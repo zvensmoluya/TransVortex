@@ -6,6 +6,34 @@ from typing import Any
 
 
 @dataclass
+class AuthConfig:
+    type: str = "bearer"  # bearer | header | query
+    header_name: str = "Authorization"
+    query_name: str = "key"
+    prefix: str = "Bearer "
+
+
+@dataclass
+class EndpointConfig:
+    path_template: str = ""
+    method: str = "POST"
+
+
+@dataclass
+class CapabilityConfig:
+    supports_system_prompt: bool = True
+    supports_temperature: bool = True
+    supports_json_mode: bool = False
+    max_batch_lines: int = 50
+
+
+@dataclass
+class MappingConfig:
+    request: dict[str, Any] = field(default_factory=dict)
+    response: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ProviderLimits:
     concurrency: int = 8
     timeout_seconds: int = 30
@@ -19,6 +47,11 @@ class ProviderConfig:
     base_url: str
     env_key: str
     models: list[str]
+    compat_mode: str = ""
+    auth: AuthConfig = field(default_factory=AuthConfig)
+    endpoint: EndpointConfig = field(default_factory=EndpointConfig)
+    mapping: MappingConfig = field(default_factory=MappingConfig)
+    capabilities: CapabilityConfig = field(default_factory=CapabilityConfig)
     limits: ProviderLimits = field(default_factory=ProviderLimits)
 
 
@@ -72,6 +105,24 @@ class Chunk:
     chunk_id: str
     segment_ids: list[int]
     lines: list[str]
+
+
+@dataclass
+class NormalizedRequest:
+    model: str
+    lines: list[str]
+    source_lang: str
+    target_lang: str
+    temperature: float = 0.1
+    system_prompt: str = "Return only numbered translation lines."
+
+
+@dataclass
+class NormalizedResponse:
+    numbered_lines: list[str]
+    raw_text: str
+    usage: dict[str, Any] = field(default_factory=dict)
+    provider_meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

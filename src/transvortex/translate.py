@@ -5,7 +5,7 @@ import re
 import time
 
 from .models import AppConfig, Chunk
-from .providers import build_provider_client
+from .providers import build_provider_client, classify_error
 
 
 def _strip_numbered_text(line: str) -> tuple[int, str]:
@@ -22,11 +22,18 @@ def translate_chunk(
     target_lang: str,
 ) -> dict:
     route_candidates = [config.routing.primary] + list(config.routing.fallback)
-    error_messages: list[str] = []
+    error_messages: list[dict] = []
     for route in route_candidates:
         provider = config.providers.get(route.provider)
         if not provider:
-            error_messages.append(f"provider not found: {route.provider}")
+            error_messages.append(
+                {
+                    "provider": route.provider,
+                    "model": route.model,
+                    "error_type": "bad_schema",
+                    "message": "provider not found",
+                }
+            )
             continue
         client = build_provider_client(provider)
         retries = max(1, provider.limits.retry)
@@ -50,15 +57,24 @@ def translate_chunk(
                     "chunk_id": chunk.chunk_id,
                     "provider": route.provider,
                     "model": route.model,
+                    "compat_mode": provider.compat_mode,
+                    "base_url": provider.base_url,
                     "rows": rows,
+                    "errors": error_messages,
                 }
             except Exception as exc:  # pragma: no cover - runtime network branches
                 error_messages.append(
-                    f"{route.provider}/{route.model} attempt={attempt + 1}: {exc}"
+                    {
+                        "provider": route.provider,
+                        "model": route.model,
+                        "attempt": attempt + 1,
+                        "error_type": classify_error(exc),
+                        "message": str(exc),
+                    }
                 )
                 if attempt + 1 < retries:
                     time.sleep(min(2**attempt, 5))
-    raise RuntimeError("All translation routes failed: " + " | ".join(error_messages))
+    raise RuntimeError(f"All translation routes failed: {error_messages}")
 
 
 def translate_all_chunks(

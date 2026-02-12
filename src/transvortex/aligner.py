@@ -14,6 +14,8 @@ def apply_translations(segments: list[Segment], translated_chunk_rows: list[dict
                 by_id[seg_id].meta["provider"] = chunk.get("provider")
                 by_id[seg_id].meta["model"] = chunk.get("model")
                 by_id[seg_id].meta["chunk_id"] = chunk.get("chunk_id")
+                by_id[seg_id].meta["compat_mode"] = chunk.get("compat_mode")
+                by_id[seg_id].meta["base_url"] = chunk.get("base_url")
     return [by_id[idx] for idx in sorted(by_id)]
 
 

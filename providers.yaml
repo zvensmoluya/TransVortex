@@ -1,10 +1,29 @@
 providers:
   - name: anthropic_main
     api_type: anthropic
+    compat_mode: anthropic_messages
     base_url: https://api.anthropic.com/v1
     env_key: ANTHROPIC_API_KEY
     models:
       - claude-3-5-haiku-latest
+    auth:
+      type: header
+      header_name: x-api-key
+      prefix: ""
+    endpoint:
+      path_template: /messages
+      method: POST
+    request_mapping:
+      style: anthropic_messages
+      max_tokens: 4096
+    response_mapping:
+      text_paths:
+        - content[].text
+    capabilities:
+      supports_system_prompt: true
+      supports_temperature: true
+      supports_json_mode: false
+      max_batch_lines: 50
     limits:
       concurrency: 8
       timeout_seconds: 30
@@ -12,10 +31,58 @@ providers:
 
   - name: gemini_backup
     api_type: gemini-compatible
+    compat_mode: gemini_generate_content
     base_url: https://generativelanguage.googleapis.com/v1beta
     env_key: GEMINI_API_KEY
     models:
       - gemini-2.0-flash
+    auth:
+      type: query
+      query_name: key
+      prefix: ""
+    endpoint:
+      path_template: /models/{model}:generateContent
+      method: POST
+    request_mapping:
+      style: gemini_generate_content
+    response_mapping:
+      text_paths:
+        - candidates[0].content.parts[].text
+    capabilities:
+      supports_system_prompt: false
+      supports_temperature: true
+      supports_json_mode: false
+      max_batch_lines: 50
+    limits:
+      concurrency: 8
+      timeout_seconds: 30
+      retry: 3
+
+  - name: custom_openai_proxy
+    api_type: openai-compatible
+    compat_mode: openai_chat
+    base_url: https://your-proxy.example.com/v1
+    env_key: CUSTOM_PROXY_API_KEY
+    models:
+      - your-model-name
+    auth:
+      type: bearer
+      header_name: Authorization
+      prefix: "Bearer "
+    endpoint:
+      path_template: /chat/completions
+      method: POST
+    request_mapping:
+      style: openai_chat
+    response_mapping:
+      text_paths:
+        - choices[0].message.content
+        - choices[].message.content
+    capabilities:
+      supports_system_prompt: true
+      supports_temperature: true
+      supports_json_mode: true
+      max_batch_lines: 60
     limits:
       concurrency: 8
       timeout_seconds: 30
