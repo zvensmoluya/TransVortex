@@ -1,0 +1,12 @@
+artifacts_dir: artifacts
+chunk_seconds: 60
+chunk_overlap_seconds: 1
+translation_batch_size: 40
+default_concurrency: 8
+timeout_seconds: 30
+retry: 3
+max_cps: 20
+asr:
+  model_size: small
+  device: auto
+  compute_type: int8

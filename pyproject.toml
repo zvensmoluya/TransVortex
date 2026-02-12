@@ -1,0 +1,30 @@
+[project]
+name = "transvortex"
+version = "0.1.0"
+description = "Fast local-video subtitle generation with configurable AI providers."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+asr = [
+  "faster-whisper>=1.0.0",
+]
+test = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+transvortex = "transvortex.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

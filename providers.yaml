@@ -1,0 +1,30 @@
+providers:
+  - name: anthropic_main
+    api_type: anthropic
+    base_url: https://api.anthropic.com/v1
+    env_key: ANTHROPIC_API_KEY
+    models:
+      - claude-3-5-haiku-latest
+    limits:
+      concurrency: 8
+      timeout_seconds: 30
+      retry: 3
+
+  - name: gemini_backup
+    api_type: gemini-compatible
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    env_key: GEMINI_API_KEY
+    models:
+      - gemini-2.0-flash
+    limits:
+      concurrency: 8
+      timeout_seconds: 30
+      retry: 3
+
+routing:
+  primary:
+    provider: anthropic_main
+    model: claude-3-5-haiku-latest
+  fallback:
+    - provider: gemini_backup
+      model: gemini-2.0-flash
