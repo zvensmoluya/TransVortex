@@ -1,0 +1,2 @@
+[console_scripts]
+transvortex = transvortex.cli:main
