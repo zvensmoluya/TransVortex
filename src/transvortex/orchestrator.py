@@ -93,9 +93,10 @@ def run_pipeline(
     target_lang: str,
     bilingual: bool = False,
     output_file: Path | None = None,
+    providers_file: Path | None = None,
     cli_overrides: dict | None = None,
 ) -> str:
-    config = load_app_config(root_dir=root_dir, cli_overrides=cli_overrides)
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
     store = TaskStore(config.pipeline.artifacts_dir)
     task = _create_task(
         store,
@@ -114,9 +115,10 @@ def resume_pipeline(
     root_dir: Path,
     task_id: str,
     output_file: Path | None = None,
+    providers_file: Path | None = None,
     cli_overrides: dict | None = None,
 ) -> str:
-    config = load_app_config(root_dir=root_dir, cli_overrides=cli_overrides)
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
     store = TaskStore(config.pipeline.artifacts_dir)
     store.load_task(task_id)
     _execute_task(config, store, task_id, output_file=output_file)

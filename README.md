@@ -11,11 +11,14 @@ TransVortex is a CLI-first pipeline for generating subtitles from local videos w
    - `pip install -e .`
    - optional ASR: `pip install -e .[asr]`
 2. Ensure `ffmpeg` and `ffprobe` are available in `PATH`.
-3. Set API keys in environment variables referenced by `providers.yaml`.
-4. Run:
+3. Put real provider config in `providers.local.yaml` (gitignored), and set API keys using the configured `env_key`.
+4. Probe provider compatibility first (zero-token local checks):
+   - `transvortex probe-provider --strict`
+5. Run:
    - `transvortex run --input demo.mp4 --src en --tgt zh-CN`
 
 ## Commands
 - `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>]`
 - `transvortex resume --task-id <id>`
 - `transvortex status --task-id <id>`
+- `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`

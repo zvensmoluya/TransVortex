@@ -112,6 +112,20 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def resolve_providers_file(root_dir: Path, providers_file: Path | None = None) -> Path:
+    if providers_file is not None:
+        return providers_file
+    candidates = [
+        root_dir / "providers.local.yaml",
+        root_dir / "providers.yaml",
+        root_dir / "providers.example.yaml",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return root_dir / "providers.yaml"
+
+
 def load_app_config(
     *,
     root_dir: Path,
@@ -120,7 +134,7 @@ def load_app_config(
     cli_overrides: dict[str, Any] | None = None,
 ) -> AppConfig:
     cli_overrides = cli_overrides or {}
-    providers_file = providers_file or root_dir / "providers.yaml"
+    providers_file = resolve_providers_file(root_dir, providers_file)
     pipeline_file = pipeline_file or root_dir / "pipeline.yaml"
 
     p_yaml = _read_yaml(providers_file)

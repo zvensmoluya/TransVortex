@@ -5,6 +5,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import posixpath
 from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 
@@ -114,10 +115,30 @@ def _extract_text_by_paths(data: dict, paths: list[str]) -> str:
 
 
 def _build_url_and_headers(config: ProviderConfig, api_key: str, model: str) -> tuple[str, dict[str, str]]:
-    path = config.endpoint.path_template.format(model=model)
-    if not path.startswith("/"):
-        path = f"/{path}"
-    url = f"{config.base_url}{path}"
+    raw_path = config.endpoint.path_template.format(model=model)
+    if not raw_path.startswith("/"):
+        raw_path = f"/{raw_path}"
+    parsed_base = urllib.parse.urlsplit(config.base_url)
+    base_path = parsed_base.path or ""
+    endpoint_path = raw_path
+    if base_path and endpoint_path.startswith(f"{base_path}/"):
+        endpoint_path = endpoint_path[len(base_path) :]
+    elif base_path and endpoint_path == base_path:
+        endpoint_path = "/"
+    combined_path = posixpath.normpath(f"{base_path.rstrip('/')}/{endpoint_path.lstrip('/')}")
+    if not combined_path.startswith("/"):
+        combined_path = f"/{combined_path}"
+    if endpoint_path.endswith("/") and not combined_path.endswith("/"):
+        combined_path = f"{combined_path}/"
+    url = urllib.parse.urlunsplit(
+        (
+            parsed_base.scheme,
+            parsed_base.netloc,
+            combined_path,
+            parsed_base.query,
+            parsed_base.fragment,
+        )
+    )
     headers: dict[str, str] = {}
     auth = config.auth
     if auth.type == "bearer":

@@ -71,7 +71,7 @@ providers:
     request_mapping:
       style: gemini_generate_content
     response_mapping:
-      text_paths: [candidates[0].content.parts[].text]
+      text_paths: ["candidates[0].content.parts[].text"]
     capabilities:
       supports_system_prompt: false
       supports_temperature: true
@@ -89,3 +89,84 @@ routing:
     assert p.endpoint.path_template == "/models/{model}:generateContent"
     assert p.mapping.response["text_paths"][0] == "candidates[0].content.parts[].text"
     assert p.capabilities.max_batch_lines == 20
+
+
+def test_provider_file_priority_local_over_yaml_over_example(tmp_path: Path) -> None:
+    providers_yaml = """
+providers:
+  - name: from_yaml
+    api_type: openai
+    base_url: https://yaml.example/v1
+    env_key: YAML_KEY
+    models: [yaml-model]
+routing:
+  primary: {provider: from_yaml, model: yaml-model}
+    """.strip()
+    providers_example = """
+providers:
+  - name: from_example
+    api_type: openai
+    base_url: https://example.example/v1
+    env_key: EXAMPLE_KEY
+    models: [example-model]
+routing:
+  primary: {provider: from_example, model: example-model}
+    """.strip()
+    providers_local = """
+providers:
+  - name: from_local
+    api_type: anthropic
+    base_url: https://local.example/v1
+    env_key: LOCAL_KEY
+    models: [local-model]
+routing:
+  primary: {provider: from_local, model: local-model}
+    """.strip()
+    (tmp_path / "providers.yaml").write_text(providers_yaml, encoding="utf-8")
+    (tmp_path / "providers.example.yaml").write_text(providers_example, encoding="utf-8")
+    (tmp_path / "providers.local.yaml").write_text(providers_local, encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.routing.primary.provider == "from_local"
+
+    (tmp_path / "providers.local.yaml").unlink()
+    cfg2 = load_app_config(root_dir=tmp_path)
+    assert cfg2.routing.primary.provider == "from_yaml"
+
+    (tmp_path / "providers.yaml").unlink()
+    cfg3 = load_app_config(root_dir=tmp_path)
+    assert cfg3.routing.primary.provider == "from_example"
+
+
+def test_provider_file_cli_override_wins(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: default_file
+    api_type: openai
+    base_url: https://default.example/v1
+    env_key: DEFAULT_KEY
+    models: [m1]
+routing:
+  primary: {provider: default_file, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    override_path = tmp_path / "custom.providers.yaml"
+    override_path.write_text(
+        """
+providers:
+  - name: cli_file
+    api_type: anthropic
+    base_url: https://cli.example/v1
+    env_key: CLI_KEY
+    models: [m2]
+routing:
+  primary: {provider: cli_file, model: m2}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path, providers_file=override_path)
+    assert cfg.routing.primary.provider == "cli_file"

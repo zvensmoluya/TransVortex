@@ -26,3 +26,21 @@ def test_query_auth_builds_url() -> None:
     url, headers = _build_url_and_headers(cfg, "abc", "m1")
     assert "key=abc" in url
     assert headers == {}
+
+
+def test_anthropic_url_v1_dedup_and_header_auth() -> None:
+    cfg = ProviderConfig(
+        name="vector",
+        api_type="anthropic",
+        compat_mode="anthropic_messages",
+        base_url="https://api.vectorengine.ai/v1",
+        env_key="VECTORENGINE_API_KEY",
+        models=["claude-haiku-4-5-20251001"],
+        auth=AuthConfig(type="header", header_name="x-api-key", prefix=""),
+        endpoint=EndpointConfig(path_template="/v1/messages", method="POST"),
+        mapping=MappingConfig(request={"style": "anthropic_messages"}, response={"text_paths": ["content[].text"]}),
+        limits=ProviderLimits(),
+    )
+    url, headers = _build_url_and_headers(cfg, "secret", "claude-haiku-4-5-20251001")
+    assert url == "https://api.vectorengine.ai/v1/messages"
+    assert headers["x-api-key"] == "secret"

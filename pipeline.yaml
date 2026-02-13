@@ -8,5 +8,5 @@ retry: 3
 max_cps: 20
 asr:
   model_size: small
-  device: auto
+  device: cpu
   compute_type: int8

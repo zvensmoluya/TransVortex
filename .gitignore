@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 artifacts/
 .venv/
+providers.local.yaml
+DemoTest/
