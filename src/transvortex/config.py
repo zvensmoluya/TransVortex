@@ -38,6 +38,28 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _load_dotenv(root_dir: Path) -> None:
+    dotenv_file = root_dir / ".env"
+    if not dotenv_file.exists():
+        return
+    for raw in dotenv_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 def _to_int(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -134,6 +156,7 @@ def load_app_config(
     cli_overrides: dict[str, Any] | None = None,
 ) -> AppConfig:
     cli_overrides = cli_overrides or {}
+    _load_dotenv(root_dir)
     providers_file = resolve_providers_file(root_dir, providers_file)
     pipeline_file = pipeline_file or root_dir / "pipeline.yaml"
 
@@ -141,6 +164,8 @@ def load_app_config(
     pip_yaml = _read_yaml(pipeline_file)
 
     artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
+    asr_raw = pip_yaml.get("asr") or {}
+    asr_cloud_raw = asr_raw.get("cloud") or {}
     pipeline = PipelineConfig(
         artifacts_dir=(root_dir / artifacts_dir),
         chunk_seconds=_to_int(pip_yaml.get("chunk_seconds"), 60),
@@ -150,9 +175,17 @@ def load_app_config(
         timeout_seconds=_to_int(pip_yaml.get("timeout_seconds"), 30),
         retry=_to_int(pip_yaml.get("retry"), 3),
         max_cps=_to_int(pip_yaml.get("max_cps"), 20),
-        asr_model_size=str((pip_yaml.get("asr") or {}).get("model_size", "small")),
-        asr_device=str((pip_yaml.get("asr") or {}).get("device", "auto")),
-        asr_compute_type=str((pip_yaml.get("asr") or {}).get("compute_type", "int8")),
+        asr_model_size=str(asr_raw.get("model_size", "small")),
+        asr_device=str(asr_raw.get("device", "auto")),
+        asr_compute_type=str(asr_raw.get("compute_type", "int8")),
+        asr_mode=str(asr_raw.get("mode", "local")),
+        asr_provider=str(asr_raw.get("provider", "")),
+        asr_provider_model=str(asr_raw.get("model", "")),
+        asr_cloud_base_url=str(asr_cloud_raw.get("base_url", "https://api.openai.com")),
+        asr_cloud_endpoint=str(asr_cloud_raw.get("endpoint", "/v1/audio/transcriptions")),
+        asr_cloud_model=str(asr_cloud_raw.get("model", "whisper-1")),
+        asr_cloud_env_key=str(asr_cloud_raw.get("env_key", "OPENAI_API_KEY")),
+        asr_cloud_timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 120),
     )
 
     for field_name, env_name in ENV_MAP.items():

@@ -80,6 +80,14 @@ class PipelineConfig:
     asr_model_size: str = "small"
     asr_device: str = "auto"
     asr_compute_type: str = "int8"
+    asr_mode: str = "local"
+    asr_provider: str = ""
+    asr_provider_model: str = ""
+    asr_cloud_base_url: str = "https://api.openai.com"
+    asr_cloud_endpoint: str = "/v1/audio/transcriptions"
+    asr_cloud_model: str = "whisper-1"
+    asr_cloud_env_key: str = "OPENAI_API_KEY"
+    asr_cloud_timeout_seconds: int = 120
 
 
 @dataclass

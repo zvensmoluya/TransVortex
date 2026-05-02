@@ -153,10 +153,27 @@ def _execute_task(config: AppConfig, store: TaskStore, task_id: str, output_file
             segments_manifest = read_json(paths["media"] / "segments_manifest.json")
 
         store.update_task_status(task_id, "ASR")
+        asr_provider = None
+        asr_provider_model = config.pipeline.asr_provider_model
+        if config.pipeline.asr_provider:
+            asr_provider = config.providers.get(config.pipeline.asr_provider)
+            if asr_provider is None:
+                raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
+            if not asr_provider_model:
+                asr_provider_model = asr_provider.models[0] if asr_provider.models else config.pipeline.asr_cloud_model
         asr = AsrEngine(
             model_size=config.pipeline.asr_model_size,
             device=config.pipeline.asr_device,
             compute_type=config.pipeline.asr_compute_type,
+            mode=config.pipeline.asr_mode,
+            source_lang=task.source_lang,
+            cloud_base_url=config.pipeline.asr_cloud_base_url,
+            cloud_endpoint=config.pipeline.asr_cloud_endpoint,
+            cloud_model=config.pipeline.asr_cloud_model,
+            cloud_env_key=config.pipeline.asr_cloud_env_key,
+            cloud_timeout_seconds=config.pipeline.asr_cloud_timeout_seconds,
+            cloud_provider=asr_provider,
+            cloud_provider_model=asr_provider_model,
         )
         asr_done = set(checkpoint.get("asr_done_segments", []))
         segment_files = []

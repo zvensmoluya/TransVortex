@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from transvortex.config import load_app_config
@@ -170,3 +171,82 @@ routing:
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
     cfg = load_app_config(root_dir=tmp_path, providers_file=override_path)
     assert cfg.routing.primary.provider == "cli_file"
+
+
+def test_dotenv_sets_api_key_when_missing(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: VECTORENGINE_API_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    (tmp_path / ".env").write_text('VECTORENGINE_API_KEY="from-dotenv"', encoding="utf-8")
+    monkeypatch.delenv("VECTORENGINE_API_KEY", raising=False)
+    load_app_config(root_dir=tmp_path)
+    assert os.getenv("VECTORENGINE_API_KEY") == "from-dotenv"
+
+
+def test_dotenv_does_not_override_existing_env(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: VECTORENGINE_API_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    (tmp_path / ".env").write_text("VECTORENGINE_API_KEY=from-dotenv", encoding="utf-8")
+    monkeypatch.setenv("VECTORENGINE_API_KEY", "from-env")
+    load_app_config(root_dir=tmp_path)
+    assert os.getenv("VECTORENGINE_API_KEY") == "from-env"
+
+
+def test_asr_cloud_config_parse(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  mode: openai
+  provider: p1
+  model: whisper-1
+  cloud:
+    base_url: https://api.openai.com
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: OPENAI_API_KEY
+    timeout_seconds: 180
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.asr_mode == "openai"
+    assert cfg.pipeline.asr_provider == "p1"
+    assert cfg.pipeline.asr_provider_model == "whisper-1"
+    assert cfg.pipeline.asr_cloud_model == "whisper-1"
+    assert cfg.pipeline.asr_cloud_timeout_seconds == 180

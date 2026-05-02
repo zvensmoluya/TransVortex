@@ -41,6 +41,8 @@ class TaskStore:
             task.output_path = output_path
         if error is not None:
             task.error = error
+        elif status == "DONE":
+            task.error = None
         self.save_task(task)
         return task
 

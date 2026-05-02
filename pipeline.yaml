@@ -7,6 +7,15 @@ timeout_seconds: 30
 retry: 3
 max_cps: 20
 asr:
+  mode: local
+  provider: openai_asr
+  model: whisper-1
   model_size: small
   device: cpu
   compute_type: int8
+  cloud:
+    base_url: https://api.vectorengine.ai/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: VECTORENGINE_API_KEY
+    timeout_seconds: 300

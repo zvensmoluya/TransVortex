@@ -4,4 +4,5 @@ __pycache__/
 artifacts/
 .venv/
 providers.local.yaml
+.env
 DemoTest/
