@@ -4,12 +4,12 @@ import importlib.util
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
-from .config import load_app_config
+from .config import apply_route_overrides, load_app_config
 from .exporter import export_srt
 from .media import extract_audio, split_audio_with_overlap
 from .models import AppConfig, Segment, TaskRecord
@@ -150,9 +150,14 @@ def _status_json(task: TaskRecord) -> dict[str, Any]:
     return {
         "task_id": task.task_id,
         "status": task.status,
+        "input_file": task.input_file,
+        "source_lang": task.source_lang,
+        "target_lang": task.target_lang,
+        "bilingual": task.bilingual,
+        "created_at": task.created_at,
         "updated_at": task.updated_at,
         "output_path": task.output_path,
-        "error": task.error,
+        "error": None if task.status == "DONE" else task.error,
     }
 
 
@@ -204,9 +209,13 @@ def run_pipeline(
     output_file: Path | None = None,
     providers_file: Path | None = None,
     cli_overrides: dict | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    store = TaskStore(config.pipeline.artifacts_dir)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
     task = _create_task(
         store,
         input_file=input_file,
@@ -235,9 +244,13 @@ def resume_pipeline(
     output_file: Path | None = None,
     providers_file: Path | None = None,
     cli_overrides: dict | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    store = TaskStore(config.pipeline.artifacts_dir)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
     store.load_task(task_id)
     store.clear_cancel(task_id)
     store.append_event(task_id, "resume_requested", message="Resume requested")

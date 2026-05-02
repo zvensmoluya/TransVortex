@@ -250,3 +250,37 @@ asr:
     assert cfg.pipeline.asr_provider_model == "whisper-1"
     assert cfg.pipeline.asr_cloud_model == "whisper-1"
     assert cfg.pipeline.asr_cloud_timeout_seconds == 180
+
+
+def test_cli_asr_overrides_parse(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "asr_mode": "openai",
+            "asr_device": "cuda",
+            "asr_model_size": "medium",
+            "asr_compute_type": "float16",
+            "asr_provider": "p1",
+            "asr_provider_model": "whisper-large",
+        },
+    )
+    assert cfg.pipeline.asr_mode == "openai"
+    assert cfg.pipeline.asr_device == "cuda"
+    assert cfg.pipeline.asr_model_size == "medium"
+    assert cfg.pipeline.asr_compute_type == "float16"
+    assert cfg.pipeline.asr_provider == "p1"
+    assert cfg.pipeline.asr_provider_model == "whisper-large"

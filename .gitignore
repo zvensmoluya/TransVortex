@@ -6,3 +6,6 @@ artifacts/
 providers.local.yaml
 .env
 DemoTest/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/

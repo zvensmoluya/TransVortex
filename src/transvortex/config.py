@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -265,3 +266,19 @@ def load_app_config(
         ],
     )
     return AppConfig(pipeline=pipeline, providers=providers, routing=routing)
+
+
+def apply_route_overrides(
+    config: AppConfig,
+    *,
+    provider_name: str | None = None,
+    model: str | None = None,
+) -> AppConfig:
+    if not provider_name and not model:
+        return config
+    primary = replace(
+        config.routing.primary,
+        provider=provider_name or config.routing.primary.provider,
+        model=model or config.routing.primary.model,
+    )
+    return replace(config, routing=replace(config.routing, primary=primary))

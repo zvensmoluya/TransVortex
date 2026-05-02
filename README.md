@@ -4,7 +4,8 @@ TransVortex is a CLI-first pipeline for generating subtitles from local videos w
 - streaming/chunked processing (no whole-video memory load),
 - local faster-whisper or cloud OpenAI Whisper ASR,
 - configurable translation providers/models/base URLs,
-- resumable tasks and artifacts.
+- resumable tasks and artifacts,
+- an optional Tauri desktop workbench for local configuration and progress viewing.
 
 ## Quick Start
 1. Install dependencies:
@@ -62,12 +63,16 @@ $env:OPENAI_API_KEY = "sk-..."
 ```
 
 ## Commands
-- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json]`
-- `transvortex resume --task-id <id> [--json]`
+- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json] [--stream-events]`
+- `transvortex resume --task-id <id> [--json] [--stream-events]`
 - `transvortex status --task-id <id> [--json]`
 - `transvortex events --task-id <id>`
 - `transvortex cancel --task-id <id> [--json]`
+- `transvortex tasks [--json]`
+- `transvortex config show [--json]`
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
+
+Common runtime overrides are available on `run` and `resume`: `--provider`, `--model`, `--asr-mode`, `--asr-device`, `--asr-model-size`, `--asr-compute-type`, `--asr-provider`, `--asr-model`, chunk settings, batch size, and concurrency.
 
 ## Worker Protocol
 Each task writes a stable artifact directory under `artifacts/<task_id>/`:
@@ -77,3 +82,30 @@ Each task writes a stable artifact directory under `artifacts/<task_id>/`:
 - `media/`, `asr/`, `chunks/`, `translate/`, `final/`, `output/`
 
 `events.jsonl` contains structured JSONL events for scripts, agents, and future desktop UI consumers.
+
+## Desktop Workbench
+The desktop app lives in `desktop/` and uses Tauri v2 + React + TypeScript + Vite. It is a development workbench, not a packaged installer yet.
+
+Prerequisites:
+- Node.js/npm
+- Rust toolchain with `cargo`
+- Python dependencies installed from the repo root
+- `ffmpeg` and `ffprobe` in `PATH`
+
+Run checks and build the frontend:
+
+```powershell
+cd desktop
+npm install
+npm run typecheck
+npm run build
+```
+
+Run the desktop app after installing Rust:
+
+```powershell
+cd desktop
+npm run tauri dev
+```
+
+The UI calls the same Python worker protocol as CLI/agents. It can save provider keys into the repo-local `.env`, but it never reads or displays secret values.

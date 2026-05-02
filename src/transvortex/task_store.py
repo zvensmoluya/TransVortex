@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .models import TaskRecord
 from .utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
 
 
 class TaskStore:
-    def __init__(self, artifacts_dir: Path) -> None:
+    def __init__(self, artifacts_dir: Path, event_sink: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.artifacts_dir = artifacts_dir
+        self.event_sink = event_sink
 
     def task_dir(self, task_id: str) -> Path:
         return self.artifacts_dir / task_id
@@ -78,7 +79,29 @@ class TaskStore:
         if details:
             event["details"] = details
         append_jsonl(self.events_file(task_id), event)
+        if self.event_sink is not None:
+            try:
+                self.event_sink(event)
+            except Exception:
+                pass
         return event
+
+    def list_tasks(self) -> list[TaskRecord]:
+        if not self.artifacts_dir.exists():
+            return []
+        tasks: list[TaskRecord] = []
+        for child in self.artifacts_dir.iterdir():
+            if not child.is_dir():
+                continue
+            task_file = child / "task.json"
+            if not task_file.exists():
+                continue
+            try:
+                tasks.append(TaskRecord(**read_json(task_file)))
+            except Exception:
+                continue
+        tasks.sort(key=lambda task: task.updated_at, reverse=True)
+        return tasks
 
     def read_events(self, task_id: str) -> list[dict[str, Any]]:
         return read_jsonl(self.events_file(task_id))

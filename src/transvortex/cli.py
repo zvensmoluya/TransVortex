@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
+from typing import Any
 
-from .config import load_app_config
+from .config import apply_route_overrides, load_app_config, resolve_providers_file
 from .orchestrator import resume_pipeline, run_pipeline, task_status_json
 from .probe import probe_exit_code, probe_provider
 from .task_store import TaskStore
+from .utils import to_plain
 
 
 def _common_overrides(args: argparse.Namespace) -> dict:
@@ -16,6 +20,12 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "chunk_overlap_seconds": args.chunk_overlap_seconds,
         "translation_batch_size": args.translation_batch_size,
         "default_concurrency": args.concurrency,
+        "asr_mode": args.asr_mode,
+        "asr_device": args.asr_device,
+        "asr_model_size": args.asr_model_size,
+        "asr_compute_type": args.asr_compute_type,
+        "asr_provider": args.asr_provider,
+        "asr_provider_model": args.asr_model,
     }
 
 
@@ -25,6 +35,63 @@ def _add_providers_file_arg(subparser: argparse.ArgumentParser) -> None:
 
 def _print_json(data: object) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _print_jsonl_event(event: dict[str, Any]) -> None:
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--chunk-seconds", type=int, default=None)
+    subparser.add_argument("--chunk-overlap-seconds", type=int, default=None)
+    subparser.add_argument("--translation-batch-size", type=int, default=None)
+    subparser.add_argument("--concurrency", type=int, default=None)
+    subparser.add_argument("--asr-mode", choices=["local", "openai"], default=None)
+    subparser.add_argument("--asr-device", default=None)
+    subparser.add_argument("--asr-model-size", default=None)
+    subparser.add_argument("--asr-compute-type", default=None)
+    subparser.add_argument("--asr-provider", default=None)
+    subparser.add_argument("--asr-model", default=None)
+
+
+def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument("--provider", default=None, help="Translation provider override")
+    subparser.add_argument("--model", default=None, help="Translation model override")
+
+
+def _task_payload(task, artifacts_dir: Path | None = None) -> dict[str, Any]:
+    payload = task_status_json(task)
+    if artifacts_dir is not None:
+        payload["task_dir"] = str(artifacts_dir / task.task_id)
+    return payload
+
+
+def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
+    resolved_providers_file = resolve_providers_file(root, providers_file)
+    config = load_app_config(root_dir=root, providers_file=providers_file)
+    providers = []
+    for provider in config.providers.values():
+        providers.append(
+            {
+                "name": provider.name,
+                "api_type": provider.api_type,
+                "compat_mode": provider.compat_mode,
+                "base_url": provider.base_url,
+                "env_key": provider.env_key,
+                "has_key": bool(os.getenv(provider.env_key)),
+                "models": provider.models,
+                "limits": to_plain(provider.limits),
+                "capabilities": to_plain(provider.capabilities),
+            }
+        )
+    return {
+        "root_dir": str(root),
+        "providers_file": str(resolved_providers_file),
+        "artifacts_dir": str(config.pipeline.artifacts_dir),
+        "pipeline": to_plain(config.pipeline),
+        "routing": to_plain(config.routing),
+        "providers": sorted(providers, key=lambda row: row["name"]),
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -39,21 +106,19 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--tgt", required=True, help="Target language")
     run_p.add_argument("--bilingual", action="store_true", help="Output bilingual subtitle")
     run_p.add_argument("--output", help="Output subtitle file path")
-    run_p.add_argument("--chunk-seconds", type=int, default=None)
-    run_p.add_argument("--chunk-overlap-seconds", type=int, default=None)
-    run_p.add_argument("--translation-batch-size", type=int, default=None)
-    run_p.add_argument("--concurrency", type=int, default=None)
+    _add_pipeline_override_args(run_p)
+    _add_route_override_args(run_p)
     run_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
+    run_p.add_argument("--stream-events", action="store_true", help="Stream task events as JSONL")
 
     resume_p = sub.add_parser("resume", help="Resume an existing task")
     _add_providers_file_arg(resume_p)
     resume_p.add_argument("--task-id", required=True)
     resume_p.add_argument("--output", help="Optional output override")
-    resume_p.add_argument("--chunk-seconds", type=int, default=None)
-    resume_p.add_argument("--chunk-overlap-seconds", type=int, default=None)
-    resume_p.add_argument("--translation-batch-size", type=int, default=None)
-    resume_p.add_argument("--concurrency", type=int, default=None)
+    _add_pipeline_override_args(resume_p)
+    _add_route_override_args(resume_p)
     resume_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
+    resume_p.add_argument("--stream-events", action="store_true", help="Stream task events as JSONL")
 
     status_p = sub.add_parser("status", help="Show task status")
     _add_providers_file_arg(status_p)
@@ -68,6 +133,16 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_providers_file_arg(cancel_p)
     cancel_p.add_argument("--task-id", required=True)
     cancel_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
+
+    tasks_p = sub.add_parser("tasks", help="List known tasks")
+    _add_providers_file_arg(tasks_p)
+    tasks_p.add_argument("--json", action="store_true", help="Print machine-readable task list")
+
+    config_p = sub.add_parser("config", help="Inspect resolved configuration")
+    config_sub = config_p.add_subparsers(dest="config_command", required=True)
+    config_show_p = config_sub.add_parser("show", help="Show resolved configuration")
+    _add_providers_file_arg(config_show_p)
+    config_show_p.add_argument("--json", action="store_true", help="Print machine-readable configuration")
 
     probe_p = sub.add_parser("probe-provider", help="Run local provider protocol checks (no network)")
     _add_providers_file_arg(probe_p)
@@ -85,6 +160,8 @@ def main() -> None:
     root = Path(args.root).resolve()
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
     if args.command == "run":
+        if args.json and args.stream_events:
+            parser.error("run: --json and --stream-events cannot be used together")
         task_id = run_pipeline(
             root_dir=root,
             input_file=Path(args.input).resolve(),
@@ -94,36 +171,50 @@ def main() -> None:
             output_file=Path(args.output).resolve() if args.output else None,
             providers_file=providers_file,
             cli_overrides=_common_overrides(args),
+            provider_name=args.provider,
+            model=args.model,
+            event_sink=_print_jsonl_event if args.stream_events else None,
         )
         if args.json:
             config = load_app_config(root_dir=root, providers_file=providers_file)
+            config = apply_route_overrides(config, provider_name=args.provider, model=args.model)
             task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
-            _print_json(task_status_json(task))
-        else:
+            _print_json(_task_payload(task, config.pipeline.artifacts_dir))
+        elif not args.stream_events:
             print(task_id)
+        else:
+            sys.stdout.flush()
         return
 
     if args.command == "resume":
+        if args.json and args.stream_events:
+            parser.error("resume: --json and --stream-events cannot be used together")
         task_id = resume_pipeline(
             root_dir=root,
             task_id=args.task_id,
             output_file=Path(args.output).resolve() if args.output else None,
             providers_file=providers_file,
             cli_overrides=_common_overrides(args),
+            provider_name=args.provider,
+            model=args.model,
+            event_sink=_print_jsonl_event if args.stream_events else None,
         )
         if args.json:
             config = load_app_config(root_dir=root, providers_file=providers_file)
+            config = apply_route_overrides(config, provider_name=args.provider, model=args.model)
             task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
-            _print_json(task_status_json(task))
-        else:
+            _print_json(_task_payload(task, config.pipeline.artifacts_dir))
+        elif not args.stream_events:
             print(task_id)
+        else:
+            sys.stdout.flush()
         return
 
     if args.command == "status":
         config = load_app_config(root_dir=root, providers_file=providers_file)
         store = TaskStore(config.pipeline.artifacts_dir)
         task = store.load_task(args.task_id)
-        payload = task_status_json(task)
+        payload = _task_payload(task, config.pipeline.artifacts_dir)
         if args.json:
             _print_json(payload)
         else:
@@ -146,6 +237,25 @@ def main() -> None:
             _print_json(payload)
         else:
             print(f"{task.task_id} {task.status}")
+        return
+
+    if args.command == "tasks":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        store = TaskStore(config.pipeline.artifacts_dir)
+        payload = [_task_payload(task, config.pipeline.artifacts_dir) for task in store.list_tasks()]
+        if args.json:
+            _print_json(payload)
+        else:
+            for task in payload:
+                print(f"{task['task_id']} {task['status']} {task['updated_at']}")
+        return
+
+    if args.command == "config" and args.config_command == "show":
+        payload = _config_show_payload(root, providers_file)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload)
         return
 
     if args.command == "probe-provider":
