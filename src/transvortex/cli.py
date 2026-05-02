@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .config import load_app_config
-from .orchestrator import resume_pipeline, run_pipeline
+from .orchestrator import resume_pipeline, run_pipeline, task_status_json
 from .probe import probe_exit_code, probe_provider
 from .task_store import TaskStore
 
@@ -21,6 +21,10 @@ def _common_overrides(args: argparse.Namespace) -> dict:
 
 def _add_providers_file_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--providers-file", default=None, help="Optional providers config file path")
+
+
+def _print_json(data: object) -> None:
+    print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -39,6 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--chunk-overlap-seconds", type=int, default=None)
     run_p.add_argument("--translation-batch-size", type=int, default=None)
     run_p.add_argument("--concurrency", type=int, default=None)
+    run_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
 
     resume_p = sub.add_parser("resume", help="Resume an existing task")
     _add_providers_file_arg(resume_p)
@@ -48,10 +53,21 @@ def _build_parser() -> argparse.ArgumentParser:
     resume_p.add_argument("--chunk-overlap-seconds", type=int, default=None)
     resume_p.add_argument("--translation-batch-size", type=int, default=None)
     resume_p.add_argument("--concurrency", type=int, default=None)
+    resume_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
 
     status_p = sub.add_parser("status", help="Show task status")
     _add_providers_file_arg(status_p)
     status_p.add_argument("--task-id", required=True)
+    status_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
+
+    events_p = sub.add_parser("events", help="Print task events as JSONL")
+    _add_providers_file_arg(events_p)
+    events_p.add_argument("--task-id", required=True)
+
+    cancel_p = sub.add_parser("cancel", help="Request cancellation for a task")
+    _add_providers_file_arg(cancel_p)
+    cancel_p.add_argument("--task-id", required=True)
+    cancel_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
 
     probe_p = sub.add_parser("probe-provider", help="Run local provider protocol checks (no network)")
     _add_providers_file_arg(probe_p)
@@ -79,7 +95,12 @@ def main() -> None:
             providers_file=providers_file,
             cli_overrides=_common_overrides(args),
         )
-        print(task_id)
+        if args.json:
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+            task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
+            _print_json(task_status_json(task))
+        else:
+            print(task_id)
         return
 
     if args.command == "resume":
@@ -90,22 +111,41 @@ def main() -> None:
             providers_file=providers_file,
             cli_overrides=_common_overrides(args),
         )
-        print(task_id)
+        if args.json:
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+            task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
+            _print_json(task_status_json(task))
+        else:
+            print(task_id)
         return
 
     if args.command == "status":
         config = load_app_config(root_dir=root, providers_file=providers_file)
         store = TaskStore(config.pipeline.artifacts_dir)
         task = store.load_task(args.task_id)
-        print(
-            {
-                "task_id": task.task_id,
-                "status": task.status,
-                "updated_at": task.updated_at,
-                "output_path": task.output_path,
-                "error": task.error,
-            }
-        )
+        payload = task_status_json(task)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload)
+        return
+
+    if args.command == "events":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        store = TaskStore(config.pipeline.artifacts_dir)
+        for event in store.read_events(args.task_id):
+            print(json.dumps(event, ensure_ascii=False))
+        return
+
+    if args.command == "cancel":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        store = TaskStore(config.pipeline.artifacts_dir)
+        task = store.request_cancel(args.task_id)
+        payload = task_status_json(task)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(f"{task.task_id} {task.status}")
         return
 
     if args.command == "probe-provider":
@@ -117,7 +157,7 @@ def main() -> None:
             source_lang=args.source_lang,
             target_lang=args.target_lang,
         )
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        _print_json(report)
         raise SystemExit(probe_exit_code(report, strict=args.strict))
 
 

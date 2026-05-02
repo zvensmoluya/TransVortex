@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from .models import TaskRecord
-from .utils import read_json, utc_now_iso, write_json
+from .utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
 
 
 class TaskStore:
@@ -18,6 +19,12 @@ class TaskStore:
 
     def checkpoint_file(self, task_id: str) -> Path:
         return self.task_dir(task_id) / "checkpoint.json"
+
+    def events_file(self, task_id: str) -> Path:
+        return self.task_dir(task_id) / "events.jsonl"
+
+    def cancel_file(self, task_id: str) -> Path:
+        return self.task_dir(task_id) / "cancel.requested"
 
     def save_task(self, task: TaskRecord) -> None:
         write_json(self.task_file(task.task_id), task)
@@ -45,6 +52,50 @@ class TaskStore:
             task.error = None
         self.save_task(task)
         return task
+
+    def append_event(
+        self,
+        task_id: str,
+        event_type: str,
+        *,
+        stage: str | None = None,
+        message: str = "",
+        progress: float | None = None,
+        level: str = "info",
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": event_type,
+            "task_id": task_id,
+            "created_at": utc_now_iso(),
+            "level": level,
+            "message": message,
+        }
+        if stage is not None:
+            event["stage"] = stage
+        if progress is not None:
+            event["progress"] = max(0.0, min(1.0, float(progress)))
+        if details:
+            event["details"] = details
+        append_jsonl(self.events_file(task_id), event)
+        return event
+
+    def read_events(self, task_id: str) -> list[dict[str, Any]]:
+        return read_jsonl(self.events_file(task_id))
+
+    def request_cancel(self, task_id: str) -> TaskRecord:
+        self.load_task(task_id)
+        self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
+        self.cancel_file(task_id).write_text(utc_now_iso(), encoding="utf-8")
+        task = self.update_task_status(task_id, "CANCEL_REQUESTED")
+        self.append_event(task_id, "cancel_requested", message="Cancel requested")
+        return task
+
+    def clear_cancel(self, task_id: str) -> None:
+        self.cancel_file(task_id).unlink(missing_ok=True)
+
+    def is_cancel_requested(self, task_id: str) -> bool:
+        return self.cancel_file(task_id).exists()
 
     def load_checkpoint(self, task_id: str) -> dict:
         file = self.checkpoint_file(task_id)

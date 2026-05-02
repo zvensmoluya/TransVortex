@@ -62,7 +62,18 @@ $env:OPENAI_API_KEY = "sk-..."
 ```
 
 ## Commands
-- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>]`
-- `transvortex resume --task-id <id>`
-- `transvortex status --task-id <id>`
+- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json]`
+- `transvortex resume --task-id <id> [--json]`
+- `transvortex status --task-id <id> [--json]`
+- `transvortex events --task-id <id>`
+- `transvortex cancel --task-id <id> [--json]`
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
+
+## Worker Protocol
+Each task writes a stable artifact directory under `artifacts/<task_id>/`:
+
+- `task.json` and `checkpoint.json`
+- `events.jsonl`
+- `media/`, `asr/`, `chunks/`, `translate/`, `final/`, `output/`
+
+`events.jsonl` contains structured JSONL events for scripts, agents, and future desktop UI consumers.

@@ -23,7 +23,11 @@ src/transvortex.egg-info/top_level.txt
 src/transvortex/providers/__init__.py
 src/transvortex/providers/base.py
 src/transvortex/providers/factory.py
+tests/test_asr.py
 tests/test_chunk_align.py
+tests/test_cli_worker_protocol.py
 tests/test_config.py
+tests/test_orchestrator_worker.py
 tests/test_probe_provider.py
 tests/test_provider_factory.py
+tests/test_task_store.py
