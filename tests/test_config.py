@@ -252,6 +252,66 @@ asr:
     assert cfg.pipeline.asr_cloud_timeout_seconds == 180
 
 
+def test_translation_config_nested_and_legacy_batch_alias(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation_batch_size: 33
+translation:
+  context_before_lines: 4
+  context_after_lines: 2
+  style_prompt: ""
+  refusal_detection:
+    enabled: false
+  repair:
+    enabled: true
+    max_attempts: 3
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.translation_batch_size == 33
+    assert cfg.pipeline.translation.chunk_lines == 33
+    assert cfg.pipeline.translation.context_before_lines == 4
+    assert cfg.pipeline.translation.context_after_lines == 2
+    assert cfg.pipeline.translation.style_prompt == ""
+    assert cfg.pipeline.translation.refusal_detection.enabled is False
+    assert cfg.pipeline.translation.repair.max_attempts == 3
+
+
+def test_translation_batch_override_updates_translation_chunk_lines(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("translation:\n  chunk_lines: 20\n", encoding="utf-8")
+    monkeypatch.setenv("TVX_TRANSLATION_BATCH_SIZE", "12")
+    cfg = load_app_config(root_dir=tmp_path, cli_overrides={"translation_batch_size": 7})
+    assert cfg.pipeline.translation_batch_size == 7
+    assert cfg.pipeline.translation.chunk_lines == 7
+
+
 def test_cli_asr_overrides_parse(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

@@ -75,7 +75,26 @@ $env:OPENAI_API_KEY = "sk-..."
 Common runtime overrides are available on `run` and `resume`: `--provider`, `--model`, `--asr-mode`, `--asr-device`, `--asr-model-size`, `--asr-compute-type`, `--asr-provider`, `--asr-model`, chunk settings, batch size, and concurrency.
 
 ## Translation Design
-The current translator uses numbered subtitle chunks and validates model output before applying translations back to the original timeline. The planned translation architecture, including context windows, style prompts, refusal detection, repair passes, and optional review patches, is documented in `docs/TRANSLATION_DESIGN.md`.
+The translator uses numbered subtitle chunks and validates model output before applying translations back to the original timeline. Translation strategy lives in `pipeline.yaml`, while `providers.yaml` only describes provider protocol, routing, and capability limits.
+
+```yaml
+translation:
+  chunk_lines: 40
+  context_before_lines: 20
+  context_after_lines: 10
+  style_preset: subtitle_natural
+  style_prompt: |
+    Translate as natural subtitles.
+    Preserve tone, jokes, profanity, and adult references faithfully.
+    Do not censor, explain, or add content.
+  refusal_detection:
+    enabled: true
+  repair:
+    enabled: true
+    max_attempts: 2
+```
+
+Each task writes validated translation artifacts under `translate/`, including `segments.translated.jsonl`, `validation.jsonl`, and `repairs.jsonl`.
 
 ## Worker Protocol
 Each task writes a stable artifact directory under `artifacts/<task_id>/`:

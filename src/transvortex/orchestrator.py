@@ -15,7 +15,8 @@ from .media import extract_audio, split_audio_with_overlap
 from .models import AppConfig, Segment, TaskRecord
 from .probe import probe_provider
 from .task_store import TaskStore
-from .translate import translate_all_chunks
+from .translate import iter_translate_all_chunks, translate_all_chunks
+from .translation_validation import validate_translation_response, validation_to_json
 from .utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
 
 
@@ -197,6 +198,122 @@ def _persist_segments_jsonl(path: Path, segments: list[Segment]) -> None:
     path.unlink(missing_ok=True)
     for seg in segments:
         append_jsonl(path, seg)
+
+
+def _translation_route_providers(config: AppConfig) -> list:
+    out = []
+    for route in [config.routing.primary] + list(config.routing.fallback):
+        provider = config.providers.get(route.provider)
+        if provider is not None:
+            out.append(provider)
+    return out
+
+
+def _effective_translation_chunk_lines(config: AppConfig) -> int:
+    configured = max(1, config.pipeline.translation.chunk_lines)
+    provider_limits = [
+        max(1, provider.capabilities.max_batch_lines)
+        for provider in _translation_route_providers(config)
+    ]
+    if not provider_limits:
+        return configured
+    return min(configured, min(provider_limits))
+
+
+def _verified_translated_chunks(translated_rows: list[dict], validation_rows: list[dict]) -> set[str]:
+    translated_ids = {str(row.get("chunk_id")) for row in translated_rows if row.get("chunk_id")}
+    valid_ids: set[str] = set()
+    for row in validation_rows:
+        chunk_id = row.get("chunk_id")
+        if not chunk_id:
+            continue
+        issues = row.get("issues", [])
+        if not any(issue.get("level") == "ERROR" for issue in issues if isinstance(issue, dict)):
+            valid_ids.add(str(chunk_id))
+    return translated_ids & valid_ids
+
+
+def _chunk_output_lines(row: dict) -> list[str]:
+    out: list[str] = []
+    for item in row.get("rows", []):
+        seg_id = item.get("id")
+        if seg_id is None:
+            continue
+        out.append(f"[{seg_id}] {str(item.get('text_tgt', '')).strip()}")
+    return out
+
+
+def _backfill_translation_validation(
+    *,
+    config: AppConfig,
+    chunks,
+    translated_rows: list[dict],
+    validation_rows: list[dict],
+    validation_file: Path,
+    store: TaskStore,
+    task_id: str,
+) -> tuple[list[dict], set[str]]:
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    validated_ids = {str(row.get("chunk_id")) for row in validation_rows if row.get("chunk_id")}
+    current_validation_rows = list(validation_rows)
+    for row in translated_rows:
+        chunk_id = str(row.get("chunk_id", ""))
+        if not chunk_id or chunk_id in validated_ids:
+            continue
+        chunk = chunks_by_id.get(chunk_id)
+        if chunk is None:
+            continue
+        validation = validate_translation_response(
+            chunk=chunk,
+            numbered_lines=_chunk_output_lines(row),
+            raw_text="\n".join(_chunk_output_lines(row)),
+            refusal_detection_enabled=config.pipeline.translation.refusal_detection.enabled,
+        )
+        validation_json = validation_to_json(validation)
+        append_jsonl(validation_file, validation_json)
+        current_validation_rows.append(validation_json)
+        validated_ids.add(chunk_id)
+        store.append_event(
+            task_id,
+            "progress",
+            stage="TRANSLATE",
+            message=f"Backfilled validation for translated chunk {chunk_id}",
+        )
+    return current_validation_rows, _verified_translated_chunks(translated_rows, current_validation_rows)
+
+
+def _translation_row_for_artifact(row: dict) -> dict:
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in {"validation", "repairs"}
+    }
+
+
+def _iter_translation_results(
+    config: AppConfig,
+    chunks,
+    *,
+    source_lang: str,
+    target_lang: str,
+    already_done: set[str],
+):
+    if translate_all_chunks.__module__ != "transvortex.translate":
+        yield from translate_all_chunks(
+            config,
+            chunks,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            already_done=already_done,
+        )
+        return
+    yield from iter_translate_all_chunks(
+        config,
+        chunks,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        already_done=already_done,
+    )
 
 
 def run_pipeline(
@@ -397,27 +514,59 @@ def _execute_task(
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
-        chunks = number_and_chunk_segments(all_segments, config.pipeline.translation_batch_size)
+        effective_chunk_lines = _effective_translation_chunk_lines(config)
+        if effective_chunk_lines < config.pipeline.translation.chunk_lines:
+            store.append_event(
+                task_id,
+                "warning",
+                stage="SEGMENT",
+                level="warning",
+                message="Reduced translation chunk size to provider capability limit",
+                details={
+                    "configured_chunk_lines": config.pipeline.translation.chunk_lines,
+                    "effective_chunk_lines": effective_chunk_lines,
+                },
+            )
+        chunks = number_and_chunk_segments(
+            all_segments,
+            effective_chunk_lines,
+            context_before_lines=config.pipeline.translation.context_before_lines,
+            context_after_lines=config.pipeline.translation.context_after_lines,
+        )
         write_json(paths["chunks"] / "chunks.json", chunks)
         checkpoint["status"] = "SEGMENT"
         store.save_checkpoint(task_id, checkpoint)
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "TRANSLATE", "Translating chunks")
-        translated_done = set(checkpoint.get("translate_done_chunks", []))
         translated_file = paths["translate"] / "segments.translated.jsonl"
+        validation_file = paths["translate"] / "validation.jsonl"
+        repairs_file = paths["translate"] / "repairs.jsonl"
+        repairs_file.parent.mkdir(parents=True, exist_ok=True)
+        repairs_file.touch(exist_ok=True)
         translated_rows = read_jsonl(translated_file)
-        if translated_rows:
-            translated_done.update(r.get("chunk_id") for r in translated_rows if r.get("chunk_id"))
-        new_rows = translate_all_chunks(
+        validation_rows = read_jsonl(validation_file)
+        validation_rows, translated_done = _backfill_translation_validation(
+            config=config,
+            chunks=chunks,
+            translated_rows=translated_rows,
+            validation_rows=validation_rows,
+            validation_file=validation_file,
+            store=store,
+            task_id=task_id,
+        )
+        for row in _iter_translation_results(
             config,
             chunks,
             source_lang=task.source_lang,
             target_lang=task.target_lang,
             already_done=translated_done,
-        )
-        for row in sorted(new_rows, key=lambda x: x["chunk_id"]):
-            append_jsonl(translated_file, row)
+        ):
+            _check_cancel(store, task_id)
+            append_jsonl(translated_file, _translation_row_for_artifact(row))
+            append_jsonl(validation_file, row.get("validation", {"chunk_id": row.get("chunk_id"), "issues": []}))
+            for repair in row.get("repairs", []):
+                append_jsonl(repairs_file, repair)
             translated_done.add(row["chunk_id"])
             checkpoint["translate_done_chunks"] = sorted(translated_done)
             checkpoint["status"] = "TRANSLATE"

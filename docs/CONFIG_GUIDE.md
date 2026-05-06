@@ -60,8 +60,36 @@ routing:
 
 说明：
 - 即使写的是 `base_url=/v1` + `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
+- `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
 
-## 3. 零 Token 协议预检
+## 3. 翻译策略配置
+
+`pipeline.yaml` 支持 `translation` 块：
+
+```yaml
+translation:
+  chunk_lines: 40
+  context_before_lines: 20
+  context_after_lines: 10
+  style_preset: subtitle_natural
+  style_prompt: |
+    Translate as natural subtitles.
+    Preserve tone, jokes, profanity, and adult references faithfully.
+    Do not censor, explain, or add content.
+  refusal_detection:
+    enabled: true
+  repair:
+    enabled: true
+    max_attempts: 2
+```
+
+说明：
+- `chunk_lines` 是当前 chunk 的待翻译行数；运行时会自动受 provider `capabilities.max_batch_lines` 限制。
+- `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
+- `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
+- 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
+
+## 4. 零 Token 协议预检
 
 在正式 `run` 前建议先执行：
 
@@ -89,7 +117,7 @@ transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-
 - 默认退出码：`0`
 - 开启 `--strict` 时：只要有 `FAIL`，退出码为 `1`
 
-## 4. 常见错误
+## 5. 常见错误
 
 - `missing environment variable: VECTORENGINE_API_KEY`
   - 未设置 key，执行：

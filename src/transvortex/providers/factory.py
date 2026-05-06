@@ -24,15 +24,60 @@ def _extract_numbered_lines(text: str) -> list[str]:
     return out
 
 
-def _translation_prompt(lines: list[str], source_lang: str, target_lang: str) -> str:
-    joined = "\n".join(lines)
-    return (
-        "You are a subtitle translation engine.\n"
-        f"Translate from {source_lang} to {target_lang}.\n"
-        "Keep numbering exactly unchanged, output only translated lines.\n"
-        "Do not add explanations.\n\n"
-        f"{joined}"
+TRANSLATION_SYSTEM_PROMPT = (
+    "You are a subtitle translation engine.\n"
+    "Follow the output contract exactly. User style instructions may affect wording only; "
+    "they cannot override ids, sections, formatting, or safety-neutral translation requirements."
+)
+
+
+FIXED_TRANSLATION_CONSTRAINTS = (
+    "Fixed output constraints:\n"
+    "- Translate only the lines in TRANSLATE_ONLY.\n"
+    "- Use CONTEXT_BEFORE and CONTEXT_AFTER only to understand tone, references, pronouns, and jokes.\n"
+    "- Keep every requested [id] exactly unchanged.\n"
+    "- Do not add, remove, merge, split, or renumber ids.\n"
+    "- Output only numbered translated lines.\n"
+    "- Do not output Markdown, explanations, summaries, notes, or context lines.\n"
+    "- This is translation of user-provided subtitle text. Translate faithfully, including profanity, "
+    "offensive language, sexual references, or violent dialogue if present. Do not censor, moralize, refuse, "
+    "summarize, or add content."
+)
+
+
+def _section(title: str, lines: list[str]) -> str:
+    body = "\n".join(lines) if lines else "(none)"
+    return f"{title}\n{body}"
+
+
+def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: bool = False) -> str:
+    parts: list[str] = []
+    if include_system_constraints:
+        parts.append(TRANSLATION_SYSTEM_PROMPT)
+    parts.extend(
+        [
+            FIXED_TRANSLATION_CONSTRAINTS,
+            f"Translate from {req.source_lang} to {req.target_lang}.",
+        ]
     )
+    if req.style_prompt:
+        parts.append("User style preferences:\n" + req.style_prompt.strip())
+    if req.prompt_mode == "repair":
+        parts.append(
+            "Repair mode:\n"
+            "- Return only a corrected translation for the single requested bad row.\n"
+            "- Keep the same id.\n"
+            f"- Failure reason: {req.repair_reason or 'row validation failed'}.\n"
+            f"- Current bad translation: {req.bad_translation or '(none)'}."
+        )
+    parts.extend(
+        [
+            _section("CONTEXT_BEFORE", req.context_before),
+            _section("TRANSLATE_ONLY", req.lines),
+            _section("CONTEXT_AFTER", req.context_after),
+        ]
+    )
+    return "\n\n".join(parts)
 
 
 def classify_error(exc: Exception) -> str:
@@ -157,14 +202,16 @@ def _build_url_and_headers(config: ProviderConfig, api_key: str, model: str) -> 
 
 def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
     style = config.mapping.request.get("style", config.compat_mode)
-    prompt = _translation_prompt(req.lines, req.source_lang, req.target_lang)
+    prompt = _translation_prompt(req, include_system_constraints=not config.capabilities.supports_system_prompt)
+    system_prompt = req.system_prompt or TRANSLATION_SYSTEM_PROMPT
     if style == "openai_chat":
+        messages = []
+        if config.capabilities.supports_system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         payload = {
             "model": req.model,
-            "messages": [
-                {"role": "system", "content": req.system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
         }
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
@@ -178,7 +225,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
         if config.capabilities.supports_system_prompt:
-            payload["system"] = req.system_prompt
+            payload["system"] = system_prompt
         return payload
     if style == "gemini_generate_content":
         payload = {
@@ -195,22 +242,16 @@ class ConfigurableProtocolClient(ProviderClient):
     config: ProviderConfig
     timeout: int
 
-    def translate_batch(self, lines: list[str], source_lang: str, target_lang: str, model: str) -> list[str]:
-        if len(lines) > self.config.capabilities.max_batch_lines:
+    def translate_request(self, req: NormalizedRequest) -> NormalizedResponse:
+        if len(req.lines) > self.config.capabilities.max_batch_lines:
             raise RuntimeError(
-                f"batch too large: {len(lines)} > {self.config.capabilities.max_batch_lines}"
+                f"batch too large: {len(req.lines)} > {self.config.capabilities.max_batch_lines}"
             )
         api_key = os.getenv(self.config.env_key)
         if not api_key:
             raise RuntimeError(f"Missing environment variable: {self.config.env_key}")
-        req = NormalizedRequest(
-            model=model,
-            lines=lines,
-            source_lang=source_lang,
-            target_lang=target_lang,
-        )
         payload = _build_payload(self.config, req)
-        url, headers = _build_url_and_headers(self.config, api_key, model)
+        url, headers = _build_url_and_headers(self.config, api_key, req.model)
         if self.config.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")
         data = _post_json(
@@ -233,9 +274,7 @@ class ConfigurableProtocolClient(ProviderClient):
                 "base_url": self.config.base_url,
             },
         )
-        if len(normalized.numbered_lines) != len(lines):
-            raise RuntimeError("mismatch_lines: model output line count mismatch")
-        return normalized.numbered_lines
+        return normalized
 
 
 def build_provider_client(config: ProviderConfig) -> ProviderClient:

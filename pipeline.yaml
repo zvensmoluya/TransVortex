@@ -6,6 +6,21 @@ default_concurrency: 8
 timeout_seconds: 30
 retry: 3
 max_cps: 20
+translation:
+  chunk_lines: 40
+  context_before_lines: 20
+  context_after_lines: 10
+  style_preset: subtitle_natural
+  style_prompt: |
+    Translate as natural subtitles.
+    Keep the wording concise, spoken, and context-aware.
+    Preserve profanity, insults, jokes, sarcasm, adult references, and character voice faithfully.
+    Do not censor, soften, moralize, summarize, or add explanations.
+  refusal_detection:
+    enabled: true
+  repair:
+    enabled: true
+    max_attempts: 2
 asr:
   mode: local
   provider: openai_asr

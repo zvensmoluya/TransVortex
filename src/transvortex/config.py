@@ -11,13 +11,17 @@ from .models import (
     AppConfig,
     AuthConfig,
     CapabilityConfig,
+    DEFAULT_TRANSLATION_STYLE_PROMPT,
     EndpointConfig,
     MappingConfig,
     PipelineConfig,
     ProviderConfig,
     ProviderLimits,
+    RefusalDetectionConfig,
+    RepairConfig,
     RouteTarget,
     RoutingConfig,
+    TranslationConfig,
 )
 
 
@@ -66,6 +70,20 @@ def _to_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _to_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def _infer_compat_mode(api_type: str) -> str:
@@ -167,11 +185,34 @@ def load_app_config(
     artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
     asr_raw = pip_yaml.get("asr") or {}
     asr_cloud_raw = asr_raw.get("cloud") or {}
+    translation_raw = pip_yaml.get("translation") or {}
+    legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 40)
+    chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
+    style_prompt_default = DEFAULT_TRANSLATION_STYLE_PROMPT
+    if "style_prompt" in translation_raw:
+        style_prompt_default = str(translation_raw.get("style_prompt") or "")
+    refusal_raw = translation_raw.get("refusal_detection") or {}
+    repair_raw = translation_raw.get("repair") or {}
+    translation = TranslationConfig(
+        chunk_lines=chunk_lines,
+        context_before_lines=_to_int(translation_raw.get("context_before_lines"), 20),
+        context_after_lines=_to_int(translation_raw.get("context_after_lines"), 10),
+        style_preset=str(translation_raw.get("style_preset", "subtitle_natural")),
+        style_prompt=style_prompt_default,
+        refusal_detection=RefusalDetectionConfig(
+            enabled=_to_bool(refusal_raw.get("enabled"), True),
+        ),
+        repair=RepairConfig(
+            enabled=_to_bool(repair_raw.get("enabled"), True),
+            max_attempts=_to_int(repair_raw.get("max_attempts"), 2),
+        ),
+    )
     pipeline = PipelineConfig(
         artifacts_dir=(root_dir / artifacts_dir),
         chunk_seconds=_to_int(pip_yaml.get("chunk_seconds"), 60),
         chunk_overlap_seconds=_to_int(pip_yaml.get("chunk_overlap_seconds"), 1),
-        translation_batch_size=_to_int(pip_yaml.get("translation_batch_size"), 40),
+        translation_batch_size=chunk_lines,
+        translation=translation,
         default_concurrency=_to_int(pip_yaml.get("default_concurrency"), 8),
         timeout_seconds=_to_int(pip_yaml.get("timeout_seconds"), 30),
         retry=_to_int(pip_yaml.get("retry"), 3),
@@ -194,12 +235,18 @@ def load_app_config(
         if env_v is None:
             continue
         setattr(pipeline, field_name, _to_int(env_v, getattr(pipeline, field_name)))
+        if field_name == "translation_batch_size":
+            pipeline.translation.chunk_lines = pipeline.translation_batch_size
 
     for key, value in cli_overrides.items():
         if value is None:
             continue
         if hasattr(pipeline, key):
-            setattr(pipeline, key, value)
+            if key == "translation_batch_size":
+                pipeline.translation_batch_size = _to_int(value, pipeline.translation_batch_size)
+                pipeline.translation.chunk_lines = pipeline.translation_batch_size
+            else:
+                setattr(pipeline, key, value)
 
     providers: dict[str, ProviderConfig] = {}
     for row in p_yaml.get("providers", []):

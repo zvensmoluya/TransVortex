@@ -67,12 +67,43 @@ class RoutingConfig:
     fallback: list[RouteTarget] = field(default_factory=list)
 
 
+DEFAULT_TRANSLATION_STYLE_PROMPT = (
+    "Translate as natural subtitles.\n"
+    "Keep the wording concise, spoken, and context-aware.\n"
+    "Preserve profanity, insults, jokes, sarcasm, adult references, and character voice faithfully.\n"
+    "Do not censor, soften, moralize, summarize, or add explanations."
+)
+
+
+@dataclass
+class RefusalDetectionConfig:
+    enabled: bool = True
+
+
+@dataclass
+class RepairConfig:
+    enabled: bool = True
+    max_attempts: int = 2
+
+
+@dataclass
+class TranslationConfig:
+    chunk_lines: int = 40
+    context_before_lines: int = 20
+    context_after_lines: int = 10
+    style_preset: str = "subtitle_natural"
+    style_prompt: str = DEFAULT_TRANSLATION_STYLE_PROMPT
+    refusal_detection: RefusalDetectionConfig = field(default_factory=RefusalDetectionConfig)
+    repair: RepairConfig = field(default_factory=RepairConfig)
+
+
 @dataclass
 class PipelineConfig:
     artifacts_dir: Path
     chunk_seconds: int = 60
     chunk_overlap_seconds: int = 1
     translation_batch_size: int = 40
+    translation: TranslationConfig = field(default_factory=TranslationConfig)
     default_concurrency: int = 8
     timeout_seconds: int = 30
     retry: int = 3
@@ -113,6 +144,8 @@ class Chunk:
     chunk_id: str
     segment_ids: list[int]
     lines: list[str]
+    context_before: list[str] = field(default_factory=list)
+    context_after: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -121,8 +154,16 @@ class NormalizedRequest:
     lines: list[str]
     source_lang: str
     target_lang: str
+    context_before: list[str] = field(default_factory=list)
+    context_after: list[str] = field(default_factory=list)
+    style_prompt: str = ""
+    prompt_mode: str = "translate"
+    repair_reason: str = ""
+    bad_translation: str = ""
     temperature: float = 0.1
-    system_prompt: str = "Return only numbered translation lines."
+    system_prompt: str = (
+        "You are a subtitle translation engine. Follow the output contract exactly."
+    )
 
 
 @dataclass

@@ -35,6 +35,28 @@ def test_chunk_and_align_mapping() -> None:
     assert done[2].text_tgt == "丙"
 
 
+def test_chunk_context_windows_do_not_enter_translate_only_lines() -> None:
+    segments = [
+        Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}")
+        for i in range(1, 7)
+    ]
+    chunks = number_and_chunk_segments(
+        segments,
+        batch_size=2,
+        context_before_lines=1,
+        context_after_lines=2,
+    )
+    assert chunks[0].lines == ["[1] line 1", "[2] line 2"]
+    assert chunks[0].context_before == []
+    assert chunks[0].context_after == ["[3] line 3", "[4] line 4"]
+    assert chunks[1].lines == ["[3] line 3", "[4] line 4"]
+    assert chunks[1].context_before == ["[2] line 2"]
+    assert chunks[1].context_after == ["[5] line 5", "[6] line 6"]
+    assert chunks[2].lines == ["[5] line 5", "[6] line 6"]
+    assert chunks[2].context_before == ["[4] line 4"]
+    assert chunks[2].context_after == []
+
+
 def test_overlap_dedupe_reassigns_ids() -> None:
     segments = [
         Segment(id=10, start=0.0, end=1.0, text_src="Hello"),
