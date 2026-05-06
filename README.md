@@ -74,6 +74,9 @@ $env:OPENAI_API_KEY = "sk-..."
 
 Common runtime overrides are available on `run` and `resume`: `--provider`, `--model`, `--asr-mode`, `--asr-device`, `--asr-model-size`, `--asr-compute-type`, `--asr-provider`, `--asr-model`, chunk settings, batch size, and concurrency.
 
+## Translation Design
+The current translator uses numbered subtitle chunks and validates model output before applying translations back to the original timeline. The planned translation architecture, including context windows, style prompts, refusal detection, repair passes, and optional review patches, is documented in `docs/TRANSLATION_DESIGN.md`.
+
 ## Worker Protocol
 Each task writes a stable artifact directory under `artifacts/<task_id>/`:
 

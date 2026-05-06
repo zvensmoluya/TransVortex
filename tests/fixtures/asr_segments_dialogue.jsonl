@@ -1,0 +1,12 @@
+{"id": 1, "start": 0.32, "end": 1.48, "text_src": "hey wait up", "confidence": -0.21}
+{"id": 2, "start": 1.62, "end": 3.2, "text_src": "you said the bridge was closed", "confidence": -0.18}
+{"id": 3, "start": 3.42, "end": 4.35, "text_src": "it was", "confidence": -0.12}
+{"id": 4, "start": 4.5, "end": 6.18, "text_src": "then why are there lights on it", "confidence": -0.26}
+{"id": 5, "start": 7.05, "end": 8.4, "text_src": "because someone is lying", "confidence": -0.19}
+{"id": 6, "start": 8.58, "end": 10.1, "text_src": "that is not an answer", "confidence": -0.22}
+{"id": 7, "start": 11.85, "end": 13.76, "text_src": "look i did not bring you here for a lecture", "confidence": -0.35}
+{"id": 8, "start": 13.92, "end": 15.2, "text_src": "you brought me here for trouble", "confidence": -0.28}
+{"id": 9, "start": 15.42, "end": 16.02, "text_src": "maybe", "confidence": -0.16}
+{"id": 10, "start": 16.2, "end": 18.35, "text_src": "or maybe i brought you here because you still trust me", "confidence": -0.31}
+{"id": 11, "start": 20.7, "end": 22.12, "text_src": "i trust maps", "confidence": -0.2}
+{"id": 12, "start": 22.3, "end": 24.2, "text_src": "and maps say we are lost", "confidence": -0.23}
