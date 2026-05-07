@@ -32,5 +32,5 @@ asr:
     base_url: https://api.vectorengine.ai/v1
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: VECTORENGINE_API_KEY
+    env_key: TVX_MODEL_API_KEY
     timeout_seconds: 300

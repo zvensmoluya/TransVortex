@@ -16,7 +16,7 @@ if (-not (Test-Path $tvx)) {
 }
 
 if ($ApiKey) {
-    $env:VECTORENGINE_API_KEY = $ApiKey
+    $env:TVX_MODEL_API_KEY = $ApiKey
 }
 
 $providersPath = if ([System.IO.Path]::IsPathRooted($ProvidersFile)) { $ProvidersFile } else { Join-Path $root $ProvidersFile }

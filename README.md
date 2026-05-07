@@ -13,6 +13,7 @@ TransVortex is a CLI-first pipeline for generating subtitles from local videos w
    - optional ASR: `pip install -e .[asr]`
 2. Ensure `ffmpeg` and `ffprobe` are available in `PATH`.
 3. Put real provider config in `providers.local.yaml` (gitignored), and set API keys using the configured `env_key`.
+   - The default translation provider uses `TVX_MODEL_API_KEY`.
    - You can also put keys in `.env` (auto-loaded, does not override existing environment variables).
 4. Probe provider compatibility first (zero-token local checks):
    - `transvortex probe-provider --strict`

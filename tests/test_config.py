@@ -180,7 +180,7 @@ providers:
   - name: p1
     api_type: openai
     base_url: https://example.com/v1
-    env_key: VECTORENGINE_API_KEY
+    env_key: TVX_MODEL_API_KEY
     models: [m1]
 routing:
   primary: {provider: p1, model: m1}
@@ -188,10 +188,10 @@ routing:
         encoding="utf-8",
     )
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
-    (tmp_path / ".env").write_text('VECTORENGINE_API_KEY="from-dotenv"', encoding="utf-8")
-    monkeypatch.delenv("VECTORENGINE_API_KEY", raising=False)
+    (tmp_path / ".env").write_text('TVX_MODEL_API_KEY="from-dotenv"', encoding="utf-8")
+    monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
     load_app_config(root_dir=tmp_path)
-    assert os.getenv("VECTORENGINE_API_KEY") == "from-dotenv"
+    assert os.getenv("TVX_MODEL_API_KEY") == "from-dotenv"
 
 
 def test_dotenv_does_not_override_existing_env(tmp_path: Path, monkeypatch) -> None:
@@ -201,7 +201,7 @@ providers:
   - name: p1
     api_type: openai
     base_url: https://example.com/v1
-    env_key: VECTORENGINE_API_KEY
+    env_key: TVX_MODEL_API_KEY
     models: [m1]
 routing:
   primary: {provider: p1, model: m1}
@@ -209,10 +209,10 @@ routing:
         encoding="utf-8",
     )
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
-    (tmp_path / ".env").write_text("VECTORENGINE_API_KEY=from-dotenv", encoding="utf-8")
-    monkeypatch.setenv("VECTORENGINE_API_KEY", "from-env")
+    (tmp_path / ".env").write_text("TVX_MODEL_API_KEY=from-dotenv", encoding="utf-8")
+    monkeypatch.setenv("TVX_MODEL_API_KEY", "from-env")
     load_app_config(root_dir=tmp_path)
-    assert os.getenv("VECTORENGINE_API_KEY") == "from-env"
+    assert os.getenv("TVX_MODEL_API_KEY") == "from-env"
 
 
 def test_asr_cloud_config_parse(tmp_path: Path) -> None:

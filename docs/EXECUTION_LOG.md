@@ -21,7 +21,7 @@
     - `base_url: https://api.vectorengine.ai/v1`
     - `model: claude-haiku-4-5-20251001`
     - `endpoint.path_template: /v1/messages`
-    - `env_key: VECTORENGINE_API_KEY`
+    - `env_key: TVX_MODEL_API_KEY`
 - URL 规范化
   - 新增 URL 拼接去重逻辑，避免 `/v1/v1/messages`
 - 新增零 Token 预检命令
@@ -48,7 +48,7 @@
 ## 建议本地验证命令
 ```powershell
 # 1) 设置 key
-$env:VECTORENGINE_API_KEY = "你的key"
+$env:TVX_MODEL_API_KEY = "你的key"
 
 # 2) 零 Token 预检
 transvortex probe-provider --providers-file .\providers.local.yaml --strict

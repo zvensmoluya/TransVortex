@@ -25,7 +25,7 @@ providers:
     api_type: anthropic
     compat_mode: anthropic_messages
     base_url: https://api.vectorengine.ai/v1
-    env_key: VECTORENGINE_API_KEY
+    env_key: TVX_MODEL_API_KEY
     models:
       - claude-haiku-4-5-20251001
     auth:
@@ -119,9 +119,9 @@ transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-
 
 ## 5. 常见错误
 
-- `missing environment variable: VECTORENGINE_API_KEY`
+- `missing environment variable: TVX_MODEL_API_KEY`
   - 未设置 key，执行：
-  - `PowerShell: $env:VECTORENGINE_API_KEY = "your_key"`
+  - `PowerShell: $env:TVX_MODEL_API_KEY = "your_key"`
 
 - `response mapping did not extract text from sample`
   - `response_mapping.text_paths` 与目标协议不匹配

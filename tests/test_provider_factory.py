@@ -42,7 +42,7 @@ def test_anthropic_url_v1_dedup_and_header_auth() -> None:
         api_type="anthropic",
         compat_mode="anthropic_messages",
         base_url="https://api.vectorengine.ai/v1",
-        env_key="VECTORENGINE_API_KEY",
+        env_key="TVX_MODEL_API_KEY",
         models=["claude-haiku-4-5-20251001"],
         auth=AuthConfig(type="header", header_name="x-api-key", prefix=""),
         endpoint=EndpointConfig(path_template="/v1/messages", method="POST"),
