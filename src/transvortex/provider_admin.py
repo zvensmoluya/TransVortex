@@ -298,6 +298,29 @@ def save_provider_config(
     }
 
 
+def save_provider_routing(*, root_dir: Path, routing: dict[str, Any]) -> dict[str, Any]:
+    providers_file = root_dir / "providers.local.yaml"
+    existing = _read_yaml(providers_file if providers_file.exists() else resolve_providers_file(root_dir))
+    primary = _as_dict(routing.get("primary"))
+    fallback = [
+        {"provider": str(item.get("provider", "")), "model": str(item.get("model", ""))}
+        for item in _as_list(routing.get("fallback"))
+        if isinstance(item, dict) and item.get("provider") and item.get("model")
+    ]
+    payload = {
+        "providers": _as_list(existing.get("providers")),
+        "routing": {
+            "primary": {
+                "provider": str(primary.get("provider", "")),
+                "model": str(primary.get("model", "")),
+            },
+            "fallback": fallback,
+        },
+    }
+    _write_yaml(providers_file, payload)
+    return {"providers_file": str(providers_file), "routing": payload["routing"]}
+
+
 def delete_provider_config(*, root_dir: Path, name: str) -> dict[str, Any]:
     providers_file = root_dir / "providers.local.yaml"
     if not providers_file.exists():

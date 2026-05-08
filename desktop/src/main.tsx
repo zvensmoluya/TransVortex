@@ -20,6 +20,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  SearchCheck,
   Settings2,
   SlidersHorizontal,
   Square,
@@ -36,6 +37,7 @@ const zh = {
   provider: "模型与 ASR",
   history: "任务历史",
   environment: "环境诊断",
+  result: "结果检查",
   refresh: "刷新",
   choose: "选择",
   cancel: "取消",
@@ -102,7 +104,17 @@ const zh = {
   keySaved: "API key 已保存到 .env",
   preflightPassed: "Provider 预检通过",
   cancelRequested: "已请求取消",
-  chooseVideoFirst: "请先选择一个视频文件。",
+  chooseVideoFirst: "请先选择一个输入文件。",
+  inputType: "输入类型",
+  videoInput: "视频",
+  srtInput: "SRT 字幕",
+  inspect: "检查",
+  timeline: "时间轴",
+  reexport: "重新导出",
+  saveEdits: "保存修改",
+  resultSaved: "结果修改已保存",
+  reexported: "字幕已重新导出",
+  routing: "Fallback 路由",
 };
 
 function t(key: keyof typeof zh) {
@@ -160,11 +172,13 @@ type ProviderTemplate = {
   capabilities?: Record<string, unknown>;
 };
 
+type RouteTarget = { provider: string; model: string };
+
 type ConfigPayload = {
   root_dir: string;
   artifacts_dir: string;
   pipeline: Record<string, unknown>;
-  routing: { primary: { provider: string; model: string } };
+  routing: { primary: RouteTarget; fallback?: RouteTarget[] };
   provider_templates: ProviderTemplate[];
   providers: ProviderConfig[];
 };
@@ -218,6 +232,25 @@ type TaskRecord = {
   error?: string | null;
 };
 
+type ResultSegment = {
+  id: number;
+  start: number;
+  end: number;
+  text_src: string;
+  text_tgt?: string | null;
+  provider?: string;
+  model?: string;
+  compat_mode?: string;
+  chunk_id?: string;
+  issues?: string[];
+};
+
+type TaskResultPayload = {
+  task: TaskRecord & { settings?: Record<string, unknown>; task_dir?: string };
+  segments: ResultSegment[];
+  output_paths?: Record<string, string>;
+};
+
 type WorkerEvent = {
   type: string;
   task_id?: string;
@@ -246,10 +279,11 @@ type DoctorPayload = {
   checks: DoctorCheck[];
 };
 
-type ActiveView = "start" | "translation" | "provider" | "history" | "environment";
+type ActiveView = "start" | "translation" | "provider" | "history" | "result" | "environment";
 
 type FormState = {
   input: string;
+  inputType: "video" | "srt";
   outputDir: string;
   sourceLang: string;
   targetLang: string;
@@ -278,6 +312,7 @@ type FormState = {
 
 const emptyForm: FormState = {
   input: "",
+  inputType: "video",
   outputDir: "",
   sourceLang: "en",
   targetLang: "zh-CN",
@@ -305,6 +340,18 @@ const emptyForm: FormState = {
 };
 
 type DroppedFile = File & { path?: string };
+
+const languageOptions = [
+  { code: "en", label: "英语" },
+  { code: "zh-CN", label: "中文简体" },
+  { code: "zh-TW", label: "中文繁体" },
+  { code: "ja", label: "日语" },
+  { code: "ko", label: "韩语" },
+  { code: "fr", label: "法语" },
+  { code: "es", label: "西班牙语" },
+  { code: "de", label: "德语" },
+  { code: "ru", label: "俄语" },
+];
 
 function textValue(value: unknown, fallback: string) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -392,6 +439,23 @@ function statusTone(status: string) {
   return "text-muted";
 }
 
+function formatClock(seconds: number) {
+  const safe = Math.max(0, seconds || 0);
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = Math.floor(safe % 60);
+  const ms = Math.round((safe - Math.floor(safe)) * 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+}
+
+function parseClock(value: string) {
+  const parts = value.replace(",", ".").split(":");
+  if (parts.length !== 3) return Number(value) || 0;
+  const [h, m, rest] = parts;
+  const [s, ms = "0"] = rest.split(".");
+  return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number((ms + "000").slice(0, 3)) / 1000;
+}
+
 function fieldTranslation(payload: ConfigPayload["pipeline"]) {
   return payload.translation as
     | {
@@ -421,6 +485,12 @@ function App() {
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(false);
   const [providerResult, setProviderResult] = useState<ProviderDiagnostic | ProviderTestPayload | null>(null);
   const [customModel, setCustomModel] = useState("");
+  const [routingDraft, setRoutingDraft] = useState<{ primary: RouteTarget; fallback: RouteTarget[] }>({
+    primary: { provider: "", model: "" },
+    fallback: [],
+  });
+  const [taskResult, setTaskResult] = useState<TaskResultPayload | null>(null);
+  const [selectedSegmentId, setSelectedSegmentId] = useState<number | null>(null);
 
   const selectedProvider = useMemo(
     () => config?.providers.find((provider) => provider.name === form.provider),
@@ -466,6 +536,10 @@ function App() {
     const payload = await invoke<ConfigPayload>("get_config");
     const translation = fieldTranslation(payload.pipeline);
     setConfig(payload);
+    setRoutingDraft({
+      primary: payload.routing.primary,
+      fallback: payload.routing.fallback || [],
+    });
     setProviderDraft((current) => {
       if (current) return current;
       const providerName = payload.routing.primary.provider || payload.providers[0]?.name || "";
@@ -622,7 +696,10 @@ function App() {
   async function chooseVideo() {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "webm", "avi"] }],
+      filters:
+        form.inputType === "srt"
+          ? [{ name: "Subtitle", extensions: ["srt"] }]
+          : [{ name: "Video", extensions: ["mp4", "mkv", "mov", "webm", "avi"] }],
     });
     if (typeof selected === "string") update("input", selected);
   }
@@ -663,6 +740,21 @@ function App() {
       update("apiKey", "");
       setNotice(t("providerSaved"));
       await Promise.all([refreshConfig(), refreshDoctor()]);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRouting() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await invoke("save_provider_routing", { routing: routingDraft });
+      setNotice("Fallback 路由已保存");
+      await refreshConfig();
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -783,6 +875,7 @@ function App() {
       await invoke("start_task", {
         request: {
           input: form.input,
+          inputType: form.inputType,
           outputDir: form.outputDir || null,
           sourceLang: form.sourceLang,
           targetLang: form.targetLang,
@@ -846,6 +939,69 @@ function App() {
       setActiveView("history");
     } catch (err) {
       setError(friendlyError(err));
+    }
+  }
+
+  async function openTaskResult(taskId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const payload = await invoke<TaskResultPayload>("open_task_result", { taskId });
+      setTaskResult(payload);
+      setSelectedSegmentId(payload.segments[0]?.id || null);
+      setActiveView("result");
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateResultSegment(id: number, patch: Partial<ResultSegment>) {
+    setTaskResult((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        segments: current.segments.map((segment) => (segment.id === id ? { ...segment, ...patch } : segment)),
+      };
+    });
+  }
+
+  async function saveResultSegments() {
+    if (!taskResult) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await invoke<TaskResultPayload>("save_task_segments", {
+        taskId: taskResult.task.task_id,
+        segments: taskResult.segments,
+      });
+      setTaskResult(payload);
+      setNotice(t("resultSaved"));
+      await refreshTasks();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reexportResult() {
+    if (!taskResult) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await invoke("reexport_task", { taskId: taskResult.task.task_id, outputFormat: form.outputFormat });
+      setNotice(t("reexported"));
+      const payload = await invoke<TaskResultPayload>("open_task_result", { taskId: taskResult.task.task_id });
+      setTaskResult(payload);
+      await refreshTasks();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -918,12 +1074,28 @@ function App() {
           testConnection={testConnection}
           useProviderForTask={useProviderForTask}
           addCustomModel={addCustomModel}
+          routingDraft={routingDraft}
+          setRoutingDraft={setRoutingDraft}
+          saveRouting={saveRouting}
           probe={probe}
           busy={busy}
         />
       )}
       {activeView === "history" && (
-        <HistoryPanel tasks={tasks} loadTaskEvents={loadTaskEvents} openPath={openPath} resumeTask={resumeTask} busy={busy} running={running} />
+        <HistoryPanel tasks={tasks} loadTaskEvents={loadTaskEvents} openTaskResult={openTaskResult} openPath={openPath} resumeTask={resumeTask} busy={busy} running={running} />
+      )}
+      {activeView === "result" && (
+        <ResultPanel
+          result={taskResult}
+          selectedSegmentId={selectedSegmentId}
+          setSelectedSegmentId={setSelectedSegmentId}
+          updateSegment={updateResultSegment}
+          saveResultSegments={saveResultSegments}
+          reexportResult={reexportResult}
+          busy={busy}
+          outputFormat={form.outputFormat}
+          updateOutputFormat={(value) => update("outputFormat", value)}
+        />
       )}
       {activeView === "environment" && <EnvironmentPanel report={doctorReport} checks={importantChecks} refresh={refreshDoctor} />}
     </AppShell>
@@ -956,6 +1128,7 @@ function AppShell({
     translation: t("translation"),
     provider: t("provider"),
     history: t("history"),
+    result: t("result"),
     environment: t("environment"),
   }[activeView];
   return (
@@ -1008,6 +1181,7 @@ function Sidebar({
     { key: "translation", label: t("translation"), icon: Languages },
     { key: "provider", label: t("provider"), icon: Settings2 },
     { key: "history", label: t("history"), icon: History, badge: taskCount ? String(taskCount) : undefined },
+    { key: "result", label: t("result"), icon: SearchCheck },
     { key: "environment", label: t("environment"), icon: MonitorCheck, badge: doctorStatus },
   ];
   return (
@@ -1081,6 +1255,15 @@ function TaskWorkspace({
   return (
     <div className="space-y-4">
       <Panel title="视频与语言">
+        <div className="mb-4 grid grid-cols-[180px_minmax(0,1fr)] gap-4">
+          <label className="tvx-label">
+            {t("inputType")}
+            <select className="tvx-input" value={form.inputType} onChange={(event) => update("inputType", event.target.value as FormState["inputType"])}>
+              <option value="video">{t("videoInput")}</option>
+              <option value="srt">{t("srtInput")}</option>
+            </select>
+          </label>
+        </div>
         <section
           className="grid min-h-28 grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-dashed border-line bg-slate-50 p-4"
           onDragOver={(event) => event.preventDefault()}
@@ -1092,8 +1275,8 @@ function TaskWorkspace({
         >
           <Video className="text-brand" size={34} />
           <div className="min-w-0">
-            <strong className="block truncate text-sm">{form.input || t("dropVideo")}</strong>
-            <span className="mt-1 block text-xs text-muted">{form.input ? t("videoReady") : t("videoHint")}</span>
+            <strong className="block truncate text-sm">{form.input || (form.inputType === "srt" ? "拖入 SRT 字幕文件" : t("dropVideo"))}</strong>
+            <span className="mt-1 block text-xs text-muted">{form.input ? t("videoReady") : form.inputType === "srt" ? "保留时间轴，跳过 ASR 直接翻译" : t("videoHint")}</span>
           </div>
           <button className="tvx-btn" onClick={chooseVideo}>
             <FolderOpen size={16} /> {t("choose")}
@@ -1102,11 +1285,11 @@ function TaskWorkspace({
         <div className="mt-4 grid grid-cols-2 gap-4">
           <label className="tvx-label">
             {t("sourceLang")}
-            <input className="tvx-input" value={form.sourceLang} onChange={(event) => update("sourceLang", event.target.value)} />
+            <LanguageSelect value={form.sourceLang} onChange={(value) => update("sourceLang", value)} />
           </label>
           <label className="tvx-label">
             {t("targetLang")}
-            <input className="tvx-input" value={form.targetLang} onChange={(event) => update("targetLang", event.target.value)} />
+            <LanguageSelect value={form.targetLang} onChange={(value) => update("targetLang", value)} />
           </label>
         </div>
       </Panel>
@@ -1173,6 +1356,23 @@ function TaskWorkspace({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function LanguageSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const known = languageOptions.some((item) => item.code === value);
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+      <select className="tvx-input" value={known ? value : "custom"} onChange={(event) => event.target.value !== "custom" && onChange(event.target.value)}>
+        {languageOptions.map((item) => (
+          <option key={item.code} value={item.code}>
+            {item.label} ({item.code})
+          </option>
+        ))}
+        <option value="custom">自定义</option>
+      </select>
+      <input className="tvx-input" value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
@@ -1250,6 +1450,9 @@ function ConfigPanel({
   testConnection,
   useProviderForTask,
   addCustomModel,
+  routingDraft,
+  setRoutingDraft,
+  saveRouting,
   probe,
   busy,
 }: {
@@ -1273,6 +1476,9 @@ function ConfigPanel({
   testConnection: () => void;
   useProviderForTask: () => void;
   addCustomModel: () => void;
+  routingDraft: { primary: RouteTarget; fallback: RouteTarget[] };
+  setRoutingDraft: React.Dispatch<React.SetStateAction<{ primary: RouteTarget; fallback: RouteTarget[] }>>;
+  saveRouting: () => void;
   probe: () => void;
   busy: boolean;
 }) {
@@ -1494,6 +1700,52 @@ function ConfigPanel({
         </div>
       </Panel>
 
+      <Panel title={t("routing")}>
+        <div className="grid grid-cols-2 gap-4">
+          <RouteEditor
+            label="Primary"
+            route={routingDraft.primary}
+            providers={config?.providers || []}
+            onChange={(route) => setRoutingDraft((current) => ({ ...current, primary: route }))}
+          />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted">Fallback</span>
+              <button
+                className="tvx-btn min-h-8 px-2"
+                onClick={() => setRoutingDraft((current) => ({ ...current, fallback: [...current.fallback, { provider: "", model: "" }] }))}
+              >
+                <Plus size={14} /> 添加
+              </button>
+            </div>
+            {routingDraft.fallback.map((route, index) => (
+              <div key={index} className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
+                <RouteEditor
+                  label={`Fallback ${index + 1}`}
+                  route={route}
+                  providers={config?.providers || []}
+                  onChange={(next) =>
+                    setRoutingDraft((current) => ({
+                      ...current,
+                      fallback: current.fallback.map((item, itemIndex) => (itemIndex === index ? next : item)),
+                    }))
+                  }
+                />
+                <button
+                  className="tvx-btn tvx-btn-danger mt-5 px-0"
+                  onClick={() => setRoutingDraft((current) => ({ ...current, fallback: current.fallback.filter((_, itemIndex) => itemIndex !== index) }))}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <button className="tvx-btn tvx-btn-primary" onClick={saveRouting} disabled={busy}>
+              <Save size={16} /> 保存路由
+            </button>
+          </div>
+        </div>
+      </Panel>
+
       <Panel title="ASR">
         <div className="grid grid-cols-4 gap-4">
           <label className="tvx-label">
@@ -1521,6 +1773,52 @@ function ConfigPanel({
           </label>
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function RouteEditor({
+  label,
+  route,
+  providers,
+  onChange,
+}: {
+  label: string;
+  route: RouteTarget;
+  providers: ProviderConfig[];
+  onChange: (route: RouteTarget) => void;
+}) {
+  const provider = providers.find((item) => item.name === route.provider) || providers[0];
+  const models = provider?.models || [];
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <label className="tvx-label">
+        {label} provider
+        <select
+          className="tvx-input"
+          value={route.provider || provider?.name || ""}
+          onChange={(event) => {
+            const nextProvider = providers.find((item) => item.name === event.target.value);
+            onChange({ provider: event.target.value, model: nextProvider?.models[0] || "" });
+          }}
+        >
+          {providers.map((item) => (
+            <option key={item.name} value={item.name}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="tvx-label">
+        model
+        <select className="tvx-input" value={route.model || models[0] || ""} onChange={(event) => onChange({ ...route, model: event.target.value })}>
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </label>
     </div>
   );
 }
@@ -1600,6 +1898,7 @@ function EventPanel({ events }: { events: WorkerEvent[] }) {
 function HistoryPanel({
   tasks,
   loadTaskEvents,
+  openTaskResult,
   openPath,
   resumeTask,
   busy,
@@ -1607,6 +1906,7 @@ function HistoryPanel({
 }: {
   tasks: TaskRecord[];
   loadTaskEvents: (taskId: string) => void;
+  openTaskResult: (taskId: string) => void;
   openPath: (path?: string | null) => void;
   resumeTask: (taskId: string) => void;
   busy: boolean;
@@ -1625,6 +1925,9 @@ function HistoryPanel({
             <p className="mt-2 truncate text-xs text-muted">{task.input_file}</p>
             {task.error && <p className="mt-2 text-xs text-danger">{task.error}</p>}
             <footer className="mt-3 flex flex-wrap gap-2">
+              <button className="tvx-btn" onClick={() => openTaskResult(task.task_id)}>
+                {t("inspect")}
+              </button>
               <button className="tvx-btn" onClick={() => loadTaskEvents(task.task_id)}>
                 {t("events")}
               </button>
@@ -1648,6 +1951,135 @@ function HistoryPanel({
         ))}
       </div>
     </Panel>
+  );
+}
+
+function ResultPanel({
+  result,
+  selectedSegmentId,
+  setSelectedSegmentId,
+  updateSegment,
+  saveResultSegments,
+  reexportResult,
+  busy,
+  outputFormat,
+  updateOutputFormat,
+}: {
+  result: TaskResultPayload | null;
+  selectedSegmentId: number | null;
+  setSelectedSegmentId: (id: number) => void;
+  updateSegment: (id: number, patch: Partial<ResultSegment>) => void;
+  saveResultSegments: () => void;
+  reexportResult: () => void;
+  busy: boolean;
+  outputFormat: FormState["outputFormat"];
+  updateOutputFormat: (value: FormState["outputFormat"]) => void;
+}) {
+  if (!result) {
+    return (
+      <Panel title={t("result")}>
+        <p className="text-sm text-muted">从任务历史中选择一个任务进行检查。</p>
+      </Panel>
+    );
+  }
+  const maxEnd = Math.max(...result.segments.map((segment) => segment.end), 1);
+  const sortedSegments = [...result.segments].sort((a, b) => a.start - b.start || a.end - b.end || a.id - b.id);
+  const gapById = new Map<number, number>();
+  sortedSegments.forEach((segment, index) => {
+    const previous = sortedSegments[index - 1];
+    gapById.set(segment.id, previous ? segment.start - previous.end : segment.start);
+  });
+  return (
+    <div className="space-y-4">
+      <Panel title={t("timeline")}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <strong className="block truncate text-sm">{result.task.task_id}</strong>
+            <span className="text-xs text-muted">{result.task.input_file}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <select className="tvx-input w-28" value={outputFormat} onChange={(event) => updateOutputFormat(event.target.value as FormState["outputFormat"])}>
+              <option value="srt">srt</option>
+              <option value="ass">ass</option>
+              <option value="both">both</option>
+            </select>
+            <button className="tvx-btn" disabled={busy} onClick={saveResultSegments}>
+              <Save size={16} /> {t("saveEdits")}
+            </button>
+            <button className="tvx-btn tvx-btn-primary" disabled={busy} onClick={reexportResult}>
+              <DownloadCloud size={16} /> {t("reexport")}
+            </button>
+          </div>
+        </div>
+        <div className="relative h-24 overflow-hidden rounded-lg border border-line bg-slate-50">
+          {sortedSegments.map((segment) => {
+            const left = `${(segment.start / maxEnd) * 100}%`;
+            const width = `${Math.max(((segment.end - segment.start) / maxEnd) * 100, 0.6)}%`;
+            const active = segment.id === selectedSegmentId;
+            const duration = Math.max(segment.end - segment.start, 0);
+            const gap = gapById.get(segment.id) || 0;
+            return (
+              <button
+                key={segment.id}
+                className={`absolute top-4 h-12 overflow-hidden rounded-sm border px-1 text-left text-[10px] leading-tight ${active ? "border-brand bg-emerald-100" : segment.issues?.length ? "border-yellow-300 bg-yellow-100" : "border-emerald-200 bg-white"}`}
+                style={{ left, width }}
+                onClick={() => setSelectedSegmentId(segment.id)}
+                title={`${segment.id} ${formatClock(segment.start)} - ${formatClock(segment.end)} / ${duration.toFixed(1)}s / gap ${gap.toFixed(1)}s`}
+              >
+                <span className="block truncate">{segment.id}</span>
+                <span className="block truncate">{duration.toFixed(1)}s</span>
+              </button>
+            );
+          })}
+        </div>
+      </Panel>
+      <Panel title="字幕行">
+        <div className="max-h-[560px] overflow-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 bg-white text-xs text-muted">
+              <tr>
+                <th className="border-b border-line p-2 text-left">#</th>
+                <th className="border-b border-line p-2 text-left">开始</th>
+                <th className="border-b border-line p-2 text-left">结束</th>
+                <th className="border-b border-line p-2 text-left">时长/间隔</th>
+                <th className="border-b border-line p-2 text-left">原文</th>
+                <th className="border-b border-line p-2 text-left">译文</th>
+                <th className="border-b border-line p-2 text-left">模型</th>
+                <th className="border-b border-line p-2 text-left">问题</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedSegments.map((segment) => (
+                <tr key={segment.id} className={segment.id === selectedSegmentId ? "bg-emerald-50" : ""} onClick={() => setSelectedSegmentId(segment.id)}>
+                  <td className="border-b border-line p-2 align-top text-xs font-semibold">{segment.id}</td>
+                  <td className="border-b border-line p-2 align-top">
+                    <input className="tvx-input min-h-8 w-28 px-2 text-xs" value={formatClock(segment.start)} onChange={(event) => updateSegment(segment.id, { start: parseClock(event.target.value) })} />
+                  </td>
+                  <td className="border-b border-line p-2 align-top">
+                    <input className="tvx-input min-h-8 w-28 px-2 text-xs" value={formatClock(segment.end)} onChange={(event) => updateSegment(segment.id, { end: parseClock(event.target.value) })} />
+                  </td>
+                  <td className="border-b border-line p-2 align-top text-xs text-muted">
+                    <div>{Math.max(segment.end - segment.start, 0).toFixed(2)}s</div>
+                    <div className={gapById.get(segment.id)! < 0 ? "mt-1 text-warning" : "mt-1"}>gap {Number(gapById.get(segment.id) || 0).toFixed(2)}s</div>
+                  </td>
+                  <td className="border-b border-line p-2 align-top">
+                    <textarea className="tvx-textarea min-h-20" value={segment.text_src} onChange={(event) => updateSegment(segment.id, { text_src: event.target.value })} />
+                  </td>
+                  <td className="border-b border-line p-2 align-top">
+                    <textarea className="tvx-textarea min-h-20" value={segment.text_tgt || ""} onChange={(event) => updateSegment(segment.id, { text_tgt: event.target.value })} />
+                  </td>
+                  <td className="border-b border-line p-2 align-top text-xs text-muted">
+                    <div>{segment.provider || "-"}</div>
+                    <div className="mt-1">{segment.model || "-"}</div>
+                  </td>
+                  <td className="border-b border-line p-2 align-top text-xs text-warning">{segment.issues?.join("；")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
   );
 }
 

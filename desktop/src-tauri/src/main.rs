@@ -22,6 +22,7 @@ struct WorkerState {
 #[serde(rename_all = "camelCase")]
 struct StartTaskRequest {
     input: String,
+    input_type: Option<String>,
     output_dir: Option<String>,
     source_lang: String,
     target_lang: String,
@@ -378,6 +379,69 @@ fn test_provider_connection(
 }
 
 #[tauri::command]
+fn save_provider_routing(app: AppHandle, routing: Value) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "provider".into(),
+            "routing".into(),
+            "--json-payload".into(),
+            value_arg(&routing)?,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn open_task_result(app: AppHandle, task_id: String) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "result".into(),
+            "open".into(),
+            "--task-id".into(),
+            task_id,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn save_task_segments(app: AppHandle, task_id: String, segments: Value) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "result".into(),
+            "save".into(),
+            "--task-id".into(),
+            task_id,
+            "--json-payload".into(),
+            value_arg(&json!({ "segments": segments }))?,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn reexport_task(app: AppHandle, task_id: String, output_format: String) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "reexport".into(),
+            "--task-id".into(),
+            task_id,
+            "--output-format".into(),
+            output_format,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
 fn start_task(
     app: AppHandle,
     state: State<WorkerState>,
@@ -395,6 +459,8 @@ fn start_task(
         "run".into(),
         "--input".into(),
         input_path.clone(),
+        "--input-type".into(),
+        request.input_type.unwrap_or_else(|| "video".into()),
         "--src".into(),
         request.source_lang.clone(),
         "--tgt".into(),
@@ -535,6 +601,10 @@ fn main() {
             delete_provider_config,
             fetch_provider_models,
             test_provider_connection,
+            save_provider_routing,
+            open_task_result,
+            save_task_segments,
+            reexport_task,
             start_task,
             resume_task,
             cancel_task,

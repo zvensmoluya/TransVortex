@@ -17,7 +17,9 @@ from .provider_admin import (
     provider_templates_payload,
     run_provider_connection_test,
     save_provider_config,
+    save_provider_routing,
 )
+from .result_workspace import open_task_result, reexport_task, save_task_segments
 from .task_store import TaskStore
 from .utils import to_plain
 
@@ -140,6 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser("run", help="Run a new task")
     _add_providers_file_arg(run_p)
     run_p.add_argument("--input", required=True, help="Input video file")
+    run_p.add_argument("--input-type", choices=["video", "srt", "video_asr_translate", "srt_translate"], default="video")
     run_p.add_argument("--src", required=True, help="Source language")
     run_p.add_argument("--tgt", required=True, help="Target language")
     run_p.add_argument("--bilingual", action="store_true", help="Output bilingual subtitle")
@@ -215,6 +218,25 @@ def _build_parser() -> argparse.ArgumentParser:
     provider_test_p.add_argument("--model", required=True)
     provider_test_p.add_argument("--api-key", default=None)
     provider_test_p.add_argument("--json", action="store_true")
+
+    provider_routing_p = provider_sub.add_parser("routing", help="Save primary/fallback provider routing")
+    provider_routing_p.add_argument("--json-payload", required=True)
+    provider_routing_p.add_argument("--json", action="store_true")
+
+    result_p = sub.add_parser("result", help="Inspect or edit task results")
+    result_sub = result_p.add_subparsers(dest="result_command", required=True)
+    result_open_p = result_sub.add_parser("open", help="Open task result data")
+    result_open_p.add_argument("--task-id", required=True)
+    result_open_p.add_argument("--json", action="store_true")
+    result_save_p = result_sub.add_parser("save", help="Save edited task segments")
+    result_save_p.add_argument("--task-id", required=True)
+    result_save_p.add_argument("--json-payload", required=True)
+    result_save_p.add_argument("--json", action="store_true")
+
+    reexport_p = sub.add_parser("reexport", help="Re-export subtitles from task final segments")
+    reexport_p.add_argument("--task-id", required=True)
+    reexport_p.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
+    reexport_p.add_argument("--json", action="store_true")
     return parser
 
 
@@ -238,6 +260,7 @@ def main() -> None:
             cli_overrides=_common_overrides(args),
             provider_name=args.provider,
             model=args.model,
+            input_type="srt_translate" if args.input_type in {"srt", "srt_translate"} else "video_asr_translate",
             event_sink=_print_jsonl_event if args.stream_events else None,
         )
         if args.json:
@@ -372,6 +395,27 @@ def main() -> None:
             api_key=args.api_key,
         )
         _print_json(payload)
+        return
+
+    if args.command == "provider" and args.provider_command == "routing":
+        payload = save_provider_routing(root_dir=root, routing=_read_json_arg(args.json_payload))
+        _print_json(payload)
+        return
+
+    if args.command == "result" and args.result_command == "open":
+        _print_json(open_task_result(root_dir=root, task_id=args.task_id))
+        return
+
+    if args.command == "result" and args.result_command == "save":
+        raw = _read_json_arg(args.json_payload)
+        segments = raw.get("segments", [])
+        if not isinstance(segments, list):
+            raise ValueError("segments must be a list")
+        _print_json(save_task_segments(root_dir=root, task_id=args.task_id, segments_payload=segments))
+        return
+
+    if args.command == "reexport":
+        _print_json(reexport_task(root_dir=root, task_id=args.task_id, output_format=args.output_format))
         return
 
 
