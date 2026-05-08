@@ -34,6 +34,13 @@ class MappingConfig:
 
 
 @dataclass
+class ModelListConfig:
+    path_template: str = ""
+    method: str = "GET"
+    response_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ProviderLimits:
     concurrency: int = 8
     timeout_seconds: int = 30
@@ -51,6 +58,8 @@ class ProviderConfig:
     auth: AuthConfig = field(default_factory=AuthConfig)
     endpoint: EndpointConfig = field(default_factory=EndpointConfig)
     mapping: MappingConfig = field(default_factory=MappingConfig)
+    extra_headers: dict[str, str] = field(default_factory=dict)
+    model_list: ModelListConfig = field(default_factory=ModelListConfig)
     capabilities: CapabilityConfig = field(default_factory=CapabilityConfig)
     limits: ProviderLimits = field(default_factory=ProviderLimits)
 

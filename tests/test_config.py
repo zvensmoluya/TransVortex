@@ -92,6 +92,36 @@ routing:
     assert p.capabilities.max_batch_lines == 20
 
 
+def test_provider_extended_schema_model_list_and_extra_headers(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: responses
+    api_type: openai-compatible
+    compat_mode: openai_responses
+    base_url: https://example.com/v1
+    env_key: KEY
+    models: [gpt-x]
+    extra_headers:
+      X-Test: "1"
+    model_list:
+      path_template: /models
+      method: GET
+      response_paths: ["data[].id"]
+routing:
+  primary: {provider: responses, model: gpt-x}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    p = cfg.providers["responses"]
+    assert p.endpoint.path_template == "/responses"
+    assert p.mapping.response["text_paths"][0] == "output_text"
+    assert p.extra_headers["X-Test"] == "1"
+    assert p.model_list.response_paths == ["data[].id"]
+
+
 def test_provider_file_priority_local_over_yaml_over_example(tmp_path: Path) -> None:
     providers_yaml = """
 providers:

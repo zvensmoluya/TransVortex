@@ -103,16 +103,27 @@ def classify_error(exc: Exception) -> str:
     return "unknown_error"
 
 
-def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, method: str = "POST") -> dict:
+def _request_json(
+    url: str,
+    payload: dict | None,
+    headers: dict[str, str],
+    timeout: int,
+    method: str = "POST",
+) -> dict:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url=url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={**headers, "Content-Type": "application/json"},
+        data=data,
+        headers=({**headers, "Content-Type": "application/json"} if data is not None else headers),
         method=method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8")
     return json.loads(body)
+
+
+def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, method: str = "POST") -> dict:
+    return _request_json(url, payload, headers, timeout, method)
 
 
 def _get_path_value(data: object, path: str) -> list[object]:
@@ -162,11 +173,27 @@ def _extract_text_by_paths(data: dict, paths: list[str]) -> str:
         chunks = [str(v) for v in vals if isinstance(v, (str, int, float))]
         if chunks:
             return "\n".join(chunks)
+        dict_chunks = [
+            str(v.get("id") or v.get("name"))
+            for v in vals
+            if isinstance(v, dict) and (v.get("id") or v.get("name"))
+        ]
+        if dict_chunks:
+            return "\n".join(dict_chunks)
     return ""
 
 
 def _build_url_and_headers(config: ProviderConfig, api_key: str, model: str) -> tuple[str, dict[str, str]]:
-    raw_path = config.endpoint.path_template.format(model=model)
+    return _build_url_and_headers_for_path(config, api_key, model, config.endpoint.path_template)
+
+
+def _build_url_and_headers_for_path(
+    config: ProviderConfig,
+    api_key: str,
+    model: str,
+    path_template: str,
+) -> tuple[str, dict[str, str]]:
+    raw_path = path_template.format(model=model)
     if not raw_path.startswith("/"):
         raw_path = f"/{raw_path}"
     parsed_base = urllib.parse.urlsplit(config.base_url)
@@ -222,6 +249,29 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
         return payload
+    if style == "openai_responses":
+        input_items: list[dict[str, str]] = []
+        if config.capabilities.supports_system_prompt:
+            input_items.append({"role": "system", "content": system_prompt})
+        input_items.append({"role": "user", "content": prompt})
+        payload = {
+            "model": req.model,
+            "input": input_items,
+        }
+        if config.capabilities.supports_temperature:
+            payload["temperature"] = req.temperature
+        return payload
+    if style == "openai_completions":
+        payload = {
+            "model": req.model,
+            "prompt": f"{system_prompt}\n\n{prompt}",
+        }
+        if config.capabilities.supports_temperature:
+            payload["temperature"] = req.temperature
+        max_tokens = config.mapping.request.get("max_tokens")
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+        return payload
     if style == "anthropic_messages":
         payload = {
             "model": req.model,
@@ -258,6 +308,7 @@ class ConfigurableProtocolClient(ProviderClient):
             raise RuntimeError(f"Missing environment variable: {self.config.env_key}")
         payload = _build_payload(self.config, req)
         url, headers = _build_url_and_headers(self.config, api_key, req.model)
+        headers.update(self.config.extra_headers)
         if self.config.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")
         data = _post_json(
@@ -286,6 +337,8 @@ class ConfigurableProtocolClient(ProviderClient):
 def build_provider_client(config: ProviderConfig) -> ProviderClient:
     if config.compat_mode not in {
         "openai_chat",
+        "openai_responses",
+        "openai_completions",
         "anthropic_messages",
         "gemini_generate_content",
     }:

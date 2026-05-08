@@ -72,3 +72,27 @@ def test_probe_provider_bad_response_mapping_fails_strict(tmp_path: Path, monkey
     checks = {row["name"]: row for row in report["checks"]}
     assert checks["response_mapping_extract"]["status"] == "FAIL"
     assert probe_exit_code(report, strict=True) == 1
+
+
+def test_probe_provider_accepts_openai_responses(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: responses
+    api_type: openai-compatible
+    compat_mode: openai_responses
+    base_url: https://example.com/v1
+    env_key: TVX_MODEL_API_KEY
+    models: [gpt-x]
+routing:
+  primary: {provider: responses, model: gpt-x}
+  fallback: []
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("TVX_MODEL_API_KEY", "abc123456")
+    report = probe_provider(root_dir=tmp_path)
+    checks = {row["name"]: row for row in report["checks"]}
+    assert checks["compat_mode_valid"]["status"] == "PASS"
+    assert checks["response_mapping_extract"]["status"] == "PASS"

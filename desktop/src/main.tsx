@@ -5,10 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Activity,
   CheckCircle2,
   CircleAlert,
   ClipboardList,
+  Database,
+  DownloadCloud,
   FolderOpen,
   History,
   KeyRound,
@@ -16,10 +17,15 @@ import {
   Loader2,
   MonitorCheck,
   Play,
+  Plus,
   RefreshCw,
+  Save,
   Settings2,
+  SlidersHorizontal,
   Square,
+  Trash2,
   Video,
+  Wifi,
 } from "lucide-react";
 import "./styles.css";
 
@@ -54,6 +60,25 @@ const zh = {
   model: "模型",
   apiKey: "API Key",
   pasteKey: "粘贴 key",
+  saveProvider: "保存 provider",
+  testConnection: "测试连接",
+  fetchModels: "拉取模型",
+  useForTask: "用于当前任务",
+  newProvider: "新建 provider",
+  deleteProvider: "删除",
+  customModel: "自定义模型",
+  addModel: "添加模型",
+  baseUrl: "Base URL",
+  compatMode: "兼容协议",
+  envKey: "环境变量",
+  endpointPath: "接口路径",
+  authType: "鉴权方式",
+  responsePaths: "响应文本路径",
+  modelListPath: "模型列表路径",
+  providerSaved: "Provider 配置已保存",
+  providerDeleted: "Provider 已删除",
+  modelsFetched: "模型列表已更新",
+  connectionPassed: "Provider 联网测试通过",
   configured: "已配置",
   missing: "未配置",
   asrMode: "ASR 模式",
@@ -92,6 +117,47 @@ type ProviderConfig = {
   env_key: string;
   has_key: boolean;
   models: string[];
+  auth?: AuthConfig;
+  endpoint?: EndpointConfig;
+  request_mapping?: Record<string, unknown>;
+  response_mapping?: { text_paths?: string[] };
+  extra_headers?: Record<string, string>;
+  model_list?: ModelListConfig;
+  capabilities?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+};
+
+type AuthConfig = {
+  type: string;
+  header_name?: string;
+  query_name?: string;
+  prefix?: string;
+};
+
+type EndpointConfig = {
+  path_template: string;
+  method: string;
+};
+
+type ModelListConfig = {
+  path_template: string;
+  method: string;
+  response_paths: string[];
+};
+
+type ProviderTemplate = {
+  id: string;
+  label: string;
+  api_type: string;
+  compat_mode: string;
+  base_url: string;
+  endpoint: EndpointConfig;
+  auth: AuthConfig;
+  request_mapping: Record<string, unknown>;
+  response_mapping: { text_paths?: string[] };
+  extra_headers?: Record<string, string>;
+  model_list: ModelListConfig;
+  capabilities?: Record<string, unknown>;
 };
 
 type ConfigPayload = {
@@ -99,7 +165,42 @@ type ConfigPayload = {
   artifacts_dir: string;
   pipeline: Record<string, unknown>;
   routing: { primary: { provider: string; model: string } };
+  provider_templates: ProviderTemplate[];
   providers: ProviderConfig[];
+};
+
+type ProviderDraft = {
+  name: string;
+  api_type: string;
+  compat_mode: string;
+  base_url: string;
+  env_key: string;
+  models: string[];
+  auth: AuthConfig;
+  endpoint: EndpointConfig;
+  request_mapping: Record<string, unknown>;
+  response_mapping: { text_paths: string[] };
+  extra_headers: Record<string, string>;
+  model_list: ModelListConfig;
+  capabilities: Record<string, unknown>;
+};
+
+type ProviderDiagnostic = {
+  name?: string;
+  status: "PASS" | "WARN" | "FAIL";
+  code: string;
+  message: string;
+  hint_zh?: string;
+  details?: Record<string, unknown>;
+};
+
+type ProviderTestPayload = {
+  status: "PASS" | "WARN" | "FAIL";
+  checks: ProviderDiagnostic[];
+};
+
+type ProviderModelsPayload = ProviderDiagnostic & {
+  models: string[];
 };
 
 type TaskRecord = {
@@ -213,6 +314,68 @@ function numberValue(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function arrayValue(value: unknown) {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function defaultTemplate(config: ConfigPayload | null) {
+  return config?.provider_templates.find((item) => item.id === "openai_chat") || config?.provider_templates[0];
+}
+
+function envKeyForName(name: string) {
+  const slug = name.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase() || "CUSTOM";
+  return `TVX_PROVIDER_${slug}_API_KEY`;
+}
+
+function providerToDraft(provider: ProviderConfig): ProviderDraft {
+  return {
+    name: provider.name,
+    api_type: provider.api_type,
+    compat_mode: provider.compat_mode,
+    base_url: provider.base_url,
+    env_key: provider.env_key,
+    models: provider.models || [],
+    auth: provider.auth || { type: "bearer", header_name: "Authorization", query_name: "key", prefix: "Bearer " },
+    endpoint: provider.endpoint || { path_template: "/chat/completions", method: "POST" },
+    request_mapping: provider.request_mapping || { style: provider.compat_mode },
+    response_mapping: { text_paths: provider.response_mapping?.text_paths || [] },
+    extra_headers: provider.extra_headers || {},
+    model_list: provider.model_list || { path_template: "/models", method: "GET", response_paths: ["data[].id"] },
+    capabilities: provider.capabilities || {},
+  };
+}
+
+function templateToDraft(template: ProviderTemplate, name = "custom_provider"): ProviderDraft {
+  return {
+    name,
+    api_type: template.api_type,
+    compat_mode: template.compat_mode,
+    base_url: template.base_url,
+    env_key: envKeyForName(name),
+    models: [],
+    auth: { ...template.auth },
+    endpoint: { ...template.endpoint },
+    request_mapping: { ...template.request_mapping },
+    response_mapping: { text_paths: [...(template.response_mapping?.text_paths || [])] },
+    extra_headers: { ...(template.extra_headers || {}) },
+    model_list: {
+      path_template: template.model_list?.path_template || "/models",
+      method: template.model_list?.method || "GET",
+      response_paths: [...(template.model_list?.response_paths || ["data[].id"])],
+    },
+    capabilities: { ...(template.capabilities || {}) },
+  };
+}
+
+function diagnosticText(payload?: ProviderDiagnostic | ProviderTestPayload | null) {
+  if (!payload) return "";
+  if ("checks" in payload) {
+    const failed = payload.checks.find((check) => check.status === "FAIL") || payload.checks[0];
+    return failed ? `${failed.hint_zh || failed.message} (${failed.code})` : payload.status;
+  }
+  return `${payload.hint_zh || payload.message} (${payload.code})`;
+}
+
 function outputPath(task: TaskRecord, key: string) {
   return task.output_paths?.[key] || "";
 }
@@ -254,10 +417,19 @@ function App() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(null);
+  const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(false);
+  const [providerResult, setProviderResult] = useState<ProviderDiagnostic | ProviderTestPayload | null>(null);
+  const [customModel, setCustomModel] = useState("");
 
   const selectedProvider = useMemo(
     () => config?.providers.find((provider) => provider.name === form.provider),
     [config, form.provider],
+  );
+
+  const selectedTemplate = useMemo(
+    () => config?.provider_templates.find((template) => template.compat_mode === providerDraft?.compat_mode),
+    [config, providerDraft?.compat_mode],
   );
 
   const progress = useMemo(() => {
@@ -294,6 +466,14 @@ function App() {
     const payload = await invoke<ConfigPayload>("get_config");
     const translation = fieldTranslation(payload.pipeline);
     setConfig(payload);
+    setProviderDraft((current) => {
+      if (current) return current;
+      const providerName = payload.routing.primary.provider || payload.providers[0]?.name || "";
+      const providerConfig = payload.providers.find((item) => item.name === providerName) || payload.providers[0];
+      if (providerConfig) return providerToDraft(providerConfig);
+      const template = defaultTemplate(payload);
+      return template ? templateToDraft(template) : current;
+    });
     setForm((current) => {
       const provider = current.provider || payload.routing.primary.provider;
       const providerConfig = payload.providers.find((item) => item.name === provider);
@@ -376,8 +556,67 @@ function App() {
     }
   }, [selectedProvider?.name]);
 
+  useEffect(() => {
+    if (!selectedProvider) return;
+    setProviderDraft(providerToDraft(selectedProvider));
+    setProviderResult(null);
+    setCustomModel("");
+  }, [selectedProvider?.name]);
+
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateProviderDraft(patch: Partial<ProviderDraft>) {
+    setProviderDraft((current) => {
+      const template = defaultTemplate(config);
+      const base = current || (template ? templateToDraft(template) : null);
+      if (!base) return current;
+      return { ...base, ...patch };
+    });
+  }
+
+  function updateProviderTemplate(compatMode: string) {
+    const template = config?.provider_templates.find((item) => item.compat_mode === compatMode);
+    if (!template) return;
+    setProviderDraft((current) => {
+      const base = current || templateToDraft(template);
+      return {
+        ...base,
+        api_type: template.api_type,
+        compat_mode: template.compat_mode,
+        base_url: base.base_url || template.base_url,
+        auth: { ...template.auth },
+        endpoint: { ...template.endpoint },
+        request_mapping: { ...template.request_mapping },
+        response_mapping: { text_paths: [...(template.response_mapping?.text_paths || [])] },
+        extra_headers: { ...(template.extra_headers || {}) },
+        model_list: {
+          path_template: template.model_list?.path_template || "/models",
+          method: template.model_list?.method || "GET",
+          response_paths: [...(template.model_list?.response_paths || ["data[].id"])],
+        },
+        capabilities: { ...(template.capabilities || {}) },
+      };
+    });
+  }
+
+  function newProviderDraft() {
+    const template = defaultTemplate(config);
+    if (!template) return;
+    const name = `custom_${Date.now().toString().slice(-5)}`;
+    setProviderDraft(templateToDraft(template, name));
+    setProviderResult(null);
+    setCustomModel("");
+  }
+
+  function addCustomModel() {
+    const model = customModel.trim();
+    if (!model || !providerDraft) return;
+    const models = providerDraft.models.includes(model) ? providerDraft.models : [...providerDraft.models, model];
+    updateProviderDraft({ models });
+    update("model", model);
+    setCustomModel("");
   }
 
   async function chooseVideo() {
@@ -393,22 +632,6 @@ function App() {
     if (typeof selected === "string") update("outputDir", selected);
   }
 
-  async function saveKey() {
-    if (!selectedProvider || !form.apiKey.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      await invoke("save_env_secret", { envKey: selectedProvider.env_key, value: form.apiKey.trim() });
-      update("apiKey", "");
-      setNotice(t("keySaved"));
-      await Promise.all([refreshConfig(), refreshDoctor()]);
-    } catch (err) {
-      setError(friendlyError(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function probe() {
     setBusy(true);
     setError("");
@@ -422,6 +645,104 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveProvider() {
+    if (!providerDraft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setProviderResult(null);
+    try {
+      await invoke("save_provider_config", {
+        providerDraft,
+        apiKey: form.apiKey.trim() || null,
+      });
+      update("provider", providerDraft.name);
+      update("model", providerDraft.models[0] || form.model);
+      update("apiKey", "");
+      setNotice(t("providerSaved"));
+      await Promise.all([refreshConfig(), refreshDoctor()]);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteProvider() {
+    if (!providerDraft?.name) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await invoke("delete_provider_config", { name: providerDraft.name });
+      setNotice(t("providerDeleted"));
+      setProviderDraft(null);
+      update("provider", "");
+      update("model", "");
+      await Promise.all([refreshConfig(), refreshDoctor()]);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fetchModels() {
+    if (!providerDraft) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await invoke<ProviderModelsPayload>("fetch_provider_models", {
+        providerDraft,
+        apiKey: form.apiKey.trim() || null,
+      });
+      setProviderResult(payload);
+      if (payload.models.length > 0) {
+        const models = Array.from(new Set([...providerDraft.models, ...payload.models]));
+        updateProviderDraft({ models });
+        update("model", models[0]);
+        setNotice(t("modelsFetched"));
+      }
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testConnection() {
+    if (!providerDraft) return;
+    const model = form.model || providerDraft.models[0] || customModel.trim();
+    if (!model) {
+      setError("请先选择或添加一个模型。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await invoke<ProviderTestPayload>("test_provider_connection", {
+        providerDraft: { ...providerDraft, models: providerDraft.models.includes(model) ? providerDraft.models : [model, ...providerDraft.models] },
+        model,
+        apiKey: form.apiKey.trim() || null,
+      });
+      setProviderResult(payload);
+      if (payload.status === "PASS") setNotice(t("connectionPassed"));
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function useProviderForTask() {
+    if (!providerDraft) return;
+    update("provider", providerDraft.name);
+    update("model", form.model || providerDraft.models[0] || "");
+    setNotice("已用于当前任务。");
   }
 
   function taskRequest() {
@@ -581,7 +902,22 @@ function App() {
           update={update}
           config={config}
           selectedProvider={selectedProvider}
-          saveKey={saveKey}
+          selectedTemplate={selectedTemplate}
+          providerDraft={providerDraft}
+          providerAdvancedOpen={providerAdvancedOpen}
+          setProviderAdvancedOpen={setProviderAdvancedOpen}
+          providerResult={providerResult}
+          customModel={customModel}
+          setCustomModel={setCustomModel}
+          updateProviderDraft={updateProviderDraft}
+          updateProviderTemplate={updateProviderTemplate}
+          newProviderDraft={newProviderDraft}
+          saveProvider={saveProvider}
+          deleteProvider={deleteProvider}
+          fetchModels={fetchModels}
+          testConnection={testConnection}
+          useProviderForTask={useProviderForTask}
+          addCustomModel={addCustomModel}
           probe={probe}
           busy={busy}
         />
@@ -898,7 +1234,22 @@ function ConfigPanel({
   update,
   config,
   selectedProvider,
-  saveKey,
+  selectedTemplate,
+  providerDraft,
+  providerAdvancedOpen,
+  setProviderAdvancedOpen,
+  providerResult,
+  customModel,
+  setCustomModel,
+  updateProviderDraft,
+  updateProviderTemplate,
+  newProviderDraft,
+  saveProvider,
+  deleteProvider,
+  fetchModels,
+  testConnection,
+  useProviderForTask,
+  addCustomModel,
   probe,
   busy,
 }: {
@@ -906,49 +1257,241 @@ function ConfigPanel({
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   config: ConfigPayload | null;
   selectedProvider?: ProviderConfig;
-  saveKey: () => void;
+  selectedTemplate?: ProviderTemplate;
+  providerDraft: ProviderDraft | null;
+  providerAdvancedOpen: boolean;
+  setProviderAdvancedOpen: (open: boolean) => void;
+  providerResult: ProviderDiagnostic | ProviderTestPayload | null;
+  customModel: string;
+  setCustomModel: (value: string) => void;
+  updateProviderDraft: (patch: Partial<ProviderDraft>) => void;
+  updateProviderTemplate: (compatMode: string) => void;
+  newProviderDraft: () => void;
+  saveProvider: () => void;
+  deleteProvider: () => void;
+  fetchModels: () => void;
+  testConnection: () => void;
+  useProviderForTask: () => void;
+  addCustomModel: () => void;
   probe: () => void;
   busy: boolean;
 }) {
+  const responsePaths = providerDraft?.response_mapping.text_paths.join("\n") || "";
+  const modelListPaths = providerDraft?.model_list.response_paths.join("\n") || "";
   return (
     <div className="space-y-4">
-      <Panel title="模型 provider">
-        <div className="grid grid-cols-2 gap-4">
-          <label className="tvx-label">
-            {t("providerName")}
-            <select className="tvx-input" value={form.provider} onChange={(event) => update("provider", event.target.value)}>
+      <Panel title="Provider 配置中心">
+        <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <aside className="space-y-2">
+            <button className="tvx-btn w-full justify-start" onClick={newProviderDraft} disabled={busy}>
+              <Plus size={16} /> {t("newProvider")}
+            </button>
+            <div className="grid max-h-[360px] gap-2 overflow-auto pr-1">
               {config?.providers.map((provider) => (
-                <option key={provider.name} value={provider.name}>
-                  {provider.name}
-                </option>
+                <button
+                  key={provider.name}
+                  className={`rounded-lg border p-3 text-left text-sm transition ${
+                    provider.name === form.provider ? "border-brand bg-emerald-50" : "border-line bg-white hover:bg-slate-50"
+                  }`}
+                  onClick={() => {
+                    update("provider", provider.name);
+                    update("model", provider.models[0] || "");
+                  }}
+                >
+                  <span className="block truncate font-semibold">{provider.name}</span>
+                  <span className="mt-1 block truncate text-xs text-muted">{provider.compat_mode}</span>
+                  <span className={`mt-2 block text-[11px] font-semibold ${provider.has_key ? "text-brand" : "text-warning"}`}>
+                    {provider.has_key ? t("configured") : t("missing")}
+                  </span>
+                </button>
               ))}
-            </select>
-          </label>
-          <label className="tvx-label">
-            {t("model")}
-            <select className="tvx-input" value={form.model} onChange={(event) => update("model", event.target.value)}>
-              {selectedProvider?.models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </label>
+            </div>
+          </aside>
+
+          <section className="space-y-4">
+            {!providerDraft && <p className="rounded-lg bg-slate-50 p-3 text-sm text-muted">请选择或新建一个 provider。</p>}
+            {providerDraft && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="tvx-label">
+                    {t("providerName")}
+                    <input
+                      className="tvx-input"
+                      value={providerDraft.name}
+                      onChange={(event) => {
+                        const name = event.target.value;
+                        updateProviderDraft({ name, env_key: providerDraft.env_key || envKeyForName(name) });
+                      }}
+                    />
+                  </label>
+                  <label className="tvx-label">
+                    {t("compatMode")}
+                    <select className="tvx-input" value={providerDraft.compat_mode} onChange={(event) => updateProviderTemplate(event.target.value)}>
+                      {config?.provider_templates.map((template) => (
+                        <option key={template.id} value={template.compat_mode}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tvx-label">
+                    {t("baseUrl")}
+                    <input className="tvx-input" value={providerDraft.base_url} onChange={(event) => updateProviderDraft({ base_url: event.target.value })} />
+                  </label>
+                  <label className="tvx-label">
+                    {t("envKey")}
+                    <input className="tvx-input" value={providerDraft.env_key} onChange={(event) => updateProviderDraft({ env_key: event.target.value })} />
+                  </label>
+                </div>
+
+                <section className="grid grid-cols-[24px_minmax(120px,1fr)_minmax(180px,260px)_auto] items-center gap-3 rounded-lg border border-line p-3">
+                  <KeyRound className="text-brand" size={18} />
+                  <div>
+                    <strong className="block text-sm">{providerDraft.env_key}</strong>
+                    <span className="text-xs text-muted">{selectedProvider?.name === providerDraft.name && selectedProvider?.has_key ? t("configured") : "可保存新 key"}</span>
+                  </div>
+                  <input className="tvx-input" type="password" placeholder={t("pasteKey")} value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} />
+                  <button className="tvx-btn" disabled={!form.apiKey || busy} onClick={saveProvider}>
+                    {t("save")}
+                  </button>
+                </section>
+
+                <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-4">
+                  <label className="tvx-label">
+                    {t("model")}
+                    <select className="tvx-input" value={form.model} onChange={(event) => update("model", event.target.value)}>
+                      {providerDraft.models.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="tvx-label">
+                    {t("customModel")}
+                    <div className="grid grid-cols-[minmax(0,1fr)_44px] gap-2">
+                      <input className="tvx-input" value={customModel} onChange={(event) => setCustomModel(event.target.value)} />
+                      <button className="tvx-btn px-0" onClick={addCustomModel} title={t("addModel")}>
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button className="tvx-btn tvx-btn-primary" onClick={saveProvider} disabled={busy}>
+                    <Save size={16} /> {t("saveProvider")}
+                  </button>
+                  <button className="tvx-btn" onClick={testConnection} disabled={busy}>
+                    <Wifi size={16} /> {t("testConnection")}
+                  </button>
+                  <button className="tvx-btn" onClick={fetchModels} disabled={busy}>
+                    <DownloadCloud size={16} /> {t("fetchModels")}
+                  </button>
+                  <button className="tvx-btn" onClick={useProviderForTask} disabled={busy}>
+                    <Database size={16} /> {t("useForTask")}
+                  </button>
+                  <button className="tvx-btn" onClick={probe} disabled={busy}>
+                    <ClipboardList size={16} /> {t("preflight")}
+                  </button>
+                  <button className="tvx-btn tvx-btn-danger" onClick={deleteProvider} disabled={busy || !selectedProvider}>
+                    <Trash2 size={16} /> {t("deleteProvider")}
+                  </button>
+                </div>
+
+                {providerResult && (
+                  <div className={`rounded-lg border p-3 text-sm ${providerResult.status === "FAIL" ? "border-red-200 bg-red-50 text-danger" : providerResult.status === "WARN" ? "border-yellow-200 bg-yellow-50 text-warning" : "border-emerald-200 bg-emerald-50 text-brand"}`}>
+                    <strong>{providerResult.status}</strong>
+                    <p className="mt-1 text-ink">{diagnosticText(providerResult)}</p>
+                  </div>
+                )}
+
+                <button className="tvx-btn" onClick={() => setProviderAdvancedOpen(!providerAdvancedOpen)}>
+                  <SlidersHorizontal size={16} /> {providerAdvancedOpen ? "收起高级设置" : "展开高级设置"}
+                </button>
+
+                {providerAdvancedOpen && (
+                  <div className="grid grid-cols-2 gap-4 rounded-lg border border-line bg-slate-50 p-3">
+                    <label className="tvx-label">
+                      api_type
+                      <input className="tvx-input" value={providerDraft.api_type} onChange={(event) => updateProviderDraft({ api_type: event.target.value })} />
+                    </label>
+                    <label className="tvx-label">
+                      {t("authType")}
+                      <select
+                        className="tvx-input"
+                        value={providerDraft.auth.type}
+                        onChange={(event) => updateProviderDraft({ auth: { ...providerDraft.auth, type: event.target.value } })}
+                      >
+                        <option value="bearer">bearer</option>
+                        <option value="header">header</option>
+                        <option value="query">query</option>
+                      </select>
+                    </label>
+                    <label className="tvx-label">
+                      {t("endpointPath")}
+                      <input
+                        className="tvx-input"
+                        value={providerDraft.endpoint.path_template}
+                        onChange={(event) => updateProviderDraft({ endpoint: { ...providerDraft.endpoint, path_template: event.target.value } })}
+                      />
+                    </label>
+                    <label className="tvx-label">
+                      {t("modelListPath")}
+                      <input
+                        className="tvx-input"
+                        value={providerDraft.model_list.path_template}
+                        onChange={(event) => updateProviderDraft({ model_list: { ...providerDraft.model_list, path_template: event.target.value } })}
+                      />
+                    </label>
+                    <label className="tvx-label">
+                      header_name / query_name
+                      <input
+                        className="tvx-input"
+                        value={providerDraft.auth.type === "query" ? providerDraft.auth.query_name || "" : providerDraft.auth.header_name || ""}
+                        onChange={(event) =>
+                          updateProviderDraft({
+                            auth:
+                              providerDraft.auth.type === "query"
+                                ? { ...providerDraft.auth, query_name: event.target.value }
+                                : { ...providerDraft.auth, header_name: event.target.value },
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="tvx-label">
+                      auth prefix
+                      <input className="tvx-input" value={providerDraft.auth.prefix || ""} onChange={(event) => updateProviderDraft({ auth: { ...providerDraft.auth, prefix: event.target.value } })} />
+                    </label>
+                    <label className="tvx-label">
+                      {t("responsePaths")}
+                      <textarea
+                        className="tvx-textarea min-h-24"
+                        value={responsePaths}
+                        onChange={(event) => updateProviderDraft({ response_mapping: { text_paths: arrayValue(event.target.value.split(/\r?\n/)) } })}
+                      />
+                    </label>
+                    <label className="tvx-label">
+                      model list response paths
+                      <textarea
+                        className="tvx-textarea min-h-24"
+                        value={modelListPaths}
+                        onChange={(event) =>
+                          updateProviderDraft({
+                            model_list: { ...providerDraft.model_list, response_paths: arrayValue(event.target.value.split(/\r?\n/)) },
+                          })
+                        }
+                      />
+                    </label>
+                    <p className="col-span-2 text-xs text-muted">
+                      当前模板：{selectedTemplate?.label || providerDraft.compat_mode}。高级字段用于兼容非标准网关，普通 OpenAI-compatible 只需要 base_url、key 和模型。
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
         </div>
-        <section className="mt-4 grid grid-cols-[24px_minmax(120px,1fr)_minmax(180px,260px)_auto] items-center gap-3 rounded-lg border border-line p-3">
-          <KeyRound className="text-brand" size={18} />
-          <div>
-            <strong className="block text-sm">{selectedProvider?.env_key || t("apiKey")}</strong>
-            <span className="text-xs text-muted">{selectedProvider?.has_key ? t("configured") : t("missing")}</span>
-          </div>
-          <input className="tvx-input" type="password" placeholder={t("pasteKey")} value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} />
-          <button className="tvx-btn" disabled={!form.apiKey || busy} onClick={saveKey}>
-            {t("save")}
-          </button>
-        </section>
-        <button className="tvx-btn mt-4" onClick={probe} disabled={busy}>
-          <ClipboardList size={17} /> {t("preflight")}
-        </button>
       </Panel>
 
       <Panel title="ASR">

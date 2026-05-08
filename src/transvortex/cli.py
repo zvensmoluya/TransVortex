@@ -11,6 +11,13 @@ from .config import apply_route_overrides, load_app_config, resolve_providers_fi
 from .doctor import doctor_report, format_doctor_report
 from .orchestrator import resume_pipeline, run_pipeline, task_status_json
 from .probe import probe_exit_code, probe_provider
+from .provider_admin import (
+    delete_provider_config,
+    fetch_provider_models,
+    provider_templates_payload,
+    run_provider_connection_test,
+    save_provider_config,
+)
 from .task_store import TaskStore
 from .utils import to_plain
 
@@ -95,6 +102,12 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
                 "env_key": provider.env_key,
                 "has_key": bool(os.getenv(provider.env_key)),
                 "models": provider.models,
+                "auth": to_plain(provider.auth),
+                "endpoint": to_plain(provider.endpoint),
+                "request_mapping": provider.mapping.request,
+                "response_mapping": provider.mapping.response,
+                "extra_headers": provider.extra_headers,
+                "model_list": to_plain(provider.model_list),
                 "limits": to_plain(provider.limits),
                 "capabilities": to_plain(provider.capabilities),
             }
@@ -105,8 +118,18 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         "artifacts_dir": str(config.pipeline.artifacts_dir),
         "pipeline": to_plain(config.pipeline),
         "routing": to_plain(config.routing),
+        "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
     }
+
+
+def _read_json_arg(raw: str) -> dict[str, Any]:
+    if raw.startswith("@"):
+        raw = Path(raw[1:]).read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON payload must be an object")
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -170,6 +193,28 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_p.add_argument("--source-lang", default="en")
     probe_p.add_argument("--target-lang", default="zh-CN")
     probe_p.add_argument("--strict", action="store_true", help="Return exit code 1 if any FAIL check exists")
+
+    provider_p = sub.add_parser("provider", help="Manage providers")
+    provider_sub = provider_p.add_subparsers(dest="provider_command", required=True)
+    provider_save_p = provider_sub.add_parser("save", help="Save provider config to providers.local.yaml")
+    provider_save_p.add_argument("--json-payload", required=True)
+    provider_save_p.add_argument("--api-key", default=None)
+    provider_save_p.add_argument("--json", action="store_true")
+
+    provider_delete_p = provider_sub.add_parser("delete", help="Delete provider config from providers.local.yaml")
+    provider_delete_p.add_argument("--name", required=True)
+    provider_delete_p.add_argument("--json", action="store_true")
+
+    provider_models_p = provider_sub.add_parser("models", help="Fetch provider models from network")
+    provider_models_p.add_argument("--json-payload", required=True)
+    provider_models_p.add_argument("--api-key", default=None)
+    provider_models_p.add_argument("--json", action="store_true")
+
+    provider_test_p = provider_sub.add_parser("test", help="Run a minimal provider network test")
+    provider_test_p.add_argument("--json-payload", required=True)
+    provider_test_p.add_argument("--model", required=True)
+    provider_test_p.add_argument("--api-key", default=None)
+    provider_test_p.add_argument("--json", action="store_true")
     return parser
 
 
@@ -177,7 +222,8 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    providers_file = Path(args.providers_file).resolve() if args.providers_file else None
+    raw_providers_file = getattr(args, "providers_file", None)
+    providers_file = Path(raw_providers_file).resolve() if raw_providers_file else None
     if args.command == "run":
         if args.json and args.stream_events:
             parser.error("run: --json and --stream-events cannot be used together")
@@ -296,6 +342,37 @@ def main() -> None:
         )
         _print_json(report)
         raise SystemExit(probe_exit_code(report, strict=args.strict))
+
+    if args.command == "provider" and args.provider_command == "save":
+        payload = save_provider_config(
+            root_dir=root,
+            provider_draft=_read_json_arg(args.json_payload),
+            api_key=args.api_key,
+        )
+        _print_json(payload)
+        return
+
+    if args.command == "provider" and args.provider_command == "delete":
+        payload = delete_provider_config(root_dir=root, name=args.name)
+        _print_json(payload)
+        return
+
+    if args.command == "provider" and args.provider_command == "models":
+        payload = fetch_provider_models(
+            provider_draft=_read_json_arg(args.json_payload),
+            api_key=args.api_key,
+        )
+        _print_json(payload)
+        return
+
+    if args.command == "provider" and args.provider_command == "test":
+        payload = run_provider_connection_test(
+            provider_draft=_read_json_arg(args.json_payload),
+            model=args.model,
+            api_key=args.api_key,
+        )
+        _print_json(payload)
+        return
 
 
 if __name__ == "__main__":

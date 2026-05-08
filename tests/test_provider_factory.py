@@ -94,6 +94,49 @@ def test_payload_contains_style_and_context_sections() -> None:
     assert "CONTEXT_AFTER\n[3] after" in user_text
 
 
+def test_openai_responses_payload_and_mapping() -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(
+            request={"style": "openai_responses"},
+            response={"text_paths": ["output_text", "output[].content[].text"]},
+        ),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
+    payload = _build_payload(cfg, req)
+    assert payload["model"] == "m1"
+    assert payload["input"][0]["role"] == "system"
+    assert payload["input"][-1]["role"] == "user"
+    assert _extract_text_by_paths({"output_text": "[1] 你好"}, cfg.mapping.response["text_paths"]) == "[1] 你好"
+
+
+def test_openai_completions_payload_and_mapping() -> None:
+    cfg = ProviderConfig(
+        name="completions",
+        api_type="openai-compatible",
+        compat_mode="openai_completions",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(
+            request={"style": "openai_completions", "max_tokens": 128},
+            response={"text_paths": ["choices[0].text"]},
+        ),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
+    payload = _build_payload(cfg, req)
+    assert payload["prompt"]
+    assert payload["max_tokens"] == 128
+    assert _extract_text_by_paths({"choices": [{"text": "[1] 你好"}]}, cfg.mapping.response["text_paths"]) == "[1] 你好"
+
+
 def test_payload_inlines_fixed_constraints_when_system_prompt_not_supported() -> None:
     cfg = ProviderConfig(
         name="g1",

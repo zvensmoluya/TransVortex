@@ -15,6 +15,7 @@ from .models import (
     DEFAULT_TRANSLATION_STYLE_PROMPT,
     EndpointConfig,
     MappingConfig,
+    ModelListConfig,
     PipelineConfig,
     ProviderConfig,
     ProviderLimits,
@@ -106,6 +107,10 @@ def _infer_compat_mode(api_type: str) -> str:
 def _default_endpoint_for_mode(compat_mode: str) -> EndpointConfig:
     if compat_mode == "openai_chat":
         return EndpointConfig(path_template="/chat/completions", method="POST")
+    if compat_mode == "openai_responses":
+        return EndpointConfig(path_template="/responses", method="POST")
+    if compat_mode == "openai_completions":
+        return EndpointConfig(path_template="/completions", method="POST")
     if compat_mode == "anthropic_messages":
         return EndpointConfig(path_template="/messages", method="POST")
     if compat_mode == "gemini_generate_content":
@@ -114,7 +119,7 @@ def _default_endpoint_for_mode(compat_mode: str) -> EndpointConfig:
 
 
 def _default_auth_for_mode(compat_mode: str) -> AuthConfig:
-    if compat_mode == "openai_chat":
+    if compat_mode in {"openai_chat", "openai_responses", "openai_completions"}:
         return AuthConfig(type="bearer", header_name="Authorization", prefix="Bearer ")
     if compat_mode == "anthropic_messages":
         return AuthConfig(type="header", header_name="x-api-key", prefix="")
@@ -130,6 +135,25 @@ def _default_mapping_for_mode(compat_mode: str) -> MappingConfig:
             response={
                 "text_paths": [
                     "choices[0].message.content",
+                ]
+            },
+        )
+    if compat_mode == "openai_responses":
+        return MappingConfig(
+            request={"style": "openai_responses"},
+            response={
+                "text_paths": [
+                    "output_text",
+                    "output[].content[].text",
+                ]
+            },
+        )
+    if compat_mode == "openai_completions":
+        return MappingConfig(
+            request={"style": "openai_completions"},
+            response={
+                "text_paths": [
+                    "choices[0].text",
                 ]
             },
         )
@@ -151,6 +175,16 @@ def _default_mapping_for_mode(compat_mode: str) -> MappingConfig:
                 ]
             },
         )
+    raise ValueError(f"Unsupported compat_mode: {compat_mode}")
+
+
+def _default_model_list_for_mode(compat_mode: str) -> ModelListConfig:
+    if compat_mode in {"openai_chat", "openai_responses", "openai_completions"}:
+        return ModelListConfig(path_template="/models", method="GET", response_paths=["data[].id"])
+    if compat_mode == "anthropic_messages":
+        return ModelListConfig(path_template="/models", method="GET", response_paths=["data[].id"])
+    if compat_mode == "gemini_generate_content":
+        return ModelListConfig(path_template="/models", method="GET", response_paths=["models[].name", "data[].id"])
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 
@@ -318,6 +352,13 @@ def load_app_config(
             request=_merge_dict(mapping_default.request, row.get("request_mapping", {})),
             response=_merge_dict(mapping_default.response, row.get("response_mapping", {})),
         )
+        model_list_default = _default_model_list_for_mode(compat_mode)
+        model_list_raw = row.get("model_list", {})
+        model_list = ModelListConfig(
+            path_template=str(model_list_raw.get("path_template", model_list_default.path_template)),
+            method=str(model_list_raw.get("method", model_list_default.method)).upper(),
+            response_paths=list(model_list_raw.get("response_paths", model_list_default.response_paths)),
+        )
         capabilities_raw = row.get("capabilities", {})
         capabilities = CapabilityConfig(
             supports_system_prompt=bool(capabilities_raw.get("supports_system_prompt", True)),
@@ -335,6 +376,8 @@ def load_app_config(
             auth=auth,
             endpoint=endpoint,
             mapping=mapping,
+            extra_headers={str(k): str(v) for k, v in (row.get("extra_headers") or {}).items()},
+            model_list=model_list,
             capabilities=capabilities,
             limits=limits,
         )

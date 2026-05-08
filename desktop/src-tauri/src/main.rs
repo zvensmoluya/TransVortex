@@ -132,6 +132,10 @@ fn run_worker_json(root: &Path, args: &[String]) -> Result<Value, String> {
     serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())
 }
 
+fn value_arg(value: &Value) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|err| err.to_string())
+}
+
 fn push_arg(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
     if let Some(value) = value {
         if !value.trim().is_empty() {
@@ -302,6 +306,78 @@ fn probe_provider(
 }
 
 #[tauri::command]
+fn save_provider_config(
+    app: AppHandle,
+    provider_draft: Value,
+    api_key: Option<String>,
+) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let mut args = vec![
+        "provider".into(),
+        "save".into(),
+        "--json-payload".into(),
+        value_arg(&provider_draft)?,
+        "--json".into(),
+    ];
+    push_arg(&mut args, "--api-key", &api_key);
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
+fn delete_provider_config(app: AppHandle, name: String) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "provider".into(),
+            "delete".into(),
+            "--name".into(),
+            name,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn fetch_provider_models(
+    app: AppHandle,
+    provider_draft: Value,
+    api_key: Option<String>,
+) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let mut args = vec![
+        "provider".into(),
+        "models".into(),
+        "--json-payload".into(),
+        value_arg(&provider_draft)?,
+        "--json".into(),
+    ];
+    push_arg(&mut args, "--api-key", &api_key);
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
+fn test_provider_connection(
+    app: AppHandle,
+    provider_draft: Value,
+    model: String,
+    api_key: Option<String>,
+) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let mut args = vec![
+        "provider".into(),
+        "test".into(),
+        "--json-payload".into(),
+        value_arg(&provider_draft)?,
+        "--model".into(),
+        model,
+        "--json".into(),
+    ];
+    push_arg(&mut args, "--api-key", &api_key);
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
 fn start_task(
     app: AppHandle,
     state: State<WorkerState>,
@@ -455,6 +531,10 @@ fn main() {
             read_events,
             save_env_secret,
             probe_provider,
+            save_provider_config,
+            delete_provider_config,
+            fetch_provider_models,
+            test_provider_connection,
             start_task,
             resume_task,
             cancel_task,

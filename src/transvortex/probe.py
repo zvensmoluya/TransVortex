@@ -10,7 +10,13 @@ from .providers.factory import _build_payload, _build_url_and_headers, _extract_
 
 
 VALID_API_TYPES = {"openai", "openai-compatible", "anthropic", "gemini-compatible"}
-VALID_COMPAT_MODES = {"openai_chat", "anthropic_messages", "gemini_generate_content"}
+VALID_COMPAT_MODES = {
+    "openai_chat",
+    "openai_responses",
+    "openai_completions",
+    "anthropic_messages",
+    "gemini_generate_content",
+}
 
 
 @dataclass
@@ -24,6 +30,10 @@ class ProbeItem:
 def _mock_response_for_compat_mode(compat_mode: str) -> dict:
     if compat_mode == "openai_chat":
         return {"choices": [{"message": {"content": "[1] ok"}}]}
+    if compat_mode == "openai_responses":
+        return {"output_text": "[1] ok"}
+    if compat_mode == "openai_completions":
+        return {"choices": [{"text": "[1] ok"}]}
     if compat_mode == "anthropic_messages":
         return {"content": [{"text": "[1] ok"}]}
     if compat_mode == "gemini_generate_content":
