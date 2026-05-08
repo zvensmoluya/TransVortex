@@ -5,18 +5,84 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  Activity,
   CheckCircle2,
   CircleAlert,
   ClipboardList,
   FolderOpen,
+  History,
   KeyRound,
+  Languages,
   Loader2,
+  MonitorCheck,
   Play,
   RefreshCw,
+  Settings2,
   Square,
   Video,
 } from "lucide-react";
 import "./styles.css";
+
+const zh = {
+  appSubtitle: "本地视频转字幕工作台",
+  start: "开始任务",
+  translation: "翻译设置",
+  provider: "模型与 ASR",
+  history: "任务历史",
+  environment: "环境诊断",
+  refresh: "刷新",
+  choose: "选择",
+  cancel: "取消",
+  startRun: "开始运行",
+  preflight: "预检 provider",
+  save: "保存",
+  openOutput: "打开输出",
+  events: "事件",
+  folder: "目录",
+  resume: "恢复",
+  noEvents: "暂无事件。",
+  noTasks: "暂无历史任务。",
+  dropVideo: "拖入视频文件",
+  videoReady: "视频已选择，可以开始生成字幕",
+  videoHint: "支持 MP4、MKV、MOV、WEBM、AVI",
+  sourceLang: "源语言",
+  targetLang: "目标语言",
+  outputDir: "输出目录",
+  outputFormat: "输出格式",
+  bilingual: "双语字幕",
+  providerName: "Provider",
+  model: "模型",
+  apiKey: "API Key",
+  pasteKey: "粘贴 key",
+  configured: "已配置",
+  missing: "未配置",
+  asrMode: "ASR 模式",
+  device: "设备",
+  modelSize: "模型大小",
+  compute: "计算精度",
+  advanced: "高级设置",
+  chunkSec: "切片秒数",
+  overlapSec: "重叠秒数",
+  concurrency: "并发",
+  preset: "翻译风格",
+  stylePrompt: "自定义 prompt",
+  chunkLines: "每批行数",
+  contextBefore: "前文行数",
+  contextAfter: "后文行数",
+  repairRows: "自动修复无效行",
+  progress: "进度",
+  running: "运行中",
+  environmentSummary: "环境摘要",
+  latestEvents: "最新事件",
+  keySaved: "API key 已保存到 .env",
+  preflightPassed: "Provider 预检通过",
+  cancelRequested: "已请求取消",
+  chooseVideoFirst: "请先选择一个视频文件。",
+};
+
+function t(key: keyof typeof zh) {
+  return zh[key];
+}
 
 type ProviderConfig = {
   name: string;
@@ -79,6 +145,8 @@ type DoctorPayload = {
   checks: DoctorCheck[];
 };
 
+type ActiveView = "start" | "translation" | "provider" | "history" | "environment";
+
 type FormState = {
   input: string;
   outputDir: string;
@@ -135,6 +203,8 @@ const emptyForm: FormState = {
   apiKey: "",
 };
 
+type DroppedFile = File & { path?: string };
+
 function textValue(value: unknown, fallback: string) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
@@ -143,18 +213,37 @@ function numberValue(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function outputPath(task: TaskRecord, key: string) {
+  return task.output_paths?.[key] || "";
+}
+
 function eventOutputPath(event: WorkerEvent) {
   const value = event.details?.output_path;
   return typeof value === "string" ? value : "";
 }
 
-function outputPath(task: TaskRecord, key: string) {
-  return task.output_paths?.[key] || "";
+function statusTone(status: string) {
+  if (status === "PASS" || status === "DONE") return "text-brand";
+  if (status === "WARN" || status === "CANCELLED") return "text-warning";
+  if (status === "FAIL" || status === "FAILED") return "text-danger";
+  return "text-muted";
 }
 
-type DroppedFile = File & { path?: string };
+function fieldTranslation(payload: ConfigPayload["pipeline"]) {
+  return payload.translation as
+    | {
+        style_preset?: string;
+        style_prompt?: string;
+        chunk_lines?: number;
+        context_before_lines?: number;
+        context_after_lines?: number;
+        repair?: { enabled?: boolean };
+      }
+    | undefined;
+}
 
 function App() {
+  const [activeView, setActiveView] = useState<ActiveView>("start");
   const [config, setConfig] = useState<ConfigPayload | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -164,6 +253,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const selectedProvider = useMemo(
     () => config?.providers.find((provider) => provider.name === form.provider),
@@ -196,12 +286,13 @@ function App() {
       if (failed) return `${failed.hint_zh || failed.message} (${failed.code})`;
       return payload.message || text;
     } catch {
-      return text;
+      return `操作失败：${text}`;
     }
   }
 
   async function refreshConfig() {
     const payload = await invoke<ConfigPayload>("get_config");
+    const translation = fieldTranslation(payload.pipeline);
     setConfig(payload);
     setForm((current) => {
       const provider = current.provider || payload.routing.primary.provider;
@@ -219,29 +310,15 @@ function App() {
         chunkSeconds: numberValue(payload.pipeline.chunk_seconds, current.chunkSeconds),
         chunkOverlapSeconds: numberValue(payload.pipeline.chunk_overlap_seconds, current.chunkOverlapSeconds),
         translationBatchSize: numberValue(payload.pipeline.translation_batch_size, current.translationBatchSize),
-        translationStylePreset: textValue(
-          (payload.pipeline.translation as Record<string, unknown> | undefined)?.style_preset,
-          current.translationStylePreset,
-        ),
-        translationStylePrompt: textValue(
-          (payload.pipeline.translation as Record<string, unknown> | undefined)?.style_prompt,
-          current.translationStylePrompt,
-        ),
-        translationChunkLines: numberValue(
-          (payload.pipeline.translation as Record<string, unknown> | undefined)?.chunk_lines,
-          current.translationChunkLines,
-        ),
+        translationStylePreset: textValue(translation?.style_preset, current.translationStylePreset),
+        translationStylePrompt: textValue(translation?.style_prompt, current.translationStylePrompt),
+        translationChunkLines: numberValue(translation?.chunk_lines, current.translationChunkLines),
         translationContextBeforeLines: numberValue(
-          (payload.pipeline.translation as Record<string, unknown> | undefined)?.context_before_lines,
+          translation?.context_before_lines,
           current.translationContextBeforeLines,
         ),
-        translationContextAfterLines: numberValue(
-          (payload.pipeline.translation as Record<string, unknown> | undefined)?.context_after_lines,
-          current.translationContextAfterLines,
-        ),
-        translationRepairEnabled:
-          ((payload.pipeline.translation as { repair?: { enabled?: boolean } } | undefined)?.repair?.enabled ??
-            current.translationRepairEnabled),
+        translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
+        translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
         outputFormat: textValue(payload.pipeline.output_format, current.outputFormat) as FormState["outputFormat"],
         concurrency: numberValue(payload.pipeline.default_concurrency, current.concurrency),
       };
@@ -249,13 +326,11 @@ function App() {
   }
 
   async function refreshTasks() {
-    const payload = await invoke<TaskRecord[]>("list_tasks");
-    setTasks(payload);
+    setTasks(await invoke<TaskRecord[]>("list_tasks"));
   }
 
   async function refreshDoctor() {
-    const payload = await invoke<DoctorPayload>("doctor");
-    setDoctorReport(payload);
+    setDoctorReport(await invoke<DoctorPayload>("doctor"));
   }
 
   async function boot() {
@@ -325,7 +400,7 @@ function App() {
     try {
       await invoke("save_env_secret", { envKey: selectedProvider.env_key, value: form.apiKey.trim() });
       update("apiKey", "");
-      setNotice("API key saved to .env");
+      setNotice(t("keySaved"));
       await Promise.all([refreshConfig(), refreshDoctor()]);
     } catch (err) {
       setError(friendlyError(err));
@@ -340,7 +415,7 @@ function App() {
     setNotice("");
     try {
       await invoke("probe_provider", { provider: form.provider, model: form.model });
-      setNotice("Provider preflight passed");
+      setNotice(t("preflightPassed"));
       await Promise.all([refreshConfig(), refreshDoctor()]);
     } catch (err) {
       setError(friendlyError(err));
@@ -349,9 +424,33 @@ function App() {
     }
   }
 
+  function taskRequest() {
+    return {
+      provider: form.provider || null,
+      model: form.model || null,
+      asrMode: form.asrMode || null,
+      asrDevice: form.asrDevice || null,
+      asrModelSize: form.asrModelSize || null,
+      asrComputeType: form.asrComputeType || null,
+      asrProvider: form.asrProvider || null,
+      asrModel: form.asrModel || null,
+      chunkSeconds: form.chunkSeconds,
+      chunkOverlapSeconds: form.chunkOverlapSeconds,
+      translationBatchSize: form.translationBatchSize,
+      translationStylePreset: form.translationStylePreset,
+      translationStylePrompt: form.translationStylePrompt,
+      translationChunkLines: form.translationChunkLines,
+      translationContextBeforeLines: form.translationContextBeforeLines,
+      translationContextAfterLines: form.translationContextAfterLines,
+      translationRepairEnabled: form.translationRepairEnabled,
+      outputFormat: form.outputFormat,
+      concurrency: form.concurrency,
+    };
+  }
+
   async function startTask() {
     if (!form.input) {
-      setError("Choose a video first.");
+      setError(t("chooseVideoFirst"));
       return;
     }
     setRunning(true);
@@ -367,25 +466,7 @@ function App() {
           sourceLang: form.sourceLang,
           targetLang: form.targetLang,
           bilingual: form.bilingual,
-          provider: form.provider || null,
-          model: form.model || null,
-          asrMode: form.asrMode || null,
-          asrDevice: form.asrDevice || null,
-          asrModelSize: form.asrModelSize || null,
-          asrComputeType: form.asrComputeType || null,
-          asrProvider: form.asrProvider || null,
-          asrModel: form.asrModel || null,
-          chunkSeconds: form.chunkSeconds,
-          chunkOverlapSeconds: form.chunkOverlapSeconds,
-          translationBatchSize: form.translationBatchSize,
-          translationStylePreset: form.translationStylePreset,
-          translationStylePrompt: form.translationStylePrompt,
-          translationChunkLines: form.translationChunkLines,
-          translationContextBeforeLines: form.translationContextBeforeLines,
-          translationContextAfterLines: form.translationContextAfterLines,
-          translationRepairEnabled: form.translationRepairEnabled,
-          outputFormat: form.outputFormat,
-          concurrency: form.concurrency,
+          ...taskRequest(),
         },
       });
     } catch (err) {
@@ -400,7 +481,7 @@ function App() {
     setBusy(true);
     try {
       await invoke("cancel_task");
-      setNotice("Cancel requested");
+      setNotice(t("cancelRequested"));
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -418,25 +499,7 @@ function App() {
       await invoke("resume_task", {
         request: {
           taskId,
-          provider: form.provider || null,
-          model: form.model || null,
-          asrMode: form.asrMode || null,
-          asrDevice: form.asrDevice || null,
-          asrModelSize: form.asrModelSize || null,
-          asrComputeType: form.asrComputeType || null,
-          asrProvider: form.asrProvider || null,
-          asrModel: form.asrModel || null,
-          chunkSeconds: form.chunkSeconds,
-          chunkOverlapSeconds: form.chunkOverlapSeconds,
-          translationBatchSize: form.translationBatchSize,
-          translationStylePreset: form.translationStylePreset,
-          translationStylePrompt: form.translationStylePrompt,
-          translationChunkLines: form.translationChunkLines,
-          translationContextBeforeLines: form.translationContextBeforeLines,
-          translationContextAfterLines: form.translationContextAfterLines,
-          translationRepairEnabled: form.translationRepairEnabled,
-          outputFormat: form.outputFormat,
-          concurrency: form.concurrency,
+          ...taskRequest(),
         },
       });
     } catch (err) {
@@ -458,8 +521,8 @@ function App() {
 
   async function loadTaskEvents(taskId: string) {
     try {
-      const payload = await invoke<WorkerEvent[]>("read_events", { taskId });
-      setEvents(payload);
+      setEvents(await invoke<WorkerEvent[]>("read_events", { taskId }));
+      setActiveView("history");
     } catch (err) {
       setError(friendlyError(err));
     }
@@ -468,348 +531,619 @@ function App() {
   const latestDonePath = [...events].reverse().map(eventOutputPath).find(Boolean);
 
   return (
-    <main className="app">
-      <header className="topbar">
-        <div>
-          <h1>TransVortex</h1>
-          <p>{config?.root_dir || "Loading workspace..."}</p>
-        </div>
-        <button className="iconButton" onClick={boot} title="Refresh">
-          <RefreshCw size={18} />
-        </button>
-      </header>
-
-      {(error || notice) && (
-        <div className={error ? "banner error" : "banner success"}>
-          {error ? <CircleAlert size={18} /> : <CheckCircle2 size={18} />}
-          <span>{error || notice}</span>
-        </div>
+    <AppShell
+      activeView={activeView}
+      setActiveView={setActiveView}
+      config={config}
+      error={error}
+      notice={notice}
+      onRefresh={boot}
+      sidebar={
+        <Sidebar
+          activeView={activeView}
+          setActiveView={setActiveView}
+          running={running}
+          doctorStatus={doctorReport?.status}
+          taskCount={tasks.length}
+        />
+      }
+      aside={
+        <RightRail
+          running={running}
+          progress={progress}
+          latestDonePath={latestDonePath || ""}
+          openPath={openPath}
+          events={events}
+          doctorReport={doctorReport}
+          checks={importantChecks}
+        />
+      }
+    >
+      {activeView === "start" && (
+        <TaskWorkspace
+          form={form}
+          update={update}
+          busy={busy}
+          running={running}
+          advancedOpen={advancedOpen}
+          setAdvancedOpen={setAdvancedOpen}
+          chooseVideo={chooseVideo}
+          chooseOutputDir={chooseOutputDir}
+          startTask={startTask}
+          cancelTask={cancelTask}
+          probe={probe}
+        />
       )}
+      {activeView === "translation" && <TranslationPanel form={form} update={update} />}
+      {activeView === "provider" && (
+        <ConfigPanel
+          form={form}
+          update={update}
+          config={config}
+          selectedProvider={selectedProvider}
+          saveKey={saveKey}
+          probe={probe}
+          busy={busy}
+        />
+      )}
+      {activeView === "history" && (
+        <HistoryPanel tasks={tasks} loadTaskEvents={loadTaskEvents} openPath={openPath} resumeTask={resumeTask} busy={busy} running={running} />
+      )}
+      {activeView === "environment" && <EnvironmentPanel report={doctorReport} checks={importantChecks} refresh={refreshDoctor} />}
+    </AppShell>
+  );
+}
 
-      <section className="workspace">
-        <div className="mainPanel">
-          <section className="settingsPanel">
-            <div className="sectionHead">
-              <h2>Input</h2>
-            </div>
-            <section
-              className="dropZone"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const file = event.dataTransfer.files.item(0) as DroppedFile | null;
-                if (file) update("input", file.path || file.name);
-              }}
-            >
-              <Video size={34} />
-              <div>
-                <strong>{form.input || "Drop a video here"}</strong>
-                <span>{form.input ? "Ready for subtitle generation" : "MP4, MKV, MOV, WEBM, AVI"}</span>
-              </div>
-              <button onClick={chooseVideo}>
-                <FolderOpen size={17} /> Choose
-              </button>
-            </section>
-            <div className="grid two">
-              <label>
-                Source language
-                <input value={form.sourceLang} onChange={(event) => update("sourceLang", event.target.value)} />
-              </label>
-              <label>
-                Target language
-                <input value={form.targetLang} onChange={(event) => update("targetLang", event.target.value)} />
-              </label>
-            </div>
-          </section>
-
-          <section className="settingsPanel">
-            <div className="sectionHead">
-              <h2>Provider</h2>
-            </div>
-            <div className="grid two">
-              <label>
-                Provider
-                <select value={form.provider} onChange={(event) => update("provider", event.target.value)}>
-                  {config?.providers.map((provider) => (
-                    <option key={provider.name} value={provider.name}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Model
-                <select value={form.model} onChange={(event) => update("model", event.target.value)}>
-                  {selectedProvider?.models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <section className="secretRow">
-              <KeyRound size={18} />
-              <div>
-                <strong>{selectedProvider?.env_key || "Provider key"}</strong>
-                <span>{selectedProvider?.has_key ? "Configured" : "Missing"}</span>
-              </div>
-              <input
-                type="password"
-                placeholder="Paste key"
-                value={form.apiKey}
-                onChange={(event) => update("apiKey", event.target.value)}
-              />
-              <button disabled={!form.apiKey || busy} onClick={saveKey}>
-                Save
-              </button>
-            </section>
-          </section>
-
-          <section className="settingsPanel">
-            <div className="sectionHead">
-              <h2>ASR</h2>
-            </div>
-            <div className="grid four">
-              <label>
-                ASR mode
-                <select value={form.asrMode} onChange={(event) => update("asrMode", event.target.value)}>
-                  <option value="local">local</option>
-                  <option value="openai">openai</option>
-                </select>
-              </label>
-              <label>
-                Device
-                <select value={form.asrDevice} onChange={(event) => update("asrDevice", event.target.value)}>
-                  <option value="cpu">cpu</option>
-                  <option value="auto">auto</option>
-                  <option value="cuda">cuda</option>
-                </select>
-              </label>
-              <label>
-                Model size
-                <input value={form.asrModelSize} onChange={(event) => update("asrModelSize", event.target.value)} />
-              </label>
-              <label>
-                Compute
-                <input value={form.asrComputeType} onChange={(event) => update("asrComputeType", event.target.value)} />
-              </label>
-            </div>
-          </section>
-
-          <section className="settingsPanel">
-            <div className="sectionHead">
-              <h2>Translation</h2>
-            </div>
-            <div className="grid four">
-              <label>
-                Preset
-                <select
-                  value={form.translationStylePreset}
-                  onChange={(event) => update("translationStylePreset", event.target.value)}
-                >
-                  <option value="subtitle_natural">subtitle_natural</option>
-                  <option value="literal">literal</option>
-                  <option value="localized">localized</option>
-                  <option value="learning_friendly">learning_friendly</option>
-                </select>
-              </label>
-              <label>
-                Chunk lines
-                <input
-                  type="number"
-                  value={form.translationChunkLines}
-                  onChange={(event) => {
-                    update("translationChunkLines", Number(event.target.value));
-                    update("translationBatchSize", Number(event.target.value));
-                  }}
-                />
-              </label>
-              <label>
-                Context before
-                <input
-                  type="number"
-                  value={form.translationContextBeforeLines}
-                  onChange={(event) => update("translationContextBeforeLines", Number(event.target.value))}
-                />
-              </label>
-              <label>
-                Context after
-                <input
-                  type="number"
-                  value={form.translationContextAfterLines}
-                  onChange={(event) => update("translationContextAfterLines", Number(event.target.value))}
-                />
-              </label>
-            </div>
-            <label>
-              Style prompt
-              <textarea
-                value={form.translationStylePrompt}
-                onChange={(event) => update("translationStylePrompt", event.target.value)}
-              />
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={form.translationRepairEnabled}
-                onChange={(event) => update("translationRepairEnabled", event.target.checked)}
-              />
-              Repair invalid rows
-            </label>
-          </section>
-
-          <section className="settingsPanel">
-            <div className="sectionHead">
-              <h2>Output</h2>
-            </div>
-            <div className="grid four">
-              <label>
-                Format
-                <select
-                  value={form.outputFormat}
-                  onChange={(event) => update("outputFormat", event.target.value as FormState["outputFormat"])}
-                >
-                  <option value="srt">srt</option>
-                  <option value="ass">ass</option>
-                  <option value="both">both</option>
-                </select>
-              </label>
-              <label>
-                Output directory
-                <div className="joined">
-                  <input value={form.outputDir} onChange={(event) => update("outputDir", event.target.value)} />
-                  <button onClick={chooseOutputDir}>
-                    <FolderOpen size={16} />
-                  </button>
-                </div>
-              </label>
-              <label>
-                Chunk sec
-                <input
-                  type="number"
-                  value={form.chunkSeconds}
-                  onChange={(event) => update("chunkSeconds", Number(event.target.value))}
-                />
-              </label>
-              <label>
-                Concurrency
-                <input
-                  type="number"
-                  value={form.concurrency}
-                  onChange={(event) => update("concurrency", Number(event.target.value))}
-                />
-              </label>
-            </div>
-          </section>
-
-          <div className="actionRow">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={form.bilingual}
-                onChange={(event) => update("bilingual", event.target.checked)}
-              />
-              Bilingual
-            </label>
-            <button onClick={probe} disabled={busy}>
-              <ClipboardList size={17} /> Preflight
-            </button>
-            {running ? (
-              <button className="danger" onClick={cancelTask} disabled={busy}>
-                <Square size={17} /> Cancel
-              </button>
-            ) : (
-              <button className="primary" onClick={startTask} disabled={busy}>
-                {busy ? <Loader2 className="spin" size={17} /> : <Play size={17} />} Start
-              </button>
-            )}
+function AppShell({
+  activeView,
+  setActiveView,
+  config,
+  error,
+  notice,
+  onRefresh,
+  sidebar,
+  aside,
+  children,
+}: {
+  activeView: ActiveView;
+  setActiveView: (view: ActiveView) => void;
+  config: ConfigPayload | null;
+  error: string;
+  notice: string;
+  onRefresh: () => void;
+  sidebar: React.ReactNode;
+  aside: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const title = {
+    start: t("start"),
+    translation: t("translation"),
+    provider: t("provider"),
+    history: t("history"),
+    environment: t("environment"),
+  }[activeView];
+  return (
+    <main className="grid min-h-screen grid-cols-[224px_minmax(0,1fr)_340px] bg-canvas text-ink">
+      {sidebar}
+      <section className="min-w-0 border-x border-line">
+        <header className="sticky top-0 z-10 flex min-h-20 items-center justify-between border-b border-line bg-canvas/95 px-6 backdrop-blur">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            <p className="mt-1 truncate text-xs text-muted">{config?.root_dir || "正在读取工作区..."}</p>
           </div>
-        </div>
-
-        <aside className="sidePanel">
-          <section className="progressBox">
-            <div className="progressHead">
-              <span>{running ? "Running" : "Progress"}</span>
-              <strong>{progress}%</strong>
-            </div>
-            <div className="track">
-              <div style={{ width: `${progress}%` }} />
-            </div>
-            {latestDonePath && (
-              <button onClick={() => openPath(latestDonePath)}>
-                <FolderOpen size={16} /> Open output
-              </button>
-            )}
-          </section>
-
-          {doctorReport && (
-            <section className={`healthBox ${doctorReport.status.toLowerCase()}`}>
-              <div className="sectionHead">
-                <h2>Environment</h2>
-                <strong>{doctorReport.status}</strong>
-              </div>
-              <div className="checkList">
-                {importantChecks.map((check) => (
-                  <article key={check.name} className={`checkItem ${check.status.toLowerCase()}`}>
-                    <span>{check.name}</span>
-                    <strong>{check.status}</strong>
-                    <p>{check.hint_zh || check.message}</p>
-                  </article>
-                ))}
-              </div>
-            </section>
-          )}
-
-          <section className="eventList">
-            <h2>Events</h2>
-            {events.length === 0 && <p className="muted">No events yet.</p>}
-            {[...events].reverse().slice(0, 12).map((event, index) => (
-              <article key={`${event.created_at}-${index}`} className={`event ${event.level || event.type}`}>
-                <span>{event.stage || event.type}</span>
-                <p>{event.message || event.type}</p>
-              </article>
-            ))}
-          </section>
-        </aside>
-      </section>
-
-      <section className="history">
-        <div className="sectionHead">
-          <h2>History</h2>
-          <button onClick={refreshTasks}>
-            <RefreshCw size={16} /> Refresh
+          <button className="tvx-btn" onClick={onRefresh} title={t("refresh")}>
+            <RefreshCw size={17} /> {t("refresh")}
           </button>
+        </header>
+        <div className="space-y-4 p-6">
+          {(error || notice) && (
+            <div
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+                error ? "border-red-200 bg-red-50 text-danger" : "border-emerald-200 bg-emerald-50 text-brand"
+              }`}
+            >
+              {error ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}
+              <span>{error || notice}</span>
+            </div>
+          )}
+          {children}
         </div>
-        <div className="taskGrid">
-          {tasks.map((task) => (
-            <article key={task.task_id} className="taskCard">
-              <div>
-                <strong>{task.task_id}</strong>
-                <span>{task.status}</span>
+      </section>
+      {aside}
+    </main>
+  );
+}
+
+function Sidebar({
+  activeView,
+  setActiveView,
+  running,
+  doctorStatus,
+  taskCount,
+}: {
+  activeView: ActiveView;
+  setActiveView: (view: ActiveView) => void;
+  running: boolean;
+  doctorStatus?: string;
+  taskCount: number;
+}) {
+  const items: Array<{ key: ActiveView; label: string; icon: React.ElementType; badge?: string }> = [
+    { key: "start", label: t("start"), icon: Play, badge: running ? "RUNNING" : undefined },
+    { key: "translation", label: t("translation"), icon: Languages },
+    { key: "provider", label: t("provider"), icon: Settings2 },
+    { key: "history", label: t("history"), icon: History, badge: taskCount ? String(taskCount) : undefined },
+    { key: "environment", label: t("environment"), icon: MonitorCheck, badge: doctorStatus },
+  ];
+  return (
+    <aside className="flex min-h-screen flex-col border-r border-line bg-white px-3 py-4">
+      <div className="px-2 pb-5">
+        <div className="text-lg font-semibold">TransVortex</div>
+        <div className="mt-1 text-xs text-muted">{t("appSubtitle")}</div>
+      </div>
+      <nav className="grid gap-1">
+        {items.map((item) => {
+          const Icon = item.icon;
+          const active = activeView === item.key;
+          return (
+            <button
+              key={item.key}
+              className={`flex min-h-11 items-center justify-between rounded-md px-3 text-left text-sm transition ${
+                active ? "bg-emerald-50 text-brand" : "text-slate-700 hover:bg-slate-50"
+              }`}
+              onClick={() => setActiveView(item.key)}
+            >
+              <span className="flex items-center gap-2">
+                <Icon size={17} />
+                {item.label}
+              </span>
+              {item.badge && <span className={`text-[11px] font-semibold ${statusTone(item.badge)}`}>{item.badge}</span>}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="mt-auto rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-muted">
+        V1 聚焦本地桌面工作流。CLI 保持为诊断和自动化入口。
+      </div>
+    </aside>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="tvx-panel p-4">
+      <h2 className="mb-4 text-base font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+function TaskWorkspace({
+  form,
+  update,
+  busy,
+  running,
+  advancedOpen,
+  setAdvancedOpen,
+  chooseVideo,
+  chooseOutputDir,
+  startTask,
+  cancelTask,
+  probe,
+}: {
+  form: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  busy: boolean;
+  running: boolean;
+  advancedOpen: boolean;
+  setAdvancedOpen: (open: boolean) => void;
+  chooseVideo: () => void;
+  chooseOutputDir: () => void;
+  startTask: () => void;
+  cancelTask: () => void;
+  probe: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <Panel title="视频与语言">
+        <section
+          className="grid min-h-28 grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-4 rounded-lg border border-dashed border-line bg-slate-50 p-4"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            const file = event.dataTransfer.files.item(0) as DroppedFile | null;
+            if (file) update("input", file.path || file.name);
+          }}
+        >
+          <Video className="text-brand" size={34} />
+          <div className="min-w-0">
+            <strong className="block truncate text-sm">{form.input || t("dropVideo")}</strong>
+            <span className="mt-1 block text-xs text-muted">{form.input ? t("videoReady") : t("videoHint")}</span>
+          </div>
+          <button className="tvx-btn" onClick={chooseVideo}>
+            <FolderOpen size={16} /> {t("choose")}
+          </button>
+        </section>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <label className="tvx-label">
+            {t("sourceLang")}
+            <input className="tvx-input" value={form.sourceLang} onChange={(event) => update("sourceLang", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("targetLang")}
+            <input className="tvx-input" value={form.targetLang} onChange={(event) => update("targetLang", event.target.value)} />
+          </label>
+        </div>
+      </Panel>
+
+      <Panel title="输出">
+        <div className="grid grid-cols-[160px_minmax(0,1fr)] gap-4">
+          <label className="tvx-label">
+            {t("outputFormat")}
+            <select className="tvx-input" value={form.outputFormat} onChange={(event) => update("outputFormat", event.target.value as FormState["outputFormat"])}>
+              <option value="srt">srt</option>
+              <option value="ass">ass</option>
+              <option value="both">both</option>
+            </select>
+          </label>
+          <label className="tvx-label">
+            {t("outputDir")}
+            <div className="grid grid-cols-[minmax(0,1fr)_44px] gap-2">
+              <input className="tvx-input" value={form.outputDir} onChange={(event) => update("outputDir", event.target.value)} />
+              <button className="tvx-btn px-0" onClick={chooseOutputDir}>
+                <FolderOpen size={16} />
+              </button>
+            </div>
+          </label>
+        </div>
+        <label className="mt-4 inline-flex items-center gap-2 text-sm text-ink">
+          <input className="h-4 w-4" type="checkbox" checked={form.bilingual} onChange={(event) => update("bilingual", event.target.checked)} />
+          {t("bilingual")}
+        </label>
+      </Panel>
+
+      <Panel title={t("advanced")}>
+        <button className="tvx-btn mb-4" onClick={() => setAdvancedOpen(!advancedOpen)}>
+          {advancedOpen ? "收起高级设置" : "展开高级设置"}
+        </button>
+        {advancedOpen && (
+          <div className="grid grid-cols-4 gap-4">
+            <label className="tvx-label">
+              {t("chunkSec")}
+              <input className="tvx-input" type="number" value={form.chunkSeconds} onChange={(event) => update("chunkSeconds", Number(event.target.value))} />
+            </label>
+            <label className="tvx-label">
+              {t("overlapSec")}
+              <input className="tvx-input" type="number" value={form.chunkOverlapSeconds} onChange={(event) => update("chunkOverlapSeconds", Number(event.target.value))} />
+            </label>
+            <label className="tvx-label">
+              {t("concurrency")}
+              <input className="tvx-input" type="number" value={form.concurrency} onChange={(event) => update("concurrency", Number(event.target.value))} />
+            </label>
+          </div>
+        )}
+      </Panel>
+
+      <div className="flex items-center justify-between rounded-lg border border-line bg-white p-4">
+        <button className="tvx-btn" onClick={probe} disabled={busy}>
+          <ClipboardList size={17} /> {t("preflight")}
+        </button>
+        {running ? (
+          <button className="tvx-btn tvx-btn-danger" onClick={cancelTask} disabled={busy}>
+            <Square size={17} /> {t("cancel")}
+          </button>
+        ) : (
+          <button className="tvx-btn tvx-btn-primary min-w-32" onClick={startTask} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" size={17} /> : <Play size={17} />} {t("startRun")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TranslationPanel({
+  form,
+  update,
+}: {
+  form: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+}) {
+  return (
+    <Panel title="LLM 翻译控制">
+      <div className="grid grid-cols-4 gap-4">
+        <label className="tvx-label">
+          {t("preset")}
+          <select className="tvx-input" value={form.translationStylePreset} onChange={(event) => update("translationStylePreset", event.target.value)}>
+            <option value="subtitle_natural">subtitle_natural</option>
+            <option value="literal">literal</option>
+            <option value="localized">localized</option>
+            <option value="learning_friendly">learning_friendly</option>
+          </select>
+        </label>
+        <label className="tvx-label">
+          {t("chunkLines")}
+          <input
+            className="tvx-input"
+            type="number"
+            value={form.translationChunkLines}
+            onChange={(event) => {
+              update("translationChunkLines", Number(event.target.value));
+              update("translationBatchSize", Number(event.target.value));
+            }}
+          />
+        </label>
+        <label className="tvx-label">
+          {t("contextBefore")}
+          <input className="tvx-input" type="number" value={form.translationContextBeforeLines} onChange={(event) => update("translationContextBeforeLines", Number(event.target.value))} />
+        </label>
+        <label className="tvx-label">
+          {t("contextAfter")}
+          <input className="tvx-input" type="number" value={form.translationContextAfterLines} onChange={(event) => update("translationContextAfterLines", Number(event.target.value))} />
+        </label>
+      </div>
+      <label className="tvx-label mt-4">
+        {t("stylePrompt")}
+        <textarea className="tvx-textarea" value={form.translationStylePrompt} onChange={(event) => update("translationStylePrompt", event.target.value)} />
+      </label>
+      <label className="mt-4 inline-flex items-center gap-2 text-sm">
+        <input className="h-4 w-4" type="checkbox" checked={form.translationRepairEnabled} onChange={(event) => update("translationRepairEnabled", event.target.checked)} />
+        {t("repairRows")}
+      </label>
+    </Panel>
+  );
+}
+
+function ConfigPanel({
+  form,
+  update,
+  config,
+  selectedProvider,
+  saveKey,
+  probe,
+  busy,
+}: {
+  form: FormState;
+  update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  config: ConfigPayload | null;
+  selectedProvider?: ProviderConfig;
+  saveKey: () => void;
+  probe: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      <Panel title="模型 provider">
+        <div className="grid grid-cols-2 gap-4">
+          <label className="tvx-label">
+            {t("providerName")}
+            <select className="tvx-input" value={form.provider} onChange={(event) => update("provider", event.target.value)}>
+              {config?.providers.map((provider) => (
+                <option key={provider.name} value={provider.name}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="tvx-label">
+            {t("model")}
+            <select className="tvx-input" value={form.model} onChange={(event) => update("model", event.target.value)}>
+              {selectedProvider?.models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <section className="mt-4 grid grid-cols-[24px_minmax(120px,1fr)_minmax(180px,260px)_auto] items-center gap-3 rounded-lg border border-line p-3">
+          <KeyRound className="text-brand" size={18} />
+          <div>
+            <strong className="block text-sm">{selectedProvider?.env_key || t("apiKey")}</strong>
+            <span className="text-xs text-muted">{selectedProvider?.has_key ? t("configured") : t("missing")}</span>
+          </div>
+          <input className="tvx-input" type="password" placeholder={t("pasteKey")} value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} />
+          <button className="tvx-btn" disabled={!form.apiKey || busy} onClick={saveKey}>
+            {t("save")}
+          </button>
+        </section>
+        <button className="tvx-btn mt-4" onClick={probe} disabled={busy}>
+          <ClipboardList size={17} /> {t("preflight")}
+        </button>
+      </Panel>
+
+      <Panel title="ASR">
+        <div className="grid grid-cols-4 gap-4">
+          <label className="tvx-label">
+            {t("asrMode")}
+            <select className="tvx-input" value={form.asrMode} onChange={(event) => update("asrMode", event.target.value)}>
+              <option value="local">local</option>
+              <option value="openai">openai</option>
+            </select>
+          </label>
+          <label className="tvx-label">
+            {t("device")}
+            <select className="tvx-input" value={form.asrDevice} onChange={(event) => update("asrDevice", event.target.value)}>
+              <option value="cpu">cpu</option>
+              <option value="auto">auto</option>
+              <option value="cuda">cuda</option>
+            </select>
+          </label>
+          <label className="tvx-label">
+            {t("modelSize")}
+            <input className="tvx-input" value={form.asrModelSize} onChange={(event) => update("asrModelSize", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("compute")}
+            <input className="tvx-input" value={form.asrComputeType} onChange={(event) => update("asrComputeType", event.target.value)} />
+          </label>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function RightRail({
+  running,
+  progress,
+  latestDonePath,
+  openPath,
+  events,
+  doctorReport,
+  checks,
+}: {
+  running: boolean;
+  progress: number;
+  latestDonePath: string;
+  openPath: (path?: string | null) => void;
+  events: WorkerEvent[];
+  doctorReport: DoctorPayload | null;
+  checks: DoctorCheck[];
+}) {
+  return (
+    <aside className="space-y-4 bg-canvas p-4">
+      <section className="tvx-panel p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">{running ? t("running") : t("progress")}</span>
+          <strong className="text-lg">{progress}%</strong>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${progress}%` }} />
+        </div>
+        {latestDonePath && (
+          <button className="tvx-btn mt-3 w-full" onClick={() => openPath(latestDonePath)}>
+            <FolderOpen size={16} /> {t("openOutput")}
+          </button>
+        )}
+      </section>
+      <section className="tvx-panel p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold">{t("environmentSummary")}</h2>
+          <strong className={`text-xs ${statusTone(doctorReport?.status || "")}`}>{doctorReport?.status || "UNKNOWN"}</strong>
+        </div>
+        <div className="grid gap-2">
+          {checks.map((check) => (
+            <article key={check.name} className="rounded-md border border-line bg-slate-50 p-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-xs font-semibold">{check.name}</span>
+                <strong className={`text-[11px] ${statusTone(check.status)}`}>{check.status}</strong>
               </div>
-              <p>{task.input_file}</p>
-              {task.error && <p className="taskError">{task.error}</p>}
-              <footer>
-                <button onClick={() => loadTaskEvents(task.task_id)}>Events</button>
-                <button onClick={() => openPath(task.task_dir)}>Folder</button>
-                {outputPath(task, "srt") && <button onClick={() => openPath(outputPath(task, "srt"))}>SRT</button>}
-                {outputPath(task, "ass") && <button onClick={() => openPath(outputPath(task, "ass"))}>ASS</button>}
-                {!outputPath(task, "srt") && !outputPath(task, "ass") && task.output_path && (
-                  <button onClick={() => openPath(task.output_path)}>Output</button>
-                )}
-                {["FAILED", "CANCELLED", "CANCEL_REQUESTED"].includes(task.status) && (
-                  <button disabled={running || busy} onClick={() => resumeTask(task.task_id)}>
-                    Resume
-                  </button>
-                )}
-              </footer>
+              <p className="mt-1 text-xs leading-relaxed text-muted">{check.hint_zh || check.message}</p>
             </article>
           ))}
         </div>
       </section>
-    </main>
+      <EventPanel events={events} />
+    </aside>
+  );
+}
+
+function EventPanel({ events }: { events: WorkerEvent[] }) {
+  return (
+    <section className="tvx-panel p-4">
+      <h2 className="mb-3 text-base font-semibold">{t("latestEvents")}</h2>
+      {events.length === 0 && <p className="text-sm text-muted">{t("noEvents")}</p>}
+      <div className="grid max-h-[320px] gap-2 overflow-auto pr-1">
+        {[...events].reverse().slice(0, 14).map((event, index) => (
+          <article key={`${event.created_at}-${index}`} className="border-t border-line py-2">
+            <span className={`text-xs font-semibold ${event.level === "error" ? "text-danger" : "text-muted"}`}>{event.stage || event.type}</span>
+            <p className="mt-1 text-xs leading-relaxed text-ink">{event.message || event.type}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function HistoryPanel({
+  tasks,
+  loadTaskEvents,
+  openPath,
+  resumeTask,
+  busy,
+  running,
+}: {
+  tasks: TaskRecord[];
+  loadTaskEvents: (taskId: string) => void;
+  openPath: (path?: string | null) => void;
+  resumeTask: (taskId: string) => void;
+  busy: boolean;
+  running: boolean;
+}) {
+  return (
+    <Panel title={t("history")}>
+      {tasks.length === 0 && <p className="text-sm text-muted">{t("noTasks")}</p>}
+      <div className="grid gap-3">
+        {tasks.map((task) => (
+          <article key={task.task_id} className="rounded-lg border border-line p-3">
+            <div className="flex items-center justify-between gap-3">
+              <strong className="truncate text-sm">{task.task_id}</strong>
+              <span className={`text-xs font-semibold ${statusTone(task.status)}`}>{task.status}</span>
+            </div>
+            <p className="mt-2 truncate text-xs text-muted">{task.input_file}</p>
+            {task.error && <p className="mt-2 text-xs text-danger">{task.error}</p>}
+            <footer className="mt-3 flex flex-wrap gap-2">
+              <button className="tvx-btn" onClick={() => loadTaskEvents(task.task_id)}>
+                {t("events")}
+              </button>
+              <button className="tvx-btn" onClick={() => openPath(task.task_dir)}>
+                {t("folder")}
+              </button>
+              {outputPath(task, "srt") && <button className="tvx-btn" onClick={() => openPath(outputPath(task, "srt"))}>SRT</button>}
+              {outputPath(task, "ass") && <button className="tvx-btn" onClick={() => openPath(outputPath(task, "ass"))}>ASS</button>}
+              {!outputPath(task, "srt") && !outputPath(task, "ass") && task.output_path && (
+                <button className="tvx-btn" onClick={() => openPath(task.output_path)}>
+                  {t("openOutput")}
+                </button>
+              )}
+              {["FAILED", "CANCELLED", "CANCEL_REQUESTED"].includes(task.status) && (
+                <button className="tvx-btn" disabled={running || busy} onClick={() => resumeTask(task.task_id)}>
+                  {t("resume")}
+                </button>
+              )}
+            </footer>
+          </article>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function EnvironmentPanel({
+  report,
+  checks,
+  refresh,
+}: {
+  report: DoctorPayload | null;
+  checks: DoctorCheck[];
+  refresh: () => void;
+}) {
+  return (
+    <Panel title={t("environment")}>
+      <div className="mb-4 flex items-center justify-between rounded-lg bg-slate-50 p-3">
+        <div>
+          <div className="text-sm font-semibold">Doctor</div>
+          <div className="text-xs text-muted">{report?.providers_file || "未读取 provider 文件"}</div>
+        </div>
+        <div className="flex items-center gap-3">
+          <strong className={`text-sm ${statusTone(report?.status || "")}`}>{report?.status || "UNKNOWN"}</strong>
+          <button className="tvx-btn" onClick={refresh}>
+            <RefreshCw size={16} /> {t("refresh")}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {checks.map((check) => (
+          <article key={check.name} className="rounded-lg border border-line p-3">
+            <div className="flex items-center justify-between gap-3">
+              <strong className="text-sm">{check.name}</strong>
+              <span className={`text-xs font-semibold ${statusTone(check.status)}`}>{check.status}</span>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-muted">{check.hint_zh || check.message}</p>
+            <p className="mt-2 text-xs text-slate-400">{check.code}</p>
+          </article>
+        ))}
+      </div>
+    </Panel>
   );
 }
 
