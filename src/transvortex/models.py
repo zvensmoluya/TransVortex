@@ -117,7 +117,7 @@ class PipelineConfig:
     asr_cloud_base_url: str = "https://api.openai.com"
     asr_cloud_endpoint: str = "/v1/audio/transcriptions"
     asr_cloud_model: str = "whisper-1"
-    asr_cloud_env_key: str = "OPENAI_API_KEY"
+    asr_cloud_env_key: str = "TVX_MODEL_API_KEY"
     asr_cloud_timeout_seconds: int = 120
 
 

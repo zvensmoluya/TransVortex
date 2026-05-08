@@ -91,8 +91,15 @@ fn python_command() -> String {
     std::env::var("TRANSVORTEX_PYTHON").unwrap_or_else(|_| "python".to_string())
 }
 
+fn python_worker_command() -> Command {
+    let mut command = Command::new(python_command());
+    command.env("PYTHONUTF8", "1");
+    command.env("PYTHONIOENCODING", "utf-8");
+    command
+}
+
 fn run_worker_json(root: &Path, args: &[String]) -> Result<Value, String> {
-    let output = Command::new(python_command())
+    let output = python_worker_command()
         .arg("-m")
         .arg("transvortex.cli")
         .arg("--root")
@@ -143,7 +150,7 @@ fn spawn_streaming_worker(
     root: PathBuf,
     args: Vec<String>,
 ) -> Result<StartTaskResponse, String> {
-    let mut child = Command::new(python_command())
+    let mut child = python_worker_command()
         .args(args)
         .current_dir(&root)
         .stdout(Stdio::piped())
@@ -196,9 +203,15 @@ fn list_tasks(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn doctor(app: AppHandle) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(&root, &["doctor".into(), "--json".into()])
+}
+
+#[tauri::command]
 fn read_events(app: AppHandle, task_id: String) -> Result<Value, String> {
     let root = repo_root(&app)?;
-    let output = Command::new(python_command())
+    let output = python_worker_command()
         .arg("-m")
         .arg("transvortex.cli")
         .arg("--root")
@@ -379,6 +392,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             list_tasks,
+            doctor,
             read_events,
             save_env_secret,
             probe_provider,

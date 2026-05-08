@@ -24,6 +24,16 @@ def test_validation_accepts_exact_numbered_rows() -> None:
     assert [row.id for row in result.rows] == [2, 3]
 
 
+def test_validation_accepts_common_numbered_variants_without_explanation() -> None:
+    result = validate_translation_response(
+        chunk=_chunk(),
+        numbered_lines=["2. 你好", "3) 该死"],
+        raw_text="2. 你好\n3) 该死",
+    )
+    assert result.errors == []
+    assert [row.id for row in result.rows] == [2, 3]
+
+
 def test_validation_rejects_missing_extra_duplicate_context_and_explanation() -> None:
     result = validate_translation_response(
         chunk=_chunk(),

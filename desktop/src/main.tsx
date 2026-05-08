@@ -61,6 +61,23 @@ type WorkerEvent = {
   details?: Record<string, unknown>;
 };
 
+type DoctorCheck = {
+  name: string;
+  status: "PASS" | "WARN" | "FAIL";
+  code: string;
+  message: string;
+  hint_zh?: string;
+  details?: Record<string, unknown>;
+};
+
+type DoctorPayload = {
+  status: "PASS" | "WARN" | "FAIL";
+  root_dir: string;
+  providers_file?: string;
+  artifacts_dir?: string;
+  checks: DoctorCheck[];
+};
+
 type FormState = {
   input: string;
   outputDir: string;
@@ -123,6 +140,7 @@ function App() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [events, setEvents] = useState<WorkerEvent[]>([]);
+  const [doctorReport, setDoctorReport] = useState<DoctorPayload | null>(null);
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -137,6 +155,31 @@ function App() {
     const latest = [...events].reverse().find((event) => typeof event.progress === "number");
     return Math.round((latest?.progress ?? 0) * 100);
   }, [events]);
+
+  const importantChecks = useMemo(() => {
+    const names = new Set([
+      "python",
+      "ffmpeg",
+      "ffprobe",
+      "faster_whisper",
+      "provider_env_key",
+      "provider_protocol",
+      "artifacts",
+    ]);
+    return doctorReport?.checks.filter((check) => names.has(check.name)) || [];
+  }, [doctorReport]);
+
+  function friendlyError(err: unknown) {
+    const text = String(err);
+    try {
+      const payload = JSON.parse(text) as { checks?: DoctorCheck[]; message?: string };
+      const failed = payload.checks?.find((check) => check.status === "FAIL");
+      if (failed) return `${failed.hint_zh || failed.message} (${failed.code})`;
+      return payload.message || text;
+    } catch {
+      return text;
+    }
+  }
 
   async function refreshConfig() {
     const payload = await invoke<ConfigPayload>("get_config");
@@ -167,13 +210,17 @@ function App() {
     setTasks(payload);
   }
 
+  async function refreshDoctor() {
+    const payload = await invoke<DoctorPayload>("doctor");
+    setDoctorReport(payload);
+  }
+
   async function boot() {
     setError("");
     try {
-      await refreshConfig();
-      await refreshTasks();
+      await Promise.all([refreshConfig(), refreshTasks(), refreshDoctor()]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     }
   }
 
@@ -185,6 +232,7 @@ function App() {
         setRunning(false);
         refreshTasks();
         refreshConfig();
+        refreshDoctor();
       }
     });
     return () => {
@@ -235,9 +283,9 @@ function App() {
       await invoke("save_env_secret", { envKey: selectedProvider.env_key, value: form.apiKey.trim() });
       update("apiKey", "");
       setNotice("API key saved to .env");
-      await refreshConfig();
+      await Promise.all([refreshConfig(), refreshDoctor()]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -250,9 +298,9 @@ function App() {
     try {
       await invoke("probe_provider", { provider: form.provider, model: form.model });
       setNotice("Provider preflight passed");
-      await refreshConfig();
+      await Promise.all([refreshConfig(), refreshDoctor()]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -292,7 +340,7 @@ function App() {
       });
     } catch (err) {
       setRunning(false);
-      setError(String(err));
+      setError(friendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -304,7 +352,7 @@ function App() {
       await invoke("cancel_task");
       setNotice("Cancel requested");
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -336,7 +384,7 @@ function App() {
       });
     } catch (err) {
       setRunning(false);
-      setError(String(err));
+      setError(friendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -347,7 +395,7 @@ function App() {
     try {
       await invoke("open_path", { path });
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     }
   }
 
@@ -356,7 +404,7 @@ function App() {
       const payload = await invoke<WorkerEvent[]>("read_events", { taskId });
       setEvents(payload);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err));
     }
   }
 
@@ -563,6 +611,24 @@ function App() {
               </button>
             )}
           </section>
+
+          {doctorReport && (
+            <section className={`healthBox ${doctorReport.status.toLowerCase()}`}>
+              <div className="sectionHead">
+                <h2>Environment</h2>
+                <strong>{doctorReport.status}</strong>
+              </div>
+              <div className="checkList">
+                {importantChecks.map((check) => (
+                  <article key={check.name} className={`checkItem ${check.status.toLowerCase()}`}>
+                    <span>{check.name}</span>
+                    <strong>{check.status}</strong>
+                    <p>{check.hint_zh || check.message}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="eventList">
             <h2>Events</h2>

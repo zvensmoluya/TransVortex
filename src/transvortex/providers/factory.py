@@ -21,6 +21,12 @@ def _extract_numbered_lines(text: str) -> list[str]:
             continue
         if re.match(r"^\[\d+\]\s*", line):
             out.append(line)
+            continue
+        normalized = re.match(r"^(?:\(?\s*(\d+)\s*\)?|（\s*(\d+)\s*）)\s*[:：.)、-]\s*(.+)$", line)
+        if normalized:
+            seg_id = normalized.group(1) or normalized.group(2)
+            text_body = normalized.group(3).strip()
+            out.append(f"[{seg_id}] {text_body}")
     return out
 
 

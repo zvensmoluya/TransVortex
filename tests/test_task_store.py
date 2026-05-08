@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from transvortex.models import TaskRecord
 from transvortex.task_store import TaskStore
+from transvortex.utils import write_json
 
 
 def test_done_status_clears_previous_error(tmp_path) -> None:
@@ -51,3 +52,20 @@ def test_events_and_cancel_request(tmp_path) -> None:
 
     store.clear_cancel("t1")
     assert not store.is_cancel_requested("t1")
+
+
+def test_read_events_tolerates_missing_events_file_for_existing_task(tmp_path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task = TaskRecord(
+        task_id="legacy",
+        input_file="demo.mp4",
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        status="DONE",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:00+00:00",
+    )
+    write_json(store.task_file("legacy"), task)
+
+    assert store.read_events("legacy") == []

@@ -9,13 +9,23 @@ from transvortex.models import (
     ProviderConfig,
     ProviderLimits,
 )
-from transvortex.providers.factory import _build_payload, _build_url_and_headers, _extract_text_by_paths
+from transvortex.providers.factory import (
+    _build_payload,
+    _build_url_and_headers,
+    _extract_numbered_lines,
+    _extract_text_by_paths,
+)
 
 
 def test_response_mapping_multi_shape() -> None:
     data = {"content": [{"text": "a"}, {"text": "b"}]}
     out = _extract_text_by_paths(data, ["choices[0].message.content", "content[].text"])
     assert out == "a\nb"
+
+
+def test_extract_numbered_lines_normalizes_common_model_formats() -> None:
+    text = "Here you go:\n1. 你好\n2) 世界\n（3）：再见\nnot a numbered row"
+    assert _extract_numbered_lines(text) == ["[1] 你好", "[2] 世界", "[3] 再见"]
 
 
 def test_query_auth_builds_url() -> None:

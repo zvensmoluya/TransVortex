@@ -29,6 +29,8 @@ class TaskStore:
 
     def save_task(self, task: TaskRecord) -> None:
         write_json(self.task_file(task.task_id), task)
+        self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
+        self.events_file(task.task_id).touch(exist_ok=True)
 
     def load_task(self, task_id: str) -> TaskRecord:
         data = read_json(self.task_file(task_id))
@@ -104,6 +106,7 @@ class TaskStore:
         return tasks
 
     def read_events(self, task_id: str) -> list[dict[str, Any]]:
+        self.load_task(task_id)
         return read_jsonl(self.events_file(task_id))
 
     def request_cancel(self, task_id: str) -> TaskRecord:

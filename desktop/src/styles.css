@@ -137,6 +137,7 @@ p {
 .dropZone,
 .secretRow,
 .progressBox,
+.healthBox,
 .eventList,
 .history {
   border: 1px solid #dbe5e1;
@@ -220,8 +221,70 @@ p {
 }
 
 .progressBox,
+.healthBox,
 .eventList {
   padding: 16px;
+}
+
+.healthBox h2 {
+  margin-bottom: 0;
+  font-size: 18px;
+}
+
+.healthBox > .sectionHead {
+  margin-bottom: 10px;
+}
+
+.healthBox > .sectionHead strong {
+  color: #18745a;
+  font-size: 13px;
+}
+
+.healthBox.warn > .sectionHead strong {
+  color: #9a6b10;
+}
+
+.healthBox.fail > .sectionHead strong {
+  color: #a73620;
+}
+
+.checkList {
+  display: grid;
+  gap: 8px;
+}
+
+.checkItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  border-top: 1px solid #edf2f0;
+  padding-top: 8px;
+}
+
+.checkItem span {
+  color: #20332e;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.checkItem strong {
+  color: #18745a;
+  font-size: 12px;
+}
+
+.checkItem.warn strong {
+  color: #9a6b10;
+}
+
+.checkItem.fail strong {
+  color: #a73620;
+}
+
+.checkItem p {
+  grid-column: 1 / -1;
+  color: #60736c;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .track {

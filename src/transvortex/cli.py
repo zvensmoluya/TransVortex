@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import apply_route_overrides, load_app_config, resolve_providers_file
+from .doctor import doctor_report, format_doctor_report
 from .orchestrator import resume_pipeline, run_pipeline, task_status_json
 from .probe import probe_exit_code, probe_provider
 from .task_store import TaskStore
@@ -138,6 +139,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_providers_file_arg(tasks_p)
     tasks_p.add_argument("--json", action="store_true", help="Print machine-readable task list")
 
+    doctor_p = sub.add_parser("doctor", help="Check local runtime, config, provider, and artifact health")
+    _add_providers_file_arg(doctor_p)
+    doctor_p.add_argument("--json", action="store_true", help="Print machine-readable doctor report")
+
     config_p = sub.add_parser("config", help="Inspect resolved configuration")
     config_sub = config_p.add_subparsers(dest="config_command", required=True)
     config_show_p = config_sub.add_parser("show", help="Show resolved configuration")
@@ -248,6 +253,14 @@ def main() -> None:
         else:
             for task in payload:
                 print(f"{task['task_id']} {task['status']} {task['updated_at']}")
+        return
+
+    if args.command == "doctor":
+        payload = doctor_report(root_dir=root, providers_file=providers_file)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(format_doctor_report(payload))
         return
 
     if args.command == "config" and args.config_command == "show":

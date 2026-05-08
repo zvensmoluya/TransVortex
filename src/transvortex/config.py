@@ -226,7 +226,7 @@ def load_app_config(
         asr_cloud_base_url=str(asr_cloud_raw.get("base_url", "https://api.openai.com")),
         asr_cloud_endpoint=str(asr_cloud_raw.get("endpoint", "/v1/audio/transcriptions")),
         asr_cloud_model=str(asr_cloud_raw.get("model", "whisper-1")),
-        asr_cloud_env_key=str(asr_cloud_raw.get("env_key", "OPENAI_API_KEY")),
+        asr_cloud_env_key=str(asr_cloud_raw.get("env_key", "TVX_MODEL_API_KEY")),
         asr_cloud_timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 120),
     )
 

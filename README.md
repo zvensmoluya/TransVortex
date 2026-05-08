@@ -7,6 +7,9 @@ TransVortex is a CLI-first pipeline for generating subtitles from local videos w
 - resumable tasks and artifacts,
 - an optional Tauri desktop workbench for local configuration and progress viewing.
 
+## Product Direction
+TransVortex is intended to grow into an agent-callable headless core with both a human-friendly terminal experience and a desktop workbench. See `docs/PRODUCT_DIRECTION.md` for the long-term CLI, agent, desktop, i18n, and packaging direction.
+
 ## Quick Start
 1. Install dependencies:
    - `pip install -e .`
@@ -15,11 +18,14 @@ TransVortex is a CLI-first pipeline for generating subtitles from local videos w
 3. Put real provider config in `providers.local.yaml` (gitignored), and set API keys using the configured `env_key`.
    - The default translation provider uses `TVX_MODEL_API_KEY`.
    - You can also put keys in `.env` (auto-loaded, does not override existing environment variables).
-4. Probe provider compatibility first (zero-token local checks):
+4. Run the local health check:
+   - `transvortex doctor`
+   - `transvortex doctor --json`
+5. Probe provider compatibility first (zero-token local checks):
    - `transvortex probe-provider --strict`
-5. Run:
+6. Run:
    - `transvortex run --input demo.mp4 --src en --tgt zh-CN`
-6. One-command demo run:
+7. One-command demo run:
    - `.\scripts\run_demo.ps1 -ApiKey "<your-key>"`
 
 ## Cloud ASR (OpenAI Whisper)
@@ -34,7 +40,7 @@ asr:
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: OPENAI_API_KEY
+    env_key: TVX_MODEL_API_KEY
     timeout_seconds: 120
 ```
 
@@ -46,7 +52,7 @@ providers:
     api_type: openai-compatible
     compat_mode: openai_chat
     base_url: https://api.openai.com
-    env_key: OPENAI_API_KEY
+    env_key: TVX_MODEL_API_KEY
     models: [whisper-1]
     auth:
       type: bearer
@@ -60,7 +66,7 @@ providers:
 Then set key (or put it in `.env`):
 
 ```powershell
-$env:OPENAI_API_KEY = "sk-..."
+$env:TVX_MODEL_API_KEY = "sk-..."
 ```
 
 ## Commands
@@ -70,6 +76,7 @@ $env:OPENAI_API_KEY = "sk-..."
 - `transvortex events --task-id <id>`
 - `transvortex cancel --task-id <id> [--json]`
 - `transvortex tasks [--json]`
+- `transvortex doctor [--json]`
 - `transvortex config show [--json]`
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
 

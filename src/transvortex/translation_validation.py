@@ -7,6 +7,7 @@ from .models import Chunk
 
 
 NUMBERED_LINE_RE = re.compile(r"^\[(\d+)\]\s*(.*)$")
+ALT_NUMBERED_LINE_RE = re.compile(r"^(?:\(?\s*(\d+)\s*\)?|（\s*(\d+)\s*）)\s*[:：.)、-]\s*(.*)$")
 REFUSAL_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
@@ -58,9 +59,13 @@ class TranslationValidationResult:
 
 def strip_numbered_text(line: str) -> tuple[int, str]:
     match = NUMBERED_LINE_RE.match(line.strip())
-    if not match:
-        raise RuntimeError(f"Bad translated line format: {line}")
-    return int(match.group(1)), match.group(2).strip()
+    if match:
+        return int(match.group(1)), match.group(2).strip()
+    match = ALT_NUMBERED_LINE_RE.match(line.strip())
+    if match:
+        seg_id = match.group(1) or match.group(2)
+        return int(seg_id), match.group(3).strip()
+    raise RuntimeError(f"Bad translated line format: {line}")
 
 
 def contains_refusal(text: str) -> bool:
@@ -79,7 +84,7 @@ def _context_ids(chunk: Chunk) -> set[int]:
 def _raw_has_explanatory_lines(raw_text: str) -> bool:
     for line in raw_text.splitlines():
         stripped = line.strip()
-        if stripped and not NUMBERED_LINE_RE.match(stripped):
+        if stripped and not NUMBERED_LINE_RE.match(stripped) and not ALT_NUMBERED_LINE_RE.match(stripped):
             return True
     return False
 

@@ -91,6 +91,32 @@ def _require_file(path: Path, label: str) -> None:
         raise RuntimeError(f"Missing or empty artifact: {label}")
 
 
+def _is_nonempty_file(path: Path) -> bool:
+    return path.exists() and path.is_file() and path.stat().st_size > 0
+
+
+def _is_valid_json_list(path: Path) -> bool:
+    if not _is_nonempty_file(path):
+        return False
+    try:
+        return isinstance(read_json(path), list)
+    except Exception:
+        return False
+
+
+def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path) -> bool:
+    if not _is_nonempty_file(audio_full) or not _is_valid_json_list(manifest_file):
+        return False
+    try:
+        manifest = read_json(manifest_file)
+    except Exception:
+        return False
+    for item in manifest:
+        if not isinstance(item, dict) or not _is_nonempty_file(Path(str(item.get("path", "")))):
+            return False
+    return True
+
+
 def _preflight(
     config: AppConfig,
     store: TaskStore,
@@ -406,7 +432,8 @@ def _execute_task(
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "INGEST", "Extracting and splitting audio")
         audio_full = paths["media"] / "audio_full.m4a"
-        if not checkpoint.get("ingest_done"):
+        manifest_file = paths["media"] / "segments_manifest.json"
+        if not checkpoint.get("ingest_done") or not _ingest_artifacts_valid(audio_full, manifest_file):
             media_meta = extract_audio(Path(task.input_file), audio_full)
             segments_manifest = split_audio_with_overlap(
                 audio_full,
@@ -416,7 +443,7 @@ def _execute_task(
                 duration_seconds=float(media_meta["duration_seconds"]),
             )
             write_json(paths["media"] / "media_meta.json", media_meta)
-            write_json(paths["media"] / "segments_manifest.json", segments_manifest)
+            write_json(manifest_file, segments_manifest)
             _require_file(audio_full, "media/audio_full.m4a")
             checkpoint["ingest_done"] = True
             checkpoint["status"] = "INGEST"
@@ -427,12 +454,10 @@ def _execute_task(
                 stage="INGEST",
                 message="Audio segments ready",
                 progress=0.18,
-                details={"path": str(paths["media"] / "segments_manifest.json"), "segments": len(segments_manifest)},
+                details={"path": str(manifest_file), "segments": len(segments_manifest)},
             )
         else:
-            _require_file(audio_full, "media/audio_full.m4a")
-            _require_file(paths["media"] / "segments_manifest.json", "media/segments_manifest.json")
-            segments_manifest = read_json(paths["media"] / "segments_manifest.json")
+            segments_manifest = read_json(manifest_file)
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
@@ -465,7 +490,7 @@ def _execute_task(
             idx = int(item["segment_index"])
             segment_output = paths["asr"] / f"segment_{idx:05d}.json"
             segment_files.append((idx, segment_output))
-            if idx in asr_done and segment_output.exists():
+            if idx in asr_done and _is_valid_json_list(segment_output):
                 continue
             rows = asr.transcribe_segment(Path(item["path"]), float(item["start"]))
             write_segment_asr_output(segment_output, rows)
@@ -599,6 +624,7 @@ def _execute_task(
             output_file = paths["output"] / default_name
         export_srt(final_segments, output_file, task.bilingual)
         checkpoint["status"] = "DONE"
+        checkpoint.pop("error", None)
         store.save_checkpoint(task_id, checkpoint)
         store.update_task_status(task_id, "DONE", output_path=str(output_file))
         store.append_event(

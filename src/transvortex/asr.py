@@ -25,7 +25,7 @@ class AsrEngine:
         cloud_base_url: str = "https://api.openai.com",
         cloud_endpoint: str = "/v1/audio/transcriptions",
         cloud_model: str = "whisper-1",
-        cloud_env_key: str = "OPENAI_API_KEY",
+        cloud_env_key: str = "TVX_MODEL_API_KEY",
         cloud_timeout_seconds: int = 120,
         cloud_provider: ProviderConfig | None = None,
         cloud_provider_model: str = "",
