@@ -42,6 +42,7 @@ class TaskStore:
         status: str,
         *,
         output_path: str | None = None,
+        output_paths: dict[str, str] | None = None,
         error: str | None = None,
     ) -> TaskRecord:
         task = self.load_task(task_id)
@@ -49,6 +50,8 @@ class TaskStore:
         task.updated_at = utc_now_iso()
         if output_path is not None:
             task.output_path = output_path
+        if output_paths is not None:
+            task.output_paths = output_paths
         if error is not None:
             task.error = error
         elif status == "DONE":

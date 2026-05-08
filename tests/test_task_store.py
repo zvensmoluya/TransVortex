@@ -19,9 +19,10 @@ def test_done_status_clears_previous_error(tmp_path) -> None:
         error="previous error",
     )
     store.save_task(task)
-    updated = store.update_task_status("t1", "DONE", output_path="out.srt")
+    updated = store.update_task_status("t1", "DONE", output_path="out.srt", output_paths={"srt": "out.srt"})
     assert updated.status == "DONE"
     assert updated.output_path == "out.srt"
+    assert updated.output_paths == {"srt": "out.srt"}
     assert updated.error is None
 
 

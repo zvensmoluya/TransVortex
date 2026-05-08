@@ -312,6 +312,47 @@ routing:
     assert cfg.pipeline.translation.chunk_lines == 7
 
 
+def test_translation_and_output_overrides_parse(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "output_format": "both",
+            "translation_style_preset": "localized",
+            "translation_style_prompt": "Use punchy captions.",
+            "translation_chunk_lines": 9,
+            "translation_context_before_lines": 3,
+            "translation_context_after_lines": 4,
+            "translation_repair_enabled": "false",
+            "subtitle_ass_style": {"font_name": "Arial", "font_size": 36, "bilingual_order": "source_target"},
+        },
+    )
+    assert cfg.pipeline.output_format == "both"
+    assert cfg.pipeline.translation.style_preset == "localized"
+    assert cfg.pipeline.translation.style_prompt == "Use punchy captions."
+    assert cfg.pipeline.translation.chunk_lines == 9
+    assert cfg.pipeline.translation_batch_size == 9
+    assert cfg.pipeline.translation.context_before_lines == 3
+    assert cfg.pipeline.translation.context_after_lines == 4
+    assert cfg.pipeline.translation.repair.enabled is False
+    assert cfg.pipeline.subtitle_ass_style.font_name == "Arial"
+    assert cfg.pipeline.subtitle_ass_style.font_size == 36
+    assert cfg.pipeline.subtitle_ass_style.bilingual_order == "source_target"
+
+
 def test_cli_asr_overrides_parse(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

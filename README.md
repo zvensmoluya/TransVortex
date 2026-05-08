@@ -28,6 +28,24 @@ TransVortex is intended to grow into an agent-callable headless core with both a
 7. One-command demo run:
    - `.\scripts\run_demo.ps1 -ApiKey "<your-key>"`
 
+## Desktop Quick Start
+The desktop app is the recommended V1 workflow for day-to-day use on Windows.
+
+```powershell
+cd desktop
+npm install
+npm run typecheck
+npm run build
+npm run tauri dev
+```
+
+In the app:
+- Check Environment first.
+- Save the provider key if needed.
+- Choose a video and configure Provider, ASR, Translation, and Output.
+- Choose `srt`, `ass`, or `both` as output format.
+- Start the task, then open SRT/ASS from History.
+
 ## Cloud ASR (OpenAI Whisper)
 Set `pipeline.yaml`:
 
@@ -103,6 +121,9 @@ translation:
 ```
 
 Each task writes validated translation artifacts under `translate/`, including `segments.translated.jsonl`, `validation.jsonl`, and `repairs.jsonl`.
+
+## Output Formats
+TransVortex can export SRT or ASS subtitles. SRT is plain subtitle text; ASS adds basic styling such as font, size, outline, shadow, and bilingual line order. Desktop V1 exposes the output format selector and writes generated files into the task `output/` directory.
 
 ## Worker Protocol
 Each task writes a stable artifact directory under `artifacts/<task_id>/`:

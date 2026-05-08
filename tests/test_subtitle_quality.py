@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.exporter import export_srt
-from transvortex.models import Segment
+from transvortex.exporter import export_ass, export_srt
+from transvortex.models import AssStyleConfig, Segment
 from transvortex.subtitle_quality import (
     clean_subtitle_text,
     format_subtitle_lines,
@@ -81,3 +81,26 @@ def test_export_srt_wraps_text_and_normalizes_timestamps(tmp_path: Path) -> None
     assert "1\n00:00:00,000 --> 00:00:00,099" in body
     assert "2\n00:00:00,100 --> 00:00:00,450" in body
     assert "This is a long subtitle line that should\nwrap cleanly at word boundaries" in body
+
+
+def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Path) -> None:
+    out_file = tmp_path / "中文输出.ass"
+    export_ass(
+        [
+            Segment(
+                id=1,
+                start=0.0,
+                end=1.25,
+                text_src="Hello {world}",
+                text_tgt="你好",
+            )
+        ],
+        out_file,
+        bilingual=True,
+        style=AssStyleConfig(font_name="Arial", font_size=36, bilingual_order="target_source"),
+    )
+    body = out_file.read_text(encoding="utf-8-sig")
+    assert "[V4+ Styles]" in body
+    assert "Style: Default,Arial,36" in body
+    assert "Dialogue: 0,0:00:00.00,0:00:01.25" in body
+    assert "你好\\NHello \\{world\\}" in body

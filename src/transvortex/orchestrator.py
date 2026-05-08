@@ -10,7 +10,7 @@ from .aligner import apply_translations, dedupe_overlap_segments, normalize_time
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
 from .config import apply_route_overrides, load_app_config
-from .exporter import export_srt
+from .exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
 from .models import AppConfig, Segment, TaskRecord
 from .probe import probe_provider
@@ -184,6 +184,7 @@ def _status_json(task: TaskRecord) -> dict[str, Any]:
         "created_at": task.created_at,
         "updated_at": task.updated_at,
         "output_path": task.output_path,
+        "output_paths": task.output_paths,
         "error": None if task.status == "DONE" else task.error,
     }
 
@@ -340,6 +341,35 @@ def _iter_translation_results(
         target_lang=target_lang,
         already_done=already_done,
     )
+
+
+def _normalize_output_format(value: str) -> str:
+    normalized = str(value or "srt").strip().lower()
+    return normalized if normalized in {"srt", "ass", "both"} else "srt"
+
+
+def _output_paths_for_task(
+    *,
+    config: AppConfig,
+    task: TaskRecord,
+    output_file: Path | None,
+    output_dir: Path,
+) -> tuple[str, dict[str, Path]]:
+    output_format = _normalize_output_format(config.pipeline.output_format)
+    stem = Path(task.input_file).stem
+    if output_file is not None:
+        base = output_file.with_suffix("")
+        if output_format == "srt":
+            return output_format, {"srt": output_file.with_suffix(".srt")}
+        if output_format == "ass":
+            return output_format, {"ass": output_file.with_suffix(".ass")}
+        return output_format, {"srt": base.with_suffix(".srt"), "ass": base.with_suffix(".ass")}
+    base = output_dir / f"{stem}.{task.target_lang}"
+    if output_format == "srt":
+        return output_format, {"srt": base.parent / f"{base.name}.srt"}
+    if output_format == "ass":
+        return output_format, {"ass": base.parent / f"{base.name}.ass"}
+    return output_format, {"srt": base.parent / f"{base.name}.srt", "ass": base.parent / f"{base.name}.ass"}
 
 
 def run_pipeline(
@@ -618,22 +648,40 @@ def _execute_task(
         store.save_checkpoint(task_id, checkpoint)
 
         _check_cancel(store, task_id)
-        _emit_stage(store, task_id, "EXPORT", "Exporting SRT")
-        if output_file is None:
-            default_name = f"{Path(task.input_file).stem}.{task.target_lang}.srt"
-            output_file = paths["output"] / default_name
-        export_srt(final_segments, output_file, task.bilingual)
+        output_format, output_paths = _output_paths_for_task(
+            config=config,
+            task=task,
+            output_file=output_file,
+            output_dir=paths["output"],
+        )
+        _emit_stage(store, task_id, "EXPORT", f"Exporting {output_format.upper()} subtitles")
+        if "srt" in output_paths:
+            export_srt(final_segments, output_paths["srt"], task.bilingual)
+        if "ass" in output_paths:
+            export_ass(
+                final_segments,
+                output_paths["ass"],
+                bilingual=task.bilingual,
+                style=config.pipeline.subtitle_ass_style,
+            )
+        output_paths_payload = {key: str(path) for key, path in output_paths.items()}
+        primary_output = output_paths.get("srt") or output_paths.get("ass")
         checkpoint["status"] = "DONE"
         checkpoint.pop("error", None)
         store.save_checkpoint(task_id, checkpoint)
-        store.update_task_status(task_id, "DONE", output_path=str(output_file))
+        store.update_task_status(
+            task_id,
+            "DONE",
+            output_path=str(primary_output) if primary_output else None,
+            output_paths=output_paths_payload,
+        )
         store.append_event(
             task_id,
             "done",
             stage="DONE",
             message="Task completed",
             progress=1.0,
-            details={"output_path": str(output_file)},
+            details={"output_path": str(primary_output) if primary_output else "", "output_paths": output_paths_payload},
         )
     except TaskCancelled as exc:
         store.update_task_status(task_id, "CANCELLED", error=str(exc))

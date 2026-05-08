@@ -38,6 +38,13 @@ struct StartTaskRequest {
     chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
     concurrency: Option<u32>,
+    output_format: Option<String>,
+    translation_style_preset: Option<String>,
+    translation_style_prompt: Option<String>,
+    translation_chunk_lines: Option<u32>,
+    translation_context_before_lines: Option<u32>,
+    translation_context_after_lines: Option<u32>,
+    translation_repair_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +63,13 @@ struct ResumeTaskRequest {
     chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
     concurrency: Option<u32>,
+    output_format: Option<String>,
+    translation_style_preset: Option<String>,
+    translation_style_prompt: Option<String>,
+    translation_chunk_lines: Option<u32>,
+    translation_context_before_lines: Option<u32>,
+    translation_context_after_lines: Option<u32>,
+    translation_repair_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +145,13 @@ fn push_num_arg(args: &mut Vec<String>, flag: &str, value: Option<u32>) {
     if let Some(value) = value {
         args.push(flag.to_string());
         args.push(value.to_string());
+    }
+}
+
+fn push_bool_arg(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        args.push(flag.to_string());
+        args.push(if value { "true" } else { "false" }.to_string());
     }
 }
 
@@ -328,6 +349,25 @@ fn start_task(
     push_num_arg(&mut args, "--chunk-overlap-seconds", request.chunk_overlap_seconds);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
+    push_arg(&mut args, "--output-format", &request.output_format);
+    push_arg(&mut args, "--translation-style-preset", &request.translation_style_preset);
+    push_arg(&mut args, "--translation-style-prompt", &request.translation_style_prompt);
+    push_num_arg(&mut args, "--translation-chunk-lines", request.translation_chunk_lines);
+    push_num_arg(
+        &mut args,
+        "--translation-context-before-lines",
+        request.translation_context_before_lines,
+    );
+    push_num_arg(
+        &mut args,
+        "--translation-context-after-lines",
+        request.translation_context_after_lines,
+    );
+    push_bool_arg(
+        &mut args,
+        "--translation-repair-enabled",
+        request.translation_repair_enabled,
+    );
 
     spawn_streaming_worker(app, state, root, args)
 }
@@ -362,6 +402,25 @@ fn resume_task(
     push_num_arg(&mut args, "--chunk-overlap-seconds", request.chunk_overlap_seconds);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
+    push_arg(&mut args, "--output-format", &request.output_format);
+    push_arg(&mut args, "--translation-style-preset", &request.translation_style_preset);
+    push_arg(&mut args, "--translation-style-prompt", &request.translation_style_prompt);
+    push_num_arg(&mut args, "--translation-chunk-lines", request.translation_chunk_lines);
+    push_num_arg(
+        &mut args,
+        "--translation-context-before-lines",
+        request.translation_context_before_lines,
+    );
+    push_num_arg(
+        &mut args,
+        "--translation-context-after-lines",
+        request.translation_context_after_lines,
+    );
+    push_bool_arg(
+        &mut args,
+        "--translation-repair-enabled",
+        request.translation_repair_enabled,
+    );
     spawn_streaming_worker(app, state, root, args)
 }
 

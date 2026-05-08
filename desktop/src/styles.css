@@ -19,7 +19,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -42,7 +43,8 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 38px;
   border: 1px solid #c8d6d1;
@@ -50,6 +52,13 @@ select {
   background: #ffffff;
   color: #14201c;
   padding: 0 10px;
+}
+
+textarea {
+  min-height: 112px;
+  padding: 10px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 label {
@@ -136,6 +145,7 @@ p {
 
 .dropZone,
 .secretRow,
+.settingsPanel,
 .progressBox,
 .healthBox,
 .eventList,
@@ -143,6 +153,16 @@ p {
   border: 1px solid #dbe5e1;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.settingsPanel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.settingsPanel > .sectionHead h2 {
+  margin-bottom: 0;
 }
 
 .dropZone {
@@ -180,6 +200,10 @@ p {
 
 .grid.four {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.grid.four label:has(.joined) {
+  grid-column: span 2;
 }
 
 .joined {

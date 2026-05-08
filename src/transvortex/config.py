@@ -9,6 +9,7 @@ import yaml
 
 from .models import (
     AppConfig,
+    AssStyleConfig,
     AuthConfig,
     CapabilityConfig,
     DEFAULT_TRANSLATION_STYLE_PROMPT,
@@ -84,6 +85,12 @@ def _to_bool(value: Any, default: bool) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _to_str(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    return str(value)
 
 
 def _infer_compat_mode(api_type: str) -> str:
@@ -207,12 +214,26 @@ def load_app_config(
             max_attempts=_to_int(repair_raw.get("max_attempts"), 2),
         ),
     )
+    ass_raw = pip_yaml.get("subtitle_ass_style") or {}
+    subtitle_ass_style = AssStyleConfig(
+        font_name=_to_str(ass_raw.get("font_name"), "Microsoft YaHei"),
+        font_size=_to_int(ass_raw.get("font_size"), 42),
+        primary_color=_to_str(ass_raw.get("primary_color"), "&H00FFFFFF"),
+        outline_color=_to_str(ass_raw.get("outline_color"), "&H00000000"),
+        back_color=_to_str(ass_raw.get("back_color"), "&H64000000"),
+        outline=_to_int(ass_raw.get("outline"), 2),
+        shadow=_to_int(ass_raw.get("shadow"), 1),
+        margin_v=_to_int(ass_raw.get("margin_v"), 48),
+        bilingual_order=_to_str(ass_raw.get("bilingual_order"), "target_source"),
+    )
     pipeline = PipelineConfig(
         artifacts_dir=(root_dir / artifacts_dir),
         chunk_seconds=_to_int(pip_yaml.get("chunk_seconds"), 60),
         chunk_overlap_seconds=_to_int(pip_yaml.get("chunk_overlap_seconds"), 1),
         translation_batch_size=chunk_lines,
         translation=translation,
+        output_format=_to_str(pip_yaml.get("output_format"), "srt"),
+        subtitle_ass_style=subtitle_ass_style,
         default_concurrency=_to_int(pip_yaml.get("default_concurrency"), 8),
         timeout_seconds=_to_int(pip_yaml.get("timeout_seconds"), 30),
         retry=_to_int(pip_yaml.get("retry"), 3),
@@ -241,12 +262,32 @@ def load_app_config(
     for key, value in cli_overrides.items():
         if value is None:
             continue
-        if hasattr(pipeline, key):
-            if key == "translation_batch_size":
-                pipeline.translation_batch_size = _to_int(value, pipeline.translation_batch_size)
-                pipeline.translation.chunk_lines = pipeline.translation_batch_size
-            else:
-                setattr(pipeline, key, value)
+        if key == "translation_batch_size":
+            pipeline.translation_batch_size = _to_int(value, pipeline.translation_batch_size)
+            pipeline.translation.chunk_lines = pipeline.translation_batch_size
+        elif key == "translation_style_preset":
+            pipeline.translation.style_preset = _to_str(value, pipeline.translation.style_preset)
+        elif key == "translation_style_prompt":
+            pipeline.translation.style_prompt = _to_str(value, pipeline.translation.style_prompt)
+        elif key == "translation_chunk_lines":
+            pipeline.translation.chunk_lines = _to_int(value, pipeline.translation.chunk_lines)
+            pipeline.translation_batch_size = pipeline.translation.chunk_lines
+        elif key == "translation_context_before_lines":
+            pipeline.translation.context_before_lines = _to_int(value, pipeline.translation.context_before_lines)
+        elif key == "translation_context_after_lines":
+            pipeline.translation.context_after_lines = _to_int(value, pipeline.translation.context_after_lines)
+        elif key == "translation_repair_enabled":
+            pipeline.translation.repair.enabled = _to_bool(value, pipeline.translation.repair.enabled)
+        elif key == "subtitle_ass_style" and isinstance(value, dict):
+            for style_key, style_value in value.items():
+                if hasattr(pipeline.subtitle_ass_style, style_key):
+                    current = getattr(pipeline.subtitle_ass_style, style_key)
+                    if isinstance(current, int):
+                        setattr(pipeline.subtitle_ass_style, style_key, _to_int(style_value, current))
+                    else:
+                        setattr(pipeline.subtitle_ass_style, style_key, _to_str(style_value, current))
+        elif hasattr(pipeline, key):
+            setattr(pipeline, key, value)
 
     providers: dict[str, ProviderConfig] = {}
     for row in p_yaml.get("providers", []):

@@ -46,6 +46,7 @@ type TaskRecord = {
   created_at: string;
   updated_at: string;
   output_path?: string | null;
+  output_paths?: Record<string, string>;
   task_dir?: string;
   error?: string | null;
 };
@@ -95,6 +96,13 @@ type FormState = {
   chunkSeconds: number;
   chunkOverlapSeconds: number;
   translationBatchSize: number;
+  translationStylePreset: string;
+  translationStylePrompt: string;
+  translationChunkLines: number;
+  translationContextBeforeLines: number;
+  translationContextAfterLines: number;
+  translationRepairEnabled: boolean;
+  outputFormat: "srt" | "ass" | "both";
   concurrency: number;
   apiKey: string;
 };
@@ -116,6 +124,13 @@ const emptyForm: FormState = {
   chunkSeconds: 60,
   chunkOverlapSeconds: 1,
   translationBatchSize: 40,
+  translationStylePreset: "subtitle_natural",
+  translationStylePrompt: "",
+  translationChunkLines: 40,
+  translationContextBeforeLines: 20,
+  translationContextAfterLines: 10,
+  translationRepairEnabled: true,
+  outputFormat: "srt",
   concurrency: 8,
   apiKey: "",
 };
@@ -131,6 +146,10 @@ function numberValue(value: unknown, fallback: number) {
 function eventOutputPath(event: WorkerEvent) {
   const value = event.details?.output_path;
   return typeof value === "string" ? value : "";
+}
+
+function outputPath(task: TaskRecord, key: string) {
+  return task.output_paths?.[key] || "";
 }
 
 type DroppedFile = File & { path?: string };
@@ -200,6 +219,30 @@ function App() {
         chunkSeconds: numberValue(payload.pipeline.chunk_seconds, current.chunkSeconds),
         chunkOverlapSeconds: numberValue(payload.pipeline.chunk_overlap_seconds, current.chunkOverlapSeconds),
         translationBatchSize: numberValue(payload.pipeline.translation_batch_size, current.translationBatchSize),
+        translationStylePreset: textValue(
+          (payload.pipeline.translation as Record<string, unknown> | undefined)?.style_preset,
+          current.translationStylePreset,
+        ),
+        translationStylePrompt: textValue(
+          (payload.pipeline.translation as Record<string, unknown> | undefined)?.style_prompt,
+          current.translationStylePrompt,
+        ),
+        translationChunkLines: numberValue(
+          (payload.pipeline.translation as Record<string, unknown> | undefined)?.chunk_lines,
+          current.translationChunkLines,
+        ),
+        translationContextBeforeLines: numberValue(
+          (payload.pipeline.translation as Record<string, unknown> | undefined)?.context_before_lines,
+          current.translationContextBeforeLines,
+        ),
+        translationContextAfterLines: numberValue(
+          (payload.pipeline.translation as Record<string, unknown> | undefined)?.context_after_lines,
+          current.translationContextAfterLines,
+        ),
+        translationRepairEnabled:
+          ((payload.pipeline.translation as { repair?: { enabled?: boolean } } | undefined)?.repair?.enabled ??
+            current.translationRepairEnabled),
+        outputFormat: textValue(payload.pipeline.output_format, current.outputFormat) as FormState["outputFormat"],
         concurrency: numberValue(payload.pipeline.default_concurrency, current.concurrency),
       };
     });
@@ -335,6 +378,13 @@ function App() {
           chunkSeconds: form.chunkSeconds,
           chunkOverlapSeconds: form.chunkOverlapSeconds,
           translationBatchSize: form.translationBatchSize,
+          translationStylePreset: form.translationStylePreset,
+          translationStylePrompt: form.translationStylePrompt,
+          translationChunkLines: form.translationChunkLines,
+          translationContextBeforeLines: form.translationContextBeforeLines,
+          translationContextAfterLines: form.translationContextAfterLines,
+          translationRepairEnabled: form.translationRepairEnabled,
+          outputFormat: form.outputFormat,
           concurrency: form.concurrency,
         },
       });
@@ -379,6 +429,13 @@ function App() {
           chunkSeconds: form.chunkSeconds,
           chunkOverlapSeconds: form.chunkOverlapSeconds,
           translationBatchSize: form.translationBatchSize,
+          translationStylePreset: form.translationStylePreset,
+          translationStylePrompt: form.translationStylePrompt,
+          translationChunkLines: form.translationChunkLines,
+          translationContextBeforeLines: form.translationContextBeforeLines,
+          translationContextAfterLines: form.translationContextAfterLines,
+          translationRepairEnabled: form.translationRepairEnabled,
+          outputFormat: form.outputFormat,
           concurrency: form.concurrency,
         },
       });
@@ -431,146 +488,221 @@ function App() {
 
       <section className="workspace">
         <div className="mainPanel">
-          <section
-            className="dropZone"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              const file = event.dataTransfer.files.item(0) as DroppedFile | null;
-              if (file) update("input", file.path || file.name);
-            }}
-          >
-            <Video size={34} />
-            <div>
-              <strong>{form.input || "Drop a video here"}</strong>
-              <span>{form.input ? "Ready for subtitle generation" : "MP4, MKV, MOV, WEBM, AVI"}</span>
+          <section className="settingsPanel">
+            <div className="sectionHead">
+              <h2>Input</h2>
             </div>
-            <button onClick={chooseVideo}>
-              <FolderOpen size={17} /> Choose
-            </button>
-          </section>
-
-          <div className="grid two">
-            <label>
-              Source language
-              <input value={form.sourceLang} onChange={(event) => update("sourceLang", event.target.value)} />
-            </label>
-            <label>
-              Target language
-              <input value={form.targetLang} onChange={(event) => update("targetLang", event.target.value)} />
-            </label>
-          </div>
-
-          <label>
-            Output directory
-            <div className="joined">
-              <input value={form.outputDir} onChange={(event) => update("outputDir", event.target.value)} />
-              <button onClick={chooseOutputDir}>
-                <FolderOpen size={16} />
+            <section
+              className="dropZone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                const file = event.dataTransfer.files.item(0) as DroppedFile | null;
+                if (file) update("input", file.path || file.name);
+              }}
+            >
+              <Video size={34} />
+              <div>
+                <strong>{form.input || "Drop a video here"}</strong>
+                <span>{form.input ? "Ready for subtitle generation" : "MP4, MKV, MOV, WEBM, AVI"}</span>
+              </div>
+              <button onClick={chooseVideo}>
+                <FolderOpen size={17} /> Choose
               </button>
+            </section>
+            <div className="grid two">
+              <label>
+                Source language
+                <input value={form.sourceLang} onChange={(event) => update("sourceLang", event.target.value)} />
+              </label>
+              <label>
+                Target language
+                <input value={form.targetLang} onChange={(event) => update("targetLang", event.target.value)} />
+              </label>
             </div>
-          </label>
-
-          <div className="grid two">
-            <label>
-              Provider
-              <select value={form.provider} onChange={(event) => update("provider", event.target.value)}>
-                {config?.providers.map((provider) => (
-                  <option key={provider.name} value={provider.name}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Model
-              <select value={form.model} onChange={(event) => update("model", event.target.value)}>
-                {selectedProvider?.models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <section className="secretRow">
-            <KeyRound size={18} />
-            <div>
-              <strong>{selectedProvider?.env_key || "Provider key"}</strong>
-              <span>{selectedProvider?.has_key ? "Configured" : "Missing"}</span>
-            </div>
-            <input
-              type="password"
-              placeholder="Paste key"
-              value={form.apiKey}
-              onChange={(event) => update("apiKey", event.target.value)}
-            />
-            <button disabled={!form.apiKey || busy} onClick={saveKey}>
-              Save
-            </button>
           </section>
 
-          <div className="grid four">
-            <label>
-              ASR mode
-              <select value={form.asrMode} onChange={(event) => update("asrMode", event.target.value)}>
-                <option value="local">local</option>
-                <option value="openai">openai</option>
-              </select>
-            </label>
-            <label>
-              Device
-              <select value={form.asrDevice} onChange={(event) => update("asrDevice", event.target.value)}>
-                <option value="cpu">cpu</option>
-                <option value="auto">auto</option>
-                <option value="cuda">cuda</option>
-              </select>
-            </label>
-            <label>
-              Model size
-              <input value={form.asrModelSize} onChange={(event) => update("asrModelSize", event.target.value)} />
-            </label>
-            <label>
-              Compute
-              <input value={form.asrComputeType} onChange={(event) => update("asrComputeType", event.target.value)} />
-            </label>
-          </div>
+          <section className="settingsPanel">
+            <div className="sectionHead">
+              <h2>Provider</h2>
+            </div>
+            <div className="grid two">
+              <label>
+                Provider
+                <select value={form.provider} onChange={(event) => update("provider", event.target.value)}>
+                  {config?.providers.map((provider) => (
+                    <option key={provider.name} value={provider.name}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Model
+                <select value={form.model} onChange={(event) => update("model", event.target.value)}>
+                  {selectedProvider?.models.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
-          <div className="grid four">
-            <label>
-              Chunk sec
+            <section className="secretRow">
+              <KeyRound size={18} />
+              <div>
+                <strong>{selectedProvider?.env_key || "Provider key"}</strong>
+                <span>{selectedProvider?.has_key ? "Configured" : "Missing"}</span>
+              </div>
               <input
-                type="number"
-                value={form.chunkSeconds}
-                onChange={(event) => update("chunkSeconds", Number(event.target.value))}
+                type="password"
+                placeholder="Paste key"
+                value={form.apiKey}
+                onChange={(event) => update("apiKey", event.target.value)}
+              />
+              <button disabled={!form.apiKey || busy} onClick={saveKey}>
+                Save
+              </button>
+            </section>
+          </section>
+
+          <section className="settingsPanel">
+            <div className="sectionHead">
+              <h2>ASR</h2>
+            </div>
+            <div className="grid four">
+              <label>
+                ASR mode
+                <select value={form.asrMode} onChange={(event) => update("asrMode", event.target.value)}>
+                  <option value="local">local</option>
+                  <option value="openai">openai</option>
+                </select>
+              </label>
+              <label>
+                Device
+                <select value={form.asrDevice} onChange={(event) => update("asrDevice", event.target.value)}>
+                  <option value="cpu">cpu</option>
+                  <option value="auto">auto</option>
+                  <option value="cuda">cuda</option>
+                </select>
+              </label>
+              <label>
+                Model size
+                <input value={form.asrModelSize} onChange={(event) => update("asrModelSize", event.target.value)} />
+              </label>
+              <label>
+                Compute
+                <input value={form.asrComputeType} onChange={(event) => update("asrComputeType", event.target.value)} />
+              </label>
+            </div>
+          </section>
+
+          <section className="settingsPanel">
+            <div className="sectionHead">
+              <h2>Translation</h2>
+            </div>
+            <div className="grid four">
+              <label>
+                Preset
+                <select
+                  value={form.translationStylePreset}
+                  onChange={(event) => update("translationStylePreset", event.target.value)}
+                >
+                  <option value="subtitle_natural">subtitle_natural</option>
+                  <option value="literal">literal</option>
+                  <option value="localized">localized</option>
+                  <option value="learning_friendly">learning_friendly</option>
+                </select>
+              </label>
+              <label>
+                Chunk lines
+                <input
+                  type="number"
+                  value={form.translationChunkLines}
+                  onChange={(event) => {
+                    update("translationChunkLines", Number(event.target.value));
+                    update("translationBatchSize", Number(event.target.value));
+                  }}
+                />
+              </label>
+              <label>
+                Context before
+                <input
+                  type="number"
+                  value={form.translationContextBeforeLines}
+                  onChange={(event) => update("translationContextBeforeLines", Number(event.target.value))}
+                />
+              </label>
+              <label>
+                Context after
+                <input
+                  type="number"
+                  value={form.translationContextAfterLines}
+                  onChange={(event) => update("translationContextAfterLines", Number(event.target.value))}
+                />
+              </label>
+            </div>
+            <label>
+              Style prompt
+              <textarea
+                value={form.translationStylePrompt}
+                onChange={(event) => update("translationStylePrompt", event.target.value)}
               />
             </label>
-            <label>
-              Overlap sec
+            <label className="check">
               <input
-                type="number"
-                value={form.chunkOverlapSeconds}
-                onChange={(event) => update("chunkOverlapSeconds", Number(event.target.value))}
+                type="checkbox"
+                checked={form.translationRepairEnabled}
+                onChange={(event) => update("translationRepairEnabled", event.target.checked)}
               />
+              Repair invalid rows
             </label>
-            <label>
-              Batch
-              <input
-                type="number"
-                value={form.translationBatchSize}
-                onChange={(event) => update("translationBatchSize", Number(event.target.value))}
-              />
-            </label>
-            <label>
-              Concurrency
-              <input
-                type="number"
-                value={form.concurrency}
-                onChange={(event) => update("concurrency", Number(event.target.value))}
-              />
-            </label>
-          </div>
+          </section>
+
+          <section className="settingsPanel">
+            <div className="sectionHead">
+              <h2>Output</h2>
+            </div>
+            <div className="grid four">
+              <label>
+                Format
+                <select
+                  value={form.outputFormat}
+                  onChange={(event) => update("outputFormat", event.target.value as FormState["outputFormat"])}
+                >
+                  <option value="srt">srt</option>
+                  <option value="ass">ass</option>
+                  <option value="both">both</option>
+                </select>
+              </label>
+              <label>
+                Output directory
+                <div className="joined">
+                  <input value={form.outputDir} onChange={(event) => update("outputDir", event.target.value)} />
+                  <button onClick={chooseOutputDir}>
+                    <FolderOpen size={16} />
+                  </button>
+                </div>
+              </label>
+              <label>
+                Chunk sec
+                <input
+                  type="number"
+                  value={form.chunkSeconds}
+                  onChange={(event) => update("chunkSeconds", Number(event.target.value))}
+                />
+              </label>
+              <label>
+                Concurrency
+                <input
+                  type="number"
+                  value={form.concurrency}
+                  onChange={(event) => update("concurrency", Number(event.target.value))}
+                />
+              </label>
+            </div>
+          </section>
 
           <div className="actionRow">
             <label className="check">
@@ -662,7 +794,11 @@ function App() {
               <footer>
                 <button onClick={() => loadTaskEvents(task.task_id)}>Events</button>
                 <button onClick={() => openPath(task.task_dir)}>Folder</button>
-                {task.output_path && <button onClick={() => openPath(task.output_path)}>SRT</button>}
+                {outputPath(task, "srt") && <button onClick={() => openPath(outputPath(task, "srt"))}>SRT</button>}
+                {outputPath(task, "ass") && <button onClick={() => openPath(outputPath(task, "ass"))}>ASS</button>}
+                {!outputPath(task, "srt") && !outputPath(task, "ass") && task.output_path && (
+                  <button onClick={() => openPath(task.output_path)}>Output</button>
+                )}
                 {["FAILED", "CANCELLED", "CANCEL_REQUESTED"].includes(task.status) && (
                   <button disabled={running || busy} onClick={() => resumeTask(task.task_id)}>
                     Resume

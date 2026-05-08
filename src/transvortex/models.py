@@ -98,12 +98,27 @@ class TranslationConfig:
 
 
 @dataclass
+class AssStyleConfig:
+    font_name: str = "Microsoft YaHei"
+    font_size: int = 42
+    primary_color: str = "&H00FFFFFF"
+    outline_color: str = "&H00000000"
+    back_color: str = "&H64000000"
+    outline: int = 2
+    shadow: int = 1
+    margin_v: int = 48
+    bilingual_order: str = "target_source"
+
+
+@dataclass
 class PipelineConfig:
     artifacts_dir: Path
     chunk_seconds: int = 60
     chunk_overlap_seconds: int = 1
     translation_batch_size: int = 40
     translation: TranslationConfig = field(default_factory=TranslationConfig)
+    output_format: str = "srt"
+    subtitle_ass_style: AssStyleConfig = field(default_factory=AssStyleConfig)
     default_concurrency: int = 8
     timeout_seconds: int = 30
     retry: int = 3
@@ -185,5 +200,6 @@ class TaskRecord:
     created_at: str
     updated_at: str
     output_path: str | None = None
+    output_paths: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
