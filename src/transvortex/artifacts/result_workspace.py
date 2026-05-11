@@ -17,6 +17,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
         "final": base / "final",
         "translate": base / "translate",
         "output": base / "output",
+        "quality": base / "quality",
     }
 
 
@@ -52,6 +53,21 @@ def _translation_meta_by_segment(translated_rows: list[dict[str, Any]]) -> dict[
     return out
 
 
+def _quality_by_segment(paths: dict[str, Path]) -> tuple[dict[str, Any], dict[int, list[dict[str, Any]]]]:
+    quality_file = paths["quality"] / "subtitle_quality.json"
+    if not quality_file.exists():
+        return {}, {}
+    payload = read_json(quality_file)
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for row in payload.get("segments", []):
+        try:
+            seg_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        by_id[seg_id] = list(row.get("issues") or [])
+    return dict(payload.get("summary") or {}), by_id
+
+
 def _issues_for_segments(segments: list[Segment], max_cps: int) -> dict[int, list[str]]:
     issues: dict[int, list[str]] = {seg.id: [] for seg in segments}
     sorted_segments = sorted(segments, key=lambda item: (item.start, item.end, item.id))
@@ -81,7 +97,8 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     segments = [_segment_from_payload(row) for row in read_json(final_file)] if final_file.exists() else []
     translated_rows = read_jsonl(translated_file)
     meta_by_id = _translation_meta_by_segment(translated_rows)
-    issues_by_id = _issues_for_segments(segments, config.pipeline.max_cps)
+    quality_summary, quality_by_id = _quality_by_segment(paths)
+    issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
     return {
         "task": {
             **to_plain(task),
@@ -95,9 +112,11 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
                 "compat_mode": meta_by_id.get(seg.id, {}).get("compat_mode", ""),
                 "chunk_id": meta_by_id.get(seg.id, {}).get("chunk_id", ""),
                 "issues": issues_by_id.get(seg.id, []),
+                "quality_issues": quality_by_id.get(seg.id, []),
             }
             for seg in segments
         ],
+        "quality": quality_summary,
         "output_paths": task.output_paths,
     }
 
@@ -115,7 +134,26 @@ def save_task_segments(*, root_dir: Path, task_id: str, segments_payload: list[d
     return open_task_result(root_dir=root_dir, task_id=task_id)
 
 
-def reexport_task(*, root_dir: Path, task_id: str, output_format: str | None = None) -> dict[str, Any]:
+def _optional_bool(value: bool | str | None, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def reexport_task(
+    *,
+    root_dir: Path,
+    task_id: str,
+    output_format: str | None = None,
+    bilingual: bool | str | None = None,
+) -> dict[str, Any]:
     config = load_app_config(root_dir=root_dir, cli_overrides={"output_format": output_format} if output_format else None)
     store = TaskStore(config.pipeline.artifacts_dir)
     task = store.load_task(task_id)
@@ -124,21 +162,23 @@ def reexport_task(*, root_dir: Path, task_id: str, output_format: str | None = N
     segments = [_segment_from_payload(row) for row in read_json(final_file)]
     normalized = str(output_format or task.settings.get("output_format") or config.pipeline.output_format or "srt").lower()
     normalized = normalized if normalized in {"srt", "ass", "both"} else "srt"
+    effective_bilingual = _optional_bool(bilingual, task.bilingual)
     stem = Path(task.input_file).stem
     base = paths["output"] / f"{stem}.{task.target_lang}"
     output_paths: dict[str, Path] = {}
     if normalized in {"srt", "both"}:
         output_paths["srt"] = base.parent / f"{base.name}.srt"
-        export_srt(segments, output_paths["srt"], task.bilingual)
+        export_srt(segments, output_paths["srt"], effective_bilingual)
     if normalized in {"ass", "both"}:
         output_paths["ass"] = base.parent / f"{base.name}.ass"
-        export_ass(segments, output_paths["ass"], bilingual=task.bilingual, style=config.pipeline.subtitle_ass_style)
+        export_ass(segments, output_paths["ass"], bilingual=effective_bilingual, style=config.pipeline.subtitle_ass_style)
     output_payload = {key: str(path) for key, path in output_paths.items()}
     primary = output_payload.get("srt") or output_payload.get("ass")
     store.update_task_status(task_id, task.status, output_path=primary, output_paths=output_payload)
     task = store.load_task(task_id)
     task.settings["edited"] = bool(task.settings.get("edited", False))
     task.settings["output_format"] = normalized
+    task.settings["reexport_bilingual"] = effective_bilingual
     store.save_task(task)
     store.append_event(
         task_id,
@@ -147,4 +187,4 @@ def reexport_task(*, root_dir: Path, task_id: str, output_format: str | None = N
         message=f"Re-exported {normalized.upper()} subtitles",
         details={"output_path": primary or "", "output_paths": output_payload},
     )
-    return {"task_id": task_id, "output_path": primary, "output_paths": output_payload}
+    return {"task_id": task_id, "output_path": primary, "output_paths": output_payload, "bilingual": effective_bilingual}

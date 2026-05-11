@@ -45,16 +45,16 @@ def _ass_text(value: str) -> str:
     return value.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
 
-def _ass_dialogue_text(seg: Segment, *, bilingual: bool, style: AssStyleConfig) -> str:
-    src = _ass_text(seg.text_src.strip())
-    tgt = _ass_text((seg.text_tgt or "").strip())
-    if not bilingual:
-        return tgt or src
-    if not tgt:
-        return src
-    if style.bilingual_order == "source_target":
-        return f"{src}\\N{tgt}"
-    return f"{tgt}\\N{src}"
+def _ass_dialogue_text(seg: Segment) -> str:
+    return _ass_text((seg.text_tgt or seg.text_src or "").strip())
+
+
+def _ass_style_line(name: str, *, style: AssStyleConfig, font_size: int, color: str, margin_v: int) -> str:
+    return (
+        f"Style: {name},"
+        f"{style.font_name},{font_size},{color},&H000000FF,{style.outline_color},{style.back_color},"
+        f"0,0,0,0,100,100,0,0,1,{style.outline},{style.shadow},2,60,60,{margin_v},1"
+    )
 
 
 def export_ass(
@@ -65,6 +65,9 @@ def export_ass(
     style: AssStyleConfig | None = None,
 ) -> Path:
     style = style or AssStyleConfig()
+    source_above_target = style.bilingual_order == "source_target"
+    target_margin_v = style.margin_v if source_above_target else style.source_margin_v
+    source_margin_v = style.source_margin_v if source_above_target else style.margin_v
     output.parent.mkdir(parents=True, exist_ok=True)
     prepared_segments = prepare_segments_for_export(segments)
     lines = [
@@ -79,15 +82,27 @@ def export_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,"
-        f"{style.font_name},{style.font_size},{style.primary_color},&H000000FF,{style.outline_color},{style.back_color},"
-        f"0,0,0,0,100,100,0,0,1,{style.outline},{style.shadow},2,60,60,{style.margin_v},1",
+        _ass_style_line("Target", style=style, font_size=style.font_size, color=style.primary_color, margin_v=target_margin_v),
+        _ass_style_line(
+            "Source",
+            style=style,
+            font_size=style.source_font_size,
+            color=style.source_primary_color,
+            margin_v=source_margin_v,
+        ),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     for seg in prepared_segments:
-        text = _ass_dialogue_text(seg, bilingual=bilingual, style=style)
-        lines.append(f"Dialogue: 0,{_ass_time(seg.start)},{_ass_time(seg.end)},Default,,0,0,0,,{text}")
+        target = _ass_dialogue_text(seg)
+        source = _ass_text(seg.text_src.strip())
+        if bilingual and style.bilingual_order == "source_target" and source:
+            lines.append(f"Dialogue: 0,{_ass_time(seg.start)},{_ass_time(seg.end)},Source,,0,0,0,,{source}")
+            lines.append(f"Dialogue: 1,{_ass_time(seg.start)},{_ass_time(seg.end)},Target,,0,0,0,,{target}")
+        else:
+            lines.append(f"Dialogue: 1,{_ass_time(seg.start)},{_ass_time(seg.end)},Target,,0,0,0,,{target}")
+            if bilingual and source:
+                lines.append(f"Dialogue: 0,{_ass_time(seg.start)},{_ass_time(seg.end)},Source,,0,0,0,,{source}")
     output.write_text("\n".join(lines), encoding="utf-8-sig")
     return output

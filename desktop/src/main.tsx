@@ -243,11 +243,13 @@ type ResultSegment = {
   compat_mode?: string;
   chunk_id?: string;
   issues?: string[];
+  quality_issues?: Array<{ code: string; level: string; message: string }>;
 };
 
 type TaskResultPayload = {
   task: TaskRecord & { settings?: Record<string, unknown>; task_dir?: string };
   segments: ResultSegment[];
+  quality?: Record<string, unknown>;
   output_paths?: Record<string, string>;
 };
 
@@ -305,6 +307,8 @@ type FormState = {
   translationContextBeforeLines: number;
   translationContextAfterLines: number;
   translationRepairEnabled: boolean;
+  subtitleQualityMode: "off" | "conservative" | "balanced";
+  subtitleCompressionEnabled: boolean;
   outputFormat: "srt" | "ass" | "both";
   concurrency: number;
   apiKey: string;
@@ -316,7 +320,7 @@ const emptyForm: FormState = {
   outputDir: "",
   sourceLang: "en",
   targetLang: "zh-CN",
-  bilingual: true,
+  bilingual: false,
   provider: "",
   model: "",
   asrMode: "local",
@@ -334,6 +338,8 @@ const emptyForm: FormState = {
   translationContextBeforeLines: 20,
   translationContextAfterLines: 10,
   translationRepairEnabled: true,
+  subtitleQualityMode: "balanced",
+  subtitleCompressionEnabled: false,
   outputFormat: "srt",
   concurrency: 8,
   apiKey: "",
@@ -363,6 +369,10 @@ function numberValue(value: unknown, fallback: number) {
 
 function arrayValue(value: unknown) {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function defaultTemplate(config: ConfigPayload | null) {
@@ -690,6 +700,13 @@ function App() {
         ),
         translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
         translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
+        subtitleQualityMode: textValue(
+          objectValue(objectValue(payload.pipeline.subtitle).quality).mode,
+          current.subtitleQualityMode,
+        ) as FormState["subtitleQualityMode"],
+        subtitleCompressionEnabled:
+          (objectValue(objectValue(payload.pipeline.subtitle).compression).enabled as boolean | undefined) ??
+          current.subtitleCompressionEnabled,
         outputFormat: textValue(payload.pipeline.output_format, current.outputFormat) as FormState["outputFormat"],
         concurrency: numberValue(payload.pipeline.default_concurrency, current.concurrency),
       };
@@ -993,6 +1010,8 @@ function App() {
       translationContextBeforeLines: form.translationContextBeforeLines,
       translationContextAfterLines: form.translationContextAfterLines,
       translationRepairEnabled: form.translationRepairEnabled,
+      subtitleQualityMode: form.subtitleQualityMode,
+      subtitleCompressionEnabled: form.subtitleCompressionEnabled,
       outputFormat: form.outputFormat,
       concurrency: form.concurrency,
     };
@@ -1130,7 +1149,11 @@ function App() {
     setError("");
     setNotice("");
     try {
-      await invoke("reexport_task", { taskId: taskResult.task.task_id, outputFormat: form.outputFormat });
+      await invoke("reexport_task", {
+        taskId: taskResult.task.task_id,
+        outputFormat: form.outputFormat,
+        bilingual: form.bilingual,
+      });
       setNotice(t("reexported"));
       const payload = await invoke<TaskResultPayload>("open_task_result", { taskId: taskResult.task.task_id });
       setTaskResult(payload);
@@ -1477,6 +1500,18 @@ function TaskWorkspace({
             <label className="tvx-label">
               {t("concurrency")}
               <input className="tvx-input" type="number" value={form.concurrency} onChange={(event) => update("concurrency", Number(event.target.value))} />
+            </label>
+            <label className="tvx-label">
+              字幕质量
+              <select className="tvx-input" value={form.subtitleQualityMode} onChange={(event) => update("subtitleQualityMode", event.target.value as FormState["subtitleQualityMode"])}>
+                <option value="off">off</option>
+                <option value="conservative">conservative</option>
+                <option value="balanced">balanced</option>
+              </select>
+            </label>
+            <label className="mt-5 inline-flex items-center gap-2 text-sm text-ink">
+              <input className="h-4 w-4" type="checkbox" checked={form.subtitleCompressionEnabled} onChange={(event) => update("subtitleCompressionEnabled", event.target.checked)} />
+              模型压缩
             </label>
           </div>
         )}

@@ -1,7 +1,8 @@
 # TransVortex Backend Architecture
 
 This document defines the backend layout and ownership boundaries. Root-level
-module files remain only as compatibility shims for older imports.
+module files are not used as compatibility shims; code should import from the
+owning package directly.
 
 ## Runtime Shape
 
@@ -56,6 +57,8 @@ transvortex/
 - `translate.py`
 - `aligner.py`
 - `subtitle_quality.py`
+- `subtitle_optimizer.py`
+- `subtitle_compression.py`
 - `translation_validation.py`
 
 `formats/` owns:
@@ -75,8 +78,8 @@ transvortex/
 - `entry.py`
 - `__main__.py`
 
-Root-level modules with the same historical names are compatibility shims. They
-must only alias the new owning modules and must not grow new behavior.
+Do not add root-level compatibility shims for migrated modules before release.
+Use the owning packages directly.
 
 ## Import Rules
 
@@ -91,20 +94,12 @@ from transvortex.formats.srt import read_srt
 from transvortex.providers.probe import probe_provider
 ```
 
-Old imports remain supported for compatibility:
-
-```python
-from transvortex.protocol.errors import PipelineTaskError
-from transvortex.artifacts.task_store import TaskStore
-from transvortex.core.orchestrator import run_pipeline
-```
-
-Do not add deprecation warnings to compatibility shims. CLI and agent stdout
-must remain stable and machine-readable.
+Do not add deprecation warnings or human diagnostics to CLI and agent stdout.
+Machine-readable stdout must remain stable.
 
 ## Migration Rules
 
-- Prefer small, behavior-preserving moves with compatibility shims.
+- Prefer small, behavior-preserving moves.
 - Do not mix directory migration with business-logic rewrites.
 - Do not change CLI commands, JSON/JSONL schemas, task artifact paths, or desktop
   process contracts during layout-only refactors.

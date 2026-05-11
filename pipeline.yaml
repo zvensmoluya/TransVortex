@@ -6,6 +6,22 @@ default_concurrency: 8
 timeout_seconds: 30
 retry: 3
 max_cps: 20
+subtitle:
+  quality:
+    enabled: true
+    mode: balanced
+    target_cps: 17
+    hard_max_cps: 22
+    max_line_width: 42
+    max_lines: 2
+    min_duration_seconds: 0.8
+    max_duration_seconds: 6.0
+    min_gap_seconds: 0.04
+    merge_short_segments: true
+    adjust_timing: true
+  compression:
+    enabled: false
+    max_attempts: 1
 translation:
   chunk_lines: 40
   context_before_lines: 20

@@ -23,6 +23,9 @@ from .models import (
     RepairConfig,
     RouteTarget,
     RoutingConfig,
+    SubtitleCompressionConfig,
+    SubtitleConfig,
+    SubtitleQualityConfig,
     TranslationConfig,
 )
 
@@ -70,6 +73,13 @@ def _load_dotenv(root_dir: Path) -> None:
 def _to_int(value: Any, default: int) -> int:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 
@@ -267,6 +277,30 @@ def load_app_config(
             max_attempts=_to_int(repair_raw.get("max_attempts"), 2),
         ),
     )
+    subtitle_raw = pip_yaml.get("subtitle") or {}
+    quality_raw = subtitle_raw.get("quality") or {}
+    legacy_max_cps = _to_int(pip_yaml.get("max_cps"), 20)
+    quality = SubtitleQualityConfig(
+        enabled=_to_bool(quality_raw.get("enabled"), True),
+        mode=_to_str(quality_raw.get("mode"), "balanced"),
+        target_cps=_to_int(quality_raw.get("target_cps"), 17),
+        hard_max_cps=_to_int(quality_raw.get("hard_max_cps"), legacy_max_cps),
+        max_line_width=_to_int(quality_raw.get("max_line_width"), 42),
+        max_lines=_to_int(quality_raw.get("max_lines"), 2),
+        min_duration_seconds=_to_float(quality_raw.get("min_duration_seconds"), 0.8),
+        max_duration_seconds=_to_float(quality_raw.get("max_duration_seconds"), 6.0),
+        min_gap_seconds=_to_float(quality_raw.get("min_gap_seconds"), 0.04),
+        merge_short_segments=_to_bool(quality_raw.get("merge_short_segments"), True),
+        adjust_timing=_to_bool(quality_raw.get("adjust_timing"), True),
+    )
+    compression_raw = subtitle_raw.get("compression") or {}
+    subtitle = SubtitleConfig(
+        quality=quality,
+        compression=SubtitleCompressionConfig(
+            enabled=_to_bool(compression_raw.get("enabled"), False),
+            max_attempts=_to_int(compression_raw.get("max_attempts"), 1),
+        ),
+    )
     ass_raw = pip_yaml.get("subtitle_ass_style") or {}
     subtitle_ass_style = AssStyleConfig(
         font_name=_to_str(ass_raw.get("font_name"), "Microsoft YaHei"),
@@ -278,6 +312,9 @@ def load_app_config(
         shadow=_to_int(ass_raw.get("shadow"), 1),
         margin_v=_to_int(ass_raw.get("margin_v"), 48),
         bilingual_order=_to_str(ass_raw.get("bilingual_order"), "target_source"),
+        source_font_size=_to_int(ass_raw.get("source_font_size"), 30),
+        source_primary_color=_to_str(ass_raw.get("source_primary_color"), "&H00B8B8B8"),
+        source_margin_v=_to_int(ass_raw.get("source_margin_v"), 104),
     )
     pipeline = PipelineConfig(
         artifacts_dir=(root_dir / artifacts_dir),
@@ -285,6 +322,7 @@ def load_app_config(
         chunk_overlap_seconds=_to_int(pip_yaml.get("chunk_overlap_seconds"), 1),
         translation_batch_size=chunk_lines,
         translation=translation,
+        subtitle=subtitle,
         output_format=_to_str(pip_yaml.get("output_format"), "srt"),
         subtitle_ass_style=subtitle_ass_style,
         default_concurrency=_to_int(pip_yaml.get("default_concurrency"), 8),
@@ -311,6 +349,8 @@ def load_app_config(
         setattr(pipeline, field_name, _to_int(env_v, getattr(pipeline, field_name)))
         if field_name == "translation_batch_size":
             pipeline.translation.chunk_lines = pipeline.translation_batch_size
+        elif field_name == "max_cps":
+            pipeline.subtitle.quality.hard_max_cps = pipeline.max_cps
 
     for key, value in cli_overrides.items():
         if value is None:
@@ -331,6 +371,11 @@ def load_app_config(
             pipeline.translation.context_after_lines = _to_int(value, pipeline.translation.context_after_lines)
         elif key == "translation_repair_enabled":
             pipeline.translation.repair.enabled = _to_bool(value, pipeline.translation.repair.enabled)
+        elif key == "subtitle_quality_mode":
+            pipeline.subtitle.quality.mode = _to_str(value, pipeline.subtitle.quality.mode)
+            pipeline.subtitle.quality.enabled = pipeline.subtitle.quality.mode != "off"
+        elif key == "subtitle_compression_enabled":
+            pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
             for style_key, style_value in value.items():
                 if hasattr(pipeline.subtitle_ass_style, style_key):
@@ -341,6 +386,8 @@ def load_app_config(
                         setattr(pipeline.subtitle_ass_style, style_key, _to_str(style_value, current))
         elif hasattr(pipeline, key):
             setattr(pipeline, key, value)
+            if key == "max_cps":
+                pipeline.subtitle.quality.hard_max_cps = _to_int(value, pipeline.subtitle.quality.hard_max_cps)
 
     providers: dict[str, ProviderConfig] = {}
     for row in p_yaml.get("providers", []):

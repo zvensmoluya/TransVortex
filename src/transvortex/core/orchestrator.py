@@ -17,6 +17,8 @@ from ..app.models import AppConfig, Segment, TaskRecord
 from ..providers.probe import probe_provider
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..formats.srt import parse_srt_file
+from .subtitle_compression import compress_overlong_subtitles
+from .subtitle_optimizer import optimize_subtitles
 from .translate import iter_translate_all_chunks, translate_all_chunks
 from .translation_validation import validate_translation_response, validation_to_json
 from ..utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
@@ -54,6 +56,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
         "asr": base / "asr",
         "translate": base / "translate",
         "final": base / "final",
+        "quality": base / "quality",
         "output": base / "output",
         "chunks": base / "chunks",
     }
@@ -69,6 +72,7 @@ def _stage_progress(stage: str) -> float:
         "SEGMENT": 0.55,
         "TRANSLATE": 0.65,
         "ALIGN": 0.85,
+        "QUALITY": 0.9,
         "EXPORT": 0.95,
         "DONE": 1.0,
     }.get(stage, 0.0)
@@ -821,14 +825,62 @@ def _execute_task(
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "ALIGN", "Aligning and validating subtitles")
         translated_rows = read_jsonl(translated_file)
-        final_segments = normalize_timeline(apply_translations(all_segments, translated_rows))
-        errors, warnings = validate_segments(final_segments, max_cps=config.pipeline.max_cps)
+        aligned_segments = normalize_timeline(apply_translations(all_segments, translated_rows))
+        errors, warnings = validate_segments(aligned_segments, max_cps=config.pipeline.subtitle.quality.hard_max_cps)
         for warning in warnings:
             store.append_event(task_id, "warning", stage="ALIGN", level="warning", message=warning)
         if errors:
             raise RuntimeError("; ".join(errors[:10]))
+        write_json(paths["final"] / "segments.aligned.json", aligned_segments)
+        store.append_event(
+            task_id,
+            "artifact",
+            stage="ALIGN",
+            message="Aligned subtitle segments ready",
+            progress=0.88,
+            details={"path": str(paths["final"] / "segments.aligned.json"), "segments": len(aligned_segments)},
+        )
+
+        _check_cancel(store, task_id)
+        _emit_stage(store, task_id, "QUALITY", "Optimizing subtitle readability")
+        quality_result = optimize_subtitles(aligned_segments, config.pipeline.subtitle.quality)
+        final_segments = quality_result.segments
+        paths["quality"].mkdir(parents=True, exist_ok=True)
+        compression_rows: list[dict[str, Any]] = []
+        if config.pipeline.subtitle.compression.enabled:
+            final_segments, compression_rows = compress_overlong_subtitles(
+                config=config,
+                segments=final_segments,
+                source_lang=task.source_lang,
+                target_lang=task.target_lang,
+            )
+            for row in compression_rows:
+                append_jsonl(paths["quality"] / "compression.jsonl", row)
+            quality_result = optimize_subtitles(final_segments, config.pipeline.subtitle.quality)
+            final_segments = quality_result.segments
+        write_json(paths["quality"] / "subtitle_quality.json", quality_result.report)
+        for code, count in quality_result.report.get("summary", {}).get("issue_counts", {}).items():
+            store.append_event(
+                task_id,
+                "warning",
+                stage="QUALITY",
+                level="warning",
+                message=f"Subtitle quality issue {code}: {count}",
+                details={"code": code, "count": count},
+            )
+        store.append_event(
+            task_id,
+            "artifact",
+            stage="QUALITY",
+            message="Subtitle quality report ready",
+            progress=0.92,
+            details={
+                "path": str(paths["quality"] / "subtitle_quality.json"),
+                "summary": quality_result.report.get("summary", {}),
+            },
+        )
         write_json(paths["final"] / "segments.final.json", final_segments)
-        checkpoint["status"] = "ALIGN"
+        checkpoint["status"] = "QUALITY"
         store.save_checkpoint(task_id, checkpoint)
 
         _check_cancel(store, task_id)

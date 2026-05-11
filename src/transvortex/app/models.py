@@ -117,6 +117,36 @@ class AssStyleConfig:
     shadow: int = 1
     margin_v: int = 48
     bilingual_order: str = "target_source"
+    source_font_size: int = 30
+    source_primary_color: str = "&H00B8B8B8"
+    source_margin_v: int = 104
+
+
+@dataclass
+class SubtitleQualityConfig:
+    enabled: bool = True
+    mode: str = "balanced"  # off | conservative | balanced
+    target_cps: int = 17
+    hard_max_cps: int = 22
+    max_line_width: int = 42
+    max_lines: int = 2
+    min_duration_seconds: float = 0.8
+    max_duration_seconds: float = 6.0
+    min_gap_seconds: float = 0.04
+    merge_short_segments: bool = True
+    adjust_timing: bool = True
+
+
+@dataclass
+class SubtitleCompressionConfig:
+    enabled: bool = False
+    max_attempts: int = 1
+
+
+@dataclass
+class SubtitleConfig:
+    quality: SubtitleQualityConfig = field(default_factory=SubtitleQualityConfig)
+    compression: SubtitleCompressionConfig = field(default_factory=SubtitleCompressionConfig)
 
 
 @dataclass
@@ -126,6 +156,7 @@ class PipelineConfig:
     chunk_overlap_seconds: int = 1
     translation_batch_size: int = 40
     translation: TranslationConfig = field(default_factory=TranslationConfig)
+    subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
     output_format: str = "srt"
     subtitle_ass_style: AssStyleConfig = field(default_factory=AssStyleConfig)
     default_concurrency: int = 8

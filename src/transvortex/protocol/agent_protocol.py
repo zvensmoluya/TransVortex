@@ -32,7 +32,7 @@ def agent_info_payload() -> dict:
             "probe-provider": {"supports_json": True, "strict_exit_code": True},
             "config show": {"supports_json": True},
             "result open": {"supports_json": True},
-            "reexport": {"supports_json": True},
+            "reexport": {"supports_json": True, "supports_bilingual_override": True},
         },
         "statuses": [
             "INIT",
@@ -43,6 +43,7 @@ def agent_info_payload() -> dict:
             "SEGMENT",
             "TRANSLATE",
             "ALIGN",
+            "QUALITY",
             "EXPORT",
             "DONE",
             "FAILED",
@@ -79,6 +80,9 @@ def agent_info_payload() -> dict:
             "translate/segments.translated.jsonl",
             "translate/validation.jsonl",
             "translate/repairs.jsonl",
+            "quality/subtitle_quality.json",
+            "quality/compression.jsonl",
+            "final/segments.aligned.json",
             "final/segments.final.json",
             "output/*.srt",
             "output/*.ass",
@@ -105,5 +109,6 @@ def agent_info_payload() -> dict:
             "Use --stream-events or events --follow for long-running task progress.",
             "Read artifacts only from task_dir returned by JSON status or detach response.",
             "Never expect secret values in config or agent-info output.",
+            "Use result open quality fields and quality/subtitle_quality.json for subtitle readability issues.",
         ],
     }

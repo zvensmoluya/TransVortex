@@ -57,6 +57,8 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "translation_context_before_lines": getattr(args, "translation_context_before_lines", None),
         "translation_context_after_lines": getattr(args, "translation_context_after_lines", None),
         "translation_repair_enabled": getattr(args, "translation_repair_enabled", None),
+        "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
+        "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
     }
 
 
@@ -116,6 +118,8 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--translation-context-before-lines", type=int, default=None)
     subparser.add_argument("--translation-context-after-lines", type=int, default=None)
     subparser.add_argument("--translation-repair-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
+    subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
 
 
 def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
@@ -215,6 +219,8 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--translation-context-before-lines", getattr(ns, "translation_context_before_lines", None)),
         ("--translation-context-after-lines", getattr(ns, "translation_context_after_lines", None)),
         ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
+        ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
+        ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
     ]
     for flag, value in mapping:
         _append_optional(args, flag, value)
@@ -423,6 +429,7 @@ def _build_parser() -> argparse.ArgumentParser:
     reexport_p = sub.add_parser("reexport", help="Re-export subtitles from task final segments")
     reexport_p.add_argument("--task-id", required=True)
     reexport_p.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
+    reexport_p.add_argument("--bilingual", choices=["true", "false"], default=None)
     reexport_p.add_argument("--json", action="store_true")
 
     asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments")
@@ -746,7 +753,14 @@ def main() -> None:
         return
 
     if args.command == "reexport":
-        _print_json(reexport_task(root_dir=root, task_id=args.task_id, output_format=args.output_format))
+        _print_json(
+            reexport_task(
+                root_dir=root,
+                task_id=args.task_id,
+                output_format=args.output_format,
+                bilingual=args.bilingual,
+            )
+        )
         return
 
     if args.command == "asr":

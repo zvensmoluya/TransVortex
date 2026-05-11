@@ -61,6 +61,29 @@ def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: b
     parts: list[str] = []
     if include_system_constraints:
         parts.append(TRANSLATION_SYSTEM_PROMPT)
+    if req.prompt_mode == "compress":
+        parts.extend(
+            [
+                "Subtitle compression mode:",
+                "- Rewrite the existing translated subtitle to be shorter and easier to read.",
+                "- Preserve meaning, tone, names, jokes, profanity, and key facts.",
+                "- Keep the same [id] exactly unchanged.",
+                "- Output only one numbered line.",
+                "- Do not output Markdown, explanations, summaries, notes, or context lines.",
+                f"Target language: {req.target_lang}.",
+            ]
+        )
+        if req.style_prompt:
+            parts.append("Compression instructions:\n" + req.style_prompt.strip())
+        parts.extend(
+            [
+                f"Reason: {req.repair_reason or 'subtitle is too long for its display duration'}.",
+                f"Current translation: {req.bad_translation or '(none)'}",
+                _section("REFERENCE", req.context_before),
+                _section("COMPRESS_ONLY", req.lines),
+            ]
+        )
+        return "\n\n".join(parts)
     parts.extend(
         [
             FIXED_TRANSLATION_CONSTRAINTS,

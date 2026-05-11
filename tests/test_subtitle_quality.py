@@ -101,6 +101,45 @@ def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Pat
     )
     body = out_file.read_text(encoding="utf-8-sig")
     assert "[V4+ Styles]" in body
-    assert "Style: Default,Arial,36" in body
-    assert "Dialogue: 0,0:00:00.00,0:00:01.25" in body
-    assert "你好\\NHello \\{world\\}" in body
+    assert "Style: Target,Arial,36" in body
+    assert "Style: Source,Arial,30" in body
+    assert "Dialogue: 1,0:00:00.00,0:00:01.25,Target" in body
+    assert "Dialogue: 0,0:00:00.00,0:00:01.25,Source" in body
+    assert "你好" in body
+    assert "Hello \\{world\\}" in body
+
+
+def test_export_ass_target_only_omits_source_dialogue(tmp_path: Path) -> None:
+    out_file = tmp_path / "target.ass"
+    export_ass(
+        [Segment(id=1, start=0.0, end=1.0, text_src="Hello", text_tgt="你好")],
+        out_file,
+        bilingual=False,
+    )
+    body = out_file.read_text(encoding="utf-8-sig")
+    assert "Dialogue: 1,0:00:00.00,0:00:01.00,Target" in body
+    assert ",Source" not in "\n".join(line for line in body.splitlines() if line.startswith("Dialogue:"))
+
+
+def test_export_ass_bilingual_order_swaps_visual_margins(tmp_path: Path) -> None:
+    segment = Segment(id=1, start=0.0, end=1.0, text_src="Hello", text_tgt="你好")
+    target_source = tmp_path / "target_source.ass"
+    source_target = tmp_path / "source_target.ass"
+    export_ass(
+        [segment],
+        target_source,
+        bilingual=True,
+        style=AssStyleConfig(font_name="Arial", margin_v=48, source_margin_v=104, bilingual_order="target_source"),
+    )
+    export_ass(
+        [segment],
+        source_target,
+        bilingual=True,
+        style=AssStyleConfig(font_name="Arial", margin_v=48, source_margin_v=104, bilingual_order="source_target"),
+    )
+    target_source_body = target_source.read_text(encoding="utf-8-sig")
+    source_target_body = source_target.read_text(encoding="utf-8-sig")
+    assert "Style: Target,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,104,1" in target_source_body
+    assert "Style: Source,Arial,30,&H00B8B8B8,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,48,1" in target_source_body
+    assert "Style: Target,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,48,1" in source_target_body
+    assert "Style: Source,Arial,30,&H00B8B8B8,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,104,1" in source_target_body

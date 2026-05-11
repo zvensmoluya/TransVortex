@@ -122,6 +122,8 @@ World
     result = open_task_result(root_dir=root, task_id=task_id)
     assert result["segments"][0]["provider"] == "p1"
     assert result["segments"][0]["model"] == "m1"
+    assert "quality" in result
+    assert "quality_issues" in result["segments"][0]
 
     edited = result["segments"]
     edited[0]["text_tgt"] = "改过的译文"
@@ -129,6 +131,10 @@ World
     assert saved["segments"][0]["text_tgt"] == "改过的译文"
     reexported = reexport_task(root_dir=root, task_id=task_id, output_format="srt")
     assert Path(reexported["output_paths"]["srt"]).read_text(encoding="utf-8").find("改过的译文") >= 0
+    reexported_plain = reexport_task(root_dir=root, task_id=task_id, output_format="srt", bilingual=False)
+    plain_body = Path(reexported_plain["output_paths"]["srt"]).read_text(encoding="utf-8")
+    assert "Hello" not in plain_body
+    assert reexported_plain["bilingual"] is False
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)

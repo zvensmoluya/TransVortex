@@ -139,6 +139,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         "chunks",
         "translate",
         "final",
+        "quality",
         "output",
     ]:
         assert (task_dir / rel).exists()
@@ -148,6 +149,9 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
     assert any(event["type"] == "warning" and "max cps" in event["message"] for event in events)
     assert (task_dir / "translate" / "segments.translated.jsonl").exists()
     assert (task_dir / "translate" / "validation.jsonl").exists()
+    assert (task_dir / "final" / "segments.aligned.json").exists()
+    quality = json.loads((task_dir / "quality" / "subtitle_quality.json").read_text(encoding="utf-8"))
+    assert quality["summary"]["segments"] >= 1
     assert len(FakeAsrEngine.calls) == 2
 
     resumed_id = resume_pipeline(root_dir=root, task_id=task.task_id)
@@ -231,6 +235,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     events = store.read_events(task_id)
     done = next(event for event in events if event["type"] == "done")
     assert set(done["details"]["output_paths"]) == {"srt", "ass"}
+    assert any(event["stage"] == "QUALITY" and event["type"] == "artifact" for event in events)
 
 
 def test_resume_backfills_missing_translation_validation_without_retranslation(tmp_path: Path, monkeypatch) -> None:

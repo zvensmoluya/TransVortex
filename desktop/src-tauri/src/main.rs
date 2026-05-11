@@ -46,6 +46,8 @@ struct StartTaskRequest {
     translation_context_before_lines: Option<u32>,
     translation_context_after_lines: Option<u32>,
     translation_repair_enabled: Option<bool>,
+    subtitle_quality_mode: Option<String>,
+    subtitle_compression_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +73,8 @@ struct ResumeTaskRequest {
     translation_context_before_lines: Option<u32>,
     translation_context_after_lines: Option<u32>,
     translation_repair_enabled: Option<bool>,
+    subtitle_quality_mode: Option<String>,
+    subtitle_compression_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -426,19 +430,23 @@ fn save_task_segments(app: AppHandle, task_id: String, segments: Value) -> Resul
 }
 
 #[tauri::command]
-fn reexport_task(app: AppHandle, task_id: String, output_format: String) -> Result<Value, String> {
+fn reexport_task(
+    app: AppHandle,
+    task_id: String,
+    output_format: String,
+    bilingual: Option<bool>,
+) -> Result<Value, String> {
     let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "reexport".into(),
-            "--task-id".into(),
-            task_id,
-            "--output-format".into(),
-            output_format,
-            "--json".into(),
-        ],
-    )
+    let mut args = vec![
+        "reexport".into(),
+        "--task-id".into(),
+        task_id,
+        "--output-format".into(),
+        output_format,
+    ];
+    push_bool_arg(&mut args, "--bilingual", bilingual);
+    args.push("--json".into());
+    run_worker_json(&root, &args)
 }
 
 #[tauri::command]
@@ -510,6 +518,12 @@ fn start_task(
         "--translation-repair-enabled",
         request.translation_repair_enabled,
     );
+    push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
+    push_bool_arg(
+        &mut args,
+        "--subtitle-compression-enabled",
+        request.subtitle_compression_enabled,
+    );
 
     spawn_streaming_worker(app, state, root, args)
 }
@@ -562,6 +576,12 @@ fn resume_task(
         &mut args,
         "--translation-repair-enabled",
         request.translation_repair_enabled,
+    );
+    push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
+    push_bool_arg(
+        &mut args,
+        "--subtitle-compression-enabled",
+        request.subtitle_compression_enabled,
     );
     spawn_streaming_worker(app, state, root, args)
 }
