@@ -157,6 +157,8 @@ transvortex asr --input video.mp4 --src ja --json
 asr/segments.raw.jsonl
 ```
 
+当前云端 ASR 更接近 OpenAI `whisper-1` / `/v1/audio/transcriptions` 兼容支持，不是完整多厂商 ASR 网关。后续云端 ASR provider、火山/腾讯/阿里/Google/Deepgram 等生态调研和适配路线见 `docs/ASR_PROVIDER_DIRECTION.md`。
+
 ### Translate
 
 输入 segments，输出 translated segments。
@@ -384,6 +386,15 @@ V1 当前落地范围：只做开发机稳定可用，不做安装包、不做�
 - Refine Agent 可读取字幕、质量报告、translation memory 和 visual context，输出 patch 而不是直接重写文件。
 - 桌面端可提供“选择字幕范围 -> 输入修改要求 -> 预览 patch -> 应用并重导出”的工作流。
 - 该方向用于提升字幕产品辨识度，但不应阻塞 V1 的稳定端到端验收。
+
+### V1.x / V2 可选：ASR Provider Gateway 与 Agent/MCP 接口
+
+- 将当前 OpenAI Whisper-style 云端 ASR 支持扩展为独立 ASR provider gateway。
+- 支持 direct upload、submit/query async job、URL-based transcription、streaming transcription 等调用形态。
+- 抽象 `segments/utterances/words/speaker/confidence` 等响应结构。
+- 优先评估 `whisper-1` 稳定性，再考虑火山豆包语音、腾讯云、阿里云、Google Chirp、Deepgram、AssemblyAI 等 provider。
+- 为 Codex/agent 提供 skill 或 MCP 工具，让 agent 调用 TransVortex 的稳定 worker，而不是临时拼 FFmpeg/ASR/翻译脚本。
+- 详细方向见 `docs/ASR_PROVIDER_DIRECTION.md`。
 
 ### V2 发布与分发
 
