@@ -456,6 +456,121 @@ function parseClock(value: string) {
   return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number((ms + "000").slice(0, 3)) / 1000;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(value: string) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function cloneRecord(value: Record<string, unknown>) {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function getPathValue(root: Record<string, unknown>, path: string) {
+  let current: unknown = root;
+  for (const token of path.split(".")) {
+    if (!isRecord(current)) return undefined;
+    current = current[token];
+  }
+  return current;
+}
+
+function setPathValue(root: Record<string, unknown>, path: string, value: unknown) {
+  const tokens = path.split(".").filter(Boolean);
+  if (tokens.length === 0) return;
+  let current: Record<string, unknown> = root;
+  tokens.slice(0, -1).forEach((token) => {
+    if (!isRecord(current[token])) current[token] = {};
+    current = current[token] as Record<string, unknown>;
+  });
+  current[tokens[tokens.length - 1]] = value;
+}
+
+function deletePathValue(root: Record<string, unknown>, path: string) {
+  const tokens = path.split(".").filter(Boolean);
+  if (tokens.length === 0) return;
+  let current: unknown = root;
+  tokens.slice(0, -1).forEach((token) => {
+    current = isRecord(current) ? current[token] : undefined;
+  });
+  if (isRecord(current)) delete current[tokens[tokens.length - 1]];
+}
+
+function formatJsonObject(value: Record<string, unknown>) {
+  return JSON.stringify(value, null, 2);
+}
+
+function updateRequestMappingJson(raw: string, updater: (mapping: Record<string, unknown>) => void) {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return raw;
+  const next = cloneRecord(parsed);
+  updater(next);
+  return formatJsonObject(next);
+}
+
+function requestBodyPath(path: string) {
+  return `body_overrides.${path}`;
+}
+
+function setRequestBodyOverride(raw: string, path: string, value: unknown) {
+  return updateRequestMappingJson(raw, (mapping) => {
+    if (value === "" || value === undefined || value === null) {
+      deletePathValue(mapping, requestBodyPath(path));
+      return;
+    }
+    setPathValue(mapping, requestBodyPath(path), value);
+  });
+}
+
+const tokenLimitFields = [
+  { value: "auto", label: "不指定" },
+  { value: "max_tokens", label: "max_tokens" },
+  { value: "max_completion_tokens", label: "max_completion_tokens" },
+  { value: "generationConfig.maxOutputTokens", label: "Gemini maxOutputTokens" },
+];
+
+function tokenLimitFieldForMapping(mapping: Record<string, unknown> | null) {
+  if (!mapping) return "auto";
+  if (getPathValue(mapping, "max_tokens") !== undefined) return "max_tokens";
+  if (getPathValue(mapping, requestBodyPath("max_completion_tokens")) !== undefined) return "max_completion_tokens";
+  if (getPathValue(mapping, requestBodyPath("max_tokens")) !== undefined) return "max_tokens";
+  if (getPathValue(mapping, requestBodyPath("generationConfig.maxOutputTokens")) !== undefined) return "generationConfig.maxOutputTokens";
+  return "auto";
+}
+
+function tokenLimitValueForMapping(mapping: Record<string, unknown> | null) {
+  if (!mapping) return "";
+  const field = tokenLimitFieldForMapping(mapping);
+  if (field === "auto") return "";
+  if (field === "max_tokens") {
+    return String(getPathValue(mapping, "max_tokens") ?? getPathValue(mapping, requestBodyPath("max_tokens")) ?? "");
+  }
+  return String(getPathValue(mapping, requestBodyPath(field)) ?? "");
+}
+
+function setTokenLimit(raw: string, field: string, value: string) {
+  return updateRequestMappingJson(raw, (mapping) => {
+    deletePathValue(mapping, "max_tokens");
+    deletePathValue(mapping, requestBodyPath("max_tokens"));
+    deletePathValue(mapping, requestBodyPath("max_completion_tokens"));
+    deletePathValue(mapping, requestBodyPath("generationConfig.maxOutputTokens"));
+    const parsedValue = value === "" ? undefined : Number(value);
+    if (field === "auto" || parsedValue === undefined || !Number.isFinite(parsedValue)) return;
+    if (field === "max_tokens") {
+      setPathValue(mapping, "max_tokens", parsedValue);
+      return;
+    }
+    setPathValue(mapping, requestBodyPath(field), parsedValue);
+  });
+}
+
 function fieldTranslation(payload: ConfigPayload["pipeline"]) {
   return payload.translation as
     | {
@@ -482,6 +597,8 @@ function App() {
   const [error, setError] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(null);
+  const [providerTemplateId, setProviderTemplateId] = useState("openai_chat");
+  const [requestMappingText, setRequestMappingText] = useState("");
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(false);
   const [providerResult, setProviderResult] = useState<ProviderDiagnostic | ProviderTestPayload | null>(null);
   const [customModel, setCustomModel] = useState("");
@@ -498,8 +615,8 @@ function App() {
   );
 
   const selectedTemplate = useMemo(
-    () => config?.provider_templates.find((template) => template.compat_mode === providerDraft?.compat_mode),
-    [config, providerDraft?.compat_mode],
+    () => config?.provider_templates.find((template) => template.id === providerTemplateId) || config?.provider_templates.find((template) => template.compat_mode === providerDraft?.compat_mode),
+    [config, providerDraft?.compat_mode, providerTemplateId],
   );
 
   const progress = useMemo(() => {
@@ -632,10 +749,16 @@ function App() {
 
   useEffect(() => {
     if (!selectedProvider) return;
-    setProviderDraft(providerToDraft(selectedProvider));
+    const draft = providerToDraft(selectedProvider);
+    const template =
+      config?.provider_templates.find((item) => item.compat_mode === draft.compat_mode && item.base_url === draft.base_url) ||
+      config?.provider_templates.find((item) => item.compat_mode === draft.compat_mode);
+    setProviderTemplateId(template?.id || draft.compat_mode);
+    setProviderDraft(draft);
+    setRequestMappingText(JSON.stringify(draft.request_mapping, null, 2));
     setProviderResult(null);
     setCustomModel("");
-  }, [selectedProvider?.name]);
+  }, [selectedProvider?.name, config?.provider_templates]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -648,11 +771,15 @@ function App() {
       if (!base) return current;
       return { ...base, ...patch };
     });
+    if (patch.request_mapping) setRequestMappingText(JSON.stringify(patch.request_mapping, null, 2));
   }
 
-  function updateProviderTemplate(compatMode: string) {
-    const template = config?.provider_templates.find((item) => item.compat_mode === compatMode);
+  function updateProviderTemplate(templateId: string) {
+    const template =
+      config?.provider_templates.find((item) => item.id === templateId) ||
+      config?.provider_templates.find((item) => item.compat_mode === templateId);
     if (!template) return;
+    setProviderTemplateId(template.id);
     setProviderDraft((current) => {
       const base = current || templateToDraft(template);
       return {
@@ -673,13 +800,17 @@ function App() {
         capabilities: { ...(template.capabilities || {}) },
       };
     });
+    setRequestMappingText(JSON.stringify(template.request_mapping, null, 2));
   }
 
   function newProviderDraft() {
     const template = defaultTemplate(config);
     if (!template) return;
     const name = `custom_${Date.now().toString().slice(-5)}`;
-    setProviderDraft(templateToDraft(template, name));
+    const draft = templateToDraft(template, name);
+    setProviderTemplateId(template.id);
+    setProviderDraft(draft);
+    setRequestMappingText(JSON.stringify(draft.request_mapping, null, 2));
     setProviderResult(null);
     setCustomModel("");
   }
@@ -731,8 +862,12 @@ function App() {
     setNotice("");
     setProviderResult(null);
     try {
+      const requestMapping = JSON.parse(requestMappingText || "{}");
+      if (!requestMapping || Array.isArray(requestMapping) || typeof requestMapping !== "object") {
+        throw new Error("request_mapping 必须是 JSON object。");
+      }
       await invoke("save_provider_config", {
-        providerDraft,
+        providerDraft: { ...providerDraft, request_mapping: requestMapping },
         apiKey: form.apiKey.trim() || null,
       });
       update("provider", providerDraft.name);
@@ -787,8 +922,9 @@ function App() {
     setError("");
     setNotice("");
     try {
+      const requestMapping = JSON.parse(requestMappingText || "{}");
       const payload = await invoke<ProviderModelsPayload>("fetch_provider_models", {
-        providerDraft,
+        providerDraft: { ...providerDraft, request_mapping: requestMapping },
         apiKey: form.apiKey.trim() || null,
       });
       setProviderResult(payload);
@@ -816,8 +952,9 @@ function App() {
     setError("");
     setNotice("");
     try {
+      const requestMapping = JSON.parse(requestMappingText || "{}");
       const payload = await invoke<ProviderTestPayload>("test_provider_connection", {
-        providerDraft: { ...providerDraft, models: providerDraft.models.includes(model) ? providerDraft.models : [model, ...providerDraft.models] },
+        providerDraft: { ...providerDraft, request_mapping: requestMapping, models: providerDraft.models.includes(model) ? providerDraft.models : [model, ...providerDraft.models] },
         model,
         apiKey: form.apiKey.trim() || null,
       });
@@ -1059,7 +1196,10 @@ function App() {
           config={config}
           selectedProvider={selectedProvider}
           selectedTemplate={selectedTemplate}
+          providerTemplateId={providerTemplateId}
           providerDraft={providerDraft}
+          requestMappingText={requestMappingText}
+          setRequestMappingText={setRequestMappingText}
           providerAdvancedOpen={providerAdvancedOpen}
           setProviderAdvancedOpen={setProviderAdvancedOpen}
           providerResult={providerResult}
@@ -1384,6 +1524,25 @@ function TranslationPanel({
   form: FormState;
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
 }) {
+  function applyContextPreset(value: string) {
+    if (value === "compact") {
+      update("translationChunkLines", 24);
+      update("translationBatchSize", 24);
+      update("translationContextBeforeLines", 8);
+      update("translationContextAfterLines", 4);
+    } else if (value === "balanced") {
+      update("translationChunkLines", 40);
+      update("translationBatchSize", 40);
+      update("translationContextBeforeLines", 20);
+      update("translationContextAfterLines", 10);
+    } else if (value === "wide") {
+      update("translationChunkLines", 60);
+      update("translationBatchSize", 60);
+      update("translationContextBeforeLines", 40);
+      update("translationContextAfterLines", 20);
+    }
+  }
+
   return (
     <Panel title="LLM 翻译控制">
       <div className="grid grid-cols-4 gap-4">
@@ -1394,6 +1553,15 @@ function TranslationPanel({
             <option value="literal">literal</option>
             <option value="localized">localized</option>
             <option value="learning_friendly">learning_friendly</option>
+          </select>
+        </label>
+        <label className="tvx-label">
+          上下文预设
+          <select className="tvx-input" defaultValue="custom" onChange={(event) => applyContextPreset(event.target.value)}>
+            <option value="custom">自定义</option>
+            <option value="compact">紧凑</option>
+            <option value="balanced">均衡</option>
+            <option value="wide">宽上下文</option>
           </select>
         </label>
         <label className="tvx-label">
@@ -1408,6 +1576,8 @@ function TranslationPanel({
             }}
           />
         </label>
+      </div>
+      <div className="mt-4 grid grid-cols-4 gap-4">
         <label className="tvx-label">
           {t("contextBefore")}
           <input className="tvx-input" type="number" value={form.translationContextBeforeLines} onChange={(event) => update("translationContextBeforeLines", Number(event.target.value))} />
@@ -1435,7 +1605,10 @@ function ConfigPanel({
   config,
   selectedProvider,
   selectedTemplate,
+  providerTemplateId,
   providerDraft,
+  requestMappingText,
+  setRequestMappingText,
   providerAdvancedOpen,
   setProviderAdvancedOpen,
   providerResult,
@@ -1461,7 +1634,10 @@ function ConfigPanel({
   config: ConfigPayload | null;
   selectedProvider?: ProviderConfig;
   selectedTemplate?: ProviderTemplate;
+  providerTemplateId: string;
   providerDraft: ProviderDraft | null;
+  requestMappingText: string;
+  setRequestMappingText: (value: string) => void;
   providerAdvancedOpen: boolean;
   setProviderAdvancedOpen: (open: boolean) => void;
   providerResult: ProviderDiagnostic | ProviderTestPayload | null;
@@ -1484,6 +1660,14 @@ function ConfigPanel({
 }) {
   const responsePaths = providerDraft?.response_mapping.text_paths.join("\n") || "";
   const modelListPaths = providerDraft?.model_list.response_paths.join("\n") || "";
+  const requestMapping = parseJsonObject(requestMappingText);
+  const reasoningEffort = String(getPathValue(requestMapping || {}, requestBodyPath("reasoning_effort")) ?? "");
+  const knownReasoningEffort = ["", "none", "low", "medium", "high", "xhigh", "minimal", "max"].includes(reasoningEffort);
+  const topP = String(getPathValue(requestMapping || {}, requestBodyPath("top_p")) ?? "");
+  const tokenLimitField = tokenLimitFieldForMapping(requestMapping);
+  const tokenLimitValue = tokenLimitValueForMapping(requestMapping);
+  const geminiThinkingBudget = String(getPathValue(requestMapping || {}, requestBodyPath("extra_body.google.thinking_config.thinking_budget")) ?? getPathValue(requestMapping || {}, requestBodyPath("thinkingConfig.thinkingBudget")) ?? "");
+  const requestMappingInvalid = requestMappingText.trim().length > 0 && !requestMapping;
   return (
     <div className="space-y-4">
       <Panel title="Provider 配置中心">
@@ -1532,9 +1716,9 @@ function ConfigPanel({
                   </label>
                   <label className="tvx-label">
                     {t("compatMode")}
-                    <select className="tvx-input" value={providerDraft.compat_mode} onChange={(event) => updateProviderTemplate(event.target.value)}>
+                    <select className="tvx-input" value={providerTemplateId} onChange={(event) => updateProviderTemplate(event.target.value)}>
                       {config?.provider_templates.map((template) => (
-                        <option key={template.id} value={template.compat_mode}>
+                        <option key={template.id} value={template.id}>
                           {template.label}
                         </option>
                       ))}
@@ -1618,6 +1802,113 @@ function ConfigPanel({
 
                 {providerAdvancedOpen && (
                   <div className="grid grid-cols-2 gap-4 rounded-lg border border-line bg-slate-50 p-3">
+                    <section className="col-span-2 rounded-lg border border-line bg-white p-3">
+                      <div className="mb-3 flex items-center justify-between">
+                        <strong className="text-sm">常用请求参数</strong>
+                        <span className="text-xs text-muted">默认不指定，只有选择/填写后才写入 request_mapping。</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-3">
+                        <label className="tvx-label">
+                          reasoning_effort
+                          <select
+                            className="tvx-input"
+                            value={knownReasoningEffort ? reasoningEffort || "auto" : "custom"}
+                            onChange={(event) =>
+                              setRequestMappingText(
+                                setRequestBodyOverride(
+                                  requestMappingText,
+                                  "reasoning_effort",
+                                  event.target.value === "auto" ? "" : event.target.value,
+                                ),
+                              )
+                            }
+                          >
+                            <option value="auto">auto / 不指定</option>
+                            <option value="none">none</option>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                            <option value="xhigh">xhigh</option>
+                            <option value="minimal">minimal</option>
+                            <option value="max">max</option>
+                            <option value="custom">自定义</option>
+                          </select>
+                        </label>
+                        <label className="tvx-label">
+                          reasoning 自定义
+                          <input
+                            className="tvx-input"
+                            value={knownReasoningEffort ? "" : reasoningEffort}
+                            placeholder="例如 vendor-specific"
+                            onChange={(event) =>
+                              setRequestMappingText(setRequestBodyOverride(requestMappingText, "reasoning_effort", event.target.value))
+                            }
+                          />
+                        </label>
+                        <label className="tvx-label">
+                          top_p
+                          <input
+                            className="tvx-input"
+                            type="number"
+                            step="0.05"
+                            min="0"
+                            max="1"
+                            value={topP}
+                            placeholder="auto"
+                            onChange={(event) =>
+                              setRequestMappingText(
+                                setRequestBodyOverride(
+                                  requestMappingText,
+                                  "top_p",
+                                  event.target.value === "" ? "" : Number(event.target.value),
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="tvx-label">
+                          token 字段
+                          <select
+                            className="tvx-input"
+                            value={tokenLimitField}
+                            onChange={(event) => setRequestMappingText(setTokenLimit(requestMappingText, event.target.value, tokenLimitValue))}
+                          >
+                            {tokenLimitFields.map((field) => (
+                              <option key={field.value} value={field.value}>
+                                {field.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="tvx-label">
+                          token 上限
+                          <input
+                            className="tvx-input"
+                            type="number"
+                            value={tokenLimitValue}
+                            placeholder="auto"
+                            onChange={(event) => setRequestMappingText(setTokenLimit(requestMappingText, tokenLimitField, event.target.value))}
+                          />
+                        </label>
+                        <label className="tvx-label">
+                          Gemini thinking budget
+                          <input
+                            className="tvx-input"
+                            type="number"
+                            value={geminiThinkingBudget}
+                            placeholder="auto"
+                            onChange={(event) => {
+                              const value = event.target.value === "" ? "" : Number(event.target.value);
+                              const path =
+                                providerDraft.compat_mode === "openai_chat"
+                                  ? "extra_body.google.thinking_config.thinking_budget"
+                                  : "thinkingConfig.thinkingBudget";
+                              setRequestMappingText(setRequestBodyOverride(requestMappingText, path, value));
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </section>
                     <label className="tvx-label">
                       api_type
                       <input className="tvx-input" value={providerDraft.api_type} onChange={(event) => updateProviderDraft({ api_type: event.target.value })} />
@@ -1676,6 +1967,15 @@ function ConfigPanel({
                         value={responsePaths}
                         onChange={(event) => updateProviderDraft({ response_mapping: { text_paths: arrayValue(event.target.value.split(/\r?\n/)) } })}
                       />
+                    </label>
+                    <label className="tvx-label">
+                      request_mapping JSON
+                      <textarea
+                        className={`tvx-textarea min-h-44 font-mono text-xs ${requestMappingInvalid ? "border-red-300" : ""}`}
+                        value={requestMappingText}
+                        onChange={(event) => setRequestMappingText(event.target.value)}
+                      />
+                      {requestMappingInvalid && <span className="text-xs text-danger">JSON 格式无效，保存/测试前需要修正。</span>}
                     </label>
                     <label className="tvx-label">
                       model list response paths

@@ -6,16 +6,17 @@ from dataclasses import asdict, dataclass
 
 from .config import load_app_config
 from .models import NormalizedRequest, ProviderConfig
-from .providers.factory import _build_payload, _build_url_and_headers, _extract_text_by_paths
+from .providers.factory import _build_payload, _build_url_and_headers, _extract_text_by_paths, response_shape_summary
 
 
-VALID_API_TYPES = {"openai", "openai-compatible", "anthropic", "gemini-compatible"}
+VALID_API_TYPES = {"openai", "openai-compatible", "anthropic", "gemini-compatible", "custom"}
 VALID_COMPAT_MODES = {
     "openai_chat",
     "openai_responses",
     "openai_completions",
     "anthropic_messages",
     "gemini_generate_content",
+    "custom_json",
 }
 
 
@@ -38,6 +39,8 @@ def _mock_response_for_compat_mode(compat_mode: str) -> dict:
         return {"content": [{"text": "[1] ok"}]}
     if compat_mode == "gemini_generate_content":
         return {"candidates": [{"content": {"parts": [{"text": "[1] ok"}]}}]}
+    if compat_mode == "custom_json":
+        return {"text": "[1] ok"}
     return {}
 
 
@@ -165,7 +168,10 @@ def probe_provider(
                 name="request_payload_build",
                 status="PASS",
                 message="request payload generated",
-                details={"top_level_keys": sorted(payload.keys())},
+                details={
+                    "top_level_keys": sorted(payload.keys()),
+                    "query_params": sorted((provider.mapping.request.get("query_params") or {}).keys()),
+                },
             )
         )
     except Exception as exc:
@@ -197,7 +203,7 @@ def probe_provider(
                     name="response_mapping_extract",
                     status="FAIL",
                     message="response mapping did not extract text from sample",
-                    details={"text_paths": text_paths},
+                    details={"text_paths": text_paths, "sample_shape": response_shape_summary(sample)},
                 )
             )
     except Exception as exc:

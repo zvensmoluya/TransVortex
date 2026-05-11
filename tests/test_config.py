@@ -122,6 +122,47 @@ routing:
     assert p.model_list.response_paths == ["data[].id"]
 
 
+def test_provider_request_mapping_extended_fields_round_trip(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: custom
+    api_type: custom
+    compat_mode: custom_json
+    base_url: https://example.com/custom
+    env_key: KEY
+    models: [custom-model]
+    endpoint:
+      path_template: /translate
+      method: POST
+    request_mapping:
+      style: custom_json
+      query_params:
+        api-version: "2024-01-01"
+      body_template:
+        model: "{{model}}"
+        prompt: "{{prompt}}"
+      body_overrides:
+        stream: false
+      body_remove_paths:
+        - temperature
+    response_mapping:
+      text_paths: ["result.text"]
+routing:
+  primary: {provider: custom, model: custom-model}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    mapping = cfg.providers["custom"].mapping.request
+    assert mapping["style"] == "custom_json"
+    assert mapping["query_params"]["api-version"] == "2024-01-01"
+    assert mapping["body_template"]["model"] == "{{model}}"
+    assert mapping["body_overrides"]["stream"] is False
+    assert mapping["body_remove_paths"] == ["temperature"]
+
+
 def test_provider_file_priority_local_over_yaml_over_example(tmp_path: Path) -> None:
     providers_yaml = """
 providers:

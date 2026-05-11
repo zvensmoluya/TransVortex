@@ -101,6 +101,8 @@ def _infer_compat_mode(api_type: str) -> str:
         return "anthropic_messages"
     if api_type == "gemini-compatible":
         return "gemini_generate_content"
+    if api_type == "custom":
+        return "custom_json"
     raise ValueError(f"Unsupported api_type: {api_type}")
 
 
@@ -115,6 +117,8 @@ def _default_endpoint_for_mode(compat_mode: str) -> EndpointConfig:
         return EndpointConfig(path_template="/messages", method="POST")
     if compat_mode == "gemini_generate_content":
         return EndpointConfig(path_template="/models/{model}:generateContent", method="POST")
+    if compat_mode == "custom_json":
+        return EndpointConfig(path_template="/", method="POST")
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 
@@ -125,6 +129,8 @@ def _default_auth_for_mode(compat_mode: str) -> AuthConfig:
         return AuthConfig(type="header", header_name="x-api-key", prefix="")
     if compat_mode == "gemini_generate_content":
         return AuthConfig(type="query", query_name="key", prefix="")
+    if compat_mode == "custom_json":
+        return AuthConfig(type="bearer", header_name="Authorization", prefix="Bearer ")
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 
@@ -175,6 +181,17 @@ def _default_mapping_for_mode(compat_mode: str) -> MappingConfig:
                 ]
             },
         )
+    if compat_mode == "custom_json":
+        return MappingConfig(
+            request={
+                "style": "custom_json",
+                "body_template": {
+                    "model": "{{model}}",
+                    "prompt": "{{prompt}}",
+                },
+            },
+            response={"text_paths": ["text", "choices[0].message.content"]},
+        )
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 
@@ -185,6 +202,8 @@ def _default_model_list_for_mode(compat_mode: str) -> ModelListConfig:
         return ModelListConfig(path_template="/models", method="GET", response_paths=["data[].id"])
     if compat_mode == "gemini_generate_content":
         return ModelListConfig(path_template="/models", method="GET", response_paths=["models[].name", "data[].id"])
+    if compat_mode == "custom_json":
+        return ModelListConfig(path_template="", method="GET", response_paths=[])
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 

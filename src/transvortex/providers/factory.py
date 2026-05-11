@@ -8,6 +8,7 @@ import urllib.request
 import posixpath
 from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
+from typing import Any
 
 from ..models import NormalizedRequest, NormalizedResponse, ProviderConfig
 from .base import ProviderClient
@@ -126,6 +127,39 @@ def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, m
     return _request_json(url, payload, headers, timeout, method)
 
 
+def _bool_string(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _stringify_query_value(value: object) -> str:
+    if isinstance(value, bool):
+        return _bool_string(value)
+    return str(value)
+
+
+def _append_query_params(url: str, params: dict[str, object]) -> str:
+    if not params:
+        return url
+    parsed = urllib.parse.urlsplit(url)
+    query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            query_items.extend((str(key), _stringify_query_value(item)) for item in value if item is not None)
+        else:
+            query_items.append((str(key), _stringify_query_value(value)))
+    return urllib.parse.urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urllib.parse.urlencode(query_items),
+            parsed.fragment,
+        )
+    )
+
+
 def _get_path_value(data: object, path: str) -> list[object]:
     def walk(nodes: list[object], token: str) -> list[object]:
         out: list[object] = []
@@ -183,6 +217,129 @@ def _extract_text_by_paths(data: dict, paths: list[str]) -> str:
     return ""
 
 
+def _template_context(
+    req: NormalizedRequest,
+    *,
+    prompt: str,
+    system_prompt: str,
+) -> dict[str, object]:
+    return {
+        "model": req.model,
+        "prompt": prompt,
+        "system_prompt": system_prompt,
+        "temperature": req.temperature,
+        "source_lang": req.source_lang,
+        "target_lang": req.target_lang,
+        "lines": req.lines,
+        "lines_text": "\n".join(req.lines),
+        "context_before": req.context_before,
+        "context_before_text": "\n".join(req.context_before),
+        "context_after": req.context_after,
+        "context_after_text": "\n".join(req.context_after),
+        "style_prompt": req.style_prompt,
+        "prompt_mode": req.prompt_mode,
+        "repair_reason": req.repair_reason,
+        "bad_translation": req.bad_translation,
+    }
+
+
+def _render_template_string(value: str, context: dict[str, object]) -> object:
+    exact = re.fullmatch(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}", value)
+    if exact:
+        return context.get(exact.group(1), "")
+
+    def replace(match: re.Match[str]) -> str:
+        replacement = context.get(match.group(1), "")
+        if isinstance(replacement, (list, dict)):
+            return json.dumps(replacement, ensure_ascii=False)
+        return str(replacement)
+
+    return re.sub(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}", replace, value)
+
+
+def _render_template_value(value: object, context: dict[str, object]) -> object:
+    if isinstance(value, str):
+        return _render_template_string(value, context)
+    if isinstance(value, list):
+        return [_render_template_value(item, context) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _render_template_value(item, context) for key, item in value.items()}
+    return value
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _remove_payload_path(payload: dict[str, Any], path: str) -> None:
+    tokens = [token for token in str(path).split(".") if token]
+    if not tokens:
+        return
+    current: Any = payload
+    for token in tokens[:-1]:
+        if isinstance(current, dict):
+            current = current.get(token)
+        elif isinstance(current, list) and token.isdigit():
+            idx = int(token)
+            current = current[idx] if 0 <= idx < len(current) else None
+        else:
+            return
+        if current is None:
+            return
+    last = tokens[-1]
+    if isinstance(current, dict):
+        current.pop(last, None)
+    elif isinstance(current, list) and last.isdigit():
+        idx = int(last)
+        if 0 <= idx < len(current):
+            current.pop(idx)
+
+
+def _apply_request_mapping(
+    payload: dict[str, Any],
+    config: ProviderConfig,
+    context: dict[str, object],
+) -> dict[str, Any]:
+    mapping = config.mapping.request
+    overrides = mapping.get("body_overrides")
+    if isinstance(overrides, dict):
+        payload = _deep_merge(payload, _render_template_value(overrides, context))
+    for raw_path in mapping.get("body_remove_paths", []) or []:
+        _remove_payload_path(payload, str(raw_path))
+    return payload
+
+
+def _query_params_for_config(config: ProviderConfig, model: str) -> dict[str, object]:
+    raw = config.mapping.request.get("query_params", {})
+    if not isinstance(raw, dict):
+        return {}
+    return _render_template_value(raw, {"model": model})
+
+
+def response_shape_summary(value: object, *, depth: int = 4, max_keys: int = 24) -> object:
+    if depth <= 0:
+        return type(value).__name__
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= max_keys:
+                out["..."] = f"{len(value) - max_keys} more keys"
+                break
+            out[str(key)] = response_shape_summary(item, depth=depth - 1, max_keys=max_keys)
+        return out
+    if isinstance(value, list):
+        if not value:
+            return []
+        return [response_shape_summary(value[0], depth=depth - 1, max_keys=max_keys)]
+    return type(value).__name__
+
+
 def _build_url_and_headers(config: ProviderConfig, api_key: str, model: str) -> tuple[str, dict[str, str]]:
     return _build_url_and_headers_for_path(config, api_key, model, config.endpoint.path_template)
 
@@ -217,6 +374,7 @@ def _build_url_and_headers_for_path(
             parsed_base.fragment,
         )
     )
+    url = _append_query_params(url, _query_params_for_config(config, model))
     headers: dict[str, str] = {}
     auth = config.auth
     if auth.type == "bearer":
@@ -237,6 +395,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
     style = config.mapping.request.get("style", config.compat_mode)
     prompt = _translation_prompt(req, include_system_constraints=not config.capabilities.supports_system_prompt)
     system_prompt = req.system_prompt or TRANSLATION_SYSTEM_PROMPT
+    context = _template_context(req, prompt=prompt, system_prompt=system_prompt)
     if style == "openai_chat":
         messages = []
         if config.capabilities.supports_system_prompt:
@@ -248,7 +407,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         }
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
-        return payload
+        return _apply_request_mapping(payload, config, context)
     if style == "openai_responses":
         input_items: list[dict[str, str]] = []
         if config.capabilities.supports_system_prompt:
@@ -260,7 +419,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         }
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
-        return payload
+        return _apply_request_mapping(payload, config, context)
     if style == "openai_completions":
         payload = {
             "model": req.model,
@@ -271,7 +430,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         max_tokens = config.mapping.request.get("max_tokens")
         if max_tokens is not None:
             payload["max_tokens"] = int(max_tokens)
-        return payload
+        return _apply_request_mapping(payload, config, context)
     if style == "anthropic_messages":
         payload = {
             "model": req.model,
@@ -282,14 +441,22 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
             payload["temperature"] = req.temperature
         if config.capabilities.supports_system_prompt:
             payload["system"] = system_prompt
-        return payload
+        return _apply_request_mapping(payload, config, context)
     if style == "gemini_generate_content":
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
         }
         if config.capabilities.supports_temperature:
             payload["generationConfig"] = {"temperature": req.temperature}
-        return payload
+        return _apply_request_mapping(payload, config, context)
+    if style == "custom_json":
+        template = config.mapping.request.get("body_template")
+        if not isinstance(template, dict):
+            raise RuntimeError("custom_json requires request_mapping.body_template object")
+        rendered = _render_template_value(template, context)
+        if not isinstance(rendered, dict):
+            raise RuntimeError("custom_json body_template must render to a JSON object")
+        return _apply_request_mapping(rendered, config, context)
     raise RuntimeError(f"Unsupported request style: {style}")
 
 
@@ -341,6 +508,7 @@ def build_provider_client(config: ProviderConfig) -> ProviderClient:
         "openai_completions",
         "anthropic_messages",
         "gemini_generate_content",
+        "custom_json",
     }:
         raise ValueError(f"Unsupported compat_mode: {config.compat_mode}")
     return ConfigurableProtocolClient(config=config, timeout=config.limits.timeout_seconds)

@@ -46,6 +46,7 @@ V1 先做 CLI 单机版，核心目标是：**极致速度、低内存、可恢�
 - `openai_chat`：OpenAI 与 OpenAI-compatible 代理，默认提取 `choices[0].message.content`
 - `anthropic_messages`：Anthropic Messages 协议，默认提取 `content[].text`
 - `gemini_generate_content`：Gemini 原生协议，默认提取 `candidates[0].content.parts[].text`
+- 当前 provider adapter 的职责边界是文本翻译请求/响应适配。未来封面、关键帧、多模态理解应作为独立 Visual Context 阶段产出摘要，再注入翻译 prompt，不在 provider adapter 内直接扩成多模态网关。
 
 ## 向后兼容规则
 - 若 `providers.yaml` 未配置 `compat_mode`，按 `api_type` 自动推断。
@@ -85,3 +86,4 @@ V1 先做 CLI 单机版，核心目标是：**极致速度、低内存、可恢�
 - 不上传媒体到云端，只上传文本
 - API Key 永不落盘，仅通过 `env_key` 从环境读取
 - `providers.yaml` 支持后续扩展到多协议兼容服务端点
+- V1/V1.1 不实现多模态输入输出。若后续需要画面理解，优先抽关键帧生成 `visual/visual_context.json|md`，翻译主流程仍消费文本摘要。

@@ -26,6 +26,7 @@ from .providers.factory import (
     _build_url_and_headers_for_path,
     _extract_text_by_paths,
     _request_json,
+    response_shape_summary,
 )
 from .utils import to_plain
 
@@ -116,6 +117,116 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         },
         "capabilities": {
             "supports_system_prompt": False,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 50,
+        },
+    },
+    "gemini_ai_studio_native": {
+        "label": "Gemini AI Studio Native",
+        "api_type": "gemini-compatible",
+        "compat_mode": "gemini_generate_content",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "endpoint": {"path_template": "/models/{model}:generateContent", "method": "POST"},
+        "auth": {"type": "query", "query_name": "key", "prefix": ""},
+        "request_mapping": {
+            "style": "gemini_generate_content",
+            "body_overrides": {
+                "generationConfig": {"topP": 0.95, "maxOutputTokens": 8192},
+                "safetySettings": [],
+            },
+        },
+        "response_mapping": {"text_paths": ["candidates[0].content.parts[].text"]},
+        "model_list": {
+            "path_template": "/models",
+            "method": "GET",
+            "response_paths": ["models[].name", "data[].id"],
+        },
+        "capabilities": {
+            "supports_system_prompt": False,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 50,
+        },
+    },
+    "gemini_openai_compatible": {
+        "label": "Gemini OpenAI-compatible",
+        "api_type": "openai-compatible",
+        "compat_mode": "openai_chat",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "endpoint": {"path_template": "/chat/completions", "method": "POST"},
+        "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
+        "request_mapping": {
+            "style": "openai_chat",
+            "body_overrides": {
+                "reasoning_effort": "none",
+                "extra_body": {"google": {"thinking_config": {"thinking_budget": 0}}},
+            },
+        },
+        "response_mapping": {"text_paths": ["choices[0].message.content"]},
+        "model_list": {"path_template": "/models", "method": "GET", "response_paths": ["data[].id"]},
+        "capabilities": {
+            "supports_system_prompt": True,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 50,
+        },
+    },
+    "vertex_native": {
+        "label": "Vertex AI Native Gemini",
+        "api_type": "gemini-compatible",
+        "compat_mode": "gemini_generate_content",
+        "base_url": "https://aiplatform.googleapis.com/v1",
+        "endpoint": {"path_template": "/{model}:generateContent", "method": "POST"},
+        "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
+        "request_mapping": {
+            "style": "gemini_generate_content",
+            "body_overrides": {"generationConfig": {"topP": 0.95, "maxOutputTokens": 8192}},
+        },
+        "response_mapping": {"text_paths": ["candidates[0].content.parts[].text"]},
+        "model_list": {"path_template": "", "method": "GET", "response_paths": []},
+        "capabilities": {
+            "supports_system_prompt": False,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 50,
+        },
+    },
+    "vertex_openai_compatible": {
+        "label": "Vertex AI OpenAI-compatible",
+        "api_type": "openai-compatible",
+        "compat_mode": "openai_chat",
+        "base_url": "https://aiplatform.googleapis.com/v1/endpoints/openapi",
+        "endpoint": {"path_template": "/chat/completions", "method": "POST"},
+        "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
+        "request_mapping": {"style": "openai_chat"},
+        "response_mapping": {"text_paths": ["choices[0].message.content"]},
+        "model_list": {"path_template": "/models", "method": "GET", "response_paths": ["data[].id"]},
+        "capabilities": {
+            "supports_system_prompt": True,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 50,
+        },
+    },
+    "custom_json": {
+        "label": "Custom JSON",
+        "api_type": "custom",
+        "compat_mode": "custom_json",
+        "base_url": "https://example.com",
+        "endpoint": {"path_template": "/", "method": "POST"},
+        "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
+        "request_mapping": {
+            "style": "custom_json",
+            "body_template": {
+                "model": "{{model}}",
+                "prompt": "{{prompt}}",
+            },
+        },
+        "response_mapping": {"text_paths": ["text", "choices[0].message.content"]},
+        "model_list": {"path_template": "", "method": "GET", "response_paths": []},
+        "capabilities": {
+            "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
             "max_batch_lines": 50,
@@ -499,7 +610,10 @@ def run_provider_connection_test(
                     code="provider_response_mapping_failed",
                     message="no text extracted from provider response",
                     hint_zh="Provider 有响应，但当前 response mapping 没有解析到文本。",
-                    details={"text_paths": provider.mapping.response.get("text_paths", [])},
+                    details={
+                        "text_paths": provider.mapping.response.get("text_paths", []),
+                        "response_shape": response_shape_summary(data),
+                    },
                 )
             )
     except Exception as exc:  # noqa: BLE001 - returned as structured diagnostics

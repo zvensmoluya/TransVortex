@@ -14,6 +14,7 @@ from transvortex.providers.factory import (
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
+    response_shape_summary,
 )
 
 
@@ -154,3 +155,125 @@ def test_payload_inlines_fixed_constraints_when_system_prompt_not_supported() ->
     text = payload["contents"][0]["parts"][0]["text"]
     assert "You are a subtitle translation engine." in text
     assert "Fixed output constraints:" in text
+
+
+def test_body_overrides_add_openai_special_fields() -> None:
+    cfg = ProviderConfig(
+        name="p1",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(
+            request={
+                "style": "openai_chat",
+                "body_overrides": {
+                    "reasoning_effort": "low",
+                    "extra_body": {"google": {"thinking_config": {"thinking_budget": 0}}},
+                },
+            },
+            response={},
+        ),
+        limits=ProviderLimits(),
+    )
+    payload = _build_payload(cfg, NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
+    assert payload["reasoning_effort"] == "low"
+    assert payload["extra_body"]["google"]["thinking_config"]["thinking_budget"] == 0
+
+
+def test_body_overrides_add_gemini_generation_fields() -> None:
+    cfg = ProviderConfig(
+        name="g1",
+        api_type="gemini-compatible",
+        compat_mode="gemini_generate_content",
+        base_url="https://example.com/v1beta",
+        env_key="KEY",
+        models=["m1"],
+        capabilities=CapabilityConfig(supports_system_prompt=False),
+        mapping=MappingConfig(
+            request={
+                "style": "gemini_generate_content",
+                "body_overrides": {
+                    "generationConfig": {"topP": 0.95, "maxOutputTokens": 8192},
+                    "safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}],
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
+            },
+            response={},
+        ),
+        limits=ProviderLimits(),
+    )
+    payload = _build_payload(cfg, NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
+    assert payload["generationConfig"]["temperature"] == 0.1
+    assert payload["generationConfig"]["topP"] == 0.95
+    assert payload["generationConfig"]["maxOutputTokens"] == 8192
+    assert payload["safetySettings"][0]["threshold"] == "BLOCK_NONE"
+    assert payload["thinkingConfig"]["thinkingBudget"] == 0
+
+
+def test_body_remove_paths_removes_default_payload_fields() -> None:
+    cfg = ProviderConfig(
+        name="p1",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(request={"style": "openai_chat", "body_remove_paths": ["temperature"]}, response={}),
+        limits=ProviderLimits(),
+    )
+    payload = _build_payload(cfg, NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
+    assert "temperature" not in payload
+
+
+def test_query_params_coexist_with_query_auth() -> None:
+    cfg = ProviderConfig(
+        name="g1",
+        api_type="gemini-compatible",
+        compat_mode="gemini_generate_content",
+        base_url="https://example.com/v1beta",
+        env_key="KEY",
+        models=["m1"],
+        auth=AuthConfig(type="query", query_name="key", prefix=""),
+        endpoint=EndpointConfig(path_template="/models/{model}:generateContent", method="POST"),
+        mapping=MappingConfig(
+            request={"style": "gemini_generate_content", "query_params": {"api-version": "2024-01-01", "model_hint": "{{model}}"}},
+            response={},
+        ),
+        limits=ProviderLimits(),
+    )
+    url, _headers = _build_url_and_headers(cfg, "secret", "m1")
+    assert "api-version=2024-01-01" in url
+    assert "model_hint=m1" in url
+    assert "key=secret" in url
+
+
+def test_custom_json_renders_body_template_and_extracts_text() -> None:
+    cfg = ProviderConfig(
+        name="custom",
+        api_type="custom",
+        compat_mode="custom_json",
+        base_url="https://example.com",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(
+            request={
+                "style": "custom_json",
+                "body_template": {
+                    "model": "{{model}}",
+                    "input": "{{prompt}}",
+                    "lines": "{{lines}}",
+                    "meta": {"source": "{{source_lang}}", "target": "{{target_lang}}"},
+                },
+            },
+            response={"text_paths": ["result.text"]},
+        ),
+        limits=ProviderLimits(),
+    )
+    payload = _build_payload(cfg, NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
+    assert payload["model"] == "m1"
+    assert payload["lines"] == ["[1] hello"]
+    assert payload["meta"] == {"source": "en", "target": "zh-CN"}
+    assert _extract_text_by_paths({"result": {"text": "[1] 你好"}}, cfg.mapping.response["text_paths"]) == "[1] 你好"
+    assert response_shape_summary({"result": {"text": "[1] 你好"}}) == {"result": {"text": "str"}}

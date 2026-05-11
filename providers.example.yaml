@@ -16,6 +16,13 @@ providers:
     request_mapping:
       style: anthropic_messages
       max_tokens: 4096
+      # Optional advanced compatibility fields.
+      # body_overrides is deep-merged into the generated provider payload.
+      # body_remove_paths deletes generated fields before sending.
+      # query_params appends non-auth query parameters to the request URL.
+      body_overrides: {}
+      body_remove_paths: []
+      query_params: {}
     response_mapping:
       text_paths:
         - content[].text
@@ -34,3 +41,40 @@ routing:
     provider: vector_anthropic
     model: claude-haiku-4-5-20251001
   fallback: []
+
+# Advanced examples:
+#
+# Gemini AI Studio native API:
+#   compat_mode: gemini_generate_content
+#   base_url: https://generativelanguage.googleapis.com/v1beta
+#   auth: {type: query, query_name: key, prefix: ""}
+#   endpoint: {path_template: /models/{model}:generateContent, method: POST}
+#   request_mapping:
+#     style: gemini_generate_content
+#     body_overrides:
+#       generationConfig:
+#         topP: 0.95
+#         maxOutputTokens: 8192
+#       safetySettings: []
+#
+# OpenAI-compatible APIs with vendor extensions:
+#   compat_mode: openai_chat
+#   request_mapping:
+#     style: openai_chat
+#     body_overrides:
+#       reasoning_effort: low
+#       extra_body:
+#         google:
+#           thinking_config:
+#             thinking_budget: 0
+#
+# Fully custom JSON API:
+#   api_type: custom
+#   compat_mode: custom_json
+#   request_mapping:
+#     style: custom_json
+#     body_template:
+#       model: "{{model}}"
+#       prompt: "{{prompt}}"
+#   response_mapping:
+#     text_paths: [result.text]
