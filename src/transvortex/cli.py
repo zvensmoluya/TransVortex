@@ -3,13 +3,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
+from .agent_protocol import agent_info_payload
 from .config import apply_route_overrides, load_app_config, resolve_providers_file
 from .doctor import doctor_report, format_doctor_report
-from .orchestrator import resume_pipeline, run_pipeline, task_status_json
+from .errors import PipelineTaskError, classify_exception
+from .exporter import export_ass, export_srt
+from .models import Segment
+from .orchestrator import (
+    create_pipeline_task,
+    execute_pipeline_task,
+    queue_resume_task,
+    resume_pipeline,
+    run_pipeline,
+    task_status_json,
+)
 from .probe import probe_exit_code, probe_provider
 from .provider_admin import (
     delete_provider_config,
@@ -19,9 +32,10 @@ from .provider_admin import (
     save_provider_config,
     save_provider_routing,
 )
+from .redaction import redact
 from .result_workspace import open_task_result, reexport_task, save_task_segments
 from .task_store import TaskStore
-from .utils import to_plain
+from .utils import read_json, to_plain, utc_now_iso
 
 
 def _common_overrides(args: argparse.Namespace) -> dict:
@@ -50,12 +64,38 @@ def _add_providers_file_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--providers-file", default=None, help="Optional providers config file path")
 
 
+_CURRENT_ROOT: Path | None = None
+
+
 def _print_json(data: object) -> None:
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    print(json.dumps(redact(data, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
 
 
 def _print_jsonl_event(event: dict[str, Any]) -> None:
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    print(json.dumps(redact(event, root_dir=_CURRENT_ROOT), ensure_ascii=False), flush=True)
+
+
+def _print_jsonl_error(task_id: str | None, err: dict[str, Any]) -> None:
+    event = {
+        "type": "error",
+        "task_id": task_id or "",
+        "created_at": utc_now_iso(),
+        "level": "error",
+        "stage": err.get("stage", ""),
+        "message": err.get("message", ""),
+        "details": {"error_info": err},
+    }
+    _print_jsonl_event(event)
+
+
+def _error_payload(task_id: str | None, err: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "task_id": task_id,
+        "status": "FAILED",
+        "error": err.get("message"),
+        "error_info": err,
+    }
 
 
 def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
@@ -87,6 +127,12 @@ def _task_payload(task, artifacts_dir: Path | None = None) -> dict[str, Any]:
     payload = task_status_json(task)
     if artifacts_dir is not None:
         payload["task_dir"] = str(artifacts_dir / task.task_id)
+    return payload
+
+
+def _capability_payload(name: str, task, artifacts_dir: Path | None = None) -> dict[str, Any]:
+    payload = _task_payload(task, artifacts_dir)
+    payload["capability"] = name
     return payload
 
 
@@ -134,10 +180,148 @@ def _read_json_arg(raw: str) -> dict[str, Any]:
     return payload
 
 
+def _optional_path_arg(value: str | None) -> Path | None:
+    return Path(value).resolve() if value else None
+
+
+def _append_optional(args: list[str], flag: str, value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool):
+        if value:
+            args.append(flag)
+        return
+    raw = str(value)
+    if raw:
+        args.extend([flag, raw])
+
+
+def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) -> None:
+    mapping = [
+        ("--chunk-seconds", getattr(ns, "chunk_seconds", None)),
+        ("--chunk-overlap-seconds", getattr(ns, "chunk_overlap_seconds", None)),
+        ("--translation-batch-size", getattr(ns, "translation_batch_size", None)),
+        ("--concurrency", getattr(ns, "concurrency", None)),
+        ("--asr-mode", getattr(ns, "asr_mode", None)),
+        ("--asr-device", getattr(ns, "asr_device", None)),
+        ("--asr-model-size", getattr(ns, "asr_model_size", None)),
+        ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
+        ("--asr-provider", getattr(ns, "asr_provider", None)),
+        ("--asr-model", getattr(ns, "asr_model", None)),
+        ("--output-format", getattr(ns, "output_format", None)),
+        ("--translation-style-preset", getattr(ns, "translation_style_preset", None)),
+        ("--translation-style-prompt", getattr(ns, "translation_style_prompt", None)),
+        ("--translation-chunk-lines", getattr(ns, "translation_chunk_lines", None)),
+        ("--translation-context-before-lines", getattr(ns, "translation_context_before_lines", None)),
+        ("--translation-context-after-lines", getattr(ns, "translation_context_after_lines", None)),
+        ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
+    ]
+    for flag, value in mapping:
+        _append_optional(args, flag, value)
+
+
+def _spawn_detached_worker(
+    *,
+    root: Path,
+    task_dir: Path,
+    worker_args: list[str],
+) -> dict[str, Any]:
+    log_dir = task_dir / "worker"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = log_dir / "stdout.log"
+    stderr_path = log_dir / "stderr.log"
+    stdout = stdout_path.open("ab")
+    stderr = stderr_path.open("ab")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "transvortex.cli", "--root", str(root), *worker_args],
+            cwd=root,
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            close_fds=False,
+            creationflags=creationflags,
+        )
+    finally:
+        stdout.close()
+        stderr.close()
+    return {
+        "pid": proc.pid,
+        "stdout_log": str(stdout_path),
+        "stderr_log": str(stderr_path),
+    }
+
+
+def _detach_response(
+    *,
+    task_id: str,
+    artifacts_dir: Path,
+    worker: dict[str, Any],
+    command: str,
+) -> dict[str, Any]:
+    task_dir = artifacts_dir / task_id
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "status": "QUEUED",
+        "task_dir": str(task_dir),
+        "worker": worker,
+        "next_commands": {
+            "status": f"transvortex status --task-id {task_id} --json",
+            "events": f"transvortex events --task-id {task_id} --follow",
+            "cancel": f"transvortex cancel --task-id {task_id} --json",
+        },
+        "command": command,
+    }
+
+
+def _task_and_artifacts(root: Path, providers_file: Path | None, task_id: str):
+    config = load_app_config(root_dir=root, providers_file=providers_file)
+    store = TaskStore(config.pipeline.artifacts_dir)
+    return store.load_task(task_id), config.pipeline.artifacts_dir
+
+
+def _print_task_json(root: Path, providers_file: Path | None, task_id: str, *, capability: str | None = None) -> None:
+    task, artifacts_dir = _task_and_artifacts(root, providers_file, task_id)
+    payload = _task_payload(task, artifacts_dir) if capability is None else _capability_payload(capability, task, artifacts_dir)
+    _print_json(payload)
+
+
+def _handle_pipeline_error(exc: Exception, *, json_mode: bool, stream_events: bool) -> None:
+    if isinstance(exc, PipelineTaskError):
+        task_id = exc.task_id
+        err = exc.error_info
+    else:
+        task_id = None
+        err = classify_exception(exc)
+    if json_mode:
+        _print_json(_error_payload(task_id, err))
+    elif stream_events and not isinstance(exc, PipelineTaskError):
+        _print_jsonl_error(task_id, err)
+    elif not stream_events:
+        print(err.get("message", str(exc)), file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _run_or_exit(fn, *, json_mode: bool, stream_events: bool):
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 - converted to stable CLI error contract
+        _handle_pipeline_error(exc, json_mode=json_mode, stream_events=stream_events)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="transvortex")
     parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
-    sub = parser.add_subparsers(dest="command", required=True)
+    public_commands = (
+        "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,"
+        "probe-provider,provider,result,reexport,asr,translate,export}"
+    )
+    sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
+
+    agent_p = sub.add_parser("agent-info", help="Show machine-readable agent protocol information")
+    agent_p.add_argument("--json", action="store_true", help="Print machine-readable protocol information")
 
     run_p = sub.add_parser("run", help="Run a new task")
     _add_providers_file_arg(run_p)
@@ -151,6 +335,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_route_override_args(run_p)
     run_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
     run_p.add_argument("--stream-events", action="store_true", help="Stream task events as JSONL")
+    run_p.add_argument("--detach", action="store_true", help="Start task in a detached worker and return immediately")
 
     resume_p = sub.add_parser("resume", help="Resume an existing task")
     _add_providers_file_arg(resume_p)
@@ -160,6 +345,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_route_override_args(resume_p)
     resume_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
     resume_p.add_argument("--stream-events", action="store_true", help="Stream task events as JSONL")
+    resume_p.add_argument("--detach", action="store_true", help="Resume task in a detached worker and return immediately")
 
     status_p = sub.add_parser("status", help="Show task status")
     _add_providers_file_arg(status_p)
@@ -169,6 +355,7 @@ def _build_parser() -> argparse.ArgumentParser:
     events_p = sub.add_parser("events", help="Print task events as JSONL")
     _add_providers_file_arg(events_p)
     events_p.add_argument("--task-id", required=True)
+    events_p.add_argument("--follow", action="store_true", help="Follow events until the task reaches a terminal state")
 
     cancel_p = sub.add_parser("cancel", help="Request cancellation for a task")
     _add_providers_file_arg(cancel_p)
@@ -237,37 +424,135 @@ def _build_parser() -> argparse.ArgumentParser:
     reexport_p.add_argument("--task-id", required=True)
     reexport_p.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
     reexport_p.add_argument("--json", action="store_true")
+
+    asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments")
+    _add_providers_file_arg(asr_p)
+    asr_p.add_argument("--input", required=True)
+    asr_p.add_argument("--src", required=True)
+    _add_pipeline_override_args(asr_p)
+    asr_p.add_argument("--json", action="store_true")
+    asr_p.add_argument("--detach", action="store_true")
+
+    translate_p = sub.add_parser("translate", help="Translate existing segments or SRT")
+    _add_providers_file_arg(translate_p)
+    translate_p.add_argument("--segments", required=True)
+    translate_p.add_argument("--src", required=True)
+    translate_p.add_argument("--tgt", required=True)
+    translate_p.add_argument("--bilingual", action="store_true")
+    translate_p.add_argument("--output", help="Output subtitle file path")
+    _add_pipeline_override_args(translate_p)
+    _add_route_override_args(translate_p)
+    translate_p.add_argument("--json", action="store_true")
+    translate_p.add_argument("--detach", action="store_true")
+
+    export_p = sub.add_parser("export", help="Export final segments to subtitle files")
+    export_p.add_argument("--segments", required=True)
+    export_p.add_argument("--format", choices=["srt", "ass", "both"], required=True)
+    export_p.add_argument("--output", required=True)
+    export_p.add_argument("--bilingual", action="store_true")
+    export_p.add_argument("--json", action="store_true")
+
+    worker_p = sub.add_parser("_worker", help=argparse.SUPPRESS)
+    worker_p.add_argument("--task-id", required=True)
+    worker_p.add_argument("--output", default=None)
+    _add_providers_file_arg(worker_p)
+    _add_pipeline_override_args(worker_p)
+    _add_route_override_args(worker_p)
+    for choice in list(getattr(sub, "_choices_actions", [])):
+        if getattr(choice, "dest", "") == "_worker":
+            sub._choices_actions.remove(choice)
     return parser
 
 
 def main() -> None:
+    global _CURRENT_ROOT
     parser = _build_parser()
     args = parser.parse_args()
     root = Path(args.root).resolve()
+    _CURRENT_ROOT = root
     raw_providers_file = getattr(args, "providers_file", None)
     providers_file = Path(raw_providers_file).resolve() if raw_providers_file else None
+    if args.command == "agent-info":
+        payload = agent_info_payload()
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload)
+        return
+
+    if args.command == "_worker":
+        def do_worker():
+            return execute_pipeline_task(
+                root_dir=root,
+                task_id=args.task_id,
+                output_file=_optional_path_arg(args.output),
+                providers_file=providers_file,
+                cli_overrides=_common_overrides(args),
+                provider_name=args.provider,
+                model=args.model,
+                event_sink=_print_jsonl_event,
+            )
+
+        _run_or_exit(do_worker, json_mode=False, stream_events=True)
+        return
+
     if args.command == "run":
         if args.json and args.stream_events:
             parser.error("run: --json and --stream-events cannot be used together")
-        task_id = run_pipeline(
-            root_dir=root,
-            input_file=Path(args.input).resolve(),
-            source_lang=args.src,
-            target_lang=args.tgt,
-            bilingual=args.bilingual,
-            output_file=Path(args.output).resolve() if args.output else None,
-            providers_file=providers_file,
-            cli_overrides=_common_overrides(args),
-            provider_name=args.provider,
-            model=args.model,
-            input_type="srt_translate" if args.input_type in {"srt", "srt_translate"} else "video_asr_translate",
-            event_sink=_print_jsonl_event if args.stream_events else None,
-        )
+        if args.detach and args.stream_events:
+            parser.error("run: --detach and --stream-events cannot be used together")
+        input_type = "srt_translate" if args.input_type in {"srt", "srt_translate"} else "video_asr_translate"
+        if args.detach:
+            task_id, artifacts_dir = _run_or_exit(
+                lambda: create_pipeline_task(
+                    root_dir=root,
+                    input_file=Path(args.input).resolve(),
+                    source_lang=args.src,
+                    target_lang=args.tgt,
+                    bilingual=args.bilingual,
+                    providers_file=providers_file,
+                    cli_overrides=_common_overrides(args),
+                    provider_name=args.provider,
+                    model=args.model,
+                    input_type=input_type,
+                    status="QUEUED",
+                ),
+                json_mode=args.json,
+                stream_events=False,
+            )
+            worker_args = ["_worker", "--task-id", task_id]
+            _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
+            _append_optional(worker_args, "--output", str(Path(args.output).resolve()) if args.output else None)
+            _append_optional(worker_args, "--provider", args.provider)
+            _append_optional(worker_args, "--model", args.model)
+            _append_common_overrides_to_args(worker_args, args)
+            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="run")
+            if args.json:
+                _print_json(payload)
+            else:
+                print(task_id)
+            return
+
+        def do_run():
+            return run_pipeline(
+                root_dir=root,
+                input_file=Path(args.input).resolve(),
+                source_lang=args.src,
+                target_lang=args.tgt,
+                bilingual=args.bilingual,
+                output_file=_optional_path_arg(args.output),
+                providers_file=providers_file,
+                cli_overrides=_common_overrides(args),
+                provider_name=args.provider,
+                model=args.model,
+                input_type=input_type,
+                event_sink=_print_jsonl_event if args.stream_events else None,
+            )
+
+        task_id = _run_or_exit(do_run, json_mode=args.json, stream_events=args.stream_events)
         if args.json:
-            config = load_app_config(root_dir=root, providers_file=providers_file)
-            config = apply_route_overrides(config, provider_name=args.provider, model=args.model)
-            task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
-            _print_json(_task_payload(task, config.pipeline.artifacts_dir))
+            _print_task_json(root, providers_file, task_id)
         elif not args.stream_events:
             print(task_id)
         else:
@@ -277,21 +562,50 @@ def main() -> None:
     if args.command == "resume":
         if args.json and args.stream_events:
             parser.error("resume: --json and --stream-events cannot be used together")
-        task_id = resume_pipeline(
-            root_dir=root,
-            task_id=args.task_id,
-            output_file=Path(args.output).resolve() if args.output else None,
-            providers_file=providers_file,
-            cli_overrides=_common_overrides(args),
-            provider_name=args.provider,
-            model=args.model,
-            event_sink=_print_jsonl_event if args.stream_events else None,
-        )
+        if args.detach and args.stream_events:
+            parser.error("resume: --detach and --stream-events cannot be used together")
+        if args.detach:
+            artifacts_dir = _run_or_exit(
+                lambda: queue_resume_task(
+                    root_dir=root,
+                    task_id=args.task_id,
+                    providers_file=providers_file,
+                    cli_overrides=_common_overrides(args),
+                    provider_name=args.provider,
+                    model=args.model,
+                ),
+                json_mode=args.json,
+                stream_events=False,
+            )
+            worker_args = ["_worker", "--task-id", args.task_id]
+            _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
+            _append_optional(worker_args, "--output", str(Path(args.output).resolve()) if args.output else None)
+            _append_optional(worker_args, "--provider", args.provider)
+            _append_optional(worker_args, "--model", args.model)
+            _append_common_overrides_to_args(worker_args, args)
+            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / args.task_id, worker_args=worker_args)
+            payload = _detach_response(task_id=args.task_id, artifacts_dir=artifacts_dir, worker=worker, command="resume")
+            if args.json:
+                _print_json(payload)
+            else:
+                print(args.task_id)
+            return
+
+        def do_resume():
+            return resume_pipeline(
+                root_dir=root,
+                task_id=args.task_id,
+                output_file=_optional_path_arg(args.output),
+                providers_file=providers_file,
+                cli_overrides=_common_overrides(args),
+                provider_name=args.provider,
+                model=args.model,
+                event_sink=_print_jsonl_event if args.stream_events else None,
+            )
+
+        task_id = _run_or_exit(do_resume, json_mode=args.json, stream_events=args.stream_events)
         if args.json:
-            config = load_app_config(root_dir=root, providers_file=providers_file)
-            config = apply_route_overrides(config, provider_name=args.provider, model=args.model)
-            task = TaskStore(config.pipeline.artifacts_dir).load_task(task_id)
-            _print_json(_task_payload(task, config.pipeline.artifacts_dir))
+            _print_task_json(root, providers_file, task_id)
         elif not args.stream_events:
             print(task_id)
         else:
@@ -312,8 +626,25 @@ def main() -> None:
     if args.command == "events":
         config = load_app_config(root_dir=root, providers_file=providers_file)
         store = TaskStore(config.pipeline.artifacts_dir)
-        for event in store.read_events(args.task_id):
-            print(json.dumps(event, ensure_ascii=False))
+        emitted = 0
+        terminal_event_types = {"done", "error", "cancelled"}
+        terminal_statuses = {"DONE", "FAILED", "CANCELLED"}
+        while True:
+            events = store.read_events(args.task_id)
+            for event in events[emitted:]:
+                print(json.dumps(event, ensure_ascii=False), flush=True)
+            emitted = len(events)
+            if not args.follow:
+                return
+            if any(event.get("type") in terminal_event_types for event in events):
+                return
+            try:
+                task = store.load_task(args.task_id)
+            except Exception:
+                return
+            if task.status in terminal_statuses:
+                return
+            time.sleep(0.5)
         return
 
     if args.command == "cancel":
@@ -416,6 +747,142 @@ def main() -> None:
 
     if args.command == "reexport":
         _print_json(reexport_task(root_dir=root, task_id=args.task_id, output_format=args.output_format))
+        return
+
+    if args.command == "asr":
+        input_type = "video_asr"
+        if args.detach:
+            task_id, artifacts_dir = _run_or_exit(
+                lambda: create_pipeline_task(
+                    root_dir=root,
+                    input_file=Path(args.input).resolve(),
+                    source_lang=args.src,
+                    target_lang=args.src,
+                    bilingual=False,
+                    providers_file=providers_file,
+                    cli_overrides=_common_overrides(args),
+                    input_type=input_type,
+                    status="QUEUED",
+                ),
+                json_mode=args.json,
+                stream_events=False,
+            )
+            worker_args = ["_worker", "--task-id", task_id]
+            _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
+            _append_common_overrides_to_args(worker_args, args)
+            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="asr")
+            if args.json:
+                _print_json(payload)
+            else:
+                print(task_id)
+            return
+
+        task_id = _run_or_exit(
+            lambda: run_pipeline(
+                root_dir=root,
+                input_file=Path(args.input).resolve(),
+                source_lang=args.src,
+                target_lang=args.src,
+                bilingual=False,
+                providers_file=providers_file,
+                cli_overrides=_common_overrides(args),
+                input_type=input_type,
+            ),
+            json_mode=args.json,
+            stream_events=False,
+        )
+        if args.json:
+            _print_task_json(root, providers_file, task_id, capability="asr")
+        else:
+            print(task_id)
+        return
+
+    if args.command == "translate":
+        input_type = "segments_translate"
+        if args.detach:
+            task_id, artifacts_dir = _run_or_exit(
+                lambda: create_pipeline_task(
+                    root_dir=root,
+                    input_file=Path(args.segments).resolve(),
+                    source_lang=args.src,
+                    target_lang=args.tgt,
+                    bilingual=args.bilingual,
+                    providers_file=providers_file,
+                    cli_overrides=_common_overrides(args),
+                    provider_name=args.provider,
+                    model=args.model,
+                    input_type=input_type,
+                    status="QUEUED",
+                ),
+                json_mode=args.json,
+                stream_events=False,
+            )
+            worker_args = ["_worker", "--task-id", task_id]
+            _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
+            _append_optional(worker_args, "--output", str(Path(args.output).resolve()) if args.output else None)
+            _append_optional(worker_args, "--provider", args.provider)
+            _append_optional(worker_args, "--model", args.model)
+            _append_common_overrides_to_args(worker_args, args)
+            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="translate")
+            if args.json:
+                _print_json(payload)
+            else:
+                print(task_id)
+            return
+
+        task_id = _run_or_exit(
+            lambda: run_pipeline(
+                root_dir=root,
+                input_file=Path(args.segments).resolve(),
+                source_lang=args.src,
+                target_lang=args.tgt,
+                bilingual=args.bilingual,
+                output_file=_optional_path_arg(args.output),
+                providers_file=providers_file,
+                cli_overrides=_common_overrides(args),
+                provider_name=args.provider,
+                model=args.model,
+                input_type=input_type,
+            ),
+            json_mode=args.json,
+            stream_events=False,
+        )
+        if args.json:
+            _print_task_json(root, providers_file, task_id, capability="translate")
+        else:
+            print(task_id)
+        return
+
+    if args.command == "export":
+        def do_export():
+            rows = read_json(Path(args.segments).resolve())
+            segments = [Segment(**row) for row in rows]
+            output = Path(args.output).resolve()
+            output_format = args.format
+            output_paths: dict[str, str] = {}
+            if output_format in {"srt", "both"}:
+                srt_path = output.with_suffix(".srt")
+                export_srt(segments, srt_path, args.bilingual)
+                output_paths["srt"] = str(srt_path)
+            if output_format in {"ass", "both"}:
+                ass_path = output.with_suffix(".ass")
+                export_ass(segments, ass_path, bilingual=args.bilingual)
+                output_paths["ass"] = str(ass_path)
+            return {
+                "ok": True,
+                "capability": "export",
+                "output_format": output_format,
+                "output_path": output_paths.get("srt") or output_paths.get("ass"),
+                "output_paths": output_paths,
+            }
+
+        payload = _run_or_exit(do_export, json_mode=args.json, stream_events=False)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload["output_path"])
         return
 
 

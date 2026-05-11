@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .redaction import redact
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -30,7 +32,7 @@ def to_plain(obj: Any) -> Any:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(to_plain(data), ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(redact(to_plain(data)), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def read_json(path: Path) -> Any:
@@ -40,7 +42,7 @@ def read_json(path: Path) -> Any:
 def append_jsonl(path: Path, item: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(to_plain(item), ensure_ascii=False))
+        f.write(json.dumps(redact(to_plain(item)), ensure_ascii=False))
         f.write("\n")
 
 

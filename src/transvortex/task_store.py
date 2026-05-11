@@ -44,6 +44,8 @@ class TaskStore:
         output_path: str | None = None,
         output_paths: dict[str, str] | None = None,
         error: str | None = None,
+        error_info: dict[str, Any] | None = None,
+        clear_error: bool = False,
     ) -> TaskRecord:
         task = self.load_task(task_id)
         task.status = status
@@ -54,8 +56,11 @@ class TaskStore:
             task.output_paths = output_paths
         if error is not None:
             task.error = error
-        elif status == "DONE":
+        if error_info is not None:
+            task.error_info = error_info
+        if clear_error or status == "DONE":
             task.error = None
+            task.error_info = None
         self.save_task(task)
         return task
 

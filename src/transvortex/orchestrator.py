@@ -10,6 +10,7 @@ from .aligner import apply_translations, dedupe_overlap_segments, normalize_time
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
 from .config import apply_route_overrides, load_app_config
+from .errors import PipelineTaskError, classify_exception
 from .exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
 from .models import AppConfig, Segment, TaskRecord
@@ -61,6 +62,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
 def _stage_progress(stage: str) -> float:
     return {
         "INIT": 0.0,
+        "QUEUED": 0.0,
         "PRECHECK": 0.02,
         "INGEST": 0.08,
         "ASR": 0.25,
@@ -73,7 +75,7 @@ def _stage_progress(stage: str) -> float:
 
 
 def _emit_stage(store: TaskStore, task_id: str, stage: str, message: str) -> None:
-    store.update_task_status(task_id, stage)
+    store.update_task_status(task_id, stage, clear_error=True)
     store.append_event(task_id, "stage", stage=stage, message=message, progress=_stage_progress(stage))
 
 
@@ -133,7 +135,7 @@ def _preflight(
         raise RuntimeError(f"Input file not found: {input_path}")
     if not input_path.is_file():
         raise RuntimeError(f"Input path is not a file: {input_path}")
-    if input_type == "video_asr_translate":
+    if input_type in {"video_asr_translate", "video_asr"}:
         for binary in ("ffmpeg", "ffprobe"):
             if shutil.which(binary) is None:
                 raise RuntimeError(f"Required executable not found in PATH: {binary}")
@@ -144,9 +146,9 @@ def _preflight(
         probe_file.write_text("ok", encoding="utf-8")
     finally:
         probe_file.unlink(missing_ok=True)
-    if input_type == "video_asr_translate" and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
+    if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
         raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
-    if input_type == "video_asr_translate" and config.pipeline.asr_mode == "openai":
+    if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "openai":
         env_key = config.pipeline.asr_cloud_env_key
         if config.pipeline.asr_provider:
             provider = config.providers.get(config.pipeline.asr_provider)
@@ -155,25 +157,26 @@ def _preflight(
             env_key = provider.env_key
         if not os.getenv(env_key):
             raise RuntimeError(f"Missing environment variable: {env_key}")
-    route = config.routing.primary
-    provider = config.providers.get(route.provider)
-    if not provider:
-        raise RuntimeError(f"Translation provider not found: {route.provider}")
-    report = probe_provider(
-        root_dir=root_dir,
-        providers_file=providers_file,
-        provider_name=route.provider,
-        model=route.model,
-        source_lang=task.source_lang,
-        target_lang=task.target_lang,
-    )
-    failures = [
-        f"{row.get('name')}: {row.get('message')}"
-        for row in report.get("checks", [])
-        if row.get("status") == "FAIL"
-    ]
-    if failures:
-        raise RuntimeError(f"Provider preflight failed: {'; '.join(failures)}")
+    if input_type != "video_asr":
+        route = config.routing.primary
+        provider = config.providers.get(route.provider)
+        if not provider:
+            raise RuntimeError(f"Translation provider not found: {route.provider}")
+        report = probe_provider(
+            root_dir=root_dir,
+            providers_file=providers_file,
+            provider_name=route.provider,
+            model=route.model,
+            source_lang=task.source_lang,
+            target_lang=task.target_lang,
+        )
+        failures = [
+            f"{row.get('name')}: {row.get('message')}"
+            for row in report.get("checks", [])
+            if row.get("status") == "FAIL"
+        ]
+        if failures:
+            raise RuntimeError(f"Provider preflight failed: {'; '.join(failures)}")
 
 
 def _status_json(task: TaskRecord) -> dict[str, Any]:
@@ -189,6 +192,7 @@ def _status_json(task: TaskRecord) -> dict[str, Any]:
         "output_path": task.output_path,
         "output_paths": task.output_paths,
         "error": None if task.status == "DONE" else task.error,
+        "error_info": None if task.status == "DONE" else task.error_info,
     }
 
 
@@ -215,6 +219,40 @@ def _create_task(
     return task
 
 
+def create_pipeline_task(
+    *,
+    root_dir: Path,
+    input_file: Path,
+    source_lang: str,
+    target_lang: str,
+    bilingual: bool = False,
+    providers_file: Path | None = None,
+    cli_overrides: dict | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    input_type: str = "video_asr_translate",
+    status: str = "QUEUED",
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[str, Path]:
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    normalized_input_type = input_type if input_type in {"video_asr_translate", "srt_translate", "segments_translate", "video_asr"} else "video_asr_translate"
+    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
+    task = _create_task(
+        store,
+        input_file=input_file,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        bilingual=bilingual,
+        settings=_task_settings(config, input_type=normalized_input_type),
+    )
+    if status != "INIT":
+        store.update_task_status(task.task_id, status)
+    store.clear_cancel(task.task_id)
+    store.append_event(task.task_id, "task_created", stage=status, message="Task created", progress=_stage_progress(status))
+    return task.task_id, config.pipeline.artifacts_dir
+
+
 def _task_settings(config: AppConfig, *, input_type: str) -> dict[str, Any]:
     settings = to_plain(config.pipeline)
     settings["input_type"] = input_type
@@ -230,6 +268,21 @@ def _load_segments_from_raw_jsonl(raw_file: Path) -> list[Segment]:
         segments.append(Segment(**row))
     segments.sort(key=lambda x: x.id)
     return segments
+
+
+def _load_segments_from_input(path: Path) -> list[Segment]:
+    if path.suffix.lower() == ".srt":
+        return parse_srt_file(path)
+    rows = read_jsonl(path)
+    segments: list[Segment] = []
+    for idx, row in enumerate(rows, start=1):
+        if isinstance(row, dict):
+            payload = dict(row)
+            payload.setdefault("id", idx)
+            if "text_src" not in payload and "text" in payload:
+                payload["text_src"] = payload.pop("text")
+            segments.append(Segment(**payload))
+    return sorted(segments, key=lambda seg: seg.id)
 
 
 def _persist_segments_jsonl(path: Path, segments: list[Segment]) -> None:
@@ -398,29 +451,32 @@ def run_pipeline(
     input_type: str = "video_asr_translate",
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
-    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
-    normalized_input_type = input_type if input_type in {"video_asr_translate", "srt_translate"} else "video_asr_translate"
-    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
-    task = _create_task(
-        store,
+    task_id, artifacts_dir = create_pipeline_task(
+        root_dir=root_dir,
         input_file=input_file,
         source_lang=source_lang,
         target_lang=target_lang,
         bilingual=bilingual,
-        settings=_task_settings(config, input_type=normalized_input_type),
+        providers_file=providers_file,
+        cli_overrides=cli_overrides,
+        provider_name=provider_name,
+        model=model,
+        input_type=input_type,
+        status="INIT",
+        event_sink=event_sink,
     )
-    store.clear_cancel(task.task_id)
-    store.append_event(task.task_id, "task_created", stage="INIT", message="Task created", progress=0.0)
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    store = TaskStore(artifacts_dir, event_sink=event_sink)
     _execute_task(
         config,
         store,
-        task.task_id,
+        task_id,
         output_file=output_file,
         root_dir=root_dir,
         providers_file=providers_file,
     )
-    return task.task_id
+    return task_id
 
 
 def resume_pipeline(
@@ -439,7 +495,54 @@ def resume_pipeline(
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
     store.load_task(task_id)
     store.clear_cancel(task_id)
-    store.append_event(task_id, "resume_requested", message="Resume requested")
+    store.update_task_status(task_id, "QUEUED", clear_error=True)
+    store.append_event(task_id, "resume_requested", stage="QUEUED", message="Resume requested")
+    _execute_task(
+        config,
+        store,
+        task_id,
+        output_file=output_file,
+        root_dir=root_dir,
+        providers_file=providers_file,
+    )
+    return task_id
+
+
+def queue_resume_task(
+    *,
+    root_dir: Path,
+    task_id: str,
+    providers_file: Path | None = None,
+    cli_overrides: dict | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> Path:
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
+    store.load_task(task_id)
+    store.clear_cancel(task_id)
+    store.update_task_status(task_id, "QUEUED", clear_error=True)
+    store.append_event(task_id, "resume_requested", stage="QUEUED", message="Resume requested")
+    return config.pipeline.artifacts_dir
+
+
+def execute_pipeline_task(
+    *,
+    root_dir: Path,
+    task_id: str,
+    output_file: Path | None = None,
+    providers_file: Path | None = None,
+    cli_overrides: dict | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> str:
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
+    store.load_task(task_id)
     _execute_task(
         config,
         store,
@@ -473,7 +576,29 @@ def _execute_task(
         checkpoint["status"] = "PRECHECK"
         store.save_checkpoint(task_id, checkpoint)
 
-        if input_type == "srt_translate":
+        if input_type == "segments_translate":
+            _check_cancel(store, task_id)
+            _emit_stage(store, task_id, "INGEST", "Loading source segments")
+            raw_jsonl = paths["asr"] / "segments.raw.jsonl"
+            if not checkpoint.get("ingest_done") or not _is_nonempty_file(raw_jsonl):
+                all_segments = _load_segments_from_input(Path(task.input_file))
+                if not all_segments:
+                    raise RuntimeError("No subtitle segments parsed from input")
+                _persist_segments_jsonl(raw_jsonl, all_segments)
+                checkpoint["ingest_done"] = True
+                checkpoint["status"] = "INGEST"
+                store.save_checkpoint(task_id, checkpoint)
+                store.append_event(
+                    task_id,
+                    "artifact",
+                    stage="INGEST",
+                    message="Source segments ready",
+                    progress=0.52,
+                    details={"path": str(raw_jsonl), "segments": len(all_segments)},
+                )
+            else:
+                all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
+        elif input_type == "srt_translate":
             _check_cancel(store, task_id)
             _emit_stage(store, task_id, "INGEST", "Parsing SRT subtitles")
             raw_jsonl = paths["asr"] / "segments.raw.jsonl"
@@ -604,6 +729,28 @@ def _execute_task(
                 details={"path": str(raw_jsonl), "segments": len(all_segments)},
             )
 
+            if input_type == "video_asr":
+                checkpoint["status"] = "DONE"
+                checkpoint.pop("error", None)
+                checkpoint.pop("error_info", None)
+                store.save_checkpoint(task_id, checkpoint)
+                store.update_task_status(
+                    task_id,
+                    "DONE",
+                    output_path=str(raw_jsonl),
+                    output_paths={"segments": str(raw_jsonl)},
+                    clear_error=True,
+                )
+                store.append_event(
+                    task_id,
+                    "done",
+                    stage="DONE",
+                    message="ASR task completed",
+                    progress=1.0,
+                    details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
+                )
+                return
+
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
         effective_chunk_lines = _effective_translation_chunk_lines(config)
@@ -721,16 +868,27 @@ def _execute_task(
             details={"output_path": str(primary_output) if primary_output else "", "output_paths": output_paths_payload},
         )
     except TaskCancelled as exc:
-        store.update_task_status(task_id, "CANCELLED", error=str(exc))
+        err = classify_exception(exc, stage=str(checkpoint.get("status", task.status)))
+        store.update_task_status(task_id, "CANCELLED", error=str(exc), error_info=err)
         checkpoint["status"] = "CANCELLED"
         checkpoint["error"] = str(exc)
+        checkpoint["error_info"] = err
         store.save_checkpoint(task_id, checkpoint)
-        store.append_event(task_id, "cancelled", stage=checkpoint.get("status"), message=str(exc), level="warning")
-        raise
+        store.append_event(
+            task_id,
+            "cancelled",
+            stage=checkpoint.get("status"),
+            message=str(exc),
+            level="warning",
+            details={"error_info": err},
+        )
+        raise PipelineTaskError(task_id, err) from exc
     except Exception as exc:
-        store.update_task_status(task_id, "FAILED", error=str(exc))
+        err = classify_exception(exc, stage=str(checkpoint.get("status", task.status)))
+        store.update_task_status(task_id, "FAILED", error=str(exc), error_info=err)
         checkpoint["status"] = "FAILED"
         checkpoint["error"] = str(exc)
+        checkpoint["error_info"] = err
         store.save_checkpoint(task_id, checkpoint)
         store.append_event(
             task_id,
@@ -738,8 +896,9 @@ def _execute_task(
             stage=str(checkpoint.get("status", task.status)),
             message=str(exc),
             level="error",
+            details={"error_info": err},
         )
-        raise
+        raise PipelineTaskError(task_id, err) from exc
 
 
 def task_status_json(task: TaskRecord) -> dict[str, Any]:

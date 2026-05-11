@@ -211,4 +211,5 @@ class TaskRecord:
     output_path: str | None = None
     output_paths: dict[str, str] = field(default_factory=dict)
     error: str | None = None
+    error_info: dict[str, Any] | None = None
     settings: dict[str, Any] = field(default_factory=dict)

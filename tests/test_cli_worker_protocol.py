@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from transvortex.cli import main
+from transvortex.errors import PipelineTaskError, error_info
 from transvortex.models import TaskRecord
 from transvortex.task_store import TaskStore
 
@@ -199,3 +200,247 @@ def test_stream_events_and_json_are_mutually_exclusive(tmp_path: Path, monkeypat
         assert exc.code == 2
     else:
         raise AssertionError("expected parser error")
+
+
+def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("PROVIDER_KEY", "super-secret-value")
+    monkeypatch.setattr("sys.argv", ["transvortex", "--root", str(tmp_path), "agent-info", "--json"])
+
+    main()
+
+    raw = capsys.readouterr().out
+    payload = json.loads(raw)
+    assert payload["protocol_version"]
+    assert payload["machine_readable"] is True
+    assert payload["commands"]["run"]["supports_detach"] is True
+    assert "QUEUED" in payload["statuses"]
+    assert "super-secret-value" not in raw
+
+
+def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    spawned = {}
+
+    class FakePopen:
+        pid = 4321
+
+        def __init__(self, cmd, **kwargs):
+            spawned["cmd"] = cmd
+            spawned["kwargs"] = kwargs
+
+    monkeypatch.setattr("transvortex.cli.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--input",
+            str(tmp_path / "demo.mp4"),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--providers-file",
+            str(tmp_path / "providers.yaml"),
+            "--provider",
+            "p1",
+            "--model",
+            "m1",
+            "--detach",
+            "--json",
+        ],
+    )
+
+    main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "QUEUED"
+    assert payload["worker"]["pid"] == 4321
+    assert "_worker" in spawned["cmd"]
+    assert "--providers-file" in spawned["cmd"]
+    assert "--provider" in spawned["cmd"]
+    store = TaskStore(tmp_path / "artifacts")
+    task = store.load_task(payload["task_id"])
+    assert task.status == "QUEUED"
+
+
+def test_detach_and_stream_events_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--input",
+            "demo.mp4",
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--detach",
+            "--stream-events",
+        ],
+    )
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected parser error")
+
+
+def test_events_follow_exits_after_terminal_event(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    task = TaskRecord(
+        task_id="t_follow",
+        input_file="demo.mp4",
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        status="DONE",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:00+00:00",
+    )
+    store.save_task(task)
+    store.append_event("t_follow", "stage", stage="ASR", message="working")
+    store.append_event("t_follow", "done", stage="DONE", message="done")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "events", "--task-id", "t_follow", "--follow"],
+    )
+    main()
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["type"] for event in events] == ["stage", "done"]
+
+
+def test_run_json_failure_outputs_single_structured_error(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    err = error_info(
+        code="missing_env",
+        error_type="config_error",
+        stage="PRECHECK",
+        message="Missing environment variable: PROVIDER_KEY",
+    )
+
+    def fake_run_pipeline(**_kwargs):
+        raise PipelineTaskError("t_error", err)
+
+    monkeypatch.setattr("transvortex.cli.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--input",
+            "demo.mp4",
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--json",
+        ],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected failure exit")
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["task_id"] == "t_error"
+    assert payload["error_info"]["code"] == "missing_env"
+
+
+def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    calls = []
+
+    def fake_run_pipeline(**kwargs):
+        calls.append(kwargs)
+        config_root = kwargs["root_dir"]
+        store = TaskStore(config_root / "artifacts")
+        task = TaskRecord(
+            task_id=f"task_{len(calls)}",
+            input_file=str(kwargs["input_file"]),
+            source_lang=kwargs["source_lang"],
+            target_lang=kwargs["target_lang"],
+            bilingual=kwargs.get("bilingual", False),
+            status="DONE",
+            created_at="2026-02-13T00:00:00+00:00",
+            updated_at="2026-02-13T00:00:00+00:00",
+        )
+        store.save_task(task)
+        return task.task_id
+
+    monkeypatch.setattr("transvortex.cli.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "asr", "--input", "demo.mp4", "--src", "en", "--json"],
+    )
+    main()
+    asr_payload = json.loads(capsys.readouterr().out)
+    assert asr_payload["capability"] == "asr"
+    assert calls[-1]["input_type"] == "video_asr"
+
+    segments_file = tmp_path / "segments.jsonl"
+    segments_file.write_text('{"id": 1, "start": 0, "end": 1, "text_src": "hello"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "translate",
+            "--segments",
+            str(segments_file),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--json",
+        ],
+    )
+    main()
+    translate_payload = json.loads(capsys.readouterr().out)
+    assert translate_payload["capability"] == "translate"
+    assert calls[-1]["input_type"] == "segments_translate"
+
+    final_file = tmp_path / "final.json"
+    final_file.write_text(
+        '[{"id":1,"start":0,"end":1,"text_src":"hello","text_tgt":"你好"}]',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "export",
+            "--segments",
+            str(final_file),
+            "--format",
+            "both",
+            "--output",
+            str(tmp_path / "out"),
+            "--json",
+        ],
+    )
+    main()
+    export_payload = json.loads(capsys.readouterr().out)
+    assert export_payload["capability"] == "export"
+    assert set(export_payload["output_paths"]) == {"srt", "ass"}
+    assert (tmp_path / "out.srt").exists()
+    assert (tmp_path / "out.ass").exists()
