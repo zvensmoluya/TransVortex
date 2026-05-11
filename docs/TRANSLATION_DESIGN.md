@@ -59,13 +59,16 @@ Do not add explanations.
 ```text
 ASR segments
   -> source normalization
+  -> optional translation memory bootstrap
   -> size-bounded chunk planning
   -> sliding read-only context package
   -> first-pass translation
   -> deterministic validation
   -> repair bad rows
+  -> optional translation memory update
   -> optional model review
   -> subtitle quality pass
+  -> optional refine agent patches
   -> SRT / ASS / VTT / burn-in export
 ```
 
@@ -78,9 +81,13 @@ ASR:
 Translation:
   负责 text_src -> text_tgt
   负责上下文、prompt、provider、重试、repair
+  可选负责 translation memory 的只读注入和 patch 生成
 
 Subtitle quality:
   负责时间轴、CPS、断行、双语排版、重复/漏译告警
+
+Refine agent:
+  负责翻译完成后的自然语言精修，但只通过受控 patch 修改字幕
 
 Exporter:
   只负责格式输出，如 SRT / ASS / VTT / burn-in
@@ -353,7 +360,98 @@ translate/
   repairs.jsonl
 ```
 
-## 11. 模型审校
+## 11. 翻译记忆与动态变量
+
+翻译记忆用于解决长视频中人名、组织名、术语、称谓和风格规则的一致性问题。
+
+它不应依赖模型在多次请求之间“自己记住”。当前翻译过程会分 chunk 并发请求模型，不同请求之间没有共享内部状态。正确做法是把记忆作为外部 artifact 管理：
+
+```text
+segments.raw.jsonl
+  -> memory bootstrap
+  -> memory/translation_memory.json
+  -> chunk translation prompt injects confirmed memory as read-only context
+  -> memory patch extraction
+  -> code validates and merges patch
+  -> memory/conflicts.jsonl for unresolved decisions
+```
+
+建议记忆结构：
+
+```json
+{
+  "characters": [
+    {
+      "source": "John",
+      "target": "约翰",
+      "aliases": ["Johnny"],
+      "notes": "male lead, informal tone",
+      "confidence": 0.92
+    }
+  ],
+  "terms": [
+    {
+      "source": "The Order",
+      "target": "教团",
+      "domain": "organization",
+      "confidence": 0.82
+    }
+  ],
+  "style_rules": [
+    "Use concise natural Chinese subtitles.",
+    "Keep profanity strength close to source."
+  ],
+  "open_questions": [
+    {
+      "source": "Mercury",
+      "candidates": ["水星", "墨丘利"],
+      "reason": "unclear if planet, codename, or person"
+    }
+  ]
+}
+```
+
+记忆更新不应混在翻译正文中。推荐让模型单独输出 memory patch：
+
+```json
+{
+  "add_terms": [
+    {
+      "source": "The Order",
+      "target": "教团",
+      "domain": "organization",
+      "evidence_ids": [120, 121]
+    }
+  ],
+  "conflicts": [
+    {
+      "source": "Commander",
+      "targets": ["指挥官", "司令"],
+      "evidence_ids": [42, 318]
+    }
+  ]
+}
+```
+
+合并规则：
+
+- 代码负责合并、去重、版本化和冲突记录。
+- 已确认记忆在翻译 prompt 中是只读约束，不允许模型在正文中自行改写。
+- 低置信度或多候选项目进入 `open_questions` 或 `conflicts`，不自动覆盖已有译名。
+- 并发翻译时，memory patch 可以先追加到 JSONL，后续由单线程 merge step 统一处理，避免并发写冲突。
+- 用户或 refine agent 的明确指令优先级高于模型自动发现的低置信度记忆。
+
+建议 artifact：
+
+```text
+memory/
+  translation_memory.json
+  memory_patches.jsonl
+  conflicts.jsonl
+  decisions.jsonl
+```
+
+## 12. 模型审校
 
 模型审校是可选增强，不应默认重写整部字幕。
 
@@ -378,7 +476,98 @@ translate/
 
 审校 patch 仍需通过 deterministic validation。
 
-## 12. Artifact 与恢复
+## 13. 字幕精修 Agent
+
+字幕精修 Agent 是翻译完成后的受控 patch engine。它提供类似“自然语言改字幕”的体验，但不允许模型任意改文件。
+
+推荐流程：
+
+```text
+user instruction
+  -> select scope
+  -> read segments + context + quality + memory + optional visual context
+  -> model proposes patches
+  -> deterministic patch validation
+  -> preview / approval
+  -> apply patches to final/segments.final.json
+  -> rerun subtitle quality
+  -> reexport SRT/ASS
+```
+
+范围选择可以来自三类来源：
+
+- 用户手选：id 范围、时间范围、桌面端选中的字幕行。
+- 系统筛选：CPS 超标、行宽超标、术语冲突、特定关键词或角色出现范围。
+- agent 检索：模型先根据用户指令调用检索工具提出待处理范围，再生成 patch。
+
+V1 patch schema 应保持简单，只允许修改 `text_tgt`：
+
+```json
+{
+  "patches": [
+    {
+      "id": 128,
+      "text_tgt": "你到底想干什么？",
+      "reason": "更口语化，保留质问语气"
+    }
+  ]
+}
+```
+
+默认禁止：
+
+- 修改 `id`
+- 修改 `start/end`
+- 修改 `text_src`
+- 增删 segment
+- 输出整片重写结果替代 patch
+
+可用的受控工具可以设计为：
+
+```text
+search_segments(query)
+read_window(start_id, end_id)
+read_quality_issues()
+read_memory()
+read_visual_context()
+propose_patches(scope, instruction)
+validate_patches(patches)
+apply_patches(patches)
+reexport()
+```
+
+建议工作模式：
+
+```text
+safe mode:
+  只生成候选 patch，不应用。
+
+review mode:
+  生成 patch，用户确认后应用。
+
+auto mode:
+  自动应用低风险 patch，高风险 patch 留给用户确认。
+```
+
+建议 artifact：
+
+```text
+refine/
+  runs/<run_id>/instruction.txt
+  runs/<run_id>/scope.json
+  runs/<run_id>/candidate_patches.json
+  runs/<run_id>/applied_patches.json
+  runs/<run_id>/quality_before.json
+  runs/<run_id>/quality_after.json
+```
+
+精修 Agent 可以消费 translation memory 和 visual context：
+
+- memory 用于统一译名、术语、角色称谓。
+- visual context/OCR 用于判断画面文字、组织名、场景氛围、人物关系。
+- 视觉信息只作为参考，不绕过 patch validation。
+
+## 14. Artifact 与恢复
 
 翻译是长任务，必须增量落盘。
 
@@ -407,9 +596,15 @@ translate/
   validation.jsonl
   repairs.jsonl
   review_patches.jsonl
+memory/
+  translation_memory.json
+  memory_patches.jsonl
+  conflicts.jsonl
+refine/
+  runs/<run_id>/
 ```
 
-## 13. 配置建议
+## 15. 配置建议
 
 未来可在 `pipeline.yaml` 加：
 
@@ -437,8 +632,18 @@ translation:
   review:
     enabled: false
     mode: patch_only
+  memory:
+    enabled: false
+    bootstrap: true
+    update_after_chunk: false
+    inject_confirmed_terms: true
   refusal_detection:
     enabled: true
+refine:
+  enabled: false
+  default_mode: review
+  allow_timing_edits: false
+  allow_segment_insert_delete: false
 ```
 
 未来可在 `providers.yaml` 保持 provider 协议配置，不放用户文风。provider 文件负责“怎么调用模型”，pipeline 文件负责“字幕翻译策略”。
@@ -454,7 +659,7 @@ capabilities:
 
 默认策略应根据模型能力保守估算输入/输出预算，而不是只看上下文窗口。上下文大不等于长输出一定稳定。
 
-## 14. 里程碑
+## 16. 里程碑
 
 建议按以下顺序实现：
 
@@ -466,11 +671,14 @@ capabilities:
 6. 滑动只读上下文。
 7. 容量主导分组 + 停顿/标点软边界。
 8. 根据 provider/model 能力自动推荐 chunk/context 默认值。
-9. glossary / 术语表。
-10. 可选模型审校 patch。
-11. 全局一致性检查。
+9. translation memory bootstrap：术语、人名、角色表。
+10. translation memory patch：chunk 后动态更新与冲突记录。
+11. 可选模型审校 patch。
+12. 全局一致性检查。
+13. 字幕精修 Agent：自然语言生成受控 patch。
+14. Visual Context/OCR 与 memory/refine 联动。
 
-## 15. 关键原则
+## 17. 关键原则
 
 - 不让模型管理时间轴。
 - 不让用户 prompt 覆盖格式约束。
@@ -478,3 +686,5 @@ capabilities:
 - 不因单行失败重做整片。
 - 不把拒绝文本当作有效译文。
 - 不把 SRT/ASS/VTT 当作翻译逻辑的一部分；它们只是导出格式。
+- 不让模型直接任意改字幕文件；模型提出 patch，代码验证和应用。
+- 不依赖模型隐式记忆；长期一致性必须落到结构化 artifact。

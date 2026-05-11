@@ -173,6 +173,23 @@ translate/validation.jsonl
 translate/repairs.jsonl
 ```
 
+### Translation Memory（未来增强）
+
+输入 source segments 和已有译文，维护可复用的术语、人名、角色称谓和风格规则。
+
+```text
+memory/translation_memory.json
+memory/memory_patches.jsonl
+memory/conflicts.jsonl
+```
+
+设计边界：
+
+- Translation Memory 是外部结构化状态，不依赖模型在多次请求之间隐式记忆。
+- 模型可以发现候选、提出 patch、解释冲突；代码负责保存、合并、去重、版本化和冲突记录。
+- 翻译 chunk 使用已确认 memory 作为只读约束。
+- 低置信度或冲突项不自动覆盖，进入人工确认或 refine agent 流程。
+
 ### Full Pipeline
 
 输入视频，输出字幕。
@@ -187,6 +204,31 @@ transvortex run --input video.mp4 --src ja --tgt zh-CN --bilingual --json
 final/segments.final.json
 output/*.srt
 ```
+
+### Subtitle Refine Agent（未来增强）
+
+输入已有任务结果和用户自然语言指令，输出受控字幕 patch。
+
+```powershell
+transvortex refine --task-id tvx_xxx --instruction "把这段对白改得更口语化"
+```
+
+目标 artifact：
+
+```text
+refine/runs/<run_id>/candidate_patches.json
+refine/runs/<run_id>/applied_patches.json
+refine/runs/<run_id>/quality_before.json
+refine/runs/<run_id>/quality_after.json
+```
+
+设计边界：
+
+- Refine Agent 不是通用文件编辑器，而是字幕专用 patch engine。
+- 模型可以检索范围、读取上下文、提出修改；代码负责校验、应用、回滚和重导出。
+- V1 先只允许修改 `text_tgt`，默认不允许改时间轴、原文、id 或增删 segment。
+- 支持用户手选范围、系统质量问题范围、agent 检索范围。
+- 默认提供 preview/review 模式，后续再考虑自动应用低风险 patch。
 
 ### Visual Context（未来增强）
 
@@ -203,6 +245,7 @@ visual/visual_context.md
 - 视觉上下文是翻译前的辅助阶段，不属于 provider 适配层的基础职责。
 - 翻译主链路仍以文本 segments 为核心，不要求翻译模型支持多模态。
 - 视觉摘要用于补充场景、角色关系、作品风格和语气建议。
+- 视觉上下文也可以供 Translation Memory 和 Subtitle Refine Agent 使用，例如识别画面文字、组织徽记、场景氛围和角色关系。
 - 视觉分析失败不阻断 ASR、翻译和导出。
 - 后续若实现，可作为独立 provider/worker 能力接入，而不是把所有翻译 provider 都升级成多模态网关。
 
@@ -331,6 +374,16 @@ V1 当前落地范围：只做开发机稳定可用，不做安装包、不做�
 - 将视觉摘要注入翻译 prompt，帮助角色语气、场景风格和专名判断。
 - 保持成本可控：默认只分析少量关键帧，不在每个翻译 chunk 上传图片。
 - 不作为当前模型接入层继续扩展的理由；provider 层优先保持文本翻译稳定。
+
+### V1.x / V2 可选：翻译记忆与字幕精修 Agent
+
+- 增加 `memory/translation_memory.json`，保存人名、术语、角色称谓、风格规则和开放问题。
+- 翻译前可 bootstrap 记忆，翻译中将已确认记忆注入 chunk prompt。
+- 翻译后可由模型生成 memory patch，代码负责合并和冲突记录。
+- 增加 `refine` 能力，让用户用自然语言对已生成字幕做受控精修。
+- Refine Agent 可读取字幕、质量报告、translation memory 和 visual context，输出 patch 而不是直接重写文件。
+- 桌面端可提供“选择字幕范围 -> 输入修改要求 -> 预览 patch -> 应用并重导出”的工作流。
+- 该方向用于提升字幕产品辨识度，但不应阻塞 V1 的稳定端到端验收。
 
 ### V2 发布与分发
 
