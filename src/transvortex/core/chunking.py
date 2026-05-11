@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import Chunk, Segment
+from ..app.models import Chunk, Segment
 
 
 def _numbered_line(seg: Segment) -> str:

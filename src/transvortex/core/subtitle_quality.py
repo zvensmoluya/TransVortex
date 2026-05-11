@@ -4,7 +4,7 @@ import re
 import unicodedata
 from dataclasses import replace
 
-from .models import Segment
+from ..app.models import Segment
 
 
 _INLINE_SPACE_RE = re.compile(r"[ \t\f\v]+")

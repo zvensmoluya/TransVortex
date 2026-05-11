@@ -4,9 +4,9 @@ import os
 import urllib.parse
 from dataclasses import asdict, dataclass
 
-from .config import load_app_config
-from .models import NormalizedRequest, ProviderConfig
-from .providers.factory import _build_payload, _build_url_and_headers, _extract_text_by_paths, response_shape_summary
+from ..app.config import load_app_config
+from ..app.models import NormalizedRequest, ProviderConfig
+from .factory import _build_payload, _build_url_and_headers, _extract_text_by_paths, response_shape_summary
 
 
 VALID_API_TYPES = {"openai", "openai-compatible", "anthropic", "gemini-compatible", "custom"}

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from transvortex.aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
-from transvortex.chunking import number_and_chunk_segments
-from transvortex.models import Segment
+from transvortex.core.aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
+from transvortex.core.chunking import number_and_chunk_segments
+from transvortex.app.models import Segment
 
 
 def test_chunk_and_align_mapping() -> None:

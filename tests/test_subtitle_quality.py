@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.exporter import export_ass, export_srt
-from transvortex.models import AssStyleConfig, Segment
-from transvortex.subtitle_quality import (
+from transvortex.formats.exporter import export_ass, export_srt
+from transvortex.app.models import AssStyleConfig, Segment
+from transvortex.core.subtitle_quality import (
     clean_subtitle_text,
     format_subtitle_lines,
     prepare_segments_for_export,

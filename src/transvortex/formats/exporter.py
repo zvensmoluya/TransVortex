@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import AssStyleConfig, Segment
-from .subtitle_quality import format_subtitle_lines, prepare_segments_for_export
+from ..app.models import AssStyleConfig, Segment
+from ..core.subtitle_quality import format_subtitle_lines, prepare_segments_for_export
 
 
 def _srt_time(seconds: float) -> str:

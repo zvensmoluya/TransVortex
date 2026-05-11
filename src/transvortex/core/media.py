@@ -5,7 +5,7 @@ import math
 import subprocess
 from pathlib import Path
 
-from .utils import write_json
+from ..utils import write_json
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:

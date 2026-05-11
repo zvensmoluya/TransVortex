@@ -4,8 +4,8 @@ import json
 import shutil
 from pathlib import Path
 
-from transvortex.orchestrator import resume_pipeline, run_pipeline, task_status_json
-from transvortex.task_store import TaskStore
+from transvortex.core.orchestrator import resume_pipeline, run_pipeline, task_status_json
+from transvortex.artifacts.task_store import TaskStore
 
 
 def _write_config(root: Path) -> None:
@@ -66,7 +66,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
     input_file.write_bytes(b"video")
     monkeypatch.setenv("PROVIDER_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.orchestrator.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
     def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -116,10 +116,10 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         return rows
 
     FakeAsrEngine.calls = []
-    monkeypatch.setattr("transvortex.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", FakeAsrEngine)
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
     task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN")
     store = TaskStore(root / "artifacts")
@@ -165,7 +165,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     input_file.write_bytes(b"video")
     monkeypatch.setenv("PROVIDER_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.orchestrator.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
     def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -196,10 +196,10 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
             if chunk.chunk_id not in already_done
         ]
 
-    monkeypatch.setattr("transvortex.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", FakeAsrEngine)
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
     task_id = run_pipeline(
         root_dir=root,
@@ -240,7 +240,7 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
     input_file.write_bytes(b"video")
     monkeypatch.setenv("PROVIDER_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.orchestrator.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
     def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -272,10 +272,10 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
             for chunk in todo
         ]
 
-    monkeypatch.setattr("transvortex.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", FakeAsrEngine)
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
     task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN")
     store = TaskStore(root / "artifacts")
@@ -307,7 +307,7 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
     input_file.write_bytes(b"video")
     monkeypatch.setenv("PROVIDER_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.orchestrator.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
     def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -337,10 +337,10 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
         ]
 
     FakeAsrEngine.calls = []
-    monkeypatch.setattr("transvortex.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", FakeAsrEngine)
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
     task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN")
     store = TaskStore(root / "artifacts")
@@ -361,7 +361,7 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
     input_file.write_bytes(b"video")
     monkeypatch.setenv("PROVIDER_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.orchestrator.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
     def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -390,10 +390,10 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
         ]
 
     streamed: list[dict] = []
-    monkeypatch.setattr("transvortex.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", FakeAsrEngine)
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
     task_id = run_pipeline(
         root_dir=root,

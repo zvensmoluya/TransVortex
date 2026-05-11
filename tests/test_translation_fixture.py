@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.aligner import apply_translations
-from transvortex.chunking import number_and_chunk_segments
-from transvortex.exporter import export_srt
-from transvortex.models import Segment
+from transvortex.core.aligner import apply_translations
+from transvortex.core.chunking import number_and_chunk_segments
+from transvortex.formats.exporter import export_srt
+from transvortex.app.models import Segment
 from transvortex.utils import read_jsonl
 
 

@@ -9,8 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .models import ProviderConfig
-from .utils import write_json
+from ..app.models import ProviderConfig
+from ..utils import write_json
 
 
 class AsrEngine:

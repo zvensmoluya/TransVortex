@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from transvortex.config import load_app_config
+from transvortex.app.config import load_app_config
 
 
 def test_config_priority_cli_over_env_over_yaml(tmp_path: Path, monkeypatch) -> None:

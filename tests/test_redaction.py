@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from transvortex.redaction import REDACTED, redact
-from transvortex.task_store import TaskStore
+from transvortex.protocol.redaction import REDACTED, redact
+from transvortex.artifacts.task_store import TaskStore
 from transvortex.utils import write_json
 
 
@@ -38,7 +38,7 @@ def test_write_json_and_events_redact_persisted_secrets(tmp_path: Path, monkeypa
     assert "direct-secret" not in raw_json
 
     store = TaskStore(tmp_path / "artifacts")
-    from transvortex.models import TaskRecord
+    from transvortex.app.models import TaskRecord
 
     store.save_task(
         TaskRecord(

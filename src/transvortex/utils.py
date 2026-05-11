@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .redaction import redact
+from .protocol.redaction import redact
 
 
 def utc_now_iso() -> str:

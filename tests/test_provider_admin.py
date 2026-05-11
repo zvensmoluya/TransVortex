@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from transvortex.provider_admin import (
+from transvortex.providers.admin import (
     draft_to_provider_config,
     fetch_provider_models,
     provider_templates_payload,
@@ -76,7 +76,7 @@ def test_fetch_provider_models_parses_openai_shape(monkeypatch) -> None:
         assert method == "GET"
         return {"data": [{"id": "model-a"}, {"id": "model-b"}]}
 
-    monkeypatch.setattr("transvortex.provider_admin._request_json", fake_request_json)
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
     report = fetch_provider_models(
         provider_draft={
             "name": "openai_like",
@@ -110,7 +110,7 @@ def test_provider_connection_maps_response(monkeypatch) -> None:
         assert payload["messages"][-1]["content"]
         return {"choices": [{"message": {"content": "[1] pong"}}]}
 
-    monkeypatch.setattr("transvortex.provider_admin._request_json", fake_request_json)
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -152,7 +152,7 @@ def test_provider_connection_reports_response_shape_when_mapping_fails(monkeypat
     def fake_request_json(url, payload, headers, timeout, method="POST"):
         return {"unexpected": {"nested": [{"text": "[1] pong"}]}}
 
-    monkeypatch.setattr("transvortex.provider_admin._request_json", fake_request_json)
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",

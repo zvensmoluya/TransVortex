@@ -9,8 +9,8 @@ from urllib.error import HTTPError, URLError
 
 import yaml
 
-from .config import load_app_config, resolve_providers_file
-from .models import (
+from ..app.config import load_app_config, resolve_providers_file
+from ..app.models import (
     AuthConfig,
     CapabilityConfig,
     EndpointConfig,
@@ -20,7 +20,7 @@ from .models import (
     ProviderConfig,
     ProviderLimits,
 )
-from .providers.factory import (
+from .factory import (
     _build_payload,
     _build_url_and_headers,
     _build_url_and_headers_for_path,
@@ -28,7 +28,7 @@ from .providers.factory import (
     _request_json,
     response_shape_summary,
 )
-from .utils import to_plain
+from ..utils import to_plain
 
 
 PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {

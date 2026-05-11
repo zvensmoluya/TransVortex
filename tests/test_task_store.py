@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from transvortex.models import TaskRecord
-from transvortex.task_store import TaskStore
+from transvortex.app.models import TaskRecord
+from transvortex.artifacts.task_store import TaskStore
 from transvortex.utils import write_json
 
 

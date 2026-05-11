@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from transvortex.models import (
+from transvortex.app.models import (
     AuthConfig,
     CapabilityConfig,
     EndpointConfig,

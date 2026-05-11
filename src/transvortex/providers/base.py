@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import NormalizedRequest, NormalizedResponse
+from ..app.models import NormalizedRequest, NormalizedResponse
 
 
 class ProviderClient(ABC):

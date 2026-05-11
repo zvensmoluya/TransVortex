@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from .models import TaskRecord
-from .utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
+from ..app.models import TaskRecord
+from ..utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
 
 
 class TaskStore:

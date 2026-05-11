@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from transvortex.doctor import doctor_report, format_doctor_report
+from transvortex.app.doctor import doctor_report, format_doctor_report
 
 
 def _write_config(root: Path) -> None:
@@ -38,7 +38,7 @@ def test_doctor_report_passes_with_runtime_config_and_key(tmp_path: Path, monkey
     _write_config(tmp_path)
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.doctor.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
 
     report = doctor_report(root_dir=tmp_path)
 
@@ -58,7 +58,7 @@ def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch
     (tmp_path / ".env").write_text("OPENAI_API_KEY=old\nVECTORENGINE_API_KEY=old\n", encoding="utf-8")
     monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.doctor.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
 
     report = doctor_report(root_dir=tmp_path)
     key_check = next(item for item in report["checks"] if item["name"] == "provider_env_key")
@@ -74,7 +74,7 @@ def test_doctor_reports_missing_binary_and_asr_dependency(tmp_path: Path, monkey
     _write_config(tmp_path)
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: None)
-    monkeypatch.setattr("transvortex.doctor.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: None)
 
     report = doctor_report(root_dir=tmp_path)
     statuses = _status_by_name(report)

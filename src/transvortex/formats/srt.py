@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .models import Segment
+from ..app.models import Segment
 
 
 SRT_TIME_RE = re.compile(

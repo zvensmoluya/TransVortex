@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 from typing import Any
 
-from ..models import NormalizedRequest, NormalizedResponse, ProviderConfig
+from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
 from .base import ProviderClient
 
 

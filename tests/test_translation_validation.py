@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from transvortex.models import Chunk
-from transvortex.translation_validation import validate_translation_response
+from transvortex.app.models import Chunk
+from transvortex.core.translation_validation import validate_translation_response
 
 
 def _chunk() -> Chunk:

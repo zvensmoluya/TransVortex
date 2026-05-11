@@ -9,13 +9,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .agent_protocol import agent_info_payload
-from .config import apply_route_overrides, load_app_config, resolve_providers_file
-from .doctor import doctor_report, format_doctor_report
-from .errors import PipelineTaskError, classify_exception
-from .exporter import export_ass, export_srt
-from .models import Segment
-from .orchestrator import (
+from ..artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
+from ..artifacts.task_store import TaskStore
+from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
+from ..app.doctor import doctor_report, format_doctor_report
+from ..formats.exporter import export_ass, export_srt
+from ..app.models import Segment
+from ..core.orchestrator import (
     create_pipeline_task,
     execute_pipeline_task,
     queue_resume_task,
@@ -23,8 +23,8 @@ from .orchestrator import (
     run_pipeline,
     task_status_json,
 )
-from .probe import probe_exit_code, probe_provider
-from .provider_admin import (
+from ..providers.probe import probe_exit_code, probe_provider
+from ..providers.admin import (
     delete_provider_config,
     fetch_provider_models,
     provider_templates_payload,
@@ -32,10 +32,10 @@ from .provider_admin import (
     save_provider_config,
     save_provider_routing,
 )
-from .redaction import redact
-from .result_workspace import open_task_result, reexport_task, save_task_segments
-from .task_store import TaskStore
-from .utils import read_json, to_plain, utc_now_iso
+from ..protocol.agent_protocol import agent_info_payload
+from ..protocol.errors import PipelineTaskError, classify_exception
+from ..protocol.redaction import redact
+from ..utils import read_json, to_plain, utc_now_iso
 
 
 def _common_overrides(args: argparse.Namespace) -> dict:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.probe import probe_exit_code, probe_provider
+from transvortex.providers.probe import probe_exit_code, probe_provider
 
 
 def _write_provider_file(

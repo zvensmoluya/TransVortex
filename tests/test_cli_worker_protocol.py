@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 from transvortex.cli import main
-from transvortex.errors import PipelineTaskError, error_info
-from transvortex.models import TaskRecord
-from transvortex.task_store import TaskStore
+from transvortex.protocol.errors import PipelineTaskError, error_info
+from transvortex.app.models import TaskRecord
+from transvortex.artifacts.task_store import TaskStore
 
 
 def _write_config(root: Path) -> None:
@@ -133,7 +133,7 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
         kwargs["event_sink"]({"type": "done", "task_id": "t2", "message": "done"})
         return "t2"
 
-    monkeypatch.setattr("transvortex.cli.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("transvortex.cli.entry.run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -229,7 +229,7 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
             spawned["cmd"] = cmd
             spawned["kwargs"] = kwargs
 
-    monkeypatch.setattr("transvortex.cli.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("transvortex.cli.entry.subprocess.Popen", FakePopen)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -333,7 +333,7 @@ def test_run_json_failure_outputs_single_structured_error(tmp_path: Path, monkey
     def fake_run_pipeline(**_kwargs):
         raise PipelineTaskError("t_error", err)
 
-    monkeypatch.setattr("transvortex.cli.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("transvortex.cli.entry.run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -384,7 +384,7 @@ def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, caps
         store.save_task(task)
         return task.task_id
 
-    monkeypatch.setattr("transvortex.cli.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr("transvortex.cli.entry.run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(
         "sys.argv",
         ["transvortex", "--root", str(tmp_path), "asr", "--input", "demo.mp4", "--src", "en", "--json"],

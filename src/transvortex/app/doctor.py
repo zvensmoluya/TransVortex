@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_app_config, resolve_providers_file
-from .probe import probe_provider
+from ..providers.probe import probe_provider
 
 
 def _check(

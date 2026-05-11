@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from transvortex.asr import _build_url_and_auth_headers, _normalize_whisper_language
-from transvortex.models import AuthConfig, CapabilityConfig, EndpointConfig, MappingConfig, ProviderConfig, ProviderLimits
+from transvortex.core.asr import _build_url_and_auth_headers, _normalize_whisper_language
+from transvortex.app.models import AuthConfig, CapabilityConfig, EndpointConfig, MappingConfig, ProviderConfig, ProviderLimits
 
 
 def test_normalize_whisper_language() -> None:

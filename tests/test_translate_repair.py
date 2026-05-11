@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from transvortex.models import (
+from transvortex.app.models import (
     AppConfig,
     Chunk,
     PipelineConfig,
@@ -8,7 +8,7 @@ from transvortex.models import (
     RouteTarget,
     RoutingConfig,
 )
-from transvortex.translate import translate_chunk
+from transvortex.core.translate import translate_chunk
 
 
 class FakeProviderClient:
@@ -18,7 +18,7 @@ class FakeProviderClient:
         pass
 
     def translate_request(self, req):
-        from transvortex.models import NormalizedResponse
+        from transvortex.app.models import NormalizedResponse
 
         FakeProviderClient.calls += 1
         if req.prompt_mode == "repair":
@@ -42,7 +42,7 @@ def test_translate_chunk_repairs_empty_row(monkeypatch, tmp_path) -> None:
     )
     chunk = Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] hello"])
     FakeProviderClient.calls = 0
-    monkeypatch.setattr("transvortex.translate.build_provider_client", lambda provider: FakeProviderClient(provider))
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: FakeProviderClient(provider))
     result = translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
     assert result["rows"] == [{"id": 1, "text_tgt": "你好"}]
     assert result["repairs"][0]["id"] == 1

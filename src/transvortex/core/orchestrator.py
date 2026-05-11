@@ -7,19 +7,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
+from ..artifacts.task_store import TaskStore
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
-from .config import apply_route_overrides, load_app_config
-from .errors import PipelineTaskError, classify_exception
-from .exporter import export_ass, export_srt
+from ..app.config import apply_route_overrides, load_app_config
+from ..formats.exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
-from .models import AppConfig, Segment, TaskRecord
-from .probe import probe_provider
-from .srt import parse_srt_file
-from .task_store import TaskStore
+from ..app.models import AppConfig, Segment, TaskRecord
+from ..providers.probe import probe_provider
+from ..protocol.errors import PipelineTaskError, classify_exception
+from ..formats.srt import parse_srt_file
 from .translate import iter_translate_all_chunks, translate_all_chunks
 from .translation_validation import validate_translation_response, validation_to_json
-from .utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
+from ..utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
 
 
 class TaskCancelled(RuntimeError):
@@ -389,7 +389,7 @@ def _iter_translation_results(
     target_lang: str,
     already_done: set[str],
 ):
-    if translate_all_chunks.__module__ != "transvortex.translate":
+    if translate_all_chunks.__module__ != "transvortex.core.translate":
         yield from translate_all_chunks(
             config,
             chunks,

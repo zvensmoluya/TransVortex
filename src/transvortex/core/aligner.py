@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .models import Segment
+from ..app.models import Segment
 
 
 def apply_translations(segments: list[Segment], translated_chunk_rows: list[dict]) -> list[Segment]:

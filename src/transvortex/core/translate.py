@@ -4,9 +4,9 @@ import concurrent.futures
 import time
 from dataclasses import replace
 
-from .models import AppConfig, Chunk, NormalizedRequest, Segment
-from .providers import build_provider_client, classify_error
-from .providers.factory import TRANSLATION_SYSTEM_PROMPT
+from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment
+from ..providers import build_provider_client, classify_error
+from ..providers.factory import TRANSLATION_SYSTEM_PROMPT
 from .translation_validation import (
     ParsedTranslationRow,
     TranslationValidationIssue,

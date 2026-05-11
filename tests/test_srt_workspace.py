@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.orchestrator import run_pipeline
-from transvortex.provider_admin import save_provider_routing
-from transvortex.result_workspace import open_task_result, reexport_task, save_task_segments
-from transvortex.srt import parse_srt_text
-from transvortex.task_store import TaskStore
+from transvortex.core.orchestrator import run_pipeline
+from transvortex.providers.admin import save_provider_routing
+from transvortex.artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
+from transvortex.formats.srt import parse_srt_text
+from transvortex.artifacts.task_store import TaskStore
 
 
 def _write_config(root: Path) -> None:
@@ -98,8 +98,8 @@ World
     def fail_asr(*_args, **_kwargs):
         raise AssertionError("ASR should not run for srt_translate")
 
-    monkeypatch.setattr("transvortex.orchestrator.translate_all_chunks", fake_translate_all_chunks)
-    monkeypatch.setattr("transvortex.orchestrator.AsrEngine", fail_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", fail_asr)
 
     task_id = run_pipeline(
         root_dir=root,

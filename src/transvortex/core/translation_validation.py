@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .models import Chunk
+from ..app.models import Chunk
 
 
 NUMBERED_LINE_RE = re.compile(r"^\[(\d+)\]\s*(.*)$")
