@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "mem_nold_cellar",
+      "source": "cellar",
+      "target": "地下室",
+      "category": "term",
+      "status": "locked",
+      "origin": "seed",
+      "priority": 100,
+      "aliases": [],
+      "scope": {
+        "type": "project"
+      },
+      "notes": "Use consistently for the basement/cellar safe-room argument in Night of the Living Dead.",
+      "confidence": 1.0,
+      "evidence_ids": [],
+      "created_by": "codex"
+    },
+    {
+      "id": "mem_nold_mr_cooper",
+      "source": "Mr. Cooper",
+      "target": "库珀先生",
+      "category": "name",
+      "status": "locked",
+      "origin": "seed",
+      "priority": 90,
+      "aliases": [
+        "Cooper"
+      ],
+      "scope": {
+        "type": "project"
+      },
+      "notes": "Character name.",
+      "confidence": 1.0,
+      "evidence_ids": [],
+      "created_by": "codex"
+    },
+    {
+      "id": "mem_nold_tom",
+      "source": "Tom",
+      "target": "汤姆",
+      "category": "name",
+      "status": "locked",
+      "origin": "seed",
+      "priority": 90,
+      "aliases": [],
+      "scope": {
+        "type": "project"
+      },
+      "notes": "Character name.",
+      "confidence": 1.0,
+      "evidence_ids": [],
+      "created_by": "codex"
+    },
+    {
+      "id": "mem_nold_butler_county",
+      "source": "Butler county",
+      "target": "巴特勒县",
+      "category": "place",
+      "status": "locked",
+      "origin": "seed",
+      "priority": 80,
+      "aliases": [
+        "Butler County"
+      ],
+      "scope": {
+        "type": "project"
+      },
+      "notes": "Place name used in the radio bulletin.",
+      "confidence": 1.0,
+      "evidence_ids": [],
+      "created_by": "codex"
+    }
+  ]
+}

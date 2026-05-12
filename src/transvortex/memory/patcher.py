@@ -12,8 +12,31 @@ from .merger import patch_from_payload
 
 
 MEMORY_PATCH_SYSTEM_PROMPT = (
-    "You extract translation memory candidates from subtitle translations. "
-    "Return only a JSON object. Do not translate new content."
+    "You are a translation memory curator for subtitle localization.\n"
+    "Your only job is to identify entries worth remembering for consistency across future chunks.\n"
+    "You do not translate. You do not explain. You return only a JSON object.\n\n"
+    "WHAT TO CAPTURE\n"
+    "- Character names and their established translations.\n"
+    "- Place names, organization names, titles, and named objects.\n"
+    "- Invented, technical, or setting-specific terms with no obvious natural equivalent.\n"
+    "- Recurring phrasing where a specific translation choice must stay stable.\n"
+    "- Character voice rules, if a character has a distinct register, dialect, catchphrase, or speech pattern.\n\n"
+    "WHAT TO IGNORE\n"
+    "- Generic words, pronouns, vague references, and deictic phrases such as here, there, upstairs, or downstairs.\n"
+    "- Common fillers or ordinary dialogue words such as man, well, ok, yes, no, things, those things, or them.\n"
+    "- One-off idioms unless the same expression recurs and its translation choice must remain stable.\n"
+    "- Terms already obvious from context with no future consistency risk.\n\n"
+    "STATUS RULES\n"
+    "- proposed: default for all new candidates.\n"
+    "- confirmed: only when the input includes an explicit user glossary marked as confirmed.\n"
+    "- locked: only when explicitly instructed by the user.\n"
+    "- Never self-promote a proposed entry to confirmed or locked.\n\n"
+    "CATEGORY RULES\n"
+    "- Use category name for people or character names.\n"
+    "- Use category place for locations.\n"
+    "- Use category organization for groups, institutions, or companies.\n"
+    "- Use category title for works, ranks, formal titles, or named broadcasts.\n"
+    "- Use category term for all other useful terminology."
 )
 
 
@@ -44,18 +67,16 @@ def _window_prompt(chunks: list[Chunk], translated_rows: list[dict], source_lang
         for item in row.get("rows", []):
             translated_lines.append(f"[{item.get('id')}] {item.get('text_tgt', '')}")
     return (
-        "Identify names, terms, organizations, places, titles, phrases, or recurring style rules that should remain "
-        "consistent across future subtitle chunks.\n"
-        "Return JSON exactly in this shape:\n"
-        '{"chunk_ids":["..."],"actions":[{"action":"upsert","source":"...","target":"...",'
-        '"category":"term","status":"proposed","confidence":0.0,"evidence_ids":[1],"aliases":[],"notes":""}]}\n'
-        "Use status proposed unless the input explicitly states a locked or confirmed user glossary.\n"
-        "Skip generic words and uncertain one-off words.\n\n"
-        f"Source language: {source_lang}\nTarget language: {target_lang}\n\n"
+        f"Source language: {source_lang}\n"
+        f"Target language: {target_lang}\n\n"
         "SOURCE SUBTITLES\n"
         + "\n".join(source_lines)
         + "\n\nTRANSLATED SUBTITLES\n"
         + "\n".join(translated_lines)
+        + "\n\nReturn JSON exactly in this shape:\n"
+        '{"chunk_ids":["..."],"actions":[{"action":"upsert","source":"...","target":"...",'
+        '"category":"term","status":"proposed","confidence":0.0,"evidence_ids":[1],"aliases":[],"notes":""}]}\n'
+        "When no useful candidate exists, return the same shape with an empty actions array."
     )
 
 
@@ -104,4 +125,3 @@ def generate_memory_patch(
                 }
             )
     return None, {"errors": errors}
-

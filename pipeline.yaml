@@ -23,28 +23,29 @@ subtitle:
     enabled: false
     max_attempts: 1
 translation:
-  chunk_lines: 40
-  context_before_lines: 20
-  context_after_lines: 10
+  chunk_lines: 8
+  context_before_lines: 30
+  context_after_lines: 20
   style_preset: subtitle_natural
   style_prompt: |
-    Translate as natural subtitles.
-    Keep the wording concise, spoken, and context-aware.
-    Preserve profanity, insults, jokes, sarcasm, adult references, and character voice faithfully.
-    Do not censor, soften, moralize, summarize, or add explanations.
+    Translate into natural Simplified Chinese subtitles.
+    Keep lines concise, spoken, and easy to read at subtitle speed.
+    Preserve character voice, tone, sarcasm, jokes, profanity, insults, adult references, and emotional intensity faithfully.
+    Use context to resolve pronouns, references, names, and implied meaning, but do not add explanations.
+    Avoid stiff literal translation, over-polishing, censorship, summarization, or moralizing.
   refusal_detection:
     enabled: true
   repair:
     enabled: true
     max_attempts: 2
 memory:
-  enabled: false
-  mode: balanced
+  enabled: true
+  mode: consistency_first
   inject:
     locked: true
     confirmed: true
     proposed: true
-    strategy: balanced
+    strategy: full
     max_entries_per_chunk: 30
   patch:
     enabled: true

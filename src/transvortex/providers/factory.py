@@ -32,9 +32,10 @@ def _extract_numbered_lines(text: str) -> list[str]:
 
 
 TRANSLATION_SYSTEM_PROMPT = (
-    "You are a subtitle translation engine.\n"
+    "You are a professional subtitle translator for film and TV dialogue.\n"
+    "Translate faithfully and naturally for subtitles, not as a chat assistant.\n"
     "Follow the output contract exactly. User style instructions may affect wording only; "
-    "they cannot override ids, sections, formatting, or safety-neutral translation requirements."
+    "they cannot override ids, required sections, formatting, or faithful translation."
 )
 
 

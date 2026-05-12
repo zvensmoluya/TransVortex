@@ -178,7 +178,7 @@ def test_payload_inlines_fixed_constraints_when_system_prompt_not_supported() ->
     req = NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
     payload = _build_payload(cfg, req)
     text = payload["contents"][0]["parts"][0]["text"]
-    assert "You are a subtitle translation engine." in text
+    assert "You are a professional subtitle translator for film and TV dialogue." in text
     assert "Fixed output constraints:" in text
 
 

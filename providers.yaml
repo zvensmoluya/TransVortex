@@ -1,24 +1,27 @@
 providers:
-  - name: vector_anthropic
-    api_type: anthropic
-    compat_mode: anthropic_messages
-    base_url: https://api.vectorengine.ai/v1
+  - name: zven_openai_responses
+    api_type: openai-compatible
+    compat_mode: openai_responses
+    base_url: https://ai.zven.cc/v1
     env_key: TVX_MODEL_API_KEY
     models:
-      - claude-haiku-4-5-20251001
+      - gpt-5.5
     auth:
-      type: header
-      header_name: x-api-key
-      prefix: ""
+      type: bearer
+      header_name: Authorization
+      prefix: "Bearer "
     endpoint:
-      path_template: /v1/messages
+      path_template: /responses
       method: POST
     request_mapping:
-      style: anthropic_messages
-      max_tokens: 4096
+      style: openai_responses
+      body_overrides:
+        reasoning:
+          effort: high
     response_mapping:
       text_paths:
-        - content[].text
+        - output_text
+        - output[].content[].text
     capabilities:
       supports_system_prompt: true
       supports_temperature: true
@@ -31,6 +34,6 @@ providers:
 
 routing:
   primary:
-    provider: vector_anthropic
-    model: claude-haiku-4-5-20251001
+    provider: zven_openai_responses
+    model: gpt-5.5
   fallback: []

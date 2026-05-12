@@ -77,10 +77,12 @@ class RoutingConfig:
 
 
 DEFAULT_TRANSLATION_STYLE_PROMPT = (
-    "Translate as natural subtitles.\n"
-    "Keep the wording concise, spoken, and context-aware.\n"
-    "Preserve profanity, insults, jokes, sarcasm, adult references, and character voice faithfully.\n"
-    "Do not censor, soften, moralize, summarize, or add explanations."
+    "Translate into natural Simplified Chinese subtitles.\n"
+    "Keep lines concise, spoken, and easy to read at subtitle speed.\n"
+    "Preserve character voice, tone, sarcasm, jokes, profanity, insults, adult references, "
+    "and emotional intensity faithfully.\n"
+    "Use context to resolve pronouns, references, names, and implied meaning, but do not add explanations.\n"
+    "Avoid stiff literal translation, over-polishing, censorship, summarization, or moralizing."
 )
 
 
