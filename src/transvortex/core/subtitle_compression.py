@@ -6,7 +6,6 @@ from typing import Any
 
 from ..app.models import AppConfig, NormalizedRequest, Segment, SubtitleQualityConfig
 from ..providers import build_provider_client, classify_error
-from ..providers.factory import TRANSLATION_SYSTEM_PROMPT
 from .subtitle_optimizer import subtitle_cps
 from .translation_validation import strip_numbered_text
 
@@ -60,7 +59,7 @@ def _compress_segment(
                 prompt_mode="compress",
                 repair_reason=f"subtitle cps {subtitle_cps(seg):.1f} exceeds hard maximum {quality.hard_max_cps}",
                 bad_translation=seg.text_tgt or "",
-                system_prompt=TRANSLATION_SYSTEM_PROMPT,
+                system_prompt=config.pipeline.translation.system_prompt,
             )
             response = client.translate_request(req)
             if len(response.numbered_lines) != 1:

@@ -6,6 +6,10 @@ default_concurrency: 8
 timeout_seconds: 30
 retry: 3
 max_cps: 20
+prompts:
+  translation_system: prompts/translation/system.v1.md
+  translation_style: prompts/translation/style.zh-CN.v1.md
+  memory_patch_system: prompts/memory/patch_system.v1.md
 subtitle:
   quality:
     enabled: true
@@ -27,12 +31,6 @@ translation:
   context_before_lines: 30
   context_after_lines: 20
   style_preset: subtitle_natural
-  style_prompt: |
-    Translate into natural Simplified Chinese subtitles.
-    Keep lines concise, spoken, and easy to read at subtitle speed.
-    Preserve character voice, tone, sarcasm, jokes, profanity, insults, adult references, and emotional intensity faithfully.
-    Use context to resolve pronouns, references, names, and implied meaning, but do not add explanations.
-    Avoid stiff literal translation, over-polishing, censorship, summarization, or moralizing.
   refusal_detection:
     enabled: true
   repair:

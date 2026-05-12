@@ -5,39 +5,13 @@ import re
 from typing import Any
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest
+from ..prompts import FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
 from ..providers import build_provider_client, classify_error
-from ..providers.factory import TRANSLATION_SYSTEM_PROMPT
 from .schema import MemoryPatch
 from .merger import patch_from_payload
 
 
-MEMORY_PATCH_SYSTEM_PROMPT = (
-    "You are a translation memory curator for subtitle localization.\n"
-    "Your only job is to identify entries worth remembering for consistency across future chunks.\n"
-    "You do not translate. You do not explain. You return only a JSON object.\n\n"
-    "WHAT TO CAPTURE\n"
-    "- Character names and their established translations.\n"
-    "- Place names, organization names, titles, and named objects.\n"
-    "- Invented, technical, or setting-specific terms with no obvious natural equivalent.\n"
-    "- Recurring phrasing where a specific translation choice must stay stable.\n"
-    "- Character voice rules, if a character has a distinct register, dialect, catchphrase, or speech pattern.\n\n"
-    "WHAT TO IGNORE\n"
-    "- Generic words, pronouns, vague references, and deictic phrases such as here, there, upstairs, or downstairs.\n"
-    "- Common fillers or ordinary dialogue words such as man, well, ok, yes, no, things, those things, or them.\n"
-    "- One-off idioms unless the same expression recurs and its translation choice must remain stable.\n"
-    "- Terms already obvious from context with no future consistency risk.\n\n"
-    "STATUS RULES\n"
-    "- proposed: default for all new candidates.\n"
-    "- confirmed: only when the input includes an explicit user glossary marked as confirmed.\n"
-    "- locked: only when explicitly instructed by the user.\n"
-    "- Never self-promote a proposed entry to confirmed or locked.\n\n"
-    "CATEGORY RULES\n"
-    "- Use category name for people or character names.\n"
-    "- Use category place for locations.\n"
-    "- Use category organization for groups, institutions, or companies.\n"
-    "- Use category title for works, ranks, formal titles, or named broadcasts.\n"
-    "- Use category term for all other useful terminology."
-)
+MEMORY_PATCH_SYSTEM_PROMPT = FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
 
 
 def _json_from_text(text: str) -> dict[str, Any]:
@@ -106,7 +80,7 @@ def generate_memory_patch(
                 context_after=[],
                 style_prompt=_window_prompt(chunks, translated_rows, source_lang, target_lang),
                 prompt_mode="memory_patch",
-                system_prompt=MEMORY_PATCH_SYSTEM_PROMPT,
+                system_prompt=config.pipeline.memory.patch.system_prompt or MEMORY_PATCH_SYSTEM_PROMPT,
             )
             response = client.translate_request(req)
             payload = _json_from_text(response.raw_text)

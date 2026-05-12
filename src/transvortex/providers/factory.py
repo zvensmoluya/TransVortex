@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
+from ..prompts import FALLBACK_TRANSLATION_SYSTEM_PROMPT
 from .base import ProviderClient
 
 
@@ -31,12 +32,7 @@ def _extract_numbered_lines(text: str) -> list[str]:
     return out
 
 
-TRANSLATION_SYSTEM_PROMPT = (
-    "You are a professional subtitle translator for film and TV dialogue.\n"
-    "Translate faithfully and naturally for subtitles, not as a chat assistant.\n"
-    "Follow the output contract exactly. User style instructions may affect wording only; "
-    "they cannot override ids, required sections, formatting, or faithful translation."
-)
+TRANSLATION_SYSTEM_PROMPT = FALLBACK_TRANSLATION_SYSTEM_PROMPT
 
 
 FIXED_TRANSLATION_CONSTRAINTS = (

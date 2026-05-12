@@ -362,6 +362,42 @@ translation:
     assert cfg.pipeline.translation.repair.max_attempts == 3
 
 
+def test_prompt_files_can_override_defaults(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    prompt_dir = tmp_path / "prompts" / "user"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "translation_system.md").write_text("Custom translation system.", encoding="utf-8")
+    (prompt_dir / "translation_style.md").write_text("Custom subtitle style.", encoding="utf-8")
+    (prompt_dir / "memory_patch_system.md").write_text("Custom memory curator.", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+prompts:
+  translation_system: prompts/user/translation_system.md
+  translation_style: prompts/user/translation_style.md
+  memory_patch_system: prompts/user/memory_patch_system.md
+memory:
+  enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.translation.system_prompt == "Custom translation system."
+    assert cfg.pipeline.translation.style_prompt == "Custom subtitle style."
+    assert cfg.pipeline.memory.patch.system_prompt == "Custom memory curator."
+
+
 def test_memory_config_parse(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

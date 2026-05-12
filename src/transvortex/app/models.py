@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..prompts import FALLBACK_TRANSLATION_STYLE_PROMPT
+
 
 @dataclass
 class AuthConfig:
@@ -76,14 +78,7 @@ class RoutingConfig:
     fallback: list[RouteTarget] = field(default_factory=list)
 
 
-DEFAULT_TRANSLATION_STYLE_PROMPT = (
-    "Translate into natural Simplified Chinese subtitles.\n"
-    "Keep lines concise, spoken, and easy to read at subtitle speed.\n"
-    "Preserve character voice, tone, sarcasm, jokes, profanity, insults, adult references, "
-    "and emotional intensity faithfully.\n"
-    "Use context to resolve pronouns, references, names, and implied meaning, but do not add explanations.\n"
-    "Avoid stiff literal translation, over-polishing, censorship, summarization, or moralizing."
-)
+DEFAULT_TRANSLATION_STYLE_PROMPT = FALLBACK_TRANSLATION_STYLE_PROMPT
 
 
 @dataclass
@@ -104,6 +99,7 @@ class TranslationConfig:
     context_after_lines: int = 10
     style_preset: str = "subtitle_natural"
     style_prompt: str = DEFAULT_TRANSLATION_STYLE_PROMPT
+    system_prompt: str = ""
     refusal_detection: RefusalDetectionConfig = field(default_factory=RefusalDetectionConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
 
@@ -170,6 +166,7 @@ class MemoryInjectConfig:
 class MemoryPatchConfig:
     enabled: bool = True
     after_each_window: bool = True
+    system_prompt: str = ""
 
 
 @dataclass
@@ -263,9 +260,7 @@ class NormalizedRequest:
     repair_reason: str = ""
     bad_translation: str = ""
     temperature: float = 0.1
-    system_prompt: str = (
-        "You are a subtitle translation engine. Follow the output contract exactly."
-    )
+    system_prompt: str = ""
 
 
 @dataclass

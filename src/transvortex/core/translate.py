@@ -12,7 +12,6 @@ from ..memory.patcher import generate_memory_patch
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
 from ..providers import build_provider_client, classify_error
-from ..providers.factory import TRANSLATION_SYSTEM_PROMPT
 from .translation_validation import (
     ParsedTranslationRow,
     TranslationValidationIssue,
@@ -73,7 +72,7 @@ def _base_request(
         context_after=chunk.context_after,
         style_prompt=config.pipeline.translation.style_prompt,
         memory_prompt=memory_prompt,
-        system_prompt=TRANSLATION_SYSTEM_PROMPT,
+        system_prompt=config.pipeline.translation.system_prompt,
     )
 
 
@@ -130,7 +129,7 @@ def _repair_row(
                 prompt_mode="repair",
                 repair_reason=issue.message,
                 bad_translation=bad_translation,
-                system_prompt=TRANSLATION_SYSTEM_PROMPT,
+                system_prompt=config.pipeline.translation.system_prompt,
             )
             response = client.translate_request(req)
             validation = _validate(

@@ -12,7 +12,6 @@ from .models import (
     AssStyleConfig,
     AuthConfig,
     CapabilityConfig,
-    DEFAULT_TRANSLATION_STYLE_PROMPT,
     EndpointConfig,
     MappingConfig,
     MemoryBootstrapConfig,
@@ -34,6 +33,7 @@ from .models import (
     SubtitleQualityConfig,
     TranslationConfig,
 )
+from ..prompts import load_prompt
 
 
 ENV_MAP = {
@@ -108,6 +108,16 @@ def _to_str(value: Any, default: str) -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _resolve_prompt_path(root_dir: Path, raw_path: Any) -> Path | None:
+    if raw_path is None:
+        return None
+    text = str(raw_path).strip()
+    if not text:
+        return None
+    path = Path(text)
+    return path if path.is_absolute() else root_dir / path
 
 
 def _infer_compat_mode(api_type: str) -> str:
@@ -257,6 +267,7 @@ def load_app_config(
 
     p_yaml = _read_yaml(providers_file)
     pip_yaml = _read_yaml(pipeline_file)
+    prompts_raw = pip_yaml.get("prompts") or {}
 
     artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
     asr_raw = pip_yaml.get("asr") or {}
@@ -264,7 +275,16 @@ def load_app_config(
     translation_raw = pip_yaml.get("translation") or {}
     legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 40)
     chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
-    style_prompt_default = DEFAULT_TRANSLATION_STYLE_PROMPT
+    translation_system_prompt = load_prompt(
+        "translation_system",
+        root_dir=root_dir,
+        override_path=_resolve_prompt_path(root_dir, prompts_raw.get("translation_system")),
+    )
+    style_prompt_default = load_prompt(
+        "translation_style_zh-CN",
+        root_dir=root_dir,
+        override_path=_resolve_prompt_path(root_dir, prompts_raw.get("translation_style")),
+    )
     if "style_prompt" in translation_raw:
         style_prompt_default = str(translation_raw.get("style_prompt") or "")
     refusal_raw = translation_raw.get("refusal_detection") or {}
@@ -275,6 +295,7 @@ def load_app_config(
         context_after_lines=_to_int(translation_raw.get("context_after_lines"), 10),
         style_preset=str(translation_raw.get("style_preset", "subtitle_natural")),
         style_prompt=style_prompt_default,
+        system_prompt=translation_system_prompt,
         refusal_detection=RefusalDetectionConfig(
             enabled=_to_bool(refusal_raw.get("enabled"), True),
         ),
@@ -330,6 +351,11 @@ def load_app_config(
         patch=MemoryPatchConfig(
             enabled=_to_bool(memory_patch_raw.get("enabled"), True),
             after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), True),
+            system_prompt=load_prompt(
+                "memory_patch_system",
+                root_dir=root_dir,
+                override_path=_resolve_prompt_path(root_dir, prompts_raw.get("memory_patch_system")),
+            ),
         ),
         merge=MemoryMergeConfig(
             auto_confirm_high_confidence=_to_bool(memory_merge_raw.get("auto_confirm_high_confidence"), False),
