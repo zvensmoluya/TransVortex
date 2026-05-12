@@ -44,6 +44,7 @@ memory:
     locked: true
     confirmed: true
     proposed: true
+    strategy: balanced
     max_entries_per_chunk: 30
   patch:
     enabled: true

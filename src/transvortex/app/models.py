@@ -160,6 +160,7 @@ class MemoryInjectConfig:
     locked: bool = True
     confirmed: bool = True
     proposed: bool = True
+    strategy: str = "balanced"
     max_entries_per_chunk: int = 30
 
 

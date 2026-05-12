@@ -49,7 +49,7 @@ def test_selector_and_injector_group_relevant_entries() -> None:
         context_before=[],
         context_after=["[2] The Order appears"],
     )
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(max_entries_per_chunk=3))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=3))
     assert [entry.source for entry in selected] == ["Subaru", "The Order", "Mercury"]
     prompt = build_memory_prompt(selected)
     assert "LOCKED GLOSSARY" in prompt
@@ -71,8 +71,75 @@ def test_selector_avoids_short_or_embedded_false_matches() -> None:
         segment_ids=[1],
         lines=["[1] The mayor joined The Order"],
     )
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
     assert [entry.source for entry in selected] == ["The Order"]
+
+
+def test_selector_balanced_injects_strong_memory_without_match() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
+            MemoryEntry(id="2", source="Unseen Confirmed", target="确认", status="confirmed", priority=50),
+            MemoryEntry(id="3", source="Unseen Proposed", target="候选", status="proposed", priority=100),
+            MemoryEntry(id="4", source="Mercury", target="墨丘利", status="proposed", priority=10),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="balanced", max_entries_per_chunk=10))
+    assert [entry.source for entry in selected] == ["Unseen Locked", "Unseen Confirmed", "Mercury"]
+
+
+def test_selector_matched_requires_match_for_strong_memory() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
+            MemoryEntry(id="2", source="Unseen Confirmed", target="确认", status="confirmed", priority=50),
+            MemoryEntry(id="3", source="Mercury", target="墨丘利", status="proposed", priority=10),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    assert [entry.source for entry in selected] == ["Mercury"]
+
+
+def test_selector_full_keeps_proposed_matched_only() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
+            MemoryEntry(id="2", source="Unseen Confirmed", target="确认", status="confirmed", priority=50),
+            MemoryEntry(id="3", source="Unseen Proposed", target="候选", status="proposed", priority=100),
+            MemoryEntry(id="4", source="Mercury", target="墨丘利", status="proposed", priority=10),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="full", max_entries_per_chunk=10))
+    assert [entry.source for entry in selected] == ["Unseen Locked", "Unseen Confirmed", "Mercury"]
+
+
+def test_selector_balanced_filters_confirmed_when_over_limit() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="Alpha", target="阿尔法", status="confirmed", priority=100),
+            MemoryEntry(id="2", source="Beta", target="贝塔", status="confirmed", priority=90),
+            MemoryEntry(id="3", source="Gamma", target="伽马", status="confirmed", priority=80),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Alpha arrives"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="balanced", max_entries_per_chunk=2))
+    assert [entry.source for entry in selected] == ["Alpha"]
+
+
+def test_selector_strategy_fallback_and_limit() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="Locked A", target="A", status="locked", priority=100),
+            MemoryEntry(id="2", source="Locked B", target="B", status="locked", priority=90),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Nothing relevant"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="unknown", max_entries_per_chunk=1))
+    assert [entry.source for entry in selected] == ["Locked A"]
+    assert select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="full", max_entries_per_chunk=0)) == []
 
 
 def test_merger_protects_locked_and_records_conflict(tmp_path: Path) -> None:
@@ -149,6 +216,7 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
         }
 
     def fake_generate_memory_patch(_config, window, translated_rows, *, source_lang: str, target_lang: str):
+        assert [chunk.chunk_id for chunk in window] == ["c1"]
         assert [row["chunk_id"] for row in translated_rows] == ["c1"]
         payload = {
             "chunk_ids": ["c1"],

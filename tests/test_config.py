@@ -382,6 +382,7 @@ memory:
   enabled: true
   mode: consistency_first
   inject:
+    strategy: full
     proposed: false
     max_entries_per_chunk: 12
   patch:
@@ -396,6 +397,7 @@ memory:
     cfg = load_app_config(root_dir=tmp_path)
     assert cfg.pipeline.memory.enabled is True
     assert cfg.pipeline.memory.mode == "consistency_first"
+    assert cfg.pipeline.memory.inject.strategy == "full"
     assert cfg.pipeline.memory.inject.proposed is False
     assert cfg.pipeline.memory.inject.max_entries_per_chunk == 12
     assert cfg.pipeline.memory.patch.enabled is False

@@ -324,6 +324,7 @@ def load_app_config(
             locked=_to_bool(memory_inject_raw.get("locked"), True),
             confirmed=_to_bool(memory_inject_raw.get("confirmed"), True),
             proposed=_to_bool(memory_inject_raw.get("proposed"), True),
+            strategy=_to_str(memory_inject_raw.get("strategy"), "balanced"),
             max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
         ),
         patch=MemoryPatchConfig(

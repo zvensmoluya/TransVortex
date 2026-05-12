@@ -385,9 +385,13 @@ def _update_memory_after_window(
     if not results:
         return
     if config.pipeline.memory.patch.enabled and config.pipeline.memory.patch.after_each_window:
+        successful_chunk_ids = {str(result.get("chunk_id") or "") for result in results}
+        successful_window = [chunk for chunk in window if chunk.chunk_id in successful_chunk_ids]
+        if not successful_window:
+            return
         patch, payload = generate_memory_patch(
             config,
-            window,
+            successful_window,
             results,
             source_lang=source_lang,
             target_lang=target_lang,
