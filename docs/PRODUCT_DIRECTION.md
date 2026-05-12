@@ -141,7 +141,7 @@ Do not parse human logs. Use JSON/JSONL outputs and artifact paths.
 
 ## 5. 能力边界
 
-TransVortex Core 应逐步拆成三个可独立调用的能力：
+TransVortex Core 应围绕几个可独立调用的能力演进。当前开发版已经具备 `asr`、`translate`、`export`、`result`、`reexport` 等入口，但这些入口仍处于开发态；机器可读输出要保持可解析和不泄露 secret，字段级长期兼容暂不冻结。
 
 ### ASR
 
@@ -340,23 +340,41 @@ pipeline.yaml
 
 ## 10. 近期路线建议
 
-### V1 稳定跑起来
+### 当前状态：实现领先于文档
 
-- 修正 provider key 命名和配置体验。
-- 增加 `doctor` 环境诊断。
-- 跑通真实 demo 端到端。
-- 清理 checkpoint、events、error 状态一致性。
-- 保证桌面端能稳定启动任务和展示错误。
+当前代码已经超过早期路线文档中的 V1/V1.1 边界：
 
-V1 当前落地范围：只做开发机稳定可用，不做安装包、不做完整 TUI、不拆 ASR/Translate 独立子命令。验收路径是 `doctor -> probe-provider -> run -> status/events/artifacts`。
+- 已有 `asr`、`translate`、`export` 独立入口。
+- 已有 provider 管理命令和 provider 预检。
+- 已有 result open/save 和 reexport。
+- 桌面端已经能调用 Python worker、读事件、管理 provider/key、编辑结果并重导出。
 
-### V1.1 Agent 协议收口
+这说明实现探索推进得更快，不说明产品形状已经稳定。现阶段仍应允许 CLI 字段、artifact 细节和桌面工作流继续调整。
 
-- 固化 JSON/JSONL 输出。
-- 明确 exit code。
-- 增加 structured error。
-- 为 ASR、Translate、Full Pipeline 拆出稳定子命令。
-- 编写 agent skill/tool 使用说明。
+### V1.x 分层验收
+
+本机性能或依赖不足时，不把 full video pipeline 作为唯一验收标准。推荐拆成四层：
+
+- 协议层：`--json` 输出合法 JSON，事件输出合法 JSONL，错误结构化，输出不泄露 secret。
+- 字幕链路：用 SRT 或 segments 输入跑 `translate -> quality -> export/reexport`。
+- 环境层：`doctor` 能明确报告 FFmpeg、ASR 依赖、API key 和 provider 配置状态。
+- Full pipeline：在具备 FFmpeg、ASR 依赖、合适硬件或云 ASR 条件时再跑真实视频演示。
+
+当前不建议过早做完整快照测试或字段全集冻结。更合适的是先锁软契约，保留产品探索空间。
+
+### V1.x 开发工作台稳定化
+
+- 打扫工程卫生，避免忽略规则误伤源码。
+- 持续同步文档和实际实现。
+- 优化桌面端任务详情、错误解释、artifact/log viewer、字幕预览和编辑体验。
+- 保持 CLI 和桌面端都调用同一套 Python worker，不分叉业务逻辑。
+
+### Agent 协议逐步收口
+
+- 保持 JSON/JSONL 机器输出可解析。
+- 明确 exit code 和 structured error 的基本字段。
+- 暂不冻结所有字段，等真实 agent/桌面调用模式更清楚后再扩大契约测试。
+- 编写 agent skill/tool 使用说明，但不要求 agent 依赖人类日志。
 
 ### V1.2 人类 CLI/TUI
 

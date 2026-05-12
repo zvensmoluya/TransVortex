@@ -84,6 +84,18 @@ def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: b
             ]
         )
         return "\n\n".join(parts)
+    if req.prompt_mode == "memory_patch":
+        parts.extend(
+            [
+                "Translation memory extraction mode:",
+                "- Analyze the provided source and translated subtitles.",
+                "- Return only the requested JSON object.",
+                "- Do not output Markdown, explanations, numbered subtitle lines, or extra text.",
+            ]
+        )
+        if req.style_prompt:
+            parts.append(req.style_prompt.strip())
+        return "\n\n".join(parts)
     parts.extend(
         [
             FIXED_TRANSLATION_CONSTRAINTS,
@@ -92,6 +104,8 @@ def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: b
     )
     if req.style_prompt:
         parts.append("User style preferences:\n" + req.style_prompt.strip())
+    if req.memory_prompt:
+        parts.append(req.memory_prompt.strip())
     if req.prompt_mode == "repair":
         parts.append(
             "Repair mode:\n"
@@ -260,6 +274,7 @@ def _template_context(
         "context_after": req.context_after,
         "context_after_text": "\n".join(req.context_after),
         "style_prompt": req.style_prompt,
+        "memory_prompt": req.memory_prompt,
         "prompt_mode": req.prompt_mode,
         "repair_reason": req.repair_reason,
         "bad_translation": req.bad_translation,

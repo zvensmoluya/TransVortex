@@ -140,6 +140,115 @@ World
     assert any(event["type"] == "reexported" for event in events)
 
 
+def test_srt_translate_memory_artifacts_and_result_summary(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    pipeline = root / "pipeline.yaml"
+    pipeline.write_text(
+        pipeline.read_text(encoding="utf-8")
+        + """
+memory:
+  enabled: true
+  mode: balanced
+  inject:
+    max_entries_per_chunk: 5
+  patch:
+    enabled: true
+  consistency_check:
+    enabled: true
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    seed_dir = root / "memory"
+    seed_dir.mkdir()
+    (seed_dir / "translation_memory.json").write_text(
+        """
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "mem_subaru",
+      "source": "Subaru",
+      "target": "斯巴鲁",
+      "category": "character",
+      "status": "locked",
+      "origin": "user_glossary",
+      "priority": 100,
+      "aliases": []
+    }
+  ]
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+    srt_file = root / "demo.srt"
+    srt_file.write_text(
+        """
+1
+00:00:01,000 --> 00:00:02,000
+Subaru arrives
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    def fake_translate_chunk(_config, chunk, source_lang: str, target_lang: str, memory_prompt: str = ""):
+        assert "Subaru => 斯巴鲁" in memory_prompt
+        return {
+            "chunk_id": chunk.chunk_id,
+            "provider": "p1",
+            "model": "m1",
+            "compat_mode": "openai_chat",
+            "base_url": "https://example.com/v1",
+            "rows": [{"id": seg_id, "text_tgt": "斯巴鲁来了"} for seg_id in chunk.segment_ids],
+            "errors": [],
+        }
+
+    def fake_generate_memory_patch(_config, chunks, translated_rows, *, source_lang: str, target_lang: str):
+        payload = {
+            "chunk_ids": [chunk.chunk_id for chunk in chunks],
+            "actions": [
+                {
+                    "action": "upsert",
+                    "source": "The Order",
+                    "target": "教团",
+                    "category": "organization",
+                    "status": "proposed",
+                    "confidence": 0.8,
+                    "evidence_ids": [1],
+                }
+            ],
+            "provider": "p1",
+            "model": "m1",
+            "raw_text": "{}",
+        }
+        from transvortex.memory.merger import patch_from_payload
+
+        return patch_from_payload(payload), payload
+
+    monkeypatch.setattr("transvortex.core.translate.translate_chunk", fake_translate_chunk)
+    monkeypatch.setattr("transvortex.core.translate.generate_memory_patch", fake_generate_memory_patch)
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=srt_file,
+        source_lang="en",
+        target_lang="zh-CN",
+        input_type="srt_translate",
+    )
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    memory_dir = task_dir / "memory"
+    memory_file = memory_dir / "translation_memory.json"
+    payload = memory_file.read_text(encoding="utf-8")
+    assert "The Order" in payload
+    assert (memory_dir / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
+    assert list((memory_dir / "snapshots").glob("memory_*.json"))
+    result = open_task_result(root_dir=root, task_id=task_id)
+    assert result["memory"]["enabled"] is True
+    assert result["memory"]["entries"] >= 1
+
+
 def test_save_provider_routing_writes_primary_and_fallback(tmp_path: Path) -> None:
     root = tmp_path
     _write_config(root)

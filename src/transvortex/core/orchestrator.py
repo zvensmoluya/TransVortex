@@ -13,6 +13,8 @@ from .chunking import number_and_chunk_segments
 from ..app.config import apply_route_overrides, load_app_config
 from ..formats.exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
+from ..memory.checker import check_consistency, write_consistency_issues
+from ..memory.store import MemoryStore
 from ..app.models import AppConfig, Segment, TaskRecord
 from ..providers.probe import probe_provider
 from ..protocol.errors import PipelineTaskError, classify_exception
@@ -57,6 +59,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
         "translate": base / "translate",
         "final": base / "final",
         "quality": base / "quality",
+        "memory": base / "memory",
         "output": base / "output",
         "chunks": base / "chunks",
     }
@@ -392,15 +395,26 @@ def _iter_translation_results(
     source_lang: str,
     target_lang: str,
     already_done: set[str],
+    memory_dir: Path | None = None,
 ):
     if translate_all_chunks.__module__ != "transvortex.core.translate":
-        yield from translate_all_chunks(
-            config,
-            chunks,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            already_done=already_done,
-        )
+        if memory_dir is not None:
+            yield from translate_all_chunks(
+                config,
+                chunks,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                already_done=already_done,
+                memory_dir=memory_dir,
+            )
+        else:
+            yield from translate_all_chunks(
+                config,
+                chunks,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                already_done=already_done,
+            )
         return
     yield from iter_translate_all_chunks(
         config,
@@ -408,6 +422,7 @@ def _iter_translation_results(
         source_lang=source_lang,
         target_lang=target_lang,
         already_done=already_done,
+        memory_dir=memory_dir,
     )
 
 
@@ -782,6 +797,8 @@ def _execute_task(
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "TRANSLATE", "Translating chunks")
+        if config.pipeline.memory.enabled:
+            MemoryStore(paths["memory"]).ensure_with_seed(root_dir / "memory" / "translation_memory.json")
         translated_file = paths["translate"] / "segments.translated.jsonl"
         validation_file = paths["translate"] / "validation.jsonl"
         repairs_file = paths["translate"] / "repairs.jsonl"
@@ -804,6 +821,7 @@ def _execute_task(
             source_lang=task.source_lang,
             target_lang=task.target_lang,
             already_done=translated_done,
+            memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
         ):
             _check_cancel(store, task_id)
             append_jsonl(translated_file, _translation_row_for_artifact(row))
@@ -880,6 +898,22 @@ def _execute_task(
             },
         )
         write_json(paths["final"] / "segments.final.json", final_segments)
+        if config.pipeline.memory.enabled and config.pipeline.memory.consistency_check.enabled:
+            memory_store = MemoryStore(paths["memory"])
+            memory_document = memory_store.load()
+            memory_issues = check_consistency(memory_document, final_segments)
+            write_consistency_issues(memory_store, memory_issues)
+            store.append_event(
+                task_id,
+                "artifact",
+                stage="QUALITY",
+                message="Translation memory consistency report ready",
+                progress=0.93,
+                details={
+                    "path": str(memory_store.issues_file),
+                    "issues": len(memory_issues),
+                },
+            )
         checkpoint["status"] = "QUALITY"
         store.save_checkpoint(task_id, checkpoint)
 

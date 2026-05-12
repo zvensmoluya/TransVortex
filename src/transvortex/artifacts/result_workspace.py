@@ -18,6 +18,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
         "translate": base / "translate",
         "output": base / "output",
         "quality": base / "quality",
+        "memory": base / "memory",
     }
 
 
@@ -98,6 +99,15 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     translated_rows = read_jsonl(translated_file)
     meta_by_id = _translation_meta_by_segment(translated_rows)
     quality_summary, quality_by_id = _quality_by_segment(paths)
+    memory_file = paths["memory"] / "translation_memory.json"
+    memory_issues_file = paths["memory"] / "consistency_issues.jsonl"
+    memory_entries = []
+    memory_issues = []
+    if memory_file.exists():
+        memory_payload = read_json(memory_file)
+        memory_entries = list(memory_payload.get("entries") or [])
+    if memory_issues_file.exists():
+        memory_issues = read_jsonl(memory_issues_file)
     issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
     return {
         "task": {
@@ -117,6 +127,15 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
             for seg in segments
         ],
         "quality": quality_summary,
+        "memory": {
+            "enabled": bool(task.settings.get("memory", {}).get("enabled", False)),
+            "entries": len(memory_entries),
+            "issues": len(memory_issues),
+            "paths": {
+                "translation_memory": str(memory_file) if memory_file.exists() else "",
+                "consistency_issues": str(memory_issues_file) if memory_issues_file.exists() else "",
+            },
+        },
         "output_paths": task.output_paths,
     }
 

@@ -150,6 +150,48 @@ class SubtitleConfig:
 
 
 @dataclass
+class MemoryBootstrapConfig:
+    enabled: bool = False
+    max_candidates: int = 80
+
+
+@dataclass
+class MemoryInjectConfig:
+    locked: bool = True
+    confirmed: bool = True
+    proposed: bool = True
+    max_entries_per_chunk: int = 30
+
+
+@dataclass
+class MemoryPatchConfig:
+    enabled: bool = True
+    after_each_window: bool = True
+
+
+@dataclass
+class MemoryMergeConfig:
+    auto_confirm_high_confidence: bool = False
+    conflict_policy: str = "record"
+
+
+@dataclass
+class MemoryConsistencyCheckConfig:
+    enabled: bool = True
+
+
+@dataclass
+class MemoryConfig:
+    enabled: bool = False
+    mode: str = "balanced"
+    bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
+    inject: MemoryInjectConfig = field(default_factory=MemoryInjectConfig)
+    patch: MemoryPatchConfig = field(default_factory=MemoryPatchConfig)
+    merge: MemoryMergeConfig = field(default_factory=MemoryMergeConfig)
+    consistency_check: MemoryConsistencyCheckConfig = field(default_factory=MemoryConsistencyCheckConfig)
+
+
+@dataclass
 class PipelineConfig:
     artifacts_dir: Path
     chunk_seconds: int = 60
@@ -157,6 +199,7 @@ class PipelineConfig:
     translation_batch_size: int = 40
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     output_format: str = "srt"
     subtitle_ass_style: AssStyleConfig = field(default_factory=AssStyleConfig)
     default_concurrency: int = 8
@@ -212,6 +255,7 @@ class NormalizedRequest:
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)
     style_prompt: str = ""
+    memory_prompt: str = ""
     prompt_mode: str = "translate"
     repair_reason: str = ""
     bad_translation: str = ""

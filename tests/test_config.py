@@ -362,6 +362,47 @@ translation:
     assert cfg.pipeline.translation.repair.max_attempts == 3
 
 
+def test_memory_config_parse(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  enabled: true
+  mode: consistency_first
+  inject:
+    proposed: false
+    max_entries_per_chunk: 12
+  patch:
+    enabled: false
+  merge:
+    auto_confirm_high_confidence: true
+  consistency_check:
+    enabled: false
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.memory.enabled is True
+    assert cfg.pipeline.memory.mode == "consistency_first"
+    assert cfg.pipeline.memory.inject.proposed is False
+    assert cfg.pipeline.memory.inject.max_entries_per_chunk == 12
+    assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.merge.auto_confirm_high_confidence is True
+    assert cfg.pipeline.memory.consistency_check.enabled is False
+
+
 def test_translation_batch_override_updates_translation_chunk_lines(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

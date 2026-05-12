@@ -95,6 +95,31 @@ def test_payload_contains_style_and_context_sections() -> None:
     assert "CONTEXT_AFTER\n[3] after" in user_text
 
 
+def test_payload_contains_memory_prompt_between_style_and_context() -> None:
+    cfg = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={}),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(
+        model="m1",
+        lines=["[1] Subaru"],
+        source_lang="en",
+        target_lang="zh-CN",
+        style_prompt="Keep it concise.",
+        memory_prompt="LOCKED GLOSSARY\n- Subaru => 斯巴鲁",
+    )
+    payload = _build_payload(cfg, req)
+    user_text = payload["messages"][1]["content"]
+    assert user_text.index("User style preferences") < user_text.index("LOCKED GLOSSARY")
+    assert user_text.index("LOCKED GLOSSARY") < user_text.index("\n\nTRANSLATE_ONLY")
+
+
 def test_openai_responses_payload_and_mapping() -> None:
     cfg = ProviderConfig(
         name="responses",

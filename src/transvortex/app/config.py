@@ -15,6 +15,12 @@ from .models import (
     DEFAULT_TRANSLATION_STYLE_PROMPT,
     EndpointConfig,
     MappingConfig,
+    MemoryBootstrapConfig,
+    MemoryConfig,
+    MemoryConsistencyCheckConfig,
+    MemoryInjectConfig,
+    MemoryMergeConfig,
+    MemoryPatchConfig,
     ModelListConfig,
     PipelineConfig,
     ProviderConfig,
@@ -301,6 +307,37 @@ def load_app_config(
             max_attempts=_to_int(compression_raw.get("max_attempts"), 1),
         ),
     )
+    memory_raw = pip_yaml.get("memory") or {}
+    memory_bootstrap_raw = memory_raw.get("bootstrap") or {}
+    memory_inject_raw = memory_raw.get("inject") or {}
+    memory_patch_raw = memory_raw.get("patch") or {}
+    memory_merge_raw = memory_raw.get("merge") or {}
+    memory_check_raw = memory_raw.get("consistency_check") or {}
+    memory = MemoryConfig(
+        enabled=_to_bool(memory_raw.get("enabled"), False),
+        mode=_to_str(memory_raw.get("mode"), "balanced"),
+        bootstrap=MemoryBootstrapConfig(
+            enabled=_to_bool(memory_bootstrap_raw.get("enabled"), False),
+            max_candidates=_to_int(memory_bootstrap_raw.get("max_candidates"), 80),
+        ),
+        inject=MemoryInjectConfig(
+            locked=_to_bool(memory_inject_raw.get("locked"), True),
+            confirmed=_to_bool(memory_inject_raw.get("confirmed"), True),
+            proposed=_to_bool(memory_inject_raw.get("proposed"), True),
+            max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
+        ),
+        patch=MemoryPatchConfig(
+            enabled=_to_bool(memory_patch_raw.get("enabled"), True),
+            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), True),
+        ),
+        merge=MemoryMergeConfig(
+            auto_confirm_high_confidence=_to_bool(memory_merge_raw.get("auto_confirm_high_confidence"), False),
+            conflict_policy=_to_str(memory_merge_raw.get("conflict_policy"), "record"),
+        ),
+        consistency_check=MemoryConsistencyCheckConfig(
+            enabled=_to_bool(memory_check_raw.get("enabled"), True),
+        ),
+    )
     ass_raw = pip_yaml.get("subtitle_ass_style") or {}
     subtitle_ass_style = AssStyleConfig(
         font_name=_to_str(ass_raw.get("font_name"), "Microsoft YaHei"),
@@ -323,6 +360,7 @@ def load_app_config(
         translation_batch_size=chunk_lines,
         translation=translation,
         subtitle=subtitle,
+        memory=memory,
         output_format=_to_str(pip_yaml.get("output_format"), "srt"),
         subtitle_ass_style=subtitle_ass_style,
         default_concurrency=_to_int(pip_yaml.get("default_concurrency"), 8),

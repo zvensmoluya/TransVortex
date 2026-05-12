@@ -37,6 +37,22 @@ translation:
   repair:
     enabled: true
     max_attempts: 2
+memory:
+  enabled: false
+  mode: balanced
+  inject:
+    locked: true
+    confirmed: true
+    proposed: true
+    max_entries_per_chunk: 30
+  patch:
+    enabled: true
+    after_each_window: true
+  merge:
+    auto_confirm_high_confidence: false
+    conflict_policy: record
+  consistency_check:
+    enabled: true
 asr:
   mode: local
   provider: openai_asr
