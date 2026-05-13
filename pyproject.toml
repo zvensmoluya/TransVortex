@@ -3,6 +3,7 @@ name = "transvortex"
 version = "0.1.0"
 description = "Fast local-video subtitle generation with configurable AI providers."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
   "PyYAML>=6.0",

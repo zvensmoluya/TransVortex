@@ -162,3 +162,9 @@ npm run tauri dev
 ```
 
 The UI calls the same Python worker protocol as CLI/agents. It can save provider keys into the repo-local `.env`, but it never reads or displays secret values.
+
+## License
+
+TransVortex is licensed under the Apache License, Version 2.0. See `LICENSE` for details.
+
+Samples and third-party materials may have separate attribution or licensing terms. See `samples/ATTRIBUTION.md`.
