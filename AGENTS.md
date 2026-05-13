@@ -5,6 +5,8 @@
 - 与用户交流默认使用中文。
 - 代码、命令、commit title、技术标识符默认使用英文。
 - Commit body 可以使用中文，尤其用于说明设计背景、取舍和验证结果。
+- 所有面向用户或协作者可见的中文内容必须按 UTF-8 读写和输出，避免在日志、文档、命令输出总结或提交信息中出现乱码中文。
+- 在 PowerShell 中读取中文文件时优先显式使用 `-Encoding utf8`；运行可能输出中文或 Unicode 的 Python CLI 时优先设置 `PYTHONIOENCODING=utf-8`。
 
 ## Commit Policy
 

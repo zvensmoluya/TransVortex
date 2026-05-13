@@ -77,6 +77,7 @@ def test_export_srt_wraps_text_and_normalizes_timestamps(tmp_path: Path) -> None
         out_file,
         bilingual=False,
     )
+    assert out_file.read_bytes().startswith(b"\xef\xbb\xbf")
     body = out_file.read_text(encoding="utf-8")
     assert "1\n00:00:00,000 --> 00:00:00,099" in body
     assert "2\n00:00:00,100 --> 00:00:00,450" in body

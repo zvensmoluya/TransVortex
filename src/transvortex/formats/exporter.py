@@ -26,7 +26,7 @@ def export_srt(segments: list[Segment], output: Path, bilingual: bool) -> Path:
         lines.append(f"{_srt_time(seg.start)} --> {_srt_time(seg.end)}")
         lines.extend(format_subtitle_lines(seg, bilingual=bilingual))
         lines.append("")
-    output.write_text("\n".join(lines), encoding="utf-8")
+    output.write_text("\n".join(lines), encoding="utf-8-sig")
     return output
 
 

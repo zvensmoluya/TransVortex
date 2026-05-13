@@ -11,5 +11,5 @@ desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
-desktop/tauri-dev.log
+desktop/*-dev*.log
 desktop/run-tauri-dev*.ps1
