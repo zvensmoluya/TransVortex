@@ -309,6 +309,49 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
             )
         )
 
+    active_profile = config.active_routing_profile
+    routing_profile_warnings = []
+    for profile in config.routing_profiles:
+        routes = [("primary", profile.primary)] + [(f"fallback[{idx}]", item) for idx, item in enumerate(profile.fallback)]
+        for route_name, route_item in routes:
+            if profile.id == active_profile and route_name == "primary":
+                continue
+            route_provider = config.providers.get(route_item.provider)
+            if route_provider is None:
+                routing_profile_warnings.append(
+                    {
+                        "profile_id": profile.id,
+                        "profile_name": profile.name,
+                        "route": route_name,
+                        "provider": route_item.provider,
+                        "model": route_item.model,
+                        "issue": "provider_missing",
+                    }
+                )
+            elif route_item.model not in route_provider.models:
+                routing_profile_warnings.append(
+                    {
+                        "profile_id": profile.id,
+                        "profile_name": profile.name,
+                        "route": route_name,
+                        "provider": route_item.provider,
+                        "model": route_item.model,
+                        "issue": "model_not_listed",
+                        "provider_models": route_provider.models,
+                    }
+                )
+    if routing_profile_warnings:
+        checks.append(
+            _check(
+                "routing_profiles",
+                "WARN",
+                "routing_profile_references_invalid",
+                "some route profile references are unavailable",
+                "部分 Route profile 引用了不可用的 provider 或 model，请检查 fallback 和未启用配置。",
+                details={"references": routing_profile_warnings},
+            )
+        )
+
     if provider is not None:
         checks.append(
             _env_key_check(

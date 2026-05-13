@@ -115,6 +115,18 @@ const zh = {
   resultSaved: "结果修改已保存",
   reexported: "字幕已重新导出",
   routing: "Fallback 路由",
+  provider_upstream_error: "Provider 网关或上游服务暂时失败，请稍后重试；如果持续失败，再检查 base_url、模型和服务商状态。",
+  provider_retryable_http_error: "Provider 暂时不可用或限流，请稍后重试；如果持续失败，再检查模型和账号额度。",
+  provider_http_error: "Provider 返回了 HTTP 错误，请检查 base_url、模型名和账号权限。",
+  provider_auth_failed: "API key 或鉴权方式不正确，请检查 key、auth type 和 base_url。",
+  provider_endpoint_not_found: "当前接口路径没有响应。若是非标准网关，可以手动填写模型并检查 endpoint。",
+  provider_network_error: "无法连接到 provider，请检查网络、代理和 base_url。",
+  provider_key_missing: "请先保存 API key，或设置对应环境变量。",
+  provider_response_mapping_failed: "Provider 有响应，但当前 response mapping 没有解析到文本。",
+  provider_connection_ok: "Provider 联网测试通过，模型可以返回文本。",
+  provider_models_found: "模型列表已更新。",
+  provider_models_empty: "接口返回成功，但没有解析到模型；可以手动填写模型。",
+  provider_model_list_unsupported: "这个 provider 没有配置模型列表接口，请手动填写模型。",
 };
 
 function t(key: keyof typeof zh) {
@@ -176,11 +188,32 @@ type ProviderTemplate = {
 
 type RouteTarget = { provider: string; model: string };
 
+type RoutingProfile = {
+  id: string;
+  name: string;
+  primary: RouteTarget;
+  fallback: RouteTarget[];
+};
+
+type ProviderPreset = ProviderTemplate & {
+  protocol_template_id?: string;
+};
+
+type FileVersion = { mtime_ns: number; size: number } | null;
+
 type ConfigPayload = {
   root_dir: string;
+  providers_file?: string;
+  providers_file_version?: FileVersion;
   artifacts_dir: string;
   pipeline: Record<string, unknown>;
   routing: { primary: RouteTarget; fallback?: RouteTarget[] };
+  active_routing_profile?: string;
+  routing_profiles?: RoutingProfile[];
+  routing_profile_next_seq?: number;
+  protocol_templates?: ProviderTemplate[];
+  provider_presets?: ProviderPreset[];
+  custom_adapter_template?: ProviderTemplate;
   provider_templates: ProviderTemplate[];
   providers: ProviderConfig[];
 };
@@ -381,7 +414,60 @@ function objectValue(value: unknown): Record<string, unknown> {
 }
 
 function defaultTemplate(config: ConfigPayload | null) {
-  return config?.provider_templates.find((item) => item.id === "openai_chat") || config?.provider_templates[0];
+  const templates = config?.protocol_templates?.length ? config.protocol_templates : config?.provider_templates || [];
+  return templates.find((item) => item.id === "openai_chat") || templates[0];
+}
+
+function protocolTemplates(config: ConfigPayload | null) {
+  return config?.protocol_templates?.length ? config.protocol_templates : config?.provider_templates || [];
+}
+
+function nextRouteProfileIdFromSeq(nextSeq: number) {
+  return `route_${Math.max(1, Math.floor(nextSeq || 1))}`;
+}
+
+function nextRouteProfileName(profiles: RoutingProfile[]) {
+  const used = new Set(profiles.map((item) => item.name));
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `配置 ${index}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return "配置";
+}
+
+function normalizeRoutingProfiles(config: ConfigPayload | null): RoutingProfile[] {
+  if (!config) return [];
+  if (config.routing_profiles?.length) {
+    return config.routing_profiles.map((profile) => ({
+      ...profile,
+      fallback: profile.fallback || [],
+    }));
+  }
+  return [
+    {
+      id: "default",
+      name: "Default",
+      primary: config.routing.primary,
+      fallback: config.routing.fallback || [],
+    },
+  ];
+}
+
+function validateRoutingProfileDrafts(profiles: RoutingProfile[]) {
+  if (!profiles.length) return "至少需要一个 Route profile。";
+  const names = new Set<string>();
+  for (const profile of profiles) {
+    const name = profile.name.trim();
+    if (!name) return "Route profile 名称不能为空。";
+    const key = name.toLocaleLowerCase();
+    if (names.has(key)) return `Route profile 名称重复：${name}。`;
+    names.add(key);
+    if (!profile.primary.provider || !profile.primary.model) return `${name} 的 Primary provider 和 model 都不能为空。`;
+    for (const route of profile.fallback) {
+      if (!route.provider || !route.model) return `${name} 的 Fallback provider 和 model 都不能为空。`;
+    }
+  }
+  return "";
 }
 
 function envKeyForName(name: string) {
@@ -435,9 +521,15 @@ function diagnosticText(payload?: ProviderDiagnostic | ProviderTestPayload | nul
   if (!payload) return "";
   if ("checks" in payload) {
     const failed = payload.checks.find((check) => check.status === "FAIL") || payload.checks[0];
-    return failed ? `${failed.hint_zh || failed.message} (${failed.code})` : payload.status;
+    return failed ? `${diagnosticHint(failed)} (${failed.code})` : payload.status;
   }
-  return `${payload.hint_zh || payload.message} (${payload.code})`;
+  return `${diagnosticHint(payload)} (${payload.code})`;
+}
+
+function diagnosticHint(payload: { code?: string; hint_zh?: string; message?: string }) {
+  const code = payload.code as keyof typeof zh | undefined;
+  if (code && code in zh) return t(code);
+  return payload.hint_zh || payload.message || "";
 }
 
 function outputPath(task: TaskRecord, key: string) {
@@ -619,10 +711,9 @@ function App() {
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(false);
   const [providerResult, setProviderResult] = useState<ProviderDiagnostic | ProviderTestPayload | null>(null);
   const [customModel, setCustomModel] = useState("");
-  const [routingDraft, setRoutingDraft] = useState<{ primary: RouteTarget; fallback: RouteTarget[] }>({
-    primary: { provider: "", model: "" },
-    fallback: [],
-  });
+  const [routingProfilesDraft, setRoutingProfilesDraft] = useState<RoutingProfile[]>([]);
+  const [activeRoutingProfileId, setActiveRoutingProfileId] = useState("default");
+  const [routingProfileNextSeq, setRoutingProfileNextSeq] = useState(1);
   const [taskResult, setTaskResult] = useState<TaskResultPayload | null>(null);
   const [selectedSegmentId, setSelectedSegmentId] = useState<number | null>(null);
 
@@ -632,7 +723,7 @@ function App() {
   );
 
   const selectedTemplate = useMemo(
-    () => config?.provider_templates.find((template) => template.id === providerTemplateId) || config?.provider_templates.find((template) => template.compat_mode === providerDraft?.compat_mode),
+    () => protocolTemplates(config).find((template) => template.id === providerTemplateId) || protocolTemplates(config).find((template) => template.compat_mode === providerDraft?.compat_mode),
     [config, providerDraft?.compat_mode, providerTemplateId],
   );
 
@@ -659,7 +750,7 @@ function App() {
     try {
       const payload = JSON.parse(text) as { checks?: DoctorCheck[]; message?: string };
       const failed = payload.checks?.find((check) => check.status === "FAIL");
-      if (failed) return `${failed.hint_zh || failed.message} (${failed.code})`;
+      if (failed) return `${diagnosticHint(failed)} (${failed.code})`;
       return payload.message || text;
     } catch {
       return `操作失败：${text}`;
@@ -669,11 +760,17 @@ function App() {
   async function refreshConfig() {
     const payload = await invoke<ConfigPayload>("get_config");
     const translation = fieldTranslation(payload.pipeline);
+    const profiles = normalizeRoutingProfiles(payload);
+    const activeProfileId = payload.active_routing_profile || profiles[0]?.id || "default";
+    const fallbackSeq =
+      profiles.reduce((max, profile) => {
+        const match = /^route_(\d+)$/.exec(profile.id);
+        return match ? Math.max(max, Number(match[1])) : max;
+      }, 0) + 1;
     setConfig(payload);
-    setRoutingDraft({
-      primary: payload.routing.primary,
-      fallback: payload.routing.fallback || [],
-    });
+    setRoutingProfilesDraft(profiles);
+    setActiveRoutingProfileId(activeProfileId);
+    setRoutingProfileNextSeq(Math.max(payload.routing_profile_next_seq || 1, fallbackSeq));
     setProviderDraft((current) => {
       if (current) return current;
       const providerName = payload.routing.primary.provider || payload.providers[0]?.name || "";
@@ -775,14 +872,14 @@ function App() {
     if (!selectedProvider) return;
     const draft = providerToDraft(selectedProvider);
     const template =
-      config?.provider_templates.find((item) => item.compat_mode === draft.compat_mode && item.base_url === draft.base_url) ||
-      config?.provider_templates.find((item) => item.compat_mode === draft.compat_mode);
+      protocolTemplates(config).find((item) => item.compat_mode === draft.compat_mode && item.base_url === draft.base_url) ||
+      protocolTemplates(config).find((item) => item.compat_mode === draft.compat_mode);
     setProviderTemplateId(template?.id || draft.compat_mode);
     setProviderDraft(draft);
     setRequestMappingText(JSON.stringify(draft.request_mapping, null, 2));
     setProviderResult(null);
     setCustomModel("");
-  }, [selectedProvider?.name, config?.provider_templates]);
+  }, [selectedProvider?.name, config?.protocol_templates, config?.provider_templates]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -800,17 +897,20 @@ function App() {
 
   function updateProviderTemplate(templateId: string) {
     const template =
-      config?.provider_templates.find((item) => item.id === templateId) ||
-      config?.provider_templates.find((item) => item.compat_mode === templateId);
+      protocolTemplates(config).find((item) => item.id === templateId) ||
+      protocolTemplates(config).find((item) => item.compat_mode === templateId);
     if (!template) return;
     setProviderTemplateId(template.id);
     setProviderDraft((current) => {
       const base = current || templateToDraft(template);
       return {
-        ...base,
+        name: base.name,
+        env_key: base.env_key,
+        credential_id: base.credential_id,
+        models: [...base.models],
         api_type: template.api_type,
         compat_mode: template.compat_mode,
-        base_url: base.base_url || template.base_url,
+        base_url: template.base_url,
         auth: { ...template.auth },
         endpoint: { ...template.endpoint },
         request_mapping: { ...template.request_mapping },
@@ -825,6 +925,68 @@ function App() {
       };
     });
     setRequestMappingText(JSON.stringify(template.request_mapping, null, 2));
+  }
+
+  function applyProviderPreset(presetId: string) {
+    const preset = config?.provider_presets?.find((item) => item.id === presetId);
+    if (!preset) return;
+    const protocolId = preset.protocol_template_id || preset.id;
+    setProviderTemplateId(protocolId);
+    setProviderDraft((current) => {
+      const base = current || templateToDraft(preset);
+      return {
+        name: base.name,
+        env_key: base.env_key,
+        credential_id: base.credential_id,
+        models: [...base.models],
+        api_type: preset.api_type,
+        compat_mode: preset.compat_mode,
+        base_url: preset.base_url,
+        auth: { ...preset.auth },
+        endpoint: { ...preset.endpoint },
+        request_mapping: { ...preset.request_mapping },
+        response_mapping: { text_paths: [...(preset.response_mapping?.text_paths || [])] },
+        extra_headers: { ...(preset.extra_headers || {}) },
+        model_list: {
+          path_template: preset.model_list?.path_template || "/models",
+          method: preset.model_list?.method || "GET",
+          response_paths: [...(preset.model_list?.response_paths || ["data[].id"])],
+        },
+        capabilities: { ...(preset.capabilities || {}) },
+      };
+    });
+    setRequestMappingText(JSON.stringify(preset.request_mapping, null, 2));
+  }
+
+  function useCustomAdapter() {
+    const template = config?.custom_adapter_template || config?.provider_templates.find((item) => item.id === "custom_json");
+    if (!template) return;
+    setProviderTemplateId(template.id);
+    setProviderDraft((current) => {
+      const base = current || templateToDraft(template);
+      return {
+        name: base.name,
+        env_key: base.env_key,
+        credential_id: base.credential_id,
+        models: [...base.models],
+        api_type: template.api_type,
+        compat_mode: template.compat_mode,
+        base_url: template.base_url,
+        auth: { ...template.auth },
+        endpoint: { ...template.endpoint },
+        request_mapping: { ...template.request_mapping },
+        response_mapping: { text_paths: [...(template.response_mapping?.text_paths || [])] },
+        extra_headers: { ...(template.extra_headers || {}) },
+        model_list: {
+          path_template: template.model_list?.path_template || "",
+          method: template.model_list?.method || "GET",
+          response_paths: [...(template.model_list?.response_paths || [])],
+        },
+        capabilities: { ...(template.capabilities || {}) },
+      };
+    });
+    setRequestMappingText(JSON.stringify(template.request_mapping, null, 2));
+    setProviderAdvancedOpen(true);
   }
 
   function newProviderDraft() {
@@ -846,6 +1008,47 @@ function App() {
     updateProviderDraft({ models });
     update("model", model);
     setCustomModel("");
+  }
+
+  function updateRoutingProfile(profileId: string, patch: Partial<RoutingProfile>) {
+    setRoutingProfilesDraft((current) => current.map((profile) => (profile.id === profileId ? { ...profile, ...patch } : profile)));
+  }
+
+  function newRoutingProfile() {
+    setRoutingProfilesDraft((current) => {
+      const id = nextRouteProfileIdFromSeq(routingProfileNextSeq);
+      const name = nextRouteProfileName(current);
+      const primary = {
+        provider: form.provider || config?.routing.primary.provider || config?.providers[0]?.name || "",
+        model: form.model || config?.routing.primary.model || "",
+      };
+      const next = [...current, { id, name, primary, fallback: [] }];
+      setActiveRoutingProfileId(id);
+      setRoutingProfileNextSeq((value) => Math.max(value + 1, routingProfileNextSeq + 1));
+      return next;
+    });
+  }
+
+  function duplicateRoutingProfile(profileId: string) {
+    setRoutingProfilesDraft((current) => {
+      const source = current.find((profile) => profile.id === profileId) || current[0];
+      if (!source) return current;
+      const id = nextRouteProfileIdFromSeq(routingProfileNextSeq);
+      const name = nextRouteProfileName(current);
+      const next = [...current, { ...source, id, name, fallback: [...source.fallback] }];
+      setActiveRoutingProfileId(id);
+      setRoutingProfileNextSeq((value) => Math.max(value + 1, routingProfileNextSeq + 1));
+      return next;
+    });
+  }
+
+  function deleteRoutingProfile(profileId: string) {
+    setRoutingProfilesDraft((current) => {
+      if (current.length <= 1) return current;
+      const next = current.filter((profile) => profile.id !== profileId);
+      if (profileId === activeRoutingProfileId) setActiveRoutingProfileId(next[0]?.id || "default");
+      return next;
+    });
   }
 
   async function chooseVideo() {
@@ -893,6 +1096,7 @@ function App() {
       await invoke("save_provider_config", {
         providerDraft: { ...providerDraft, request_mapping: requestMapping },
         apiKey: form.apiKey.trim() || null,
+        expectedVersion: config?.providers_file_version || null,
       });
       update("provider", providerDraft.name);
       update("model", providerDraft.models[0] || form.model);
@@ -906,13 +1110,36 @@ function App() {
     }
   }
 
-  async function saveRouting() {
+  async function persistRouting(activeProfileId: string, noticeMessage: string) {
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      await invoke("save_provider_routing", { routing: routingDraft });
-      setNotice("Fallback 路由已保存");
+      const profiles = routingProfilesDraft.length
+        ? routingProfilesDraft
+        : [
+            {
+              id: "default",
+              name: "Default",
+              primary: { provider: form.provider, model: form.model },
+              fallback: [],
+            },
+          ];
+      const activeProfile = profiles.find((profile) => profile.id === activeProfileId) || profiles[0];
+      const validationError = validateRoutingProfileDrafts(profiles);
+      if (validationError) throw new Error(validationError);
+      await invoke("save_provider_routing", {
+        routing: {
+          active_profile: activeProfile.id,
+          profiles,
+          next_profile_seq: routingProfileNextSeq,
+          expected_version: config?.providers_file_version || null,
+        },
+      });
+      setActiveRoutingProfileId(activeProfile.id);
+      update("provider", activeProfile.primary.provider);
+      update("model", activeProfile.primary.model);
+      setNotice(noticeMessage);
       await refreshConfig();
     } catch (err) {
       setError(friendlyError(err));
@@ -921,13 +1148,31 @@ function App() {
     }
   }
 
+  async function saveRouting() {
+    await persistRouting(activeRoutingProfileId, "Route profile 已保存");
+  }
+
+  async function activateRoutingProfile(profileId: string) {
+    if (profileId === activeRoutingProfileId) return;
+    await persistRouting(profileId, "Route profile 已切换并设为默认");
+  }
+
   async function deleteProvider() {
     if (!providerDraft?.name) return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      await invoke("delete_provider_config", { name: providerDraft.name });
+      const payload = await invoke<{ deleted: boolean; blocked?: boolean; hint_zh?: string; message?: string; references?: Array<Record<string, string>> }>("delete_provider_config", {
+        name: providerDraft.name,
+        expectedVersion: config?.providers_file_version || null,
+      });
+      if (payload.blocked) {
+        const refs = payload.references?.map((item) => `${item.profile_name || item.profile_id}:${item.route}`).join("，");
+        setError(`${payload.hint_zh || payload.message || "Provider 正在被使用。"}${refs ? ` 引用：${refs}` : ""}`);
+        await refreshConfig();
+        return;
+      }
       setNotice(t("providerDeleted"));
       setProviderDraft(null);
       update("provider", "");
@@ -1237,6 +1482,8 @@ function App() {
           setCustomModel={setCustomModel}
           updateProviderDraft={updateProviderDraft}
           updateProviderTemplate={updateProviderTemplate}
+          applyProviderPreset={applyProviderPreset}
+          useCustomAdapter={useCustomAdapter}
           newProviderDraft={newProviderDraft}
           saveProvider={saveProvider}
           deleteProvider={deleteProvider}
@@ -1244,9 +1491,14 @@ function App() {
           testConnection={testConnection}
           useProviderForTask={useProviderForTask}
           addCustomModel={addCustomModel}
-          routingDraft={routingDraft}
-          setRoutingDraft={setRoutingDraft}
+          routingProfilesDraft={routingProfilesDraft}
+          activeRoutingProfileId={activeRoutingProfileId}
+          updateRoutingProfile={updateRoutingProfile}
+          newRoutingProfile={newRoutingProfile}
+          duplicateRoutingProfile={duplicateRoutingProfile}
+          deleteRoutingProfile={deleteRoutingProfile}
           saveRouting={saveRouting}
+          activateRoutingProfile={activateRoutingProfile}
           probe={probe}
           busy={busy}
         />
@@ -1658,6 +1910,8 @@ function ConfigPanel({
   setCustomModel,
   updateProviderDraft,
   updateProviderTemplate,
+  applyProviderPreset,
+  useCustomAdapter,
   newProviderDraft,
   saveProvider,
   deleteProvider,
@@ -1665,9 +1919,14 @@ function ConfigPanel({
   testConnection,
   useProviderForTask,
   addCustomModel,
-  routingDraft,
-  setRoutingDraft,
+  routingProfilesDraft,
+  activeRoutingProfileId,
+  updateRoutingProfile,
+  newRoutingProfile,
+  duplicateRoutingProfile,
+  deleteRoutingProfile,
   saveRouting,
+  activateRoutingProfile,
   probe,
   busy,
 }: {
@@ -1687,6 +1946,8 @@ function ConfigPanel({
   setCustomModel: (value: string) => void;
   updateProviderDraft: (patch: Partial<ProviderDraft>) => void;
   updateProviderTemplate: (compatMode: string) => void;
+  applyProviderPreset: (presetId: string) => void;
+  useCustomAdapter: () => void;
   newProviderDraft: () => void;
   saveProvider: () => void;
   deleteProvider: () => void;
@@ -1694,9 +1955,14 @@ function ConfigPanel({
   testConnection: () => void;
   useProviderForTask: () => void;
   addCustomModel: () => void;
-  routingDraft: { primary: RouteTarget; fallback: RouteTarget[] };
-  setRoutingDraft: React.Dispatch<React.SetStateAction<{ primary: RouteTarget; fallback: RouteTarget[] }>>;
+  routingProfilesDraft: RoutingProfile[];
+  activeRoutingProfileId: string;
+  updateRoutingProfile: (profileId: string, patch: Partial<RoutingProfile>) => void;
+  newRoutingProfile: () => void;
+  duplicateRoutingProfile: (profileId: string) => void;
+  deleteRoutingProfile: (profileId: string) => void;
   saveRouting: () => void;
+  activateRoutingProfile: (profileId: string) => void;
   probe: () => void;
   busy: boolean;
 }) {
@@ -1710,9 +1976,105 @@ function ConfigPanel({
   const tokenLimitValue = tokenLimitValueForMapping(requestMapping);
   const geminiThinkingBudget = String(getPathValue(requestMapping || {}, requestBodyPath("extra_body.google.thinking_config.thinking_budget")) ?? getPathValue(requestMapping || {}, requestBodyPath("thinkingConfig.thinkingBudget")) ?? "");
   const requestMappingInvalid = requestMappingText.trim().length > 0 && !requestMapping;
+  const activeProfile = routingProfilesDraft.find((profile) => profile.id === activeRoutingProfileId) || routingProfilesDraft[0];
   return (
     <div className="space-y-4">
-      <Panel title="Provider 配置中心">
+      <Panel title="Route Profiles">
+        <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <aside className="space-y-2">
+            <button className="tvx-btn w-full justify-start" onClick={newRoutingProfile} disabled={busy}>
+              <Plus size={16} /> 新建配置
+            </button>
+            <div className="grid max-h-[280px] gap-2 overflow-auto pr-1">
+              {routingProfilesDraft.map((profile) => (
+                <button
+                  key={profile.id}
+                  className={`rounded-lg border p-3 text-left text-sm transition ${
+                    profile.id === activeRoutingProfileId ? "border-brand bg-emerald-50" : "border-line bg-white hover:bg-slate-50"
+                  }`}
+                  onClick={() => activateRoutingProfile(profile.id)}
+                  disabled={busy}
+                >
+                  <span className="block truncate font-semibold">{profile.name}</span>
+                  <span className="mt-1 block truncate text-xs text-muted">
+                    {profile.primary.provider || "未选择"} · {profile.primary.model || "未选择模型"}
+                  </span>
+                  <span className="mt-2 block text-[11px] text-muted">Fallback {profile.fallback.length}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="space-y-3">
+            {!activeProfile && <p className="rounded-lg bg-slate-50 p-3 text-sm text-muted">请新建一个模型路由配置。</p>}
+            {activeProfile && (
+              <>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-3">
+                  <label className="tvx-label">
+                    配置名称
+                    <input className="tvx-input" value={activeProfile.name} onChange={(event) => updateRoutingProfile(activeProfile.id, { name: event.target.value })} />
+                  </label>
+                  <button className="tvx-btn" onClick={() => duplicateRoutingProfile(activeProfile.id)} disabled={busy}>
+                    <ClipboardList size={16} /> 复制
+                  </button>
+                  <button className="tvx-btn tvx-btn-danger" onClick={() => deleteRoutingProfile(activeProfile.id)} disabled={busy || routingProfilesDraft.length <= 1}>
+                    <Trash2 size={16} /> 删除
+                  </button>
+                </div>
+                <RouteEditor
+                  label="Primary"
+                  route={activeProfile.primary}
+                  providers={config?.providers || []}
+                  onChange={(route) => {
+                    updateRoutingProfile(activeProfile.id, { primary: route });
+                    update("provider", route.provider);
+                    update("model", route.model);
+                  }}
+                />
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted">Fallback</span>
+                    <button
+                      className="tvx-btn min-h-8 px-2"
+                      onClick={() => updateRoutingProfile(activeProfile.id, { fallback: [...activeProfile.fallback, { provider: "", model: "" }] })}
+                    >
+                      <Plus size={14} /> 添加
+                    </button>
+                  </div>
+                  {activeProfile.fallback.map((route, index) => (
+                    <div key={index} className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
+                      <RouteEditor
+                        label={`Fallback ${index + 1}`}
+                        route={route}
+                        providers={config?.providers || []}
+                        onChange={(next) =>
+                          updateRoutingProfile(activeProfile.id, {
+                            fallback: activeProfile.fallback.map((item, itemIndex) => (itemIndex === index ? next : item)),
+                          })
+                        }
+                      />
+                      <button
+                        className="tvx-btn tvx-btn-danger mt-5 px-0"
+                        onClick={() =>
+                          updateRoutingProfile(activeProfile.id, {
+                            fallback: activeProfile.fallback.filter((_, itemIndex) => itemIndex !== index),
+                          })
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button className="tvx-btn tvx-btn-primary" onClick={saveRouting} disabled={busy || !activeProfile.primary.provider || !activeProfile.primary.model}>
+                  <Save size={16} /> 保存并设为默认
+                </button>
+              </>
+            )}
+          </section>
+        </div>
+      </Panel>
+
+      <Panel title="Provider Connections">
         <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
           <aside className="space-y-2">
             <button className="tvx-btn w-full justify-start" onClick={newProviderDraft} disabled={busy}>
@@ -1746,6 +2108,29 @@ function ConfigPanel({
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <label className="tvx-label">
+                    Provider preset
+                    <select className="tvx-input" defaultValue="" onChange={(event) => event.target.value && applyProviderPreset(event.target.value)}>
+                      <option value="">不使用快捷预设</option>
+                      {config?.provider_presets?.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-xs font-normal text-muted">切换 preset 会重置协议字段，仅保留名称、凭据引用和模型列表。</span>
+                  </label>
+                  <label className="tvx-label">
+                    Protocol
+                    <select className="tvx-input" value={providerTemplateId} onChange={(event) => updateProviderTemplate(event.target.value)}>
+                      {protocolTemplates(config).map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-xs font-normal text-muted">切换 protocol 会重置 auth、endpoint、mapping、headers 和 capabilities。</span>
+                  </label>
+                  <label className="tvx-label">
                     {t("providerName")}
                     <input
                       className="tvx-input"
@@ -1755,16 +2140,6 @@ function ConfigPanel({
                         updateProviderDraft({ name, env_key: providerDraft.env_key || envKeyForName(name), credential_id: providerDraft.credential_id || name });
                       }}
                     />
-                  </label>
-                  <label className="tvx-label">
-                    {t("compatMode")}
-                    <select className="tvx-input" value={providerTemplateId} onChange={(event) => updateProviderTemplate(event.target.value)}>
-                      {config?.provider_templates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.label}
-                        </option>
-                      ))}
-                    </select>
                   </label>
                   <label className="tvx-label">
                     {t("baseUrl")}
@@ -1778,6 +2153,11 @@ function ConfigPanel({
                     credential_id
                     <input className="tvx-input" value={providerDraft.credential_id} onChange={(event) => updateProviderDraft({ credential_id: event.target.value })} />
                   </label>
+                  <div className="flex items-end">
+                    <button className="tvx-btn w-full" onClick={useCustomAdapter} disabled={busy}>
+                      <SlidersHorizontal size={16} /> 找不到你的 API？
+                    </button>
+                  </div>
                 </div>
 
                 <section className="grid grid-cols-[24px_minmax(120px,1fr)_minmax(180px,260px)_auto] items-center gap-3 rounded-lg border border-line p-3">
@@ -2050,52 +2430,6 @@ function ConfigPanel({
         </div>
       </Panel>
 
-      <Panel title={t("routing")}>
-        <div className="grid grid-cols-2 gap-4">
-          <RouteEditor
-            label="Primary"
-            route={routingDraft.primary}
-            providers={config?.providers || []}
-            onChange={(route) => setRoutingDraft((current) => ({ ...current, primary: route }))}
-          />
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted">Fallback</span>
-              <button
-                className="tvx-btn min-h-8 px-2"
-                onClick={() => setRoutingDraft((current) => ({ ...current, fallback: [...current.fallback, { provider: "", model: "" }] }))}
-              >
-                <Plus size={14} /> 添加
-              </button>
-            </div>
-            {routingDraft.fallback.map((route, index) => (
-              <div key={index} className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
-                <RouteEditor
-                  label={`Fallback ${index + 1}`}
-                  route={route}
-                  providers={config?.providers || []}
-                  onChange={(next) =>
-                    setRoutingDraft((current) => ({
-                      ...current,
-                      fallback: current.fallback.map((item, itemIndex) => (itemIndex === index ? next : item)),
-                    }))
-                  }
-                />
-                <button
-                  className="tvx-btn tvx-btn-danger mt-5 px-0"
-                  onClick={() => setRoutingDraft((current) => ({ ...current, fallback: current.fallback.filter((_, itemIndex) => itemIndex !== index) }))}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-            <button className="tvx-btn tvx-btn-primary" onClick={saveRouting} disabled={busy}>
-              <Save size={16} /> 保存路由
-            </button>
-          </div>
-        </div>
-      </Panel>
-
       <Panel title="ASR">
         <div className="grid grid-cols-4 gap-4">
           <label className="tvx-label">
@@ -2218,7 +2552,7 @@ function RightRail({
                 <span className="truncate text-xs font-semibold">{check.name}</span>
                 <strong className={`text-[11px] ${statusTone(check.status)}`}>{check.status}</strong>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-muted">{check.hint_zh || check.message}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted">{diagnosticHint(check)}</p>
             </article>
           ))}
         </div>
@@ -2463,7 +2797,7 @@ function EnvironmentPanel({
               <strong className="text-sm">{check.name}</strong>
               <span className={`text-xs font-semibold ${statusTone(check.status)}`}>{check.status}</span>
             </div>
-            <p className="mt-2 text-sm leading-relaxed text-muted">{check.hint_zh || check.message}</p>
+            <p className="mt-2 text-sm leading-relaxed text-muted">{diagnosticHint(check)}</p>
             <p className="mt-2 text-xs text-slate-400">{check.code}</p>
           </article>
         ))}

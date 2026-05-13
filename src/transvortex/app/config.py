@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from .models import (
     ProviderLimits,
     RefusalDetectionConfig,
     RepairConfig,
+    RoutingProfile,
     RouteTarget,
     RoutingConfig,
     SubtitleCompressionConfig,
@@ -216,6 +218,66 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     merged = dict(base)
     merged.update(override or {})
     return merged
+
+
+def _route_target(raw: dict[str, Any] | None) -> RouteTarget:
+    raw = raw or {}
+    return RouteTarget(provider=str(raw.get("provider", "")), model=str(raw.get("model", "")))
+
+
+def _route_fallback(raw: Any) -> list[RouteTarget]:
+    if not isinstance(raw, list):
+        return []
+    return [_route_target(item) for item in raw if isinstance(item, dict)]
+
+
+def _routing_profile_from_row(row: dict[str, Any], fallback_id: str) -> RoutingProfile:
+    profile_id = str(row.get("id") or fallback_id).strip() or fallback_id
+    profile_name = "" if "name" in row and row.get("name") is None else str(row.get("name", profile_id)).strip()
+    return RoutingProfile(
+        id=profile_id,
+        name=profile_name,
+        primary=_route_target(row.get("primary") if isinstance(row.get("primary"), dict) else {}),
+        fallback=_route_fallback(row.get("fallback")),
+    )
+
+
+def _profile_seq_from_id(profile_id: str) -> int:
+    match = re.fullmatch(r"route_(\d+)", profile_id)
+    return int(match.group(1)) if match else 0
+
+
+def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, list[RoutingProfile], str, int]:
+    routing_raw = p_yaml.get("routing") or {}
+    if not isinstance(routing_raw, dict):
+        routing_raw = {}
+    raw_profiles = p_yaml.get("routing_profiles")
+    profiles: list[RoutingProfile] = []
+    if isinstance(raw_profiles, list):
+        for idx, item in enumerate(raw_profiles, start=1):
+            if isinstance(item, dict):
+                profiles.append(_routing_profile_from_row(item, f"route_{idx}"))
+    if not profiles:
+        profiles = [
+            RoutingProfile(
+                id="default",
+                name="Default",
+                primary=_route_target(routing_raw.get("primary") if isinstance(routing_raw.get("primary"), dict) else {}),
+                fallback=_route_fallback(routing_raw.get("fallback")),
+            )
+        ]
+    active_profile = str(routing_raw.get("active_profile") or "").strip()
+    active = next((item for item in profiles if item.id == active_profile), None)
+    if active is None:
+        active = profiles[0]
+        active_profile = active.id
+    highest_profile_seq = max([_profile_seq_from_id(item.id) for item in profiles] + [0])
+    try:
+        next_profile_seq = int(routing_raw.get("next_profile_seq", highest_profile_seq + 1))
+    except (TypeError, ValueError):
+        next_profile_seq = highest_profile_seq + 1
+    next_profile_seq = max(next_profile_seq, highest_profile_seq + 1, 1)
+    return RoutingConfig(primary=active.primary, fallback=list(active.fallback)), profiles, active_profile, next_profile_seq
 
 
 def resolve_providers_file(root_dir: Path, providers_file: Path | None = None) -> Path:
@@ -497,20 +559,15 @@ def load_app_config(
         )
         providers[cfg.name] = cfg
 
-    routing_raw = p_yaml.get("routing", {})
-    primary_raw = routing_raw.get("primary", {})
-    fallback_raw = routing_raw.get("fallback", [])
-    routing = RoutingConfig(
-        primary=RouteTarget(
-            provider=primary_raw.get("provider", ""),
-            model=primary_raw.get("model", ""),
-        ),
-        fallback=[
-            RouteTarget(provider=item["provider"], model=item["model"])
-            for item in fallback_raw
-        ],
+    routing, routing_profiles, active_routing_profile, routing_profile_next_seq = _resolve_routing_profiles(p_yaml)
+    return AppConfig(
+        pipeline=pipeline,
+        providers=providers,
+        routing=routing,
+        routing_profiles=routing_profiles,
+        active_routing_profile=active_routing_profile,
+        routing_profile_next_seq=routing_profile_next_seq,
     )
-    return AppConfig(pipeline=pipeline, providers=providers, routing=routing)
 
 
 def apply_route_overrides(

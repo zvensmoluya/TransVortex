@@ -122,6 +122,14 @@ def test_config_show_json_masks_secret_values(tmp_path: Path, monkeypatch, capsy
     assert payload["providers"][0]["env_key"] == "PROVIDER_KEY"
     assert payload["providers"][0]["has_key"] is True
     assert payload["routing"]["primary"]["provider"] == "p1"
+    assert payload["active_routing_profile"] == "default"
+    assert payload["routing_profiles"][0]["primary"]["provider"] == "p1"
+    assert payload["providers_file"]
+    assert payload["providers_file_version"]
+    assert payload["routing_profile_next_seq"] == 1
+    assert payload["protocol_templates"]
+    assert payload["provider_presets"]
+    assert payload["custom_adapter_template"]["id"] == "custom_json"
 
 
 def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, capsys) -> None:

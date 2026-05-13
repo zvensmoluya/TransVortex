@@ -261,5 +261,104 @@ def test_save_provider_routing_writes_primary_and_fallback(tmp_path: Path) -> No
     )
     assert payload["routing"]["primary"]["provider"] == "p1"
     assert payload["routing"]["fallback"][0]["model"] == "m2"
+    assert payload["active_routing_profile"] == "default"
     raw = (root / "providers.local.yaml").read_text(encoding="utf-8")
     assert "fallback" in raw
+    assert "routing_profiles" in raw
+
+
+def test_save_provider_routing_writes_named_profiles(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_config(root)
+    payload = save_provider_routing(
+        root_dir=root,
+        routing={
+            "active_profile": "route_2",
+            "profiles": [
+                {"id": "route_1", "name": "配置 1", "primary": {"provider": "p1", "model": "m1"}, "fallback": []},
+                {
+                    "id": "route_2",
+                    "name": "配置 2",
+                    "primary": {"provider": "p2", "model": "m2"},
+                    "fallback": [{"provider": "p1", "model": "m1"}],
+                },
+            ],
+        },
+    )
+    assert payload["active_routing_profile"] == "route_2"
+    assert payload["routing"]["primary"] == {"provider": "p2", "model": "m2"}
+    assert payload["routing_profiles"][1]["name"] == "配置 2"
+    raw = (root / "providers.local.yaml").read_text(encoding="utf-8")
+    assert "active_profile: route_2" in raw
+    assert "routing_profiles" in raw
+
+
+def test_save_provider_routing_legacy_payload_updates_default_without_switching_active(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_config(root)
+    save_provider_routing(
+        root_dir=root,
+        routing={
+            "active_profile": "route_2",
+            "profiles": [
+                {"id": "default", "name": "Default", "primary": {"provider": "p1", "model": "m1"}, "fallback": []},
+                {"id": "route_2", "name": "配置 2", "primary": {"provider": "p2", "model": "m2"}, "fallback": []},
+            ],
+            "next_profile_seq": 3,
+        },
+    )
+    payload = save_provider_routing(
+        root_dir=root,
+        routing={
+            "primary": {"provider": "p1", "model": "m1"},
+            "fallback": [{"provider": "p2", "model": "m2"}],
+        },
+    )
+    assert payload["active_routing_profile"] == "route_2"
+    assert payload["routing"]["primary"] == {"provider": "p2", "model": "m2"}
+    default = payload["routing_profiles"][0]
+    assert default["id"] == "default"
+    assert default["fallback"][0]["model"] == "m2"
+
+
+def test_save_provider_routing_rejects_duplicate_or_empty_names(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_config(root)
+    for name in ["", "配置 1"]:
+        try:
+            save_provider_routing(
+                root_dir=root,
+                routing={
+                    "active_profile": "route_1",
+                    "profiles": [
+                        {"id": "route_1", "name": "配置 1", "primary": {"provider": "p1", "model": "m1"}, "fallback": []},
+                        {"id": "route_2", "name": name, "primary": {"provider": "p2", "model": "m2"}, "fallback": []},
+                    ],
+                },
+            )
+        except ValueError as exc:
+            assert "routing_profile_name" in str(exc)
+        else:  # pragma: no cover - assertion branch
+            raise AssertionError("expected invalid profile name to fail")
+
+
+def test_save_provider_routing_rejects_missing_provider_or_model(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_config(root)
+    cases = [
+        ({"provider": "missing", "model": "m1"}, "routing_provider_missing"),
+        ({"provider": "p1", "model": "missing"}, "routing_model_missing"),
+    ]
+    for route, code in cases:
+        try:
+            save_provider_routing(
+                root_dir=root,
+                routing={
+                    "active_profile": "route_1",
+                    "profiles": [{"id": "route_1", "name": "配置 1", "primary": route, "fallback": []}],
+                },
+            )
+        except ValueError as exc:
+            assert code in str(exc)
+        else:  # pragma: no cover - assertion branch
+            raise AssertionError("expected invalid route to fail")

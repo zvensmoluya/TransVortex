@@ -283,6 +283,7 @@ fn save_provider_config(
     app: AppHandle,
     provider_draft: Value,
     api_key: Option<String>,
+    expected_version: Option<Value>,
 ) -> Result<Value, String> {
     let root = repo_root(&app)?;
     let mut args = vec![
@@ -293,22 +294,28 @@ fn save_provider_config(
         "--json".into(),
     ];
     push_arg(&mut args, "--api-key", &api_key);
+    if let Some(version) = expected_version {
+        args.push("--expected-version".into());
+        args.push(value_arg(&version)?);
+    }
     run_worker_json(&root, &args)
 }
 
 #[tauri::command]
-fn delete_provider_config(app: AppHandle, name: String) -> Result<Value, String> {
+fn delete_provider_config(app: AppHandle, name: String, expected_version: Option<Value>) -> Result<Value, String> {
     let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "provider".into(),
-            "delete".into(),
-            "--name".into(),
-            name,
-            "--json".into(),
-        ],
-    )
+    let mut args = vec![
+        "provider".into(),
+        "delete".into(),
+        "--name".into(),
+        name,
+        "--json".into(),
+    ];
+    if let Some(version) = expected_version {
+        args.push("--expected-version".into());
+        args.push(value_arg(&version)?);
+    }
+    run_worker_json(&root, &args)
 }
 
 #[tauri::command]

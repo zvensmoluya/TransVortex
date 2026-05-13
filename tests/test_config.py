@@ -51,6 +51,94 @@ routing:
     assert cfg.providers["custom"].base_url == "https://my-proxy.example.com/api"
     assert cfg.routing.primary.model == "my-model-v2"
     assert cfg.providers["custom"].compat_mode == "openai_chat"
+    assert cfg.active_routing_profile == "default"
+    assert cfg.routing_profiles[0].primary.provider == "custom"
+
+
+def test_routing_profiles_select_active_profile(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: KEY
+    models: [m1, m2]
+routing:
+  active_profile: route_2
+  primary: {provider: p1, model: m1}
+  fallback: []
+routing_profiles:
+  - id: route_1
+    name: 配置 1
+    primary: {provider: p1, model: m1}
+    fallback: []
+  - id: route_2
+    name: 配置 2
+    primary: {provider: p1, model: m2}
+    fallback:
+      - {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.active_routing_profile == "route_2"
+    assert cfg.routing.primary.model == "m2"
+    assert cfg.routing.fallback[0].model == "m1"
+    assert [item.name for item in cfg.routing_profiles] == ["配置 1", "配置 2"]
+    assert cfg.routing_profile_next_seq == 3
+
+
+def test_routing_profiles_fallback_to_first_when_active_missing(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: KEY
+    models: [m1]
+routing:
+  active_profile: missing
+routing_profiles:
+  - id: route_1
+    name: 配置 1
+    primary: {provider: p1, model: m1}
+    fallback: []
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.active_routing_profile == "route_1"
+    assert cfg.routing.primary.provider == "p1"
+    assert cfg.routing_profile_next_seq == 2
+
+
+def test_routing_profiles_next_seq_uses_configured_monotonic_value(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: KEY
+    models: [m1]
+routing:
+  active_profile: route_1
+  next_profile_seq: 9
+routing_profiles:
+  - id: route_1
+    name: 配置 1
+    primary: {provider: p1, model: m1}
+    fallback: []
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.routing_profile_next_seq == 9
 
 
 def test_provider_new_schema_and_mappings(tmp_path: Path) -> None:

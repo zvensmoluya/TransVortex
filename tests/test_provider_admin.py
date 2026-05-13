@@ -2,16 +2,58 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.error import HTTPError
 
 import yaml
 
 from transvortex.providers.admin import (
+    custom_adapter_template_payload,
+    delete_provider_config,
     draft_to_provider_config,
     fetch_provider_models,
+    providers_file_version,
+    protocol_templates_payload,
+    provider_presets_payload,
     provider_templates_payload,
     run_provider_connection_test,
     save_provider_config,
 )
+
+
+def _write_provider_admin_config(root: Path) -> None:
+    (root / "providers.local.yaml").write_text(
+        """
+custom_top: keep-me
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: KEY
+    models: [m1]
+  - name: p2
+    api_type: openai
+    base_url: https://fallback.example/v1
+    env_key: KEY
+    models: [m2]
+routing:
+  active_profile: route_2
+  next_profile_seq: 3
+  primary: {provider: p2, model: m2}
+  fallback: []
+routing_profiles:
+  - id: route_1
+    name: 配置 1
+    primary: {provider: p1, model: m1}
+    fallback: []
+  - id: route_2
+    name: 配置 2
+    primary: {provider: p2, model: m2}
+    fallback:
+      - {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (root / "pipeline.yaml").write_text("{}", encoding="utf-8")
 
 
 def test_provider_templates_include_core_compat_modes() -> None:
@@ -32,6 +74,12 @@ def test_provider_templates_include_core_compat_modes() -> None:
         "vertex_openai_compatible",
         "custom_json",
     }.issubset(ids)
+    protocol_ids = {row["id"] for row in protocol_templates_payload()}
+    assert "custom_json" not in protocol_ids
+    assert {"openai_chat", "openai_responses", "vertex_native"}.issubset(protocol_ids)
+    preset_ids = {row["id"] for row in provider_presets_payload()}
+    assert {"openai_official", "google_ai_studio", "google_vertex_gemini"}.issubset(preset_ids)
+    assert custom_adapter_template_payload()["id"] == "custom_json"
 
 
 def test_save_provider_config_writes_yaml_without_api_key(tmp_path: Path, monkeypatch) -> None:
@@ -178,6 +226,59 @@ def test_provider_connection_maps_response(monkeypatch) -> None:
     assert report["checks"][0]["code"] == "provider_connection_ok"
 
 
+def test_provider_connection_retries_transient_upstream_error(monkeypatch) -> None:
+    calls = 0
+
+    def fake_request_json(url, payload, headers, timeout, method="POST"):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(url, 502, "Bad Gateway", hdrs=None, fp=None)
+        return {"choices": [{"message": {"content": "[1] pong"}}]}
+
+    monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    report = run_provider_connection_test(
+        provider_draft={
+            "name": "openai_like",
+            "compat_mode": "openai_chat",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["model-a"],
+            "limits": {"retry": 3},
+        },
+        model="model-a",
+        api_key="secret",
+    )
+    assert report["status"] == "PASS"
+    assert calls == 2
+    assert report["checks"][0]["details"]["attempts"] == 2
+
+
+def test_provider_connection_reports_upstream_error_hint(monkeypatch) -> None:
+    def fake_request_json(url, payload, headers, timeout, method="POST"):
+        raise HTTPError(url, 502, "Bad Gateway", hdrs=None, fp=None)
+
+    monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    report = run_provider_connection_test(
+        provider_draft={
+            "name": "openai_like",
+            "compat_mode": "openai_chat",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["model-a"],
+            "limits": {"retry": 2},
+        },
+        model="model-a",
+        api_key="secret",
+    )
+    assert report["status"] == "FAIL"
+    assert report["checks"][0]["code"] == "provider_upstream_error"
+    assert report["checks"][0]["details"] == {"status": 502, "attempts": 2}
+    assert "网关或上游服务" in report["checks"][0]["hint_zh"]
+
+
 def test_save_provider_config_preserves_advanced_request_mapping(tmp_path: Path) -> None:
     save_provider_config(
         root_dir=tmp_path,
@@ -219,3 +320,52 @@ def test_provider_connection_reports_response_shape_when_mapping_fails(monkeypat
     )
     assert report["status"] == "FAIL"
     assert report["checks"][0]["details"]["response_shape"] == {"unexpected": {"nested": [{"text": "str"}]}}
+
+
+def test_delete_provider_blocks_when_route_profile_references_provider(tmp_path: Path) -> None:
+    _write_provider_admin_config(tmp_path)
+    payload = delete_provider_config(root_dir=tmp_path, name="p1")
+    assert payload["deleted"] is False
+    assert payload["blocked"] is True
+    assert payload["code"] == "provider_in_use"
+    assert {ref["route"] for ref in payload["references"]} == {"primary", "fallback[0]"}
+
+
+def test_delete_provider_preserves_profiles_next_seq_and_unknown_fields(tmp_path: Path) -> None:
+    _write_provider_admin_config(tmp_path)
+    data = yaml.safe_load((tmp_path / "providers.local.yaml").read_text(encoding="utf-8"))
+    data["routing_profiles"][1]["primary"] = {"provider": "p1", "model": "m1"}
+    data["routing_profiles"][1]["fallback"] = []
+    data["routing"]["active_profile"] = "route_1"
+    data["routing"]["primary"] = {"provider": "p1", "model": "m1"}
+    (tmp_path / "providers.local.yaml").write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    payload = delete_provider_config(root_dir=tmp_path, name="p2")
+    assert payload["deleted"] is True
+    saved = yaml.safe_load((tmp_path / "providers.local.yaml").read_text(encoding="utf-8"))
+    assert saved["custom_top"] == "keep-me"
+    assert saved["routing"]["next_profile_seq"] == 3
+    assert saved["routing_profiles"][1]["id"] == "route_2"
+
+
+def test_provider_save_rejects_stale_expected_version(tmp_path: Path) -> None:
+    _write_provider_admin_config(tmp_path)
+    version = providers_file_version(tmp_path / "providers.local.yaml")
+    raw = (tmp_path / "providers.local.yaml").read_text(encoding="utf-8")
+    (tmp_path / "providers.local.yaml").write_text(raw + "\n# changed\n", encoding="utf-8")
+    try:
+        save_provider_config(
+            root_dir=tmp_path,
+            provider_draft={
+                "name": "p3",
+                "compat_mode": "openai_chat",
+                "base_url": "https://p3.example/v1",
+                "env_key": "KEY",
+                "models": ["m3"],
+            },
+            expected_version=version,
+        )
+    except ValueError as exc:
+        assert "provider_config_conflict" in str(exc)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("expected stale version to fail")

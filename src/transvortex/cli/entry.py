@@ -33,9 +33,13 @@ from ..core.orchestrator import (
 )
 from ..providers.probe import probe_exit_code, probe_provider
 from ..providers.admin import (
+    custom_adapter_template_payload,
     delete_provider_config,
     fetch_provider_models,
+    protocol_templates_payload,
+    provider_presets_payload,
     provider_templates_payload,
+    providers_file_version,
     run_provider_connection_test,
     save_provider_config,
     save_provider_routing,
@@ -179,9 +183,16 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         "root_dir": str(root),
         "auth_file": str(auth_file_path()),
         "providers_file": str(resolved_providers_file),
+        "providers_file_version": providers_file_version(resolved_providers_file),
         "artifacts_dir": str(config.pipeline.artifacts_dir),
         "pipeline": to_plain(config.pipeline),
         "routing": to_plain(config.routing),
+        "active_routing_profile": config.active_routing_profile,
+        "routing_profiles": to_plain(config.routing_profiles),
+        "routing_profile_next_seq": int(getattr(config, "routing_profile_next_seq", 1) or 1),
+        "protocol_templates": protocol_templates_payload(),
+        "provider_presets": provider_presets_payload(),
+        "custom_adapter_template": custom_adapter_template_payload(),
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
     }
@@ -446,10 +457,12 @@ def _build_parser() -> argparse.ArgumentParser:
     provider_save_p = provider_sub.add_parser("save", help="Save provider config to providers.local.yaml")
     provider_save_p.add_argument("--json-payload", required=True)
     provider_save_p.add_argument("--api-key", default=None)
+    provider_save_p.add_argument("--expected-version", default=None)
     provider_save_p.add_argument("--json", action="store_true")
 
     provider_delete_p = provider_sub.add_parser("delete", help="Delete provider config from providers.local.yaml")
     provider_delete_p.add_argument("--name", required=True)
+    provider_delete_p.add_argument("--expected-version", default=None)
     provider_delete_p.add_argument("--json", action="store_true")
 
     provider_models_p = provider_sub.add_parser("models", help="Fetch provider models from network")
@@ -776,12 +789,17 @@ def main() -> None:
             root_dir=root,
             provider_draft=_read_json_arg(args.json_payload),
             api_key=args.api_key,
+            expected_version=_read_json_arg(args.expected_version) if args.expected_version else None,
         )
         _print_json(payload)
         return
 
     if args.command == "provider" and args.provider_command == "delete":
-        payload = delete_provider_config(root_dir=root, name=args.name)
+        payload = delete_provider_config(
+            root_dir=root,
+            name=args.name,
+            expected_version=_read_json_arg(args.expected_version) if args.expected_version else None,
+        )
         _print_json(payload)
         return
 

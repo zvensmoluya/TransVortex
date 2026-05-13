@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -241,6 +243,47 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
 }
 
 
+PROTOCOL_TEMPLATE_IDS = [
+    "openai_chat",
+    "openai_responses",
+    "openai_completions",
+    "anthropic_messages",
+    "gemini_generate_content",
+    "gemini_openai_compatible",
+    "vertex_native",
+    "vertex_openai_compatible",
+]
+
+
+PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "openai_official": {
+        "label": "OpenAI official",
+        "protocol_template_id": "openai_responses",
+        **PROVIDER_TEMPLATES["openai_responses"],
+    },
+    "anthropic_official": {
+        "label": "Anthropic official",
+        "protocol_template_id": "anthropic_messages",
+        **PROVIDER_TEMPLATES["anthropic_messages"],
+    },
+    "google_ai_studio": {
+        "label": "Google AI Studio",
+        "protocol_template_id": "gemini_generate_content",
+        **PROVIDER_TEMPLATES["gemini_ai_studio_native"],
+    },
+    "google_vertex_gemini": {
+        "label": "Google Vertex AI Gemini",
+        "protocol_template_id": "vertex_native",
+        **PROVIDER_TEMPLATES["vertex_native"],
+    },
+    "google_vertex_openai": {
+        "label": "Google Vertex AI OpenAI-compatible",
+        "protocol_template_id": "vertex_openai_compatible",
+        **PROVIDER_TEMPLATES["vertex_openai_compatible"],
+    },
+}
+
+
 @dataclass
 class ProviderCheck:
     name: str
@@ -258,6 +301,21 @@ def provider_templates_payload() -> list[dict[str, Any]]:
     ]
 
 
+def protocol_templates_payload() -> list[dict[str, Any]]:
+    return [{"id": key, **to_plain(PROVIDER_TEMPLATES[key])} for key in PROTOCOL_TEMPLATE_IDS]
+
+
+def provider_presets_payload() -> list[dict[str, Any]]:
+    return [
+        {"id": key, **to_plain(preset)}
+        for key, preset in sorted(PROVIDER_PRESETS.items(), key=lambda item: item[0])
+    ]
+
+
+def custom_adapter_template_payload() -> dict[str, Any]:
+    return {"id": "custom_json", **to_plain(PROVIDER_TEMPLATES["custom_json"])}
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -272,17 +330,63 @@ def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-def _slug_env_key(name: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").upper()
-    return f"TVX_PROVIDER_{slug or 'CUSTOM'}_API_KEY"
-
-
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def providers_file_version(path: Path) -> dict[str, int] | None:
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+
+
+def _parse_expected_version(raw: Any) -> dict[str, int] | None:
+    raw = _as_dict(raw)
+    if not raw:
+        return None
+    try:
+        return {"mtime_ns": int(raw.get("mtime_ns", -1)), "size": int(raw.get("size", -1))}
+    except (TypeError, ValueError):
+        return {"mtime_ns": -1, "size": -1}
+
+
+def _check_expected_version(path: Path, expected_version: Any) -> None:
+    expected = _parse_expected_version(expected_version)
+    if expected is None:
+        return
+    current = providers_file_version(path)
+    if current != expected:
+        raise ValueError(
+            json_diagnostic(
+                code="provider_config_conflict",
+                message="provider config changed on disk",
+                hint_zh="Provider 配置文件已被其它窗口或进程修改，请刷新后重试。",
+                details={"expected": expected, "current": current},
+            )
+        )
+
+
+def json_diagnostic(*, code: str, message: str, hint_zh: str, details: dict[str, Any] | None = None) -> str:
+    return json.dumps(
+        {
+            "status": "FAIL",
+            "code": code,
+            "message": message,
+            "hint_zh": hint_zh,
+            "details": details or {},
+        },
+        ensure_ascii=False,
+    )
+
+
+def _slug_env_key(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").upper()
+    return f"TVX_PROVIDER_{slug or 'CUSTOM'}_API_KEY"
 
 
 def _template_for_compat(compat_mode: str) -> dict[str, Any]:
@@ -371,31 +475,294 @@ def provider_config_to_yaml_row(config: ProviderConfig) -> dict[str, Any]:
     return row
 
 
+def _route_row(raw: Any) -> dict[str, str]:
+    raw = _as_dict(raw)
+    return {"provider": str(raw.get("provider", "")), "model": str(raw.get("model", ""))}
+
+
+def _fallback_rows(raw: Any) -> list[dict[str, str]]:
+    return [
+        _route_row(item)
+        for item in _as_list(raw)
+        if isinstance(item, dict) and item.get("provider") and item.get("model")
+    ]
+
+
+def _normalize_routing_profile(raw: dict[str, Any], fallback_id: str) -> dict[str, Any]:
+    profile_id = str(raw.get("id") or fallback_id).strip() or fallback_id
+    name = "" if "name" in raw and raw.get("name") is None else str(raw.get("name", profile_id)).strip()
+    return {
+        "id": profile_id,
+        "name": name,
+        "primary": _route_row(raw.get("primary")),
+        "fallback": _fallback_rows(raw.get("fallback")),
+    }
+
+
+def _profile_seq_from_id(profile_id: str) -> int:
+    match = re.fullmatch(r"route_(\d+)", profile_id)
+    return int(match.group(1)) if match else 0
+
+
+def _fallback_next_profile_seq(profiles: list[dict[str, Any]]) -> int:
+    highest = max([_profile_seq_from_id(str(item.get("id", ""))) for item in profiles] + [0])
+    return highest + 1
+
+
+def _normalized_next_profile_seq(raw: Any, profiles: list[dict[str, Any]]) -> int:
+    fallback = _fallback_next_profile_seq(profiles)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = fallback
+    return max(value, fallback, 1)
+
+
+def _existing_routing_profiles(existing: dict[str, Any]) -> list[dict[str, Any]]:
+    routing = _as_dict(existing.get("routing"))
+    rows = [
+        _normalize_routing_profile(item, f"route_{idx}")
+        for idx, item in enumerate(_as_list(existing.get("routing_profiles")), start=1)
+        if isinstance(item, dict)
+    ]
+    if rows:
+        return rows
+    return [
+        _normalize_routing_profile(
+            {
+                "id": "default",
+                "name": "Default",
+                "primary": routing.get("primary"),
+                "fallback": routing.get("fallback"),
+            },
+            "default",
+        )
+    ]
+
+
+def _active_profile_id(existing: dict[str, Any], profiles: list[dict[str, Any]]) -> str:
+    routing = _as_dict(existing.get("routing"))
+    requested = str(routing.get("active_profile") or "").strip()
+    if any(item["id"] == requested for item in profiles):
+        return requested
+    return profiles[0]["id"] if profiles else "default"
+
+
+def _providers_by_name(rows: list[Any]) -> dict[str, dict[str, Any]]:
+    return {str(item.get("name")): item for item in rows if isinstance(item, dict) and item.get("name")}
+
+
+def _validate_routing_profiles(
+    *,
+    profiles: list[dict[str, Any]],
+    providers: list[Any],
+    active_profile: str,
+) -> None:
+    if not profiles:
+        raise ValueError(
+            json_diagnostic(
+                code="routing_profile_missing",
+                message="at least one route profile is required",
+                hint_zh="至少需要一个 Route profile。",
+            )
+        )
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    providers_by_name = _providers_by_name(providers)
+    for profile in profiles:
+        profile_id = str(profile.get("id", "")).strip()
+        name = str(profile.get("name", "")).strip()
+        if not profile_id:
+            raise ValueError(
+                json_diagnostic(
+                    code="routing_profile_id_missing",
+                    message="route profile id is missing",
+                    hint_zh="Route profile 缺少 id。",
+                    details={"profile": profile},
+                )
+            )
+        if profile_id in seen_ids:
+            raise ValueError(
+                json_diagnostic(
+                    code="routing_profile_id_duplicate",
+                    message=f"duplicate route profile id: {profile_id}",
+                    hint_zh=f"Route profile id 重复：{profile_id}。",
+                    details={"profile_id": profile_id},
+                )
+            )
+        seen_ids.add(profile_id)
+        if not name:
+            raise ValueError(
+                json_diagnostic(
+                    code="routing_profile_name_missing",
+                    message="route profile name is missing",
+                    hint_zh="Route profile 名称不能为空。",
+                    details={"profile_id": profile_id},
+                )
+            )
+        name_key = name.casefold()
+        if name_key in seen_names:
+            raise ValueError(
+                json_diagnostic(
+                    code="routing_profile_name_duplicate",
+                    message=f"duplicate route profile name: {name}",
+                    hint_zh=f"Route profile 名称重复：{name}。",
+                    details={"profile_name": name},
+                )
+            )
+        seen_names.add(name_key)
+        for role, route in [("primary", profile.get("primary"))] + [
+            (f"fallback[{idx}]", item) for idx, item in enumerate(_as_list(profile.get("fallback")))
+        ]:
+            route = _route_row(route)
+            provider_name = route["provider"]
+            model = route["model"]
+            if not provider_name or not model:
+                raise ValueError(
+                    json_diagnostic(
+                        code="routing_route_missing",
+                        message="route provider/model is missing",
+                        hint_zh="Route profile 中的 provider 和 model 都不能为空。",
+                        details={"profile_id": profile_id, "profile_name": name, "route": role},
+                    )
+                )
+            provider = providers_by_name.get(provider_name)
+            if provider is None:
+                raise ValueError(
+                    json_diagnostic(
+                        code="routing_provider_missing",
+                        message=f"routing provider not found: {provider_name}",
+                        hint_zh=f"Route profile 引用了不存在的 provider：{provider_name}。",
+                        details={"profile_id": profile_id, "profile_name": name, "route": role, "provider": provider_name},
+                    )
+                )
+            models = [str(item) for item in _as_list(provider.get("models"))]
+            if model not in models:
+                raise ValueError(
+                    json_diagnostic(
+                        code="routing_model_missing",
+                        message=f"routing model not found: {provider_name}/{model}",
+                        hint_zh=f"Route profile 引用了 provider 未配置的模型：{provider_name} / {model}。",
+                        details={
+                            "profile_id": profile_id,
+                            "profile_name": name,
+                            "route": role,
+                            "provider": provider_name,
+                            "model": model,
+                            "provider_models": models,
+                        },
+                    )
+                )
+    if active_profile not in seen_ids:
+        raise ValueError(
+            json_diagnostic(
+                code="routing_active_profile_missing",
+                message=f"active route profile not found: {active_profile}",
+                hint_zh="当前 active Route profile 不存在。",
+                details={"active_profile": active_profile},
+            )
+        )
+
+
+def _provider_references(profiles: list[dict[str, Any]], provider_name: str) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for profile in profiles:
+        routes = [("primary", profile.get("primary"))] + [
+            (f"fallback[{idx}]", item) for idx, item in enumerate(_as_list(profile.get("fallback")))
+        ]
+        for route_name, route in routes:
+            route = _route_row(route)
+            if route["provider"] == provider_name:
+                refs.append(
+                    {
+                        "profile_id": profile.get("id", ""),
+                        "profile_name": profile.get("name", ""),
+                        "route": route_name,
+                        "provider": route["provider"],
+                        "model": route["model"],
+                    }
+                )
+    return refs
+
+
+def _payload_with_routing(
+    existing: dict[str, Any],
+    *,
+    providers: list[Any],
+    routing: dict[str, Any],
+    profiles: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = dict(existing)
+    payload["providers"] = providers
+    payload["routing"] = routing
+    payload["routing_profiles"] = profiles
+    return payload
+
+
+def _legacy_routing_profile(existing: dict[str, Any]) -> dict[str, Any]:
+    routing = _as_dict(existing.get("routing"))
+    return _normalize_routing_profile(
+        {
+            "id": "default",
+            "name": "Default",
+            "primary": routing.get("primary"),
+            "fallback": routing.get("fallback"),
+        },
+        "default",
+    )
+
+
 def save_provider_config(
     *,
     root_dir: Path,
     provider_draft: dict[str, Any],
     api_key: str | None = None,
+    expected_version: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     providers_file = root_dir / "providers.local.yaml"
-    existing = _read_yaml(providers_file if providers_file.exists() else resolve_providers_file(root_dir))
+    read_path = providers_file if providers_file.exists() else resolve_providers_file(root_dir)
+    _check_expected_version(read_path, expected_version)
+    existing = _read_yaml(read_path)
     provider = draft_to_provider_config(provider_draft)
     rows = [row for row in _as_list(existing.get("providers")) if row.get("name") != provider.name]
     rows.append(provider_config_to_yaml_row(provider))
-    primary = _as_dict(_as_dict(existing.get("routing")).get("primary"))
+    routing_existing = _as_dict(existing.get("routing"))
+    primary = _as_dict(routing_existing.get("primary"))
     if not primary.get("provider"):
         primary = {"provider": provider.name, "model": provider.models[0] if provider.models else ""}
+    fallback = _fallback_rows(routing_existing.get("fallback"))
+    if _as_list(existing.get("routing_profiles")):
+        routing_profiles = _existing_routing_profiles(existing)
+    else:
+        routing_profiles = [
+            _normalize_routing_profile(
+                {
+                    "id": str(routing_existing.get("active_profile") or "default"),
+                    "name": "Default",
+                    "primary": primary,
+                    "fallback": fallback,
+                },
+                "default",
+            )
+        ]
     routing = {
+        "active_profile": str(routing_existing.get("active_profile") or routing_profiles[0].get("id") or "default"),
+        "next_profile_seq": _normalized_next_profile_seq(routing_existing.get("next_profile_seq"), routing_profiles),
         "primary": primary,
-        "fallback": _as_list(_as_dict(existing.get("routing")).get("fallback")),
+        "fallback": fallback,
     }
-    _write_yaml(providers_file, {"providers": rows, "routing": routing})
+    _validate_routing_profiles(profiles=routing_profiles, providers=rows, active_profile=routing["active_profile"])
+    _write_yaml(
+        providers_file,
+        _payload_with_routing(existing, providers=rows, routing=routing, profiles=routing_profiles),
+    )
     if api_key:
         write_auth_credential(provider_credential_id(provider), api_key)
     credential = resolve_provider_credential(provider, root_dir=root_dir)
     return {
         "provider": provider.name,
         "providers_file": str(providers_file),
+        "providers_file_version": providers_file_version(providers_file),
         "auth_file": str(auth_file_path()),
         "credential_id": provider_credential_id(provider),
         "has_key": credential.found,
@@ -405,48 +772,108 @@ def save_provider_config(
 
 def save_provider_routing(*, root_dir: Path, routing: dict[str, Any]) -> dict[str, Any]:
     providers_file = root_dir / "providers.local.yaml"
-    existing = _read_yaml(providers_file if providers_file.exists() else resolve_providers_file(root_dir))
-    primary = _as_dict(routing.get("primary"))
-    fallback = [
-        {"provider": str(item.get("provider", "")), "model": str(item.get("model", ""))}
-        for item in _as_list(routing.get("fallback"))
-        if isinstance(item, dict) and item.get("provider") and item.get("model")
-    ]
-    payload = {
-        "providers": _as_list(existing.get("providers")),
-        "routing": {
-            "primary": {
-                "provider": str(primary.get("provider", "")),
-                "model": str(primary.get("model", "")),
+    read_path = providers_file if providers_file.exists() else resolve_providers_file(root_dir)
+    _check_expected_version(read_path, routing.get("expected_version") or routing.get("expectedVersion"))
+    existing = _read_yaml(read_path)
+    providers = _as_list(existing.get("providers"))
+    routing_existing = _as_dict(existing.get("routing"))
+    existing_profiles = _existing_routing_profiles(existing)
+    profiles_payload = _as_list(routing.get("profiles"))
+    if profiles_payload:
+        profiles = [_normalize_routing_profile(item, f"route_{idx}") for idx, item in enumerate(profiles_payload, start=1) if isinstance(item, dict)]
+        if not profiles:
+            profiles = existing_profiles
+        active_profile = str(routing.get("active_profile") or routing.get("activeProfile") or profiles[0]["id"])
+        active = next((item for item in profiles if item["id"] == active_profile), profiles[0])
+        active_profile = active["id"]
+        next_profile_seq = _normalized_next_profile_seq(
+            routing.get("next_profile_seq") or routing.get("nextProfileSeq") or routing_existing.get("next_profile_seq"),
+            profiles,
+        )
+    else:
+        active = _normalize_routing_profile(
+            {
+                "id": "default",
+                "name": "Default",
+                "primary": routing.get("primary"),
+                "fallback": routing.get("fallback"),
             },
-            "fallback": fallback,
-        },
+            "default",
+        )
+        profiles = [
+            _normalize_routing_profile(item, f"route_{idx}")
+            for idx, item in enumerate(existing_profiles, start=1)
+            if isinstance(item, dict) and str(item.get("id") or "") != "default"
+        ]
+        profiles.insert(0, active)
+        existing_active_profile = _active_profile_id(existing, profiles)
+        active_profile = "default" if existing_active_profile == "default" else existing_active_profile
+        active = next((item for item in profiles if item["id"] == active_profile), profiles[0])
+        next_profile_seq = _normalized_next_profile_seq(routing_existing.get("next_profile_seq"), profiles)
+    _validate_routing_profiles(profiles=profiles, providers=providers, active_profile=active_profile)
+    payload_routing = {
+        "active_profile": active_profile,
+        "next_profile_seq": next_profile_seq,
+        "primary": active["primary"],
+        "fallback": active["fallback"],
     }
+    payload = _payload_with_routing(existing, providers=providers, routing=payload_routing, profiles=profiles)
     _write_yaml(providers_file, payload)
-    return {"providers_file": str(providers_file), "routing": payload["routing"]}
+    return {
+        "providers_file": str(providers_file),
+        "routing": payload["routing"],
+        "active_routing_profile": active_profile,
+        "routing_profile_next_seq": next_profile_seq,
+        "routing_profiles": profiles,
+        "providers_file_version": providers_file_version(providers_file),
+    }
 
 
-def delete_provider_config(*, root_dir: Path, name: str) -> dict[str, Any]:
+def delete_provider_config(*, root_dir: Path, name: str, expected_version: dict[str, Any] | None = None) -> dict[str, Any]:
     providers_file = root_dir / "providers.local.yaml"
     if not providers_file.exists():
         return {"deleted": False, "providers_file": str(providers_file)}
+    _check_expected_version(providers_file, expected_version)
     existing = _read_yaml(providers_file)
     rows = _as_list(existing.get("providers"))
     kept = [row for row in rows if row.get("name") != name]
     if len(kept) == len(rows):
         return {"deleted": False, "providers_file": str(providers_file)}
+    profiles = _existing_routing_profiles(existing)
+    references = _provider_references(profiles, name)
+    if references:
+        return {
+            "deleted": False,
+            "blocked": True,
+            "code": "provider_in_use",
+            "message": f"provider is used by {len(references)} route references",
+            "hint_zh": "这个 provider 正在被 Route profile 使用，请先修改路由后再删除。",
+            "references": references,
+            "providers_file": str(providers_file),
+            "providers_file_version": providers_file_version(providers_file),
+        }
     routing = _as_dict(existing.get("routing"))
     primary = _as_dict(routing.get("primary"))
     if primary.get("provider") == name:
         first = kept[0] if kept else {}
         models = _as_list(first.get("models"))
         routing["primary"] = {"provider": first.get("name", ""), "model": models[0] if models else ""}
-    _write_yaml(providers_file, {"providers": kept, "routing": routing or {"primary": {"provider": "", "model": ""}, "fallback": []}})
-    return {"deleted": True, "providers_file": str(providers_file)}
+    routing = routing or {"primary": {"provider": "", "model": ""}, "fallback": []}
+    routing["next_profile_seq"] = _normalized_next_profile_seq(routing.get("next_profile_seq"), profiles)
+    _write_yaml(providers_file, _payload_with_routing(existing, providers=kept, routing=routing, profiles=profiles))
+    return {"deleted": True, "providers_file": str(providers_file), "providers_file_version": providers_file_version(providers_file)}
 
 
 def _api_key_for(config: ProviderConfig, *, root_dir: Path | None = None, override: str | None = None):
     return resolve_provider_credential(config, root_dir=root_dir, explicit_key=override)
+
+
+def _is_retryable_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, HTTPError):
+        return exc.code in {408, 429, 500, 502, 503, 504}
+    if isinstance(exc, URLError):
+        return True
+    return "timed out" in str(exc).lower()
 
 
 def _network_error_hint(exc: Exception) -> ProviderCheck:
@@ -467,6 +894,24 @@ def _network_error_hint(exc: Exception) -> ProviderCheck:
                 code="provider_endpoint_not_found",
                 message="provider endpoint not found",
                 hint_zh="当前接口路径没有响应。若是非标准网关，可以手动填写模型并检查 endpoint。",
+                details={"status": exc.code},
+            )
+        if exc.code in {502, 503, 504}:
+            return ProviderCheck(
+                name="network",
+                status="FAIL",
+                code="provider_upstream_error",
+                message=f"provider upstream returned HTTP {exc.code}",
+                hint_zh="Provider 网关或上游服务暂时失败，请稍后重试；如果持续失败，再检查 base_url、模型和服务商状态。",
+                details={"status": exc.code},
+            )
+        if exc.code in {408, 429, 500}:
+            return ProviderCheck(
+                name="network",
+                status="FAIL",
+                code="provider_retryable_http_error",
+                message=f"provider returned retryable HTTP {exc.code}",
+                hint_zh="Provider 暂时不可用或限流，请稍后重试；如果持续失败，再检查模型和账号额度。",
                 details={"status": exc.code},
             )
         return ProviderCheck(
@@ -579,48 +1024,65 @@ def run_provider_connection_test(
             )
         )
         return {"status": "FAIL", "checks": [asdict(item) for item in checks]}
-    try:
-        req = NormalizedRequest(
-            model=model,
-            lines=["[1] ping"],
-            source_lang="en",
-            target_lang="zh-CN",
-            temperature=0,
-        )
-        payload = _build_payload(provider, req)
-        url, headers = _build_url_and_headers(provider, credential.key, model)
-        headers.update(provider.extra_headers)
-        if provider.compat_mode == "anthropic_messages":
-            headers.setdefault("anthropic-version", "2023-06-01")
-        data = _request_json(url, payload, headers, provider.limits.timeout_seconds, provider.endpoint.method)
-        text = _extract_text_by_paths(data, provider.mapping.response.get("text_paths", []))
-        if text:
-            checks.append(
-                ProviderCheck(
-                    name="network",
-                    status="PASS",
-                    code="provider_connection_ok",
-                    message="provider returned text",
-                    hint_zh="Provider 联网测试通过，模型可以返回文本。",
-                    details={"compat_mode": provider.compat_mode, "credential_source": credential.source},
-                )
+    attempts = min(max(1, provider.limits.retry), 3)
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            req = NormalizedRequest(
+                model=model,
+                lines=["[1] ping"],
+                source_lang="en",
+                target_lang="zh-CN",
+                temperature=0,
             )
-        else:
-            checks.append(
-                ProviderCheck(
-                    name="response_mapping",
-                    status="FAIL",
-                    code="provider_response_mapping_failed",
-                    message="no text extracted from provider response",
-                    hint_zh="Provider 有响应，但当前 response mapping 没有解析到文本。",
-                    details={
-                        "text_paths": provider.mapping.response.get("text_paths", []),
-                        "response_shape": response_shape_summary(data),
-                    },
+            payload = _build_payload(provider, req)
+            url, headers = _build_url_and_headers(provider, credential.key, model)
+            headers.update(provider.extra_headers)
+            if provider.compat_mode == "anthropic_messages":
+                headers.setdefault("anthropic-version", "2023-06-01")
+            data = _request_json(url, payload, headers, provider.limits.timeout_seconds, provider.endpoint.method)
+            text = _extract_text_by_paths(data, provider.mapping.response.get("text_paths", []))
+            if text:
+                checks.append(
+                    ProviderCheck(
+                        name="network",
+                        status="PASS",
+                        code="provider_connection_ok",
+                        message="provider returned text",
+                        hint_zh="Provider 联网测试通过，模型可以返回文本。",
+                        details={
+                            "compat_mode": provider.compat_mode,
+                            "credential_source": credential.source,
+                            "attempts": attempt + 1,
+                        },
+                    )
                 )
-            )
-    except Exception as exc:  # noqa: BLE001 - returned as structured diagnostics
-        checks.append(_network_error_hint(exc))
+            else:
+                checks.append(
+                    ProviderCheck(
+                        name="response_mapping",
+                        status="FAIL",
+                        code="provider_response_mapping_failed",
+                        message="no text extracted from provider response",
+                        hint_zh="Provider 有响应，但当前 response mapping 没有解析到文本。",
+                        details={
+                            "text_paths": provider.mapping.response.get("text_paths", []),
+                            "response_shape": response_shape_summary(data),
+                            "attempts": attempt + 1,
+                        },
+                    )
+                )
+            last_error = None
+            break
+        except Exception as exc:  # noqa: BLE001 - returned as structured diagnostics
+            last_error = exc
+            if attempt + 1 >= attempts or not _is_retryable_provider_error(exc):
+                break
+            time.sleep(min(2**attempt, 2))
+    if last_error is not None:
+        check = _network_error_hint(last_error)
+        check.details = {**check.details, "attempts": attempts}
+        checks.append(check)
     status = "FAIL" if any(item.status == "FAIL" for item in checks) else "WARN" if any(item.status == "WARN" for item in checks) else "PASS"
     return {"status": status, "checks": [asdict(item) for item in checks]}
 

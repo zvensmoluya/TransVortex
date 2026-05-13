@@ -80,6 +80,14 @@ class RoutingConfig:
     fallback: list[RouteTarget] = field(default_factory=list)
 
 
+@dataclass
+class RoutingProfile:
+    id: str
+    name: str
+    primary: RouteTarget
+    fallback: list[RouteTarget] = field(default_factory=list)
+
+
 DEFAULT_TRANSLATION_STYLE_PROMPT = FALLBACK_TRANSLATION_STYLE_PROMPT
 
 
@@ -226,6 +234,9 @@ class AppConfig:
     pipeline: PipelineConfig
     providers: dict[str, ProviderConfig]
     routing: RoutingConfig
+    routing_profiles: list[RoutingProfile] = field(default_factory=list)
+    active_routing_profile: str = ""
+    routing_profile_next_seq: int = 1
 
 
 @dataclass
