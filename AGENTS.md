@@ -26,7 +26,7 @@ Use this shape:
 ```text
 Short English title
 
-中文说明：为什么需要这次改动，以及主要设计取舍。
+说明：为什么需要这次改动，以及主要设计取舍。
 
 改动范围：
 - ...
