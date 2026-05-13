@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -444,3 +445,69 @@ def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, caps
     assert set(export_payload["output_paths"]) == {"srt", "ass"}
     assert (tmp_path / "out.srt").exists()
     assert (tmp_path / "out.ass").exists()
+
+
+def test_auth_cli_json_does_not_print_secret(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "auth",
+            "set",
+            "p1",
+            "--stdin",
+            "--json",
+        ],
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("super-secret\n"))
+    main()
+    raw = capsys.readouterr().out
+    assert "super-secret" not in raw
+    payload = json.loads(raw)
+    assert payload["credential_id"] == "p1"
+
+    monkeypatch.setattr("sys.argv", ["transvortex", "--root", str(tmp_path), "auth", "list", "--json"])
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["credentials"] == [{"credential_id": "p1", "has_key": True}]
+
+    monkeypatch.setattr("sys.argv", ["transvortex", "--root", str(tmp_path), "auth", "status", "--json"])
+    main()
+    status = json.loads(capsys.readouterr().out)
+    assert status["providers"][0]["has_key"] is True
+    assert status["providers"][0]["source"] == "auth_json"
+
+    monkeypatch.setattr("sys.argv", ["transvortex", "--root", str(tmp_path), "auth", "delete", "p1", "--json"])
+    main()
+    deleted = json.loads(capsys.readouterr().out)
+    assert deleted["deleted"] is True
+
+
+def test_auth_cli_set_rejects_multiple_secret_inputs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "auth",
+            "set",
+            "p1",
+            "--api-key",
+            "super-secret",
+            "--stdin",
+            "--json",
+        ],
+    )
+    try:
+        main()
+    except ValueError as exc:
+        assert "Use only one" in str(exc)
+    else:
+        raise AssertionError("expected multiple secret inputs to be rejected")

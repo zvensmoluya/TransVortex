@@ -47,7 +47,8 @@ def test_probe_provider_missing_env_fails_without_secret(tmp_path: Path, monkeyp
     report = probe_provider(root_dir=tmp_path)
     checks = {row["name"]: row for row in report["checks"]}
     assert checks["env_key_present"]["status"] == "FAIL"
-    assert "TVX_MODEL_API_KEY" in checks["env_key_present"]["message"]
+    assert checks["env_key_present"]["details"]["env_key"] == "TVX_MODEL_API_KEY"
+    assert checks["env_key_present"]["details"]["credential_source"] == "missing"
     assert "DUMMY_API_KEY" not in str(report)
     assert probe_exit_code(report, strict=True) == 1
 

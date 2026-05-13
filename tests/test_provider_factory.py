@@ -10,12 +10,38 @@ from transvortex.app.models import (
     ProviderLimits,
 )
 from transvortex.providers.factory import (
+    ConfigurableProtocolClient,
     _build_payload,
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
     response_shape_summary,
 )
+
+
+def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="openai_like",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["model-a"],
+        credential_root_dir=tmp_path,
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={"text_paths": ["choices[0].message.content"]}),
+    )
+    (tmp_path / ".env").write_text("KEY=from-dotenv\n", encoding="utf-8")
+
+    def fake_post_json(url, payload, headers, timeout, method="POST"):
+        assert headers["Authorization"] == "Bearer from-dotenv"
+        return {"choices": [{"message": {"content": "[1] pong"}}]}
+
+    monkeypatch.setattr("transvortex.providers.factory._post_json", fake_post_json)
+    client = ConfigurableProtocolClient(config=cfg, timeout=30)
+    response = client.translate_request(
+        NormalizedRequest(model="model-a", lines=["[1] ping"], source_lang="en", target_lang="zh-CN")
+    )
+    assert response.numbered_lines == ["[1] pong"]
 
 
 def test_response_mapping_multi_shape() -> None:

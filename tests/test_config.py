@@ -261,8 +261,13 @@ routing:
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
     (tmp_path / ".env").write_text('TVX_MODEL_API_KEY="from-dotenv"', encoding="utf-8")
     monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
-    load_app_config(root_dir=tmp_path)
-    assert os.getenv("TVX_MODEL_API_KEY") == "from-dotenv"
+    cfg = load_app_config(root_dir=tmp_path)
+    from transvortex.app.credentials import resolve_provider_credential
+
+    assert os.getenv("TVX_MODEL_API_KEY") is None
+    resolved = resolve_provider_credential(cfg.providers["p1"], root_dir=tmp_path)
+    assert resolved.key == "from-dotenv"
+    assert resolved.source == "dotenv"
 
 
 def test_dotenv_does_not_override_existing_env(tmp_path: Path, monkeypatch) -> None:

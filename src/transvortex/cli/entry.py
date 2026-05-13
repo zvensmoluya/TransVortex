@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
-import os
 import subprocess
 import sys
 import time
@@ -12,6 +12,14 @@ from typing import Any
 from ..artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
 from ..artifacts.task_store import TaskStore
 from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
+from ..app.credentials import (
+    auth_file_path,
+    delete_auth_credential,
+    provider_credential_id,
+    read_auth_credentials,
+    resolve_provider_credential,
+    write_auth_credential,
+)
 from ..app.doctor import doctor_report, format_doctor_report
 from ..formats.exporter import export_ass, export_srt
 from ..app.models import Segment
@@ -145,6 +153,7 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
     config = load_app_config(root_dir=root, providers_file=providers_file)
     providers = []
     for provider in config.providers.values():
+        credential = resolve_provider_credential(provider, root_dir=root)
         providers.append(
             {
                 "name": provider.name,
@@ -152,7 +161,9 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
                 "compat_mode": provider.compat_mode,
                 "base_url": provider.base_url,
                 "env_key": provider.env_key,
-                "has_key": bool(os.getenv(provider.env_key)),
+                "credential_id": provider_credential_id(provider),
+                "credential_source": credential.source,
+                "has_key": credential.found,
                 "models": provider.models,
                 "auth": to_plain(provider.auth),
                 "endpoint": to_plain(provider.endpoint),
@@ -166,6 +177,7 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         )
     return {
         "root_dir": str(root),
+        "auth_file": str(auth_file_path()),
         "providers_file": str(resolved_providers_file),
         "artifacts_dir": str(config.pipeline.artifacts_dir),
         "pipeline": to_plain(config.pipeline),
@@ -173,6 +185,45 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
     }
+
+
+def _auth_status_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
+    config = load_app_config(root_dir=root, providers_file=providers_file)
+    rows = []
+    for provider in sorted(config.providers.values(), key=lambda item: item.name):
+        credential = resolve_provider_credential(provider, root_dir=root)
+        rows.append(
+            {
+                "provider": provider.name,
+                "env_key": provider.env_key,
+                "credential_id": provider_credential_id(provider),
+                "has_key": credential.found,
+                "source": credential.source,
+            }
+        )
+    return {"auth_file": str(auth_file_path()), "providers": rows}
+
+
+def _auth_list_payload() -> dict[str, Any]:
+    credentials = read_auth_credentials()
+    return {
+        "auth_file": str(auth_file_path()),
+        "credentials": [{"credential_id": key, "has_key": True} for key in sorted(credentials)],
+    }
+
+
+def _read_auth_set_value(args: argparse.Namespace) -> str:
+    if args.api_key and args.stdin:
+        raise ValueError("Use only one of --api-key or --stdin")
+    if args.stdin:
+        value = sys.stdin.read().strip()
+    elif args.api_key is not None:
+        value = args.api_key.strip()
+    else:
+        value = getpass.getpass("API key: ").strip()
+    if not value:
+        raise ValueError("credential value is required")
+    return value
 
 
 def _read_json_arg(raw: str) -> dict[str, Any]:
@@ -322,7 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
     public_commands = (
         "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,"
-        "probe-provider,provider,result,reexport,asr,translate,export}"
+        "probe-provider,provider,auth,result,reexport,asr,translate,export}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
@@ -415,6 +466,22 @@ def _build_parser() -> argparse.ArgumentParser:
     provider_routing_p = provider_sub.add_parser("routing", help="Save primary/fallback provider routing")
     provider_routing_p.add_argument("--json-payload", required=True)
     provider_routing_p.add_argument("--json", action="store_true")
+
+    auth_p = sub.add_parser("auth", help="Manage saved API credentials")
+    auth_sub = auth_p.add_subparsers(dest="auth_command", required=True)
+    auth_set_p = auth_sub.add_parser("set", help="Save a credential to auth.json")
+    auth_set_p.add_argument("credential_id")
+    auth_set_p.add_argument("--api-key", default=None, help="Credential value. Prefer prompt or --stdin to avoid shell history.")
+    auth_set_p.add_argument("--stdin", action="store_true", help="Read credential value from standard input")
+    auth_set_p.add_argument("--json", action="store_true")
+    auth_delete_p = auth_sub.add_parser("delete", help="Delete a credential from auth.json")
+    auth_delete_p.add_argument("credential_id")
+    auth_delete_p.add_argument("--json", action="store_true")
+    auth_list_p = auth_sub.add_parser("list", help="List credential ids in auth.json")
+    auth_list_p.add_argument("--json", action="store_true")
+    auth_status_p = auth_sub.add_parser("status", help="Show provider credential status")
+    _add_providers_file_arg(auth_status_p)
+    auth_status_p.add_argument("--json", action="store_true")
 
     result_p = sub.add_parser("result", help="Inspect or edit task results")
     result_sub = result_p.add_subparsers(dest="result_command", required=True)
@@ -722,6 +789,7 @@ def main() -> None:
         payload = fetch_provider_models(
             provider_draft=_read_json_arg(args.json_payload),
             api_key=args.api_key,
+            root_dir=root,
         )
         _print_json(payload)
         return
@@ -731,6 +799,7 @@ def main() -> None:
             provider_draft=_read_json_arg(args.json_payload),
             model=args.model,
             api_key=args.api_key,
+            root_dir=root,
         )
         _print_json(payload)
         return
@@ -738,6 +807,47 @@ def main() -> None:
     if args.command == "provider" and args.provider_command == "routing":
         payload = save_provider_routing(root_dir=root, routing=_read_json_arg(args.json_payload))
         _print_json(payload)
+        return
+
+    if args.command == "auth" and args.auth_command == "set":
+        path = write_auth_credential(args.credential_id, _read_auth_set_value(args))
+        payload = {"ok": True, "credential_id": args.credential_id, "auth_file": str(path)}
+        if args.json:
+            _print_json(payload)
+        else:
+            print(args.credential_id)
+        return
+
+    if args.command == "auth" and args.auth_command == "delete":
+        deleted = delete_auth_credential(args.credential_id)
+        payload = {
+            "ok": True,
+            "deleted": deleted,
+            "credential_id": args.credential_id,
+            "auth_file": str(auth_file_path()),
+        }
+        if args.json:
+            _print_json(payload)
+        else:
+            print(f"{args.credential_id} {'deleted' if deleted else 'not_found'}")
+        return
+
+    if args.command == "auth" and args.auth_command == "list":
+        payload = _auth_list_payload()
+        if args.json:
+            _print_json(payload)
+        else:
+            for row in payload["credentials"]:
+                print(row["credential_id"])
+        return
+
+    if args.command == "auth" and args.auth_command == "status":
+        payload = _auth_status_payload(root, providers_file)
+        if args.json:
+            _print_json(payload)
+        else:
+            for row in payload["providers"]:
+                print(f"{row['provider']} {row['credential_id']} {row['source']}")
         return
 
     if args.command == "result" and args.result_command == "open":

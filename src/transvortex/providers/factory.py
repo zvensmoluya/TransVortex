@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.parse
 import urllib.request
@@ -11,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
+from ..app.credentials import resolve_provider_credential
 from ..prompts import FALLBACK_TRANSLATION_SYSTEM_PROMPT
 from .base import ProviderClient
 
@@ -505,11 +505,11 @@ class ConfigurableProtocolClient(ProviderClient):
             raise RuntimeError(
                 f"batch too large: {len(req.lines)} > {self.config.capabilities.max_batch_lines}"
             )
-        api_key = os.getenv(self.config.env_key)
-        if not api_key:
-            raise RuntimeError(f"Missing environment variable: {self.config.env_key}")
+        credential = resolve_provider_credential(self.config, root_dir=self.config.credential_root_dir)
+        if not credential.found:
+            raise RuntimeError(f"Missing credential: {credential.credential_id or self.config.env_key}")
         payload = _build_payload(self.config, req)
-        url, headers = _build_url_and_headers(self.config, api_key, req.model)
+        url, headers = _build_url_and_headers(self.config, credential.key, req.model)
         headers.update(self.config.extra_headers)
         if self.config.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")

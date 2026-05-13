@@ -34,6 +34,7 @@ from .models import (
     TranslationConfig,
 )
 from ..prompts import load_prompt
+from .credentials import read_dotenv_values
 
 
 ENV_MAP = {
@@ -52,28 +53,6 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         return {}
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _load_dotenv(root_dir: Path) -> None:
-    dotenv_file = root_dir / ".env"
-    if not dotenv_file.exists():
-        return
-    for raw in dotenv_file.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        os.environ.setdefault(key, value)
 
 
 def _to_int(value: Any, default: int) -> int:
@@ -261,12 +240,12 @@ def load_app_config(
     cli_overrides: dict[str, Any] | None = None,
 ) -> AppConfig:
     cli_overrides = cli_overrides or {}
-    _load_dotenv(root_dir)
     providers_file = resolve_providers_file(root_dir, providers_file)
     pipeline_file = pipeline_file or root_dir / "pipeline.yaml"
 
     p_yaml = _read_yaml(providers_file)
     pip_yaml = _read_yaml(pipeline_file)
+    dotenv_values = read_dotenv_values(root_dir)
     prompts_raw = pip_yaml.get("prompts") or {}
 
     artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
@@ -408,7 +387,9 @@ def load_app_config(
     )
 
     for field_name, env_name in ENV_MAP.items():
-        env_v = os.getenv(env_name)
+        env_v = dotenv_values.get(env_name)
+        if env_name in os.environ:
+            env_v = os.environ[env_name]
         if env_v is None:
             continue
         setattr(pipeline, field_name, _to_int(env_v, getattr(pipeline, field_name)))
@@ -503,6 +484,8 @@ def load_app_config(
             base_url=row["base_url"].rstrip("/"),
             env_key=row["env_key"],
             models=list(row.get("models", [])),
+            credential_id=str(row.get("credential_id", row["name"])),
+            credential_root_dir=root_dir,
             compat_mode=compat_mode,
             auth=auth,
             endpoint=endpoint,

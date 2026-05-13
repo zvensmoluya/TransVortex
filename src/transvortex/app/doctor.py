@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
-import os
 import platform
 import shutil
 import sys
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_app_config, resolve_providers_file
+from .credentials import resolve_credential
 from ..providers.probe import probe_provider
 
 
@@ -120,15 +120,27 @@ def _env_key_check(
     env_key: str,
     name: str,
     message_subject: str,
+    credential_id: str | None = None,
+    provider_name: str = "",
 ) -> dict[str, Any]:
-    if os.getenv(env_key):
+    credential = resolve_credential(
+        env_key=env_key,
+        credential_id=credential_id or env_key,
+        provider_name=provider_name,
+        root_dir=root_dir,
+    )
+    if credential.found:
         return _check(
             name,
             "PASS",
             "env_key_present",
-            f"{message_subject} environment variable is set",
-            f"{env_key} 已配置。",
-            details={"env_key": env_key},
+            f"{message_subject} credential is configured via {credential.source}",
+            f"{env_key} 已配置，来源：{credential.source}。",
+            details={
+                "env_key": env_key,
+                "credential_id": credential.credential_id,
+                "credential_source": credential.source,
+            },
         )
     legacy_keys = sorted(_dotenv_keys(root_dir) & {"OPENAI_API_KEY", "VECTORENGINE_API_KEY"})
     hint = f"缺少 {env_key}。请在 .env 中写入 {env_key}=你的key，或在桌面端保存 key。"
@@ -138,9 +150,14 @@ def _env_key_check(
         name,
         "FAIL",
         "missing_env",
-        f"Missing environment variable: {env_key}",
+        f"Missing credential: {credential.credential_id or env_key}",
         hint,
-        details={"env_key": env_key, "legacy_keys_present": legacy_keys},
+        details={
+            "env_key": env_key,
+            "credential_id": credential.credential_id,
+            "credential_source": credential.source,
+            "legacy_keys_present": legacy_keys,
+        },
     )
 
 
@@ -297,6 +314,8 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
             _env_key_check(
                 root_dir=root_dir,
                 env_key=provider.env_key,
+                credential_id=provider.credential_id or provider.name,
+                provider_name=provider.name,
                 name="provider_env_key",
                 message_subject="provider",
             )
@@ -361,10 +380,17 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                 )
             else:
                 env_key = asr_provider.env_key
+                asr_credential_id = asr_provider.credential_id or asr_provider.name
+                asr_provider_name = asr_provider.name
+        else:
+            asr_credential_id = env_key
+            asr_provider_name = ""
         checks.append(
             _env_key_check(
                 root_dir=root_dir,
                 env_key=env_key,
+                credential_id=asr_credential_id,
+                provider_name=asr_provider_name,
                 name="asr_env_key",
                 message_subject="ASR",
             )

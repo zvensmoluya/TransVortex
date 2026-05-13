@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import posixpath
 import urllib.parse
 import urllib.request
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.models import ProviderConfig
+from ..app.credentials import resolve_credential, resolve_provider_credential
 from ..utils import write_json
 
 
@@ -29,6 +29,7 @@ class AsrEngine:
         cloud_timeout_seconds: int = 120,
         cloud_provider: ProviderConfig | None = None,
         cloud_provider_model: str = "",
+        root_dir: Path | None = None,
     ) -> None:
         self.model_size = model_size
         self.device = device
@@ -42,6 +43,7 @@ class AsrEngine:
         self.cloud_timeout_seconds = cloud_timeout_seconds
         self.cloud_provider = cloud_provider
         self.cloud_provider_model = cloud_provider_model
+        self.root_dir = root_dir
         self._model = None
 
     def _ensure_model(self) -> Any:
@@ -82,11 +84,18 @@ class AsrEngine:
         return rows
 
     def _transcribe_segment_openai(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
-        env_key = self.cloud_provider.env_key if self.cloud_provider else self.cloud_env_key
-        api_key = os.getenv(env_key)
-        if not api_key:
-            raise RuntimeError(f"Missing environment variable: {env_key}")
-        response = self._call_openai_transcriptions(audio_path, api_key=api_key)
+        if self.cloud_provider:
+            credential = resolve_provider_credential(self.cloud_provider, root_dir=self.root_dir)
+        else:
+            credential = resolve_credential(
+                env_key=self.cloud_env_key,
+                credential_id=self.cloud_env_key,
+                provider_name="",
+                root_dir=self.root_dir,
+            )
+        if not credential.found:
+            raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+        response = self._call_openai_transcriptions(audio_path, api_key=credential.key)
         rows: list[dict] = []
         segments = response.get("segments")
         if isinstance(segments, list) and segments:

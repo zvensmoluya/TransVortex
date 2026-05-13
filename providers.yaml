@@ -4,6 +4,7 @@ providers:
     compat_mode: openai_responses
     base_url: https://ai.zven.cc/v1
     env_key: TVX_MODEL_API_KEY
+    credential_id: zven_openai_responses
     models:
       - gpt-5.5
     auth:

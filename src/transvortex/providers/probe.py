@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import os
 import urllib.parse
 from dataclasses import asdict, dataclass
 
 from ..app.config import load_app_config
+from ..app.credentials import resolve_provider_credential
 from ..app.models import NormalizedRequest, ProviderConfig
 from .factory import _build_payload, _build_url_and_headers, _extract_text_by_paths, response_shape_summary
 
@@ -125,13 +125,17 @@ def probe_provider(
         )
     )
 
-    env_set = bool(os.getenv(provider.env_key))
+    credential = resolve_provider_credential(provider, root_dir=root_dir)
     items.append(
         ProbeItem(
             name="env_key_present",
-            status="PASS" if env_set else "FAIL",
-            message="environment variable is set" if env_set else f"missing environment variable: {provider.env_key}",
-            details={"env_key": provider.env_key},
+            status="PASS" if credential.found else "FAIL",
+            message=f"credential is configured via {credential.source}" if credential.found else f"missing credential: {credential.credential_id}",
+            details={
+                "env_key": provider.env_key,
+                "credential_id": credential.credential_id,
+                "credential_source": credential.source,
+            },
         )
     )
 

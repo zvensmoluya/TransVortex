@@ -15,9 +15,10 @@ TransVortex is intended to grow into an agent-callable headless core with both a
    - `pip install -e .`
    - optional ASR: `pip install -e .[asr]`
 2. Ensure `ffmpeg` and `ffprobe` are available in `PATH`.
-3. Put real provider config in `providers.local.yaml` (gitignored), and set API keys using the configured `env_key`.
-   - The default translation provider uses `TVX_MODEL_API_KEY`.
-   - You can also put keys in `.env` (auto-loaded, does not override existing environment variables).
+3. Put real provider config in `providers.local.yaml` (gitignored), and save API keys with `transvortex auth set <credential-id>`.
+   - Persistent keys are stored in `~/.transvortex/auth.json` by default, or under `TRANSVORTEX_HOME` if set.
+   - Environment variables using the configured `env_key` take priority for CI/agent/headless use.
+   - Project `.env` files remain supported as a development compatibility fallback.
 4. Run the local health check:
    - `transvortex doctor`
    - `transvortex doctor --json`
@@ -81,10 +82,10 @@ providers:
       method: POST
 ```
 
-Then set key (or put it in `.env`):
+Then save the key:
 
 ```powershell
-$env:TVX_MODEL_API_KEY = "sk-..."
+transvortex auth set openai_asr
 ```
 
 ## Commands
@@ -97,6 +98,7 @@ $env:TVX_MODEL_API_KEY = "sk-..."
 - `transvortex doctor [--json]`
 - `transvortex config show [--json]`
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
+- `transvortex auth set/delete/list/status [--json]`
 
 Common runtime overrides are available on `run` and `resume`: `--provider`, `--model`, `--asr-mode`, `--asr-device`, `--asr-model-size`, `--asr-compute-type`, `--asr-provider`, `--asr-model`, chunk settings, batch size, and concurrency.
 

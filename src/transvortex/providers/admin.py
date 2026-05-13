@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -10,6 +9,13 @@ from urllib.error import HTTPError, URLError
 import yaml
 
 from ..app.config import load_app_config, resolve_providers_file
+from ..app.credentials import (
+    auth_file_path,
+    delete_auth_credential,
+    provider_credential_id,
+    resolve_provider_credential,
+    write_auth_credential,
+)
 from ..app.models import (
     AuthConfig,
     CapabilityConfig,
@@ -307,6 +313,7 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
         base_url=base_url,
         env_key=env_key,
         models=models,
+        credential_id=str(draft.get("credential_id") or draft.get("credentialId") or name),
         auth=AuthConfig(
             type=str(auth_raw.get("type", "bearer")),
             header_name=str(auth_raw.get("header_name") or auth_raw.get("headerName") or "Authorization"),
@@ -348,6 +355,7 @@ def provider_config_to_yaml_row(config: ProviderConfig) -> dict[str, Any]:
         "compat_mode": config.compat_mode,
         "base_url": config.base_url,
         "env_key": config.env_key,
+        "credential_id": provider_credential_id(config),
         "models": config.models,
         "auth": to_plain(config.auth),
         "endpoint": to_plain(config.endpoint),
@@ -361,24 +369,6 @@ def provider_config_to_yaml_row(config: ProviderConfig) -> dict[str, Any]:
     if config.model_list.path_template:
         row["model_list"] = to_plain(config.model_list)
     return row
-
-
-def write_env_secret(root_dir: Path, env_key: str, value: str) -> None:
-    env_key = env_key.strip()
-    if not env_key:
-        raise ValueError("env_key is required")
-    dotenv_path = root_dir / ".env"
-    entries: dict[str, str] = {}
-    if dotenv_path.exists():
-        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip() or line.strip().startswith("#") or "=" not in line:
-                continue
-            key, existing = line.split("=", 1)
-            entries[key.strip()] = existing.strip()
-    entries[env_key] = value
-    body = "".join(f"{key}={entries[key]}\n" for key in sorted(entries))
-    dotenv_path.write_text(body, encoding="utf-8")
-    os.environ[env_key] = value
 
 
 def save_provider_config(
@@ -401,11 +391,15 @@ def save_provider_config(
     }
     _write_yaml(providers_file, {"providers": rows, "routing": routing})
     if api_key:
-        write_env_secret(root_dir, provider.env_key, api_key)
+        write_auth_credential(provider_credential_id(provider), api_key)
+    credential = resolve_provider_credential(provider, root_dir=root_dir)
     return {
         "provider": provider.name,
         "providers_file": str(providers_file),
-        "has_key": bool(os.getenv(provider.env_key)),
+        "auth_file": str(auth_file_path()),
+        "credential_id": provider_credential_id(provider),
+        "has_key": credential.found,
+        "credential_source": credential.source,
     }
 
 
@@ -451,10 +445,8 @@ def delete_provider_config(*, root_dir: Path, name: str) -> dict[str, Any]:
     return {"deleted": True, "providers_file": str(providers_file)}
 
 
-def _api_key_for(config: ProviderConfig, override: str | None = None) -> str:
-    if override:
-        return override
-    return os.getenv(config.env_key, "")
+def _api_key_for(config: ProviderConfig, *, root_dir: Path | None = None, override: str | None = None):
+    return resolve_provider_credential(config, root_dir=root_dir, explicit_key=override)
 
 
 def _network_error_hint(exc: Exception) -> ProviderCheck:
@@ -508,15 +500,19 @@ def fetch_provider_models(
     *,
     provider_draft: dict[str, Any],
     api_key: str | None = None,
+    root_dir: Path | None = None,
 ) -> dict[str, Any]:
     provider = draft_to_provider_config(provider_draft)
-    key = _api_key_for(provider, api_key)
-    if not key:
+    credential = _api_key_for(provider, root_dir=root_dir, override=api_key)
+    if not credential.found:
         return {
             "status": "FAIL",
             "code": "provider_key_missing",
-            "message": f"missing environment variable: {provider.env_key}",
-            "hint_zh": "请先填写并保存 API key，或确认对应环境变量已设置。",
+            "message": f"missing credential for {provider.name}",
+            "hint_zh": "请先保存 API key，或设置对应环境变量。",
+            "credential_id": credential.credential_id,
+            "credential_source": credential.source,
+            "env_key": provider.env_key,
             "models": [],
         }
     if not provider.model_list.path_template:
@@ -528,7 +524,7 @@ def fetch_provider_models(
             "models": [],
         }
     try:
-        url, headers = _build_url_and_headers_for_path(provider, key, provider.models[0], provider.model_list.path_template)
+        url, headers = _build_url_and_headers_for_path(provider, credential.key, provider.models[0], provider.model_list.path_template)
         headers.update(provider.extra_headers)
         data = _request_json(url, None, headers, provider.limits.timeout_seconds, provider.model_list.method)
         found: list[str] = []
@@ -543,6 +539,8 @@ def fetch_provider_models(
             "code": "provider_models_found" if found else "provider_models_empty",
             "message": f"found {len(found)} models" if found else "model list response contained no models",
             "hint_zh": f"已拉取到 {len(found)} 个模型。" if found else "接口返回成功，但没有解析到模型；可以手动填写模型。",
+            "credential_source": credential.source,
+            "credential_id": credential.credential_id,
             "models": found,
         }
     except Exception as exc:  # noqa: BLE001 - returned as structured diagnostics
@@ -557,22 +555,27 @@ def run_provider_connection_test(
     provider_draft: dict[str, Any],
     model: str,
     api_key: str | None = None,
+    root_dir: Path | None = None,
 ) -> dict[str, Any]:
     models = [str(item).strip() for item in _as_list(provider_draft.get("models")) if str(item).strip()]
     if model and model not in models:
         models.insert(0, model)
     provider = draft_to_provider_config({**provider_draft, "models": models})
-    key = _api_key_for(provider, api_key)
+    credential = _api_key_for(provider, root_dir=root_dir, override=api_key)
     checks: list[ProviderCheck] = []
-    if not key:
+    if not credential.found:
         checks.append(
             ProviderCheck(
                 name="api_key",
                 status="FAIL",
                 code="provider_key_missing",
-                message=f"missing environment variable: {provider.env_key}",
-                hint_zh="请先填写并保存 API key，或确认对应环境变量已设置。",
-                details={"env_key": provider.env_key},
+                message=f"missing credential for {provider.name}",
+                hint_zh="请先保存 API key，或设置对应环境变量。",
+                details={
+                    "env_key": provider.env_key,
+                    "credential_id": credential.credential_id,
+                    "credential_source": credential.source,
+                },
             )
         )
         return {"status": "FAIL", "checks": [asdict(item) for item in checks]}
@@ -585,7 +588,7 @@ def run_provider_connection_test(
             temperature=0,
         )
         payload = _build_payload(provider, req)
-        url, headers = _build_url_and_headers(provider, key, model)
+        url, headers = _build_url_and_headers(provider, credential.key, model)
         headers.update(provider.extra_headers)
         if provider.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")
@@ -599,7 +602,7 @@ def run_provider_connection_test(
                     code="provider_connection_ok",
                     message="provider returned text",
                     hint_zh="Provider 联网测试通过，模型可以返回文本。",
-                    details={"compat_mode": provider.compat_mode},
+                    details={"compat_mode": provider.compat_mode, "credential_source": credential.source},
                 )
             )
         else:
@@ -626,12 +629,29 @@ def provider_payload(root_dir: Path) -> dict[str, Any]:
     config = load_app_config(root_dir=root_dir)
     return {
         "providers_file": str(resolve_providers_file(root_dir)),
+        "auth_file": str(auth_file_path()),
         "provider_templates": provider_templates_payload(),
         "providers": [
             {
-                **to_plain(provider),
-                "has_key": bool(os.getenv(provider.env_key)),
+                **{
+                    key: value
+                    for key, value in to_plain(provider).items()
+                    if key != "credential_root_dir"
+                },
+                "credential_id": provider_credential_id(provider),
+                "has_key": resolve_provider_credential(provider, root_dir=root_dir).found,
+                "credential_source": resolve_provider_credential(provider, root_dir=root_dir).source,
             }
             for provider in sorted(config.providers.values(), key=lambda item: item.name)
         ],
     }
+
+
+def save_auth_credential(*, credential_id: str, value: str) -> dict[str, Any]:
+    path = write_auth_credential(credential_id, value)
+    return {"ok": True, "credential_id": credential_id, "auth_file": str(path)}
+
+
+def delete_saved_auth_credential(*, credential_id: str) -> dict[str, Any]:
+    deleted = delete_auth_credential(credential_id)
+    return {"ok": True, "deleted": deleted, "credential_id": credential_id, "auth_file": str(auth_file_path())}

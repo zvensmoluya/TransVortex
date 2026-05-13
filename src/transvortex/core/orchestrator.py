@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import shutil
 from pathlib import Path
 from typing import Any, Callable
@@ -11,6 +10,7 @@ from ..artifacts.task_store import TaskStore
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
 from ..app.config import apply_route_overrides, load_app_config
+from ..app.credentials import resolve_credential, resolve_provider_credential
 from ..formats.exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
 from ..memory.checker import check_consistency, write_consistency_issues
@@ -156,14 +156,18 @@ def _preflight(
     if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
         raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
     if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "openai":
-        env_key = config.pipeline.asr_cloud_env_key
+        credential = resolve_credential(
+            env_key=config.pipeline.asr_cloud_env_key,
+            credential_id=config.pipeline.asr_cloud_env_key,
+            root_dir=root_dir,
+        )
         if config.pipeline.asr_provider:
             provider = config.providers.get(config.pipeline.asr_provider)
             if provider is None:
                 raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
-            env_key = provider.env_key
-        if not os.getenv(env_key):
-            raise RuntimeError(f"Missing environment variable: {env_key}")
+            credential = resolve_provider_credential(provider, root_dir=root_dir)
+        if not credential.found:
+            raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
     if input_type != "video_asr":
         route = config.routing.primary
         provider = config.providers.get(route.provider)
@@ -693,6 +697,7 @@ def _execute_task(
                 cloud_timeout_seconds=config.pipeline.asr_cloud_timeout_seconds,
                 cloud_provider=asr_provider,
                 cloud_provider_model=asr_provider_model,
+                root_dir=root_dir,
             )
             asr_done = set(checkpoint.get("asr_done_segments", []))
             segment_files = []

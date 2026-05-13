@@ -15,7 +15,54 @@
 3. `<root>/providers.yaml`
 4. `<root>/providers.example.yaml`
 
-## 2. VectorEngine Anthropic 兼容配置示例
+## 2. 凭据与 API Key
+
+长期默认凭据文件是用户目录下的 `auth.json`：
+
+```text
+~/.transvortex/auth.json
+```
+
+可通过 `TRANSVORTEX_HOME` 改变目录。文件结构：
+
+```json
+{
+  "version": 1,
+  "credentials": {
+    "zven_openai": "sk-xxx"
+  }
+}
+```
+
+解析优先级：
+
+1. 显式一次性 key（例如 provider test/save 命令传入的 key）
+2. 真实环境变量（provider 的 `env_key`）
+3. `auth.json[credential_id]`
+4. `auth.json[provider.name]`
+5. 项目 `.env` 中的 `env_key`
+
+保存 key：
+
+```powershell
+transvortex auth set zven_openai
+# 或从标准输入读取，避免进入 shell 历史：
+Get-Content key.txt | transvortex auth set zven_openai --stdin
+transvortex auth status --json
+```
+
+`providers.yaml` / `providers.local.yaml` 只保存协议、路由和凭据引用，不保存真实 key：
+
+```yaml
+providers:
+  - name: zven_openai
+    env_key: TVX_MODEL_API_KEY
+    credential_id: zven_openai
+```
+
+`.env` 仍可用于开发兼容，但不再是桌面端默认保存位置。
+
+## 3. VectorEngine Anthropic 兼容配置示例
 
 下面是推荐示例（可放到 `providers.local.yaml`）：
 
@@ -62,7 +109,7 @@ routing:
 - 即使写的是 `base_url=/v1` + `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
 - `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
 
-## 3. 翻译策略配置
+## 4. 翻译策略配置
 
 `pipeline.yaml` 支持 `translation` 块：
 
@@ -89,7 +136,7 @@ translation:
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
 
-## 4. 零 Token 协议预检
+## 5. 零 Token 协议预检
 
 在正式 `run` 前建议先执行：
 
@@ -117,7 +164,7 @@ transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-
 - 默认退出码：`0`
 - 开启 `--strict` 时：只要有 `FAIL`，退出码为 `1`
 
-## 5. 常见错误
+## 6. 常见错误
 
 - `missing environment variable: TVX_MODEL_API_KEY`
   - 未设置 key，执行：

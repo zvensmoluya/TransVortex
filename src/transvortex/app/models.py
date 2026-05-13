@@ -56,6 +56,8 @@ class ProviderConfig:
     base_url: str
     env_key: str
     models: list[str]
+    credential_id: str = ""
+    credential_root_dir: Path | None = None
     compat_mode: str = ""
     auth: AuthConfig = field(default_factory=AuthConfig)
     endpoint: EndpointConfig = field(default_factory=EndpointConfig)

@@ -127,6 +127,8 @@ type ProviderConfig = {
   compat_mode: string;
   base_url: string;
   env_key: string;
+  credential_id?: string;
+  credential_source?: string;
   has_key: boolean;
   models: string[];
   auth?: AuthConfig;
@@ -189,6 +191,7 @@ type ProviderDraft = {
   compat_mode: string;
   base_url: string;
   env_key: string;
+  credential_id: string;
   models: string[];
   auth: AuthConfig;
   endpoint: EndpointConfig;
@@ -206,6 +209,8 @@ type ProviderDiagnostic = {
   message: string;
   hint_zh?: string;
   details?: Record<string, unknown>;
+  credential_id?: string;
+  credential_source?: string;
 };
 
 type ProviderTestPayload = {
@@ -391,6 +396,7 @@ function providerToDraft(provider: ProviderConfig): ProviderDraft {
     compat_mode: provider.compat_mode,
     base_url: provider.base_url,
     env_key: provider.env_key,
+    credential_id: provider.credential_id || provider.name,
     models: provider.models || [],
     auth: provider.auth || { type: "bearer", header_name: "Authorization", query_name: "key", prefix: "Bearer " },
     endpoint: provider.endpoint || { path_template: "/chat/completions", method: "POST" },
@@ -409,6 +415,7 @@ function templateToDraft(template: ProviderTemplate, name = "custom_provider"): 
     compat_mode: template.compat_mode,
     base_url: template.base_url,
     env_key: envKeyForName(name),
+    credential_id: name,
     models: [],
     auth: { ...template.auth },
     endpoint: { ...template.endpoint },
@@ -1726,7 +1733,7 @@ function ConfigPanel({
                   <span className="block truncate font-semibold">{provider.name}</span>
                   <span className="mt-1 block truncate text-xs text-muted">{provider.compat_mode}</span>
                   <span className={`mt-2 block text-[11px] font-semibold ${provider.has_key ? "text-brand" : "text-warning"}`}>
-                    {provider.has_key ? t("configured") : t("missing")}
+                    {provider.has_key ? `${t("configured")} · ${provider.credential_source || "unknown"}` : t("missing")}
                   </span>
                 </button>
               ))}
@@ -1745,7 +1752,7 @@ function ConfigPanel({
                       value={providerDraft.name}
                       onChange={(event) => {
                         const name = event.target.value;
-                        updateProviderDraft({ name, env_key: providerDraft.env_key || envKeyForName(name) });
+                        updateProviderDraft({ name, env_key: providerDraft.env_key || envKeyForName(name), credential_id: providerDraft.credential_id || name });
                       }}
                     />
                   </label>
@@ -1767,13 +1774,21 @@ function ConfigPanel({
                     {t("envKey")}
                     <input className="tvx-input" value={providerDraft.env_key} onChange={(event) => updateProviderDraft({ env_key: event.target.value })} />
                   </label>
+                  <label className="tvx-label">
+                    credential_id
+                    <input className="tvx-input" value={providerDraft.credential_id} onChange={(event) => updateProviderDraft({ credential_id: event.target.value })} />
+                  </label>
                 </div>
 
                 <section className="grid grid-cols-[24px_minmax(120px,1fr)_minmax(180px,260px)_auto] items-center gap-3 rounded-lg border border-line p-3">
                   <KeyRound className="text-brand" size={18} />
                   <div>
                     <strong className="block text-sm">{providerDraft.env_key}</strong>
-                    <span className="text-xs text-muted">{selectedProvider?.name === providerDraft.name && selectedProvider?.has_key ? t("configured") : "可保存新 key"}</span>
+                    <span className="text-xs text-muted">
+                      {selectedProvider?.name === providerDraft.name && selectedProvider?.has_key
+                        ? `${t("configured")} · ${selectedProvider.credential_source || "unknown"}`
+                        : "可保存新 key"}
+                    </span>
                   </div>
                   <input className="tvx-input" type="password" placeholder={t("pasteKey")} value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} />
                   <button className="tvx-btn" disabled={!form.apiKey || busy} onClick={saveProvider}>

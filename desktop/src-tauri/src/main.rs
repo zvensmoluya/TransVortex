@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
-    fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -265,36 +263,6 @@ fn read_events(app: AppHandle, task_id: String) -> Result<Value, String> {
         }
     }
     Ok(Value::Array(events))
-}
-
-#[tauri::command]
-fn save_env_secret(app: AppHandle, env_key: String, value: String) -> Result<(), String> {
-    if env_key.trim().is_empty() {
-        return Err("env_key is required".into());
-    }
-    let root = repo_root(&app)?;
-    let dotenv_path = root.join(".env");
-    let mut entries: HashMap<String, String> = HashMap::new();
-    if dotenv_path.exists() {
-        for line in fs::read_to_string(&dotenv_path).map_err(|err| err.to_string())?.lines() {
-            if let Some((key, value)) = line.split_once('=') {
-                entries.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
-    }
-    entries.insert(env_key, value);
-    let mut keys: Vec<_> = entries.keys().cloned().collect();
-    keys.sort();
-    let mut body = String::new();
-    for key in keys {
-        if let Some(value) = entries.get(&key) {
-            body.push_str(&key);
-            body.push('=');
-            body.push_str(value);
-            body.push('\n');
-        }
-    }
-    fs::write(dotenv_path, body).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -615,7 +583,6 @@ fn main() {
             list_tasks,
             doctor,
             read_events,
-            save_env_secret,
             probe_provider,
             save_provider_config,
             delete_provider_config,
