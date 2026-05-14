@@ -1,0 +1,44 @@
+{
+  "id": "nold",
+  "version": "1.0.0",
+  "name": "Night of the Living Dead (1968)",
+  "description": "Locked glossary for the Night of the Living Dead translation project.",
+  "scope": {
+    "language_pairs": ["en->zh-CN", "en->zh-TW"],
+    "works": ["night_of_the_living_dead"],
+    "tags": ["film", "classic-horror"]
+  },
+  "default_status": "locked",
+  "entries": [
+    {
+      "source": "cellar",
+      "target": "地下室",
+      "category": "term",
+      "priority": 100,
+      "notes": "Use consistently for the basement/cellar safe-room argument."
+    },
+    {
+      "source": "Mr. Cooper",
+      "target": "库珀先生",
+      "category": "name",
+      "aliases": ["Cooper"],
+      "priority": 90,
+      "notes": "Character name."
+    },
+    {
+      "source": "Tom",
+      "target": "汤姆",
+      "category": "name",
+      "priority": 90,
+      "notes": "Character name."
+    },
+    {
+      "source": "Butler county",
+      "target": "巴特勒县",
+      "category": "place",
+      "aliases": ["Butler County"],
+      "priority": 80,
+      "notes": "Place name used in the radio bulletin."
+    }
+  ]
+}

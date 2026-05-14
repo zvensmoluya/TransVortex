@@ -14,6 +14,7 @@ from ..app.credentials import resolve_credential, resolve_provider_credential
 from ..formats.exporter import export_ass, export_srt
 from .media import extract_audio, split_audio_with_overlap
 from ..memory.checker import check_consistency, write_consistency_issues
+from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
 from ..app.models import AppConfig, Segment, TaskRecord
 from ..providers.probe import probe_provider
@@ -804,7 +805,31 @@ def _execute_task(
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "TRANSLATE", "Translating chunks")
         if config.pipeline.memory.enabled:
-            MemoryStore(paths["memory"]).ensure_with_seed(root_dir / "memory" / "translation_memory.json")
+            memory_store = MemoryStore(paths["memory"])
+            memory_store.ensure_runtime_document()
+            if not memory_store.selected_presets_file.exists():
+                snapshot = build_selected_presets_snapshot(
+                    presets=config.pipeline.memory.presets,
+                    root_dir=root_dir,
+                    source_lang=task.source_lang,
+                    target_lang=task.target_lang,
+                )
+                memory_store.save_selected_presets(snapshot)
+                report = dict(snapshot.get("report") or {})
+                if report.get("applied") or report.get("skipped") or report.get("errors"):
+                    store.append_event(
+                        task_id,
+                        "artifact",
+                        stage="TRANSLATE",
+                        message="Memory presets snapshot ready",
+                        details={
+                            "path": str(memory_store.selected_presets_file),
+                            "applied": report.get("applied") or [],
+                            "skipped": report.get("skipped") or [],
+                            "errors": report.get("errors") or [],
+                            "entries": int(report.get("entries") or 0),
+                        },
+                    )
         translated_file = paths["translate"] / "segments.translated.jsonl"
         validation_file = paths["translate"] / "validation.jsonl"
         repairs_file = paths["translate"] / "repairs.jsonl"
@@ -948,7 +973,7 @@ def _execute_task(
         write_json(paths["final"] / "segments.final.json", final_segments)
         if config.pipeline.memory.enabled and config.pipeline.memory.consistency_check.enabled:
             memory_store = MemoryStore(paths["memory"])
-            memory_document = memory_store.load()
+            memory_document = memory_store.load_effective()
             memory_issues = check_consistency(memory_document, final_segments)
             write_consistency_issues(memory_store, memory_issues)
             store.append_event(

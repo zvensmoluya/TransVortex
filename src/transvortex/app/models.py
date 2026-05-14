@@ -209,9 +209,16 @@ class MemoryConsistencyCheckConfig:
 
 
 @dataclass
+class MemoryPresetRef:
+    id: str
+    override_status: str = ""
+
+
+@dataclass
 class MemoryConfig:
     enabled: bool = False
     mode: str = "balanced"
+    presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
     inject: MemoryInjectConfig = field(default_factory=MemoryInjectConfig)
     patch: MemoryPatchConfig = field(default_factory=MemoryPatchConfig)

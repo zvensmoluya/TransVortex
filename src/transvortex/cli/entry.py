@@ -72,7 +72,24 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
         "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
+        "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
+
+
+def _parse_memory_preset_arg(raw: str | None) -> list[dict[str, str]] | None:
+    if raw is None:
+        return None
+    out: list[dict[str, str]] = []
+    for token in str(raw).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if ":" in token:
+            ref_id, override = token.split(":", 1)
+            out.append({"id": ref_id.strip(), "override_status": override.strip()})
+        else:
+            out.append({"id": token})
+    return out
 
 
 def _add_providers_file_arg(subparser: argparse.ArgumentParser) -> None:
@@ -134,6 +151,11 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument(
+        "--memory-preset",
+        default=None,
+        help="Comma-separated preset ids; append :status to override (e.g. rezero,anime-honorifics:locked)",
+    )
 
 
 def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
@@ -286,6 +308,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
         ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
+        ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]
     for flag, value in mapping:
         _append_optional(args, flag, value)

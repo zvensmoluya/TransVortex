@@ -9,6 +9,7 @@ from .schema import (
     MEMORY_STATUS_ORDER,
     MemoryConflict,
     MemoryDocument,
+    MemoryEntry,
     MemoryPatch,
     MemoryPatchAction,
     normalize_source_key,
@@ -49,10 +50,16 @@ def merge_patch(
     patch: MemoryPatch,
     *,
     store: MemoryStore | None = None,
+    protected_entries: list[MemoryEntry] | None = None,
     auto_confirm_high_confidence: bool = False,
 ) -> tuple[MemoryDocument, list[MemoryConflict]]:
     entries = list(document.entries)
     by_key = {normalize_source_key(entry.source): entry for entry in entries}
+    protected_by_key = {
+        normalize_source_key(entry.source): entry
+        for entry in (protected_entries or [])
+        if normalize_source_key(entry.source)
+    }
     conflicts: list[MemoryConflict] = []
     for action in patch.actions:
         if action.action not in {"upsert", "add", "update"}:
@@ -63,6 +70,23 @@ def merge_patch(
         if auto_confirm_high_confidence and status == "proposed" and action.confidence >= 0.9:
             status = "confirmed"
         key = normalize_source_key(action.source)
+        protected = protected_by_key.get(key)
+        if protected is not None:
+            if protected.target == action.target:
+                continue
+            conflict = MemoryConflict(
+                source=action.source,
+                existing_target=protected.target,
+                proposed_target=action.target,
+                existing_status=protected.status,
+                proposed_status=status,
+                chunk_ids=patch.chunk_ids,
+                reason="preset entry cannot be overwritten",
+            )
+            conflicts.append(conflict)
+            if store is not None:
+                store.append_conflict(to_plain(conflict))
+            continue
         existing = by_key.get(key)
         if existing is None:
             entry = replace(
@@ -126,4 +150,3 @@ def action_to_entry(action: MemoryPatchAction):
         evidence_ids=action.evidence_ids,
         created_by="model",
     )
-

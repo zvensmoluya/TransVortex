@@ -230,7 +230,7 @@ def _memory_prompt_for_batch(
     if not memory_dir or not config.pipeline.memory.enabled or not config.pipeline.subtitle.reflow.memory:
         return "", 0
     store = MemoryStore(memory_dir)
-    document = store.load()
+    document = store.load_effective()
     chunk = Chunk(
         chunk_id="reflow_" + "_".join(str(window.window_index) for window in windows),
         segment_ids=[seg.id for window in windows for seg in window.editable],

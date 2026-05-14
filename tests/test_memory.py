@@ -33,6 +33,50 @@ def test_memory_store_reads_empty_and_preserves_locked(tmp_path: Path) -> None:
     assert snapshot.exists()
 
 
+def test_memory_store_load_effective_combines_presets_and_runtime_with_preset_priority(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory")
+    store.save_selected_presets(
+        {
+            "version": 1,
+            "source_lang": "en",
+            "target_lang": "zh-CN",
+            "report": {"applied": [], "skipped": [], "errors": [], "entries": 2},
+            "entries": [
+                {
+                    "id": "preset_subaru",
+                    "source": "Subaru",
+                    "target": "斯巴鲁",
+                    "status": "locked",
+                    "source_preset": "anime",
+                },
+                {
+                    "id": "preset_order",
+                    "source": "The Order",
+                    "target": "教团",
+                    "status": "confirmed",
+                    "source_preset": "anime",
+                },
+            ],
+        }
+    )
+    store.save(
+        MemoryDocument(
+            entries=[
+                MemoryEntry(id="runtime_subaru", source="subaru", target="昴", status="confirmed"),
+                MemoryEntry(id="runtime_alpha", source="Alpha", target="阿尔法", status="proposed"),
+            ]
+        )
+    )
+
+    effective = store.load_effective()
+    assert [(entry.source, entry.target) for entry in effective.entries] == [
+        ("Subaru", "斯巴鲁"),
+        ("The Order", "教团"),
+        ("Alpha", "阿尔法"),
+    ]
+    assert [entry.source for entry in store.load_runtime().entries] == ["subaru", "Alpha"]
+
+
 def test_selector_and_injector_group_relevant_entries() -> None:
     doc = MemoryDocument(
         entries=[
@@ -159,6 +203,26 @@ def test_merger_protects_locked_and_records_conflict(tmp_path: Path) -> None:
     assert next(entry for entry in merged.entries if entry.source == "The Order").target == "教团"
     assert conflicts[0].source == "Subaru"
     assert store.conflicts_file.read_text(encoding="utf-8").strip()
+
+
+def test_merger_protects_preset_entries_without_writing_runtime_duplicate(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / "memory")
+    runtime_doc = MemoryDocument(entries=[MemoryEntry(id="runtime_subaru", source="subaru", target="昴", status="confirmed")])
+    preset_entries = [MemoryEntry(id="preset_subaru", source="Subaru", target="斯巴鲁", status="locked", source_preset="anime")]
+    same_patch = patch_from_payload(
+        {"chunk_ids": ["c1"], "actions": [{"action": "upsert", "source": "Subaru", "target": "斯巴鲁"}]}
+    )
+    merged, conflicts = merge_patch(runtime_doc, same_patch, store=store, protected_entries=preset_entries)
+    assert [entry.target for entry in merged.entries] == ["昴"]
+    assert conflicts == []
+
+    conflict_patch = patch_from_payload(
+        {"chunk_ids": ["c2"], "actions": [{"action": "upsert", "source": "Subaru", "target": "昴"}]}
+    )
+    merged, conflicts = merge_patch(runtime_doc, conflict_patch, store=store, protected_entries=preset_entries)
+    assert [entry.target for entry in merged.entries] == ["昴"]
+    assert conflicts[0].reason == "preset entry cannot be overwritten"
+    assert "preset entry cannot be overwritten" in store.conflicts_file.read_text(encoding="utf-8")
 
 
 def test_consistency_check_reports_missing_locked_translation() -> None:

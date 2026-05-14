@@ -159,29 +159,24 @@ subtitle:
     batch_windows: 10
 memory:
   enabled: true
+  presets:
+    - reflow_hello
   inject:
     max_entries_per_chunk: 5
         """,
         encoding="utf-8",
     )
     monkeypatch.setenv("PROVIDER_KEY", "key")
-    seed_dir = root / "memory"
-    seed_dir.mkdir()
-    (seed_dir / "translation_memory.json").write_text(
+    presets_dir = root / "memory" / "presets"
+    presets_dir.mkdir(parents=True)
+    (presets_dir / "reflow_hello.json").write_text(
         """
 {
-  "version": 1,
+  "id": "reflow_hello",
+  "scope": {"language_pairs": ["en->zh-CN"]},
+  "default_status": "locked",
   "entries": [
-    {
-      "id": "mem_hello",
-      "source": "Hello",
-      "target": "你好",
-      "category": "term",
-      "status": "locked",
-      "origin": "user_glossary",
-      "priority": 100,
-      "aliases": []
-    }
+    {"source": "Hello", "target": "你好", "category": "term"}
   ]
 }
         """.strip(),
@@ -256,6 +251,8 @@ def test_srt_translate_memory_artifacts_and_result_summary(tmp_path: Path, monke
 memory:
   enabled: true
   mode: balanced
+  presets:
+    - subaru
   inject:
     max_entries_per_chunk: 5
   patch:
@@ -266,23 +263,16 @@ memory:
         encoding="utf-8",
     )
     monkeypatch.setenv("PROVIDER_KEY", "key")
-    seed_dir = root / "memory"
-    seed_dir.mkdir()
-    (seed_dir / "translation_memory.json").write_text(
+    presets_dir = root / "memory" / "presets"
+    presets_dir.mkdir(parents=True)
+    (presets_dir / "subaru.json").write_text(
         """
 {
-  "version": 1,
+  "id": "subaru",
+  "scope": {"language_pairs": ["en->zh-CN"]},
+  "default_status": "locked",
   "entries": [
-    {
-      "id": "mem_subaru",
-      "source": "Subaru",
-      "target": "斯巴鲁",
-      "category": "character",
-      "status": "locked",
-      "origin": "user_glossary",
-      "priority": 100,
-      "aliases": []
-    }
+    {"source": "Subaru", "target": "斯巴鲁", "category": "character"}
   ]
 }
         """.strip(),
@@ -348,6 +338,9 @@ Subaru arrives
     memory_file = memory_dir / "translation_memory.json"
     payload = memory_file.read_text(encoding="utf-8")
     assert "The Order" in payload
+    assert "Subaru" not in payload
+    selected_payload = (memory_dir / "selected_presets.json").read_text(encoding="utf-8")
+    assert "Subaru" in selected_payload
     assert (memory_dir / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
     assert list((memory_dir / "snapshots").glob("memory_*.json"))
     result = open_task_result(root_dir=root, task_id=task_id)

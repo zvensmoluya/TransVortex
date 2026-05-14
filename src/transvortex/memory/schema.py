@@ -26,7 +26,7 @@ class MemoryEntry:
     origin: str = "model_patch"
     priority: int = 50
     aliases: list[str] = field(default_factory=list)
-    scope: dict[str, Any] = field(default_factory=lambda: {"type": "global"})
+    source_preset: str = ""
     notes: str = ""
     confidence: float = 0.0
     evidence_ids: list[int] = field(default_factory=list)
@@ -104,7 +104,7 @@ def entry_from_dict(row: dict[str, Any]) -> MemoryEntry:
         origin=str(row.get("origin") or "model_patch"),
         priority=int(row.get("priority") or 50),
         aliases=[str(item) for item in row.get("aliases", []) or []],
-        scope=dict(row.get("scope") or {"type": "global"}),
+        source_preset=str(row.get("source_preset") or ""),
         notes=str(row.get("notes") or ""),
         confidence=float(row.get("confidence") or 0.0),
         evidence_ids=[int(item) for item in row.get("evidence_ids", []) or [] if str(item).isdigit()],

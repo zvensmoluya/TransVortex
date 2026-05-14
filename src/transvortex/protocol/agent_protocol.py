@@ -80,6 +80,7 @@ def agent_info_payload() -> dict:
             "translate/segments.translated.jsonl",
             "translate/validation.jsonl",
             "translate/repairs.jsonl",
+            "memory/selected_presets.json",
             "memory/translation_memory.json",
             "memory/memory_patches.jsonl",
             "memory/conflicts.jsonl",

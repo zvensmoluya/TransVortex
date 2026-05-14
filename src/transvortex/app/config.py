@@ -21,6 +21,7 @@ from .models import (
     MemoryInjectConfig,
     MemoryMergeConfig,
     MemoryPatchConfig,
+    MemoryPresetRef,
     ModelListConfig,
     PipelineConfig,
     ProviderConfig,
@@ -90,6 +91,27 @@ def _to_str(value: Any, default: str) -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _parse_memory_presets(raw: Any) -> list[MemoryPresetRef]:
+    if not isinstance(raw, list):
+        return []
+    out: list[MemoryPresetRef] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            ref_id = item.strip()
+            override = ""
+        elif isinstance(item, dict):
+            ref_id = str(item.get("id") or "").strip()
+            override = str(item.get("override_status") or "").strip()
+        else:
+            continue
+        if not ref_id or ref_id in seen:
+            continue
+        seen.add(ref_id)
+        out.append(MemoryPresetRef(id=ref_id, override_status=override))
+    return out
 
 
 def _resolve_prompt_path(root_dir: Path, raw_path: Any) -> Path | None:
@@ -392,9 +414,11 @@ def load_app_config(
     memory_patch_raw = memory_raw.get("patch") or {}
     memory_merge_raw = memory_raw.get("merge") or {}
     memory_check_raw = memory_raw.get("consistency_check") or {}
+    memory_presets = _parse_memory_presets(memory_raw.get("presets"))
     memory = MemoryConfig(
         enabled=_to_bool(memory_raw.get("enabled"), False),
         mode=_to_str(memory_raw.get("mode"), "balanced"),
+        presets=memory_presets,
         bootstrap=MemoryBootstrapConfig(
             enabled=_to_bool(memory_bootstrap_raw.get("enabled"), False),
             max_candidates=_to_int(memory_bootstrap_raw.get("max_candidates"), 80),
@@ -503,6 +527,8 @@ def load_app_config(
             pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
         elif key == "subtitle_reflow_enabled":
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
+        elif key == "memory_presets":
+            pipeline.memory.presets = _parse_memory_presets(value)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
             for style_key, style_value in value.items():
                 if hasattr(pipeline.subtitle_ass_style, style_key):

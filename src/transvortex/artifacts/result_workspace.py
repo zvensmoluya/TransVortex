@@ -113,12 +113,17 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     quality_summary, quality_by_id = _quality_by_segment(paths)
     reflow_summary = _reflow_summary(paths)
     memory_file = paths["memory"] / "translation_memory.json"
+    selected_presets_file = paths["memory"] / "selected_presets.json"
     memory_issues_file = paths["memory"] / "consistency_issues.jsonl"
     memory_entries = []
+    preset_entries = []
     memory_issues = []
     if memory_file.exists():
         memory_payload = read_json(memory_file)
         memory_entries = list(memory_payload.get("entries") or [])
+    if selected_presets_file.exists():
+        preset_payload = read_json(selected_presets_file)
+        preset_entries = list(preset_payload.get("entries") or [])
     if memory_issues_file.exists():
         memory_issues = read_jsonl(memory_issues_file)
     issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
@@ -143,10 +148,13 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
         "reflow": reflow_summary,
         "memory": {
             "enabled": bool(task.settings.get("memory", {}).get("enabled", False)),
-            "entries": len(memory_entries),
+            "entries": len(memory_entries) + len(preset_entries),
+            "runtime_entries": len(memory_entries),
+            "preset_entries": len(preset_entries),
             "issues": len(memory_issues),
             "paths": {
                 "translation_memory": str(memory_file) if memory_file.exists() else "",
+                "selected_presets": str(selected_presets_file) if selected_presets_file.exists() else "",
                 "consistency_issues": str(memory_issues_file) if memory_issues_file.exists() else "",
             },
         },

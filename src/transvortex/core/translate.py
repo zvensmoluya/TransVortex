@@ -335,7 +335,7 @@ def _iter_translate_window(
     target_lang: str,
     memory_store: MemoryStore,
 ):
-    document = memory_store.load()
+    document = memory_store.load_effective()
     chunk_memory_prompts = {}
     for chunk in window:
         selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
@@ -398,11 +398,12 @@ def _update_memory_after_window(
         if payload is not None:
             memory_store.append_patch(payload)
         if patch is not None:
-            document = memory_store.load()
+            document = memory_store.load_runtime()
             document, _conflicts = merge_patch(
                 document,
                 patch,
                 store=memory_store,
+                protected_entries=memory_store.load_selected_entries(),
                 auto_confirm_high_confidence=config.pipeline.memory.merge.auto_confirm_high_confidence,
             )
             memory_store.save(document)
@@ -417,7 +418,7 @@ def _iter_translate_all_chunks_with_memory(
     memory_dir: Path,
 ):
     memory_store = MemoryStore(memory_dir)
-    memory_store.ensure()
+    memory_store.ensure_runtime_document()
     window_size = max(1, config.pipeline.default_concurrency)
     if config.pipeline.memory.mode == "consistency_first":
         window_size = 1
@@ -433,7 +434,7 @@ def _iter_translate_all_chunks_with_memory(
         ):
             yield result
         snapshot_index += 1
-        memory_store.write_snapshot(memory_store.load(), snapshot_index)
+        memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
 
 
 def translate_all_chunks(
