@@ -1,7 +1,0 @@
-PyYAML>=6.0
-
-[asr]
-faster-whisper>=1.0.0
-
-[test]
-pytest>=8.0.0
