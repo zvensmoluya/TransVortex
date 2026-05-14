@@ -527,6 +527,8 @@ def load_app_config(
             pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
         elif key == "subtitle_reflow_enabled":
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
+        elif key == "memory_enabled":
+            pipeline.memory.enabled = _to_bool(value, pipeline.memory.enabled)
         elif key == "memory_presets":
             pipeline.memory.presets = _parse_memory_presets(value)
         elif key == "subtitle_ass_style" and isinstance(value, dict):

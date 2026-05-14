@@ -152,7 +152,36 @@ export type ResultSegment = {
 export type TaskResultPayload = {
   task: TaskRecord & { settings?: Record<string, unknown>; task_dir?: string };
   segments: ResultSegment[];
-  quality?: Record<string, unknown>;
+  quality?: {
+    mode?: string;
+    status?: string;
+    segments?: number;
+    segments_with_issues?: number;
+    issue_counts?: Record<string, number>;
+    residual_counts?: Record<string, number>;
+    action_counts?: Record<string, number>;
+    max_cps?: number;
+    thresholds?: Record<string, number>;
+  };
+  reflow?: {
+    enabled: boolean;
+    windows: number;
+    reflowed: number;
+    failed: number;
+    path: string;
+  };
+  memory?: {
+    enabled: boolean;
+    entries: number;
+    runtime_entries: number;
+    preset_entries: number;
+    issues: number;
+    paths: {
+      translation_memory: string;
+      selected_presets: string;
+      consistency_issues: string;
+    };
+  };
   output_paths?: Record<string, string>;
 };
 
@@ -206,12 +235,16 @@ export type FormState = {
   translationBatchSize: number;
   translationStylePreset: string;
   translationStylePrompt: string;
+  projectPrompt: string;
+  memoryEnabled: boolean;
+  memoryPreset: string;
   translationChunkLines: number;
   translationContextBeforeLines: number;
   translationContextAfterLines: number;
   translationRepairEnabled: boolean;
   subtitleQualityMode: "off" | "conservative" | "balanced";
   subtitleCompressionEnabled: boolean;
+  subtitleReflowEnabled: boolean;
   outputFormat: "srt" | "ass" | "both";
   concurrency: number;
   apiKey: string;
@@ -237,12 +270,16 @@ export const emptyForm: FormState = {
   translationBatchSize: 40,
   translationStylePreset: "subtitle_natural",
   translationStylePrompt: "",
+  projectPrompt: "",
+  memoryEnabled: true,
+  memoryPreset: "",
   translationChunkLines: 40,
   translationContextBeforeLines: 20,
   translationContextAfterLines: 10,
   translationRepairEnabled: true,
   subtitleQualityMode: "balanced",
   subtitleCompressionEnabled: false,
+  subtitleReflowEnabled: false,
   outputFormat: "srt",
   concurrency: 8,
   apiKey: "",

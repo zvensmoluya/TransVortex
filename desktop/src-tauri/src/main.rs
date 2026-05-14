@@ -46,6 +46,9 @@ struct StartTaskRequest {
     translation_repair_enabled: Option<bool>,
     subtitle_quality_mode: Option<String>,
     subtitle_compression_enabled: Option<bool>,
+    subtitle_reflow_enabled: Option<bool>,
+    memory_enabled: Option<bool>,
+    memory_preset: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +76,9 @@ struct ResumeTaskRequest {
     translation_repair_enabled: Option<bool>,
     subtitle_quality_mode: Option<String>,
     subtitle_compression_enabled: Option<bool>,
+    subtitle_reflow_enabled: Option<bool>,
+    memory_enabled: Option<bool>,
+    memory_preset: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -499,6 +505,13 @@ fn start_task(
         "--subtitle-compression-enabled",
         request.subtitle_compression_enabled,
     );
+    push_bool_arg(
+        &mut args,
+        "--subtitle-reflow-enabled",
+        request.subtitle_reflow_enabled,
+    );
+    push_bool_arg(&mut args, "--memory-enabled", request.memory_enabled);
+    push_arg(&mut args, "--memory-preset", &request.memory_preset);
 
     spawn_streaming_worker(app, state, root, args)
 }
@@ -558,6 +571,13 @@ fn resume_task(
         "--subtitle-compression-enabled",
         request.subtitle_compression_enabled,
     );
+    push_bool_arg(
+        &mut args,
+        "--subtitle-reflow-enabled",
+        request.subtitle_reflow_enabled,
+    );
+    push_bool_arg(&mut args, "--memory-enabled", request.memory_enabled);
+    push_arg(&mut args, "--memory-preset", &request.memory_preset);
     spawn_streaming_worker(app, state, root, args)
 }
 

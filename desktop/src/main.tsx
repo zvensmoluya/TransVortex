@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Database,
   DownloadCloud,
+  FileText,
   FolderOpen,
   History,
   KeyRound,
@@ -113,6 +114,43 @@ function parseClock(value: string) {
   return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number((ms + "000").slice(0, 3)) / 1000;
 }
 
+function memoryPresetRefs(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function memoryPresetString(value: unknown) {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (!item || typeof item !== "object") return "";
+      const row = item as { id?: unknown; override_status?: unknown };
+      const id = typeof row.id === "string" ? row.id.trim() : "";
+      const status = typeof row.override_status === "string" ? row.override_status.trim() : "";
+      return id && status ? `${id}:${status}` : id;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function buildTranslationStylePrompt(projectPrompt: string, stylePrompt: string) {
+  const project = projectPrompt.trim();
+  const style = stylePrompt.trim();
+  if (project && style) return `Project context:\n${project}\n\nStyle instructions:\n${style}`;
+  if (project) return `Project context:\n${project}`;
+  return style;
+}
+
+function compactCountMap(value?: Record<string, number>) {
+  return Object.entries(value || {})
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => `${key}:${count}`)
+    .join(" · ");
+}
+
 function App() {
   const [activeView, setActiveView] = useState<ActiveView>("start");
   const [config, setConfig] = useState<ConfigPayload | null>(null);
@@ -202,6 +240,9 @@ function App() {
     setForm((current) => {
       const provider = current.provider || payload.routing.primary.provider;
       const providerConfig = payload.providers.find((item) => item.name === provider);
+      const memory = objectValue(payload.pipeline.memory);
+      const subtitle = objectValue(payload.pipeline.subtitle);
+      const reflow = objectValue(subtitle.reflow);
       return {
         ...current,
         provider,
@@ -224,13 +265,15 @@ function App() {
         ),
         translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
         translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
+        memoryEnabled: (memory.enabled as boolean | undefined) ?? current.memoryEnabled,
+        memoryPreset: current.memoryPreset || memoryPresetString(memory.presets),
         subtitleQualityMode: textValue(
-          objectValue(objectValue(payload.pipeline.subtitle).quality).mode,
+          objectValue(subtitle.quality).mode,
           current.subtitleQualityMode,
         ) as FormState["subtitleQualityMode"],
         subtitleCompressionEnabled:
-          (objectValue(objectValue(payload.pipeline.subtitle).compression).enabled as boolean | undefined) ??
-          current.subtitleCompressionEnabled,
+          (objectValue(subtitle.compression).enabled as boolean | undefined) ?? current.subtitleCompressionEnabled,
+        subtitleReflowEnabled: (reflow.enabled as boolean | undefined) ?? current.subtitleReflowEnabled,
         outputFormat: textValue(payload.pipeline.output_format, current.outputFormat) as FormState["outputFormat"],
         concurrency: numberValue(payload.pipeline.default_concurrency, current.concurrency),
       };
@@ -664,6 +707,7 @@ function App() {
   }
 
   function taskRequest() {
+    const memoryPresets = memoryPresetRefs(form.memoryPreset);
     return {
       provider: form.provider || null,
       model: form.model || null,
@@ -677,13 +721,16 @@ function App() {
       chunkOverlapSeconds: form.chunkOverlapSeconds,
       translationBatchSize: form.translationBatchSize,
       translationStylePreset: form.translationStylePreset,
-      translationStylePrompt: form.translationStylePrompt,
+      translationStylePrompt: buildTranslationStylePrompt(form.projectPrompt, form.translationStylePrompt),
       translationChunkLines: form.translationChunkLines,
       translationContextBeforeLines: form.translationContextBeforeLines,
       translationContextAfterLines: form.translationContextAfterLines,
       translationRepairEnabled: form.translationRepairEnabled,
       subtitleQualityMode: form.subtitleQualityMode,
       subtitleCompressionEnabled: form.subtitleCompressionEnabled,
+      subtitleReflowEnabled: form.subtitleReflowEnabled,
+      memoryEnabled: form.memoryEnabled,
+      memoryPreset: memoryPresets.length ? memoryPresets.join(",") : null,
       outputFormat: form.outputFormat,
       concurrency: form.concurrency,
     };
@@ -934,6 +981,7 @@ function App() {
           updateSegment={updateResultSegment}
           saveResultSegments={saveResultSegments}
           reexportResult={reexportResult}
+          openPath={openPath}
           busy={busy}
           outputFormat={form.outputFormat}
           updateOutputFormat={(value) => update("outputFormat", value)}
@@ -1094,6 +1142,8 @@ function TaskWorkspace({
   cancelTask: () => void;
   probe: () => void;
 }) {
+  const selectedPresetCount = memoryPresetRefs(form.memoryPreset).length;
+
   return (
     <div className="space-y-4">
       <Panel title="视频与语言">
@@ -1134,6 +1184,52 @@ function TaskWorkspace({
             <LanguageSelect value={form.targetLang} onChange={(value) => update("targetLang", value)} />
           </label>
         </div>
+      </Panel>
+
+      <Panel title={t("preTranslation")}>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="tvx-label">
+            {t("projectPrompt")}
+            <textarea
+              className="tvx-textarea min-h-28"
+              placeholder={t("projectPromptPlaceholder")}
+              value={form.projectPrompt}
+              onChange={(event) => update("projectPrompt", event.target.value)}
+            />
+          </label>
+          <label className="tvx-label">
+            {t("stylePrompt")}
+            <textarea
+              className="tvx-textarea min-h-28"
+              placeholder={t("stylePromptPlaceholder")}
+              value={form.translationStylePrompt}
+              onChange={(event) => update("translationStylePrompt", event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="mt-4 grid grid-cols-[180px_minmax(0,1fr)_120px] items-end gap-4">
+          <label className="inline-flex min-h-10 items-center gap-2 text-sm text-ink">
+            <input className="h-4 w-4" type="checkbox" checked={form.memoryEnabled} onChange={(event) => update("memoryEnabled", event.target.checked)} />
+            {t("memoryEnabled")}
+          </label>
+          <label className="tvx-label">
+            {t("memoryPreset")}
+            <input
+              className="tvx-input"
+              placeholder="nold, rezero:locked"
+              value={form.memoryPreset}
+              onChange={(event) => {
+                update("memoryPreset", event.target.value);
+                if (event.target.value.trim()) update("memoryEnabled", true);
+              }}
+            />
+          </label>
+          <div className="rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-muted">
+            <strong className="block text-sm text-ink">{selectedPresetCount}</strong>
+            preset
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-muted">{t("memoryPresetHint")}</p>
       </Panel>
 
       <Panel title="输出">
@@ -1179,18 +1275,6 @@ function TaskWorkspace({
             <label className="tvx-label">
               {t("concurrency")}
               <input className="tvx-input" type="number" value={form.concurrency} onChange={(event) => update("concurrency", Number(event.target.value))} />
-            </label>
-            <label className="tvx-label">
-              字幕质量
-              <select className="tvx-input" value={form.subtitleQualityMode} onChange={(event) => update("subtitleQualityMode", event.target.value as FormState["subtitleQualityMode"])}>
-                <option value="off">off</option>
-                <option value="conservative">conservative</option>
-                <option value="balanced">balanced</option>
-              </select>
-            </label>
-            <label className="mt-5 inline-flex items-center gap-2 text-sm text-ink">
-              <input className="h-4 w-4" type="checkbox" checked={form.subtitleCompressionEnabled} onChange={(event) => update("subtitleCompressionEnabled", event.target.checked)} />
-              模型压缩
             </label>
           </div>
         )}
@@ -1300,15 +1384,29 @@ function TranslationPanel({
           {t("contextAfter")}
           <input className="tvx-input" type="number" value={form.translationContextAfterLines} onChange={(event) => update("translationContextAfterLines", Number(event.target.value))} />
         </label>
+        <label className="tvx-label">
+          字幕质量
+          <select className="tvx-input" value={form.subtitleQualityMode} onChange={(event) => update("subtitleQualityMode", event.target.value as FormState["subtitleQualityMode"])}>
+            <option value="off">off</option>
+            <option value="conservative">conservative</option>
+            <option value="balanced">balanced</option>
+          </select>
+        </label>
       </div>
-      <label className="tvx-label mt-4">
-        {t("stylePrompt")}
-        <textarea className="tvx-textarea" value={form.translationStylePrompt} onChange={(event) => update("translationStylePrompt", event.target.value)} />
-      </label>
-      <label className="mt-4 inline-flex items-center gap-2 text-sm">
-        <input className="h-4 w-4" type="checkbox" checked={form.translationRepairEnabled} onChange={(event) => update("translationRepairEnabled", event.target.checked)} />
-        {t("repairRows")}
-      </label>
+      <div className="mt-4 flex flex-wrap gap-6">
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input className="h-4 w-4" type="checkbox" checked={form.translationRepairEnabled} onChange={(event) => update("translationRepairEnabled", event.target.checked)} />
+          {t("repairRows")}
+        </label>
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input className="h-4 w-4" type="checkbox" checked={form.subtitleCompressionEnabled} onChange={(event) => update("subtitleCompressionEnabled", event.target.checked)} />
+          模型压缩
+        </label>
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input className="h-4 w-4" type="checkbox" checked={form.subtitleReflowEnabled} onChange={(event) => update("subtitleReflowEnabled", event.target.checked)} />
+          {t("reflowRows")}
+        </label>
+      </div>
     </Panel>
   );
 }
@@ -2065,6 +2163,7 @@ function ResultPanel({
   updateSegment,
   saveResultSegments,
   reexportResult,
+  openPath,
   busy,
   outputFormat,
   updateOutputFormat,
@@ -2075,6 +2174,7 @@ function ResultPanel({
   updateSegment: (id: number, patch: Partial<ResultSegment>) => void;
   saveResultSegments: () => void;
   reexportResult: () => void;
+  openPath: (path?: string | null) => void;
   busy: boolean;
   outputFormat: FormState["outputFormat"];
   updateOutputFormat: (value: FormState["outputFormat"]) => void;
@@ -2088,6 +2188,8 @@ function ResultPanel({
   }
   const maxEnd = Math.max(...result.segments.map((segment) => segment.end), 1);
   const sortedSegments = [...result.segments].sort((a, b) => a.start - b.start || a.end - b.end || a.id - b.id);
+  const qualityResiduals = compactCountMap(result.quality?.residual_counts);
+  const qualityActions = compactCountMap(result.quality?.action_counts);
   const gapById = new Map<number, number>();
   sortedSegments.forEach((segment, index) => {
     const previous = sortedSegments[index - 1];
@@ -2137,6 +2239,65 @@ function ResultPanel({
           })}
         </div>
       </Panel>
+      <div className="grid grid-cols-2 gap-4">
+        <Panel title={t("qualitySummary")}>
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">status</span>
+              <strong className={statusTone(result.quality?.status || "")}>{result.quality?.status || "-"}</strong>
+            </div>
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">issues</span>
+              <strong>{result.quality?.segments_with_issues ?? 0}</strong>
+            </div>
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">max cps</span>
+              <strong>{Number(result.quality?.max_cps || 0).toFixed(1)}</strong>
+            </div>
+          </div>
+          <p className="mt-3 truncate text-xs text-muted">{qualityResiduals || qualityActions || "暂无质量问题记录"}</p>
+        </Panel>
+        <Panel title={t("memorySummary")}>
+          <div className="grid grid-cols-4 gap-3 text-sm">
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">preset</span>
+              <strong>{result.memory?.preset_entries ?? 0}</strong>
+            </div>
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">runtime</span>
+              <strong>{result.memory?.runtime_entries ?? 0}</strong>
+            </div>
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">issues</span>
+              <strong>{result.memory?.issues ?? 0}</strong>
+            </div>
+            <div className="rounded-md border border-line bg-slate-50 p-3">
+              <span className="block text-xs text-muted">reflow</span>
+              <strong>{result.reflow?.reflowed ?? 0}/{result.reflow?.windows ?? 0}</strong>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {result.memory?.paths.selected_presets && (
+              <button className="tvx-btn min-h-8 px-2 text-xs" onClick={() => openPath(result.memory?.paths.selected_presets)}>
+                <FileText size={14} />
+                selected_presets
+              </button>
+            )}
+            {result.memory?.paths.translation_memory && (
+              <button className="tvx-btn min-h-8 px-2 text-xs" onClick={() => openPath(result.memory?.paths.translation_memory)}>
+                <FileText size={14} />
+                runtime_memory
+              </button>
+            )}
+            {result.reflow?.path && (
+              <button className="tvx-btn min-h-8 px-2 text-xs" onClick={() => openPath(result.reflow?.path)}>
+                <FileText size={14} />
+                reflow_log
+              </button>
+            )}
+          </div>
+        </Panel>
+      </div>
       <Panel title="字幕行">
         <div className="max-h-[560px] overflow-auto">
           <table className="w-full border-collapse text-sm">
