@@ -69,6 +69,18 @@ def _quality_by_segment(paths: dict[str, Path]) -> tuple[dict[str, Any], dict[in
     return dict(payload.get("summary") or {}), by_id
 
 
+def _reflow_summary(paths: dict[str, Path]) -> dict[str, Any]:
+    reflow_file = paths["quality"] / "reflow.jsonl"
+    rows = read_jsonl(reflow_file)
+    return {
+        "enabled": bool(rows),
+        "windows": len(rows),
+        "reflowed": sum(1 for row in rows if row.get("status") == "reflowed"),
+        "failed": sum(1 for row in rows if row.get("status") != "reflowed"),
+        "path": str(reflow_file) if reflow_file.exists() else "",
+    }
+
+
 def _issues_for_segments(segments: list[Segment], max_cps: int) -> dict[int, list[str]]:
     issues: dict[int, list[str]] = {seg.id: [] for seg in segments}
     sorted_segments = sorted(segments, key=lambda item: (item.start, item.end, item.id))
@@ -99,6 +111,7 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     translated_rows = read_jsonl(translated_file)
     meta_by_id = _translation_meta_by_segment(translated_rows)
     quality_summary, quality_by_id = _quality_by_segment(paths)
+    reflow_summary = _reflow_summary(paths)
     memory_file = paths["memory"] / "translation_memory.json"
     memory_issues_file = paths["memory"] / "consistency_issues.jsonl"
     memory_entries = []
@@ -127,6 +140,7 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
             for seg in segments
         ],
         "quality": quality_summary,
+        "reflow": reflow_summary,
         "memory": {
             "enabled": bool(task.settings.get("memory", {}).get("enabled", False)),
             "entries": len(memory_entries),

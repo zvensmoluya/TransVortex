@@ -534,6 +534,86 @@ memory:
     assert cfg.pipeline.memory.consistency_check.enabled is False
 
 
+def test_subtitle_reflow_config_parse(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+subtitle:
+  reflow:
+    enabled: true
+    trigger: warn_and_fail
+    batch_windows: 4
+    max_windows: 9
+    max_window_segments: 5
+    context_before_segments: 6
+    context_after_segments: 7
+    max_input_chars: 12345
+    max_output_replacements: 11
+    memory: false
+    max_attempts: 3
+    allow_merge: false
+    allow_drop: true
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path, cli_overrides={"subtitle_reflow_enabled": "false"})
+    assert cfg.pipeline.subtitle.reflow.enabled is False
+    assert cfg.pipeline.subtitle.reflow.trigger == "warn_and_fail"
+    assert cfg.pipeline.subtitle.reflow.batch_windows == 4
+    assert cfg.pipeline.subtitle.reflow.max_windows == 9
+    assert cfg.pipeline.subtitle.reflow.max_window_segments == 5
+    assert cfg.pipeline.subtitle.reflow.context_before_segments == 6
+    assert cfg.pipeline.subtitle.reflow.context_after_segments == 7
+    assert cfg.pipeline.subtitle.reflow.max_input_chars == 12345
+    assert cfg.pipeline.subtitle.reflow.max_output_replacements == 11
+    assert cfg.pipeline.subtitle.reflow.memory is False
+    assert cfg.pipeline.subtitle.reflow.max_attempts == 3
+    assert cfg.pipeline.subtitle.reflow.allow_merge is False
+    assert cfg.pipeline.subtitle.reflow.allow_drop is True
+
+
+def test_subtitle_reflow_defaults_are_conservative(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+    reflow = cfg.pipeline.subtitle.reflow
+    assert reflow.enabled is False
+    assert reflow.batch_windows == 10
+    assert reflow.max_windows == 30
+    assert reflow.max_window_segments == 10
+    assert reflow.context_before_segments == 8
+    assert reflow.context_after_segments == 8
+    assert reflow.max_input_chars == 60000
+    assert reflow.max_output_replacements == 80
+    assert reflow.memory is True
+    assert reflow.max_attempts == 2
+
+
 def test_translation_batch_override_updates_translation_chunk_lines(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

@@ -266,8 +266,14 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
     main()
 
     payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
     assert payload["status"] == "QUEUED"
+    assert payload["command"] == "run"
+    assert Path(payload["task_dir"]).parts[-2:] == ("artifacts", payload["task_id"])
     assert payload["worker"]["pid"] == 4321
+    assert Path(payload["worker"]["stdout_log"]).name == "stdout.log"
+    assert Path(payload["worker"]["stderr_log"]).name == "stderr.log"
+    assert f"status --task-id {payload['task_id']} --json" in payload["next_commands"]["status"]
     assert "_worker" in spawned["cmd"]
     assert "--providers-file" in spawned["cmd"]
     assert "--provider" in spawned["cmd"]

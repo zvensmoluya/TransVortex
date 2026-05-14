@@ -21,6 +21,7 @@ from ..protocol.errors import PipelineTaskError, classify_exception
 from ..formats.srt import parse_srt_file
 from .subtitle_compression import compress_overlong_subtitles
 from .subtitle_optimizer import optimize_subtitles
+from .subtitle_reflow import reflow_subtitles
 from .translate import iter_translate_all_chunks, translate_all_chunks
 from .translation_validation import validate_translation_response, validation_to_json
 from ..utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
@@ -881,7 +882,37 @@ def _execute_task(
                 append_jsonl(paths["quality"] / "compression.jsonl", row)
             quality_result = optimize_subtitles(final_segments, config.pipeline.subtitle.quality)
             final_segments = quality_result.segments
+        reflow_rows: list[dict[str, Any]] = []
+        if config.pipeline.subtitle.reflow.enabled:
+            final_segments, reflow_rows = reflow_subtitles(
+                config=config,
+                segments=final_segments,
+                quality_report=quality_result.report,
+                source_lang=task.source_lang,
+                target_lang=task.target_lang,
+                memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
+            )
+            for row in reflow_rows:
+                append_jsonl(paths["quality"] / "reflow.jsonl", row)
+            if reflow_rows:
+                store.append_event(
+                    task_id,
+                    "artifact",
+                    stage="QUALITY",
+                    message="Subtitle reflow report ready",
+                    progress=0.91,
+                    details={
+                        "path": str(paths["quality"] / "reflow.jsonl"),
+                        "windows": len(reflow_rows),
+                        "reflowed": sum(1 for row in reflow_rows if row.get("status") == "reflowed"),
+                    },
+                )
+            quality_result = optimize_subtitles(final_segments, config.pipeline.subtitle.quality)
+            final_segments = quality_result.segments
+            write_json(paths["final"] / "segments.reflowed.json", final_segments)
         write_json(paths["quality"] / "subtitle_quality.json", quality_result.report)
+        quality_summary = quality_result.report.get("summary", {})
+        quality_status = str(quality_summary.get("status") or "")
         for code, count in quality_result.report.get("summary", {}).get("issue_counts", {}).items():
             store.append_event(
                 task_id,
@@ -891,6 +922,18 @@ def _execute_task(
                 message=f"Subtitle quality issue {code}: {count}",
                 details={"code": code, "count": count},
             )
+        if quality_status in {"WARN", "FAIL"}:
+            store.append_event(
+                task_id,
+                "warning",
+                stage="QUALITY",
+                level="warning",
+                message=f"Subtitle quality status {quality_status}",
+                details={
+                    "status": quality_status,
+                    "residual_counts": quality_summary.get("residual_counts", {}),
+                },
+            )
         store.append_event(
             task_id,
             "artifact",
@@ -899,7 +942,7 @@ def _execute_task(
             progress=0.92,
             details={
                 "path": str(paths["quality"] / "subtitle_quality.json"),
-                "summary": quality_result.report.get("summary", {}),
+                "summary": quality_summary,
             },
         )
         write_json(paths["final"] / "segments.final.json", final_segments)

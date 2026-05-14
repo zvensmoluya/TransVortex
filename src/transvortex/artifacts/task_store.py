@@ -7,6 +7,11 @@ from ..app.models import TaskRecord
 from ..utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
 
 
+def _normalize_progress(progress: float) -> float:
+    clamped = max(0.0, min(1.0, float(progress)))
+    return round(clamped, 4)
+
+
 class TaskStore:
     def __init__(self, artifacts_dir: Path, event_sink: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.artifacts_dir = artifacts_dir
@@ -75,20 +80,27 @@ class TaskStore:
         level: str = "info",
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        created_at = utc_now_iso()
         event: dict[str, Any] = {
             "type": event_type,
             "task_id": task_id,
-            "created_at": utc_now_iso(),
+            "created_at": created_at,
             "level": level,
             "message": message,
         }
         if stage is not None:
             event["stage"] = stage
         if progress is not None:
-            event["progress"] = max(0.0, min(1.0, float(progress)))
+            event["progress"] = _normalize_progress(progress)
         if details:
             event["details"] = details
         append_jsonl(self.events_file(task_id), event)
+        try:
+            task = self.load_task(task_id)
+            task.updated_at = created_at
+            self.save_task(task)
+        except Exception:
+            pass
         if self.event_sink is not None:
             try:
                 self.event_sink(event)

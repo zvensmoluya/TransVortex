@@ -7,6 +7,9 @@ from ..app.models import Segment, SubtitleQualityConfig
 from .subtitle_quality import clean_subtitle_text, visual_width, wrap_subtitle_text
 
 
+_QUALITY_EPSILON = 1e-6
+
+
 @dataclass
 class SubtitleQualityIssue:
     code: str
@@ -63,7 +66,7 @@ def _quality_row(seg: Segment, config: SubtitleQualityConfig, actions: list[str]
     cps = len(text) / max(duration, 0.001)
     lines, max_width = _line_metrics(text, max_line_width=config.max_line_width)
     issues: list[SubtitleQualityIssue] = []
-    if duration < config.min_duration_seconds:
+    if duration + _QUALITY_EPSILON < config.min_duration_seconds:
         issues.append(
             SubtitleQualityIssue(
                 code="duration_too_short",
@@ -71,7 +74,7 @@ def _quality_row(seg: Segment, config: SubtitleQualityConfig, actions: list[str]
                 message=f"duration {duration:.2f}s < {config.min_duration_seconds:.2f}s",
             )
         )
-    if cps > config.hard_max_cps:
+    if cps > config.hard_max_cps + _QUALITY_EPSILON:
         issues.append(
             SubtitleQualityIssue(
                 code="cps_too_high",
@@ -108,7 +111,33 @@ def _quality_row(seg: Segment, config: SubtitleQualityConfig, actions: list[str]
     )
 
 
-def _report_payload(rows: list[SubtitleQualityRow], mode: str) -> dict[str, Any]:
+def _residual_counts(rows: list[SubtitleQualityRow], config: SubtitleQualityConfig) -> dict[str, int]:
+    return {
+        "under_min_duration": sum(1 for row in rows if row.duration + _QUALITY_EPSILON < config.min_duration_seconds),
+        "under_one_second": sum(1 for row in rows if row.duration + _QUALITY_EPSILON < 1.0),
+        "over_max_duration": sum(1 for row in rows if row.duration > config.max_duration_seconds + _QUALITY_EPSILON),
+        "over_hard_cps": sum(1 for row in rows if row.cps > config.hard_max_cps + _QUALITY_EPSILON),
+        "too_many_lines": sum(1 for row in rows if row.line_count > config.max_lines),
+        "line_too_wide": sum(1 for row in rows if row.max_line_width > config.max_line_width),
+    }
+
+
+def _quality_status(residual_counts: dict[str, int], mode: str) -> str:
+    if mode == "off":
+        return "OFF"
+    if (
+        residual_counts.get("under_min_duration", 0)
+        or residual_counts.get("over_hard_cps", 0)
+        or residual_counts.get("too_many_lines", 0)
+        or residual_counts.get("line_too_wide", 0)
+    ):
+        return "FAIL"
+    if residual_counts.get("under_one_second", 0) or residual_counts.get("over_max_duration", 0):
+        return "WARN"
+    return "PASS"
+
+
+def _report_payload(rows: list[SubtitleQualityRow], mode: str, config: SubtitleQualityConfig) -> dict[str, Any]:
     issue_counts: dict[str, int] = {}
     action_counts: dict[str, int] = {}
     for row in rows:
@@ -116,14 +145,26 @@ def _report_payload(rows: list[SubtitleQualityRow], mode: str) -> dict[str, Any]
             issue_counts[issue.code] = issue_counts.get(issue.code, 0) + 1
         for action in row.actions:
             action_counts[action] = action_counts.get(action, 0) + 1
+    residual_counts = _residual_counts(rows, config)
     return {
         "summary": {
             "mode": mode,
+            "status": _quality_status(residual_counts, mode),
             "segments": len(rows),
             "segments_with_issues": sum(1 for row in rows if row.issues),
             "issue_counts": issue_counts,
+            "residual_counts": residual_counts,
             "action_counts": action_counts,
             "max_cps": max((row.cps for row in rows), default=0.0),
+            "thresholds": {
+                "target_cps": config.target_cps,
+                "hard_max_cps": config.hard_max_cps,
+                "max_line_width": config.max_line_width,
+                "max_lines": config.max_lines,
+                "min_duration_seconds": config.min_duration_seconds,
+                "max_duration_seconds": config.max_duration_seconds,
+                "min_gap_seconds": config.min_gap_seconds,
+            },
         },
         "segments": [
             {
@@ -211,7 +252,7 @@ def optimize_subtitles(segments: list[Segment], config: SubtitleQualityConfig) -
     ordered = sorted(segments, key=lambda seg: (seg.start, seg.end, seg.id))
     if mode == "off":
         rows = [_quality_row(seg, config, []) for seg in ordered]
-        return SubtitleOptimizationResult(segments=ordered, report=_report_payload(rows, mode))
+        return SubtitleOptimizationResult(segments=ordered, report=_report_payload(rows, mode, config))
 
     optimized: list[Segment] = []
     pending = list(ordered)
@@ -274,4 +315,4 @@ def optimize_subtitles(segments: list[Segment], config: SubtitleQualityConfig) -
         clean_seg = replace(seg, meta=meta)
         final_segments.append(clean_seg)
         rows.append(_quality_row(clean_seg, config, actions))
-    return SubtitleOptimizationResult(segments=final_segments, report=_report_payload(rows, mode))
+    return SubtitleOptimizationResult(segments=final_segments, report=_report_payload(rows, mode, config))

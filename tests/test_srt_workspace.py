@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from transvortex.app.models import NormalizedResponse
 from transvortex.core.orchestrator import run_pipeline
 from transvortex.providers.admin import save_provider_routing
 from transvortex.artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
@@ -138,6 +139,111 @@ World
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)
+
+
+def test_srt_translate_reflow_artifacts_and_result_summary(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    pipeline = root / "pipeline.yaml"
+    pipeline.write_text(
+        pipeline.read_text(encoding="utf-8")
+        + """
+subtitle:
+  quality:
+    min_duration_seconds: 0.8
+    hard_max_cps: 10
+    target_cps: 8
+  reflow:
+    enabled: true
+    max_window_segments: 3
+    batch_windows: 10
+memory:
+  enabled: true
+  inject:
+    max_entries_per_chunk: 5
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    seed_dir = root / "memory"
+    seed_dir.mkdir()
+    (seed_dir / "translation_memory.json").write_text(
+        """
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "mem_hello",
+      "source": "Hello",
+      "target": "你好",
+      "category": "term",
+      "status": "locked",
+      "origin": "user_glossary",
+      "priority": 100,
+      "aliases": []
+    }
+  ]
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+    srt_file = root / "demo.srt"
+    srt_file.write_text(
+        """
+1
+00:00:01,000 --> 00:00:01,100
+Hello
+
+2
+00:00:01,500 --> 00:00:02,600
+World
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None, memory_dir=None):
+        return [
+            {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [
+                    {"id": seg_id, "text_tgt": "这是一条非常非常长的字幕" if seg_id == 1 else "下一句"}
+                    for seg_id in chunk.segment_ids
+                ],
+                "errors": [],
+            }
+            for chunk in chunks
+        ]
+
+    class FakeReflowClient:
+        def __init__(self, _provider):
+            pass
+
+        def translate_request(self, req):
+            assert req.prompt_mode == "reflow"
+            assert "Hello => 你好" in req.memory_prompt
+            return NormalizedResponse(
+                numbered_lines=[],
+                raw_text='{"windows":[{"window_id":1,"replacements":[{"source_ids":[1,2],"text_tgt":"短句合并","reason":"merge"}]}]}',
+            )
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    monkeypatch.setattr("transvortex.core.subtitle_reflow.build_provider_client", lambda provider: FakeReflowClient(provider))
+
+    task_id = run_pipeline(root_dir=root, input_file=srt_file, source_lang="en", target_lang="zh-CN", input_type="srt_translate")
+
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    assert (task_dir / "quality" / "reflow.jsonl").exists()
+    assert (task_dir / "final" / "segments.reflowed.json").exists()
+    result = open_task_result(root_dir=root, task_id=task_id)
+    assert result["reflow"]["reflowed"] == 1
+    assert [segment["id"] for segment in result["segments"]] == [1]
+    assert result["segments"][0]["text_tgt"] == "短句合并"
+    assert not (task_dir / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
 
 
 def test_srt_translate_memory_artifacts_and_result_summary(tmp_path: Path, monkeypatch) -> None:

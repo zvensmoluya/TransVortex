@@ -17,6 +17,16 @@ def test_optimizer_extends_segment_when_gap_allows() -> None:
     assert "extend_min_duration" in row["actions"]
 
 
+def test_optimizer_reports_pass_for_clean_segments() -> None:
+    result = optimize_subtitles(
+        [Segment(id=1, start=0.0, end=2.0, text_src="hello", text_tgt="干净字幕")],
+        SubtitleQualityConfig(target_cps=10, hard_max_cps=12, min_duration_seconds=0.8),
+    )
+
+    assert result.report["summary"]["status"] == "PASS"
+    assert result.report["summary"]["residual_counts"]["under_one_second"] == 0
+
+
 def test_optimizer_does_not_extend_into_next_segment() -> None:
     result = optimize_subtitles(
         [
@@ -47,7 +57,27 @@ def test_optimizer_reports_unfixed_high_cps() -> None:
         [Segment(id=1, start=0.0, end=0.5, text_src="a", text_tgt="这是一条非常非常非常长的字幕")],
         SubtitleQualityConfig(target_cps=5, hard_max_cps=6, max_duration_seconds=0.5, min_duration_seconds=0.5),
     )
+    assert result.report["summary"]["status"] == "FAIL"
     assert result.report["summary"]["issue_counts"]["cps_too_high"] == 1
+    assert result.report["summary"]["residual_counts"]["over_hard_cps"] == 1
+
+
+def test_optimizer_reports_residual_duration_buckets_without_false_boundary_issue() -> None:
+    result = optimize_subtitles(
+        [
+            Segment(id=1, start=0.0, end=0.7999999999999545, text_src="a", text_tgt="短"),
+            Segment(id=2, start=2.0, end=8.5, text_src="b", text_tgt="长时长"),
+        ],
+        SubtitleQualityConfig(target_cps=10, hard_max_cps=12, min_duration_seconds=0.8, max_duration_seconds=6.0),
+    )
+
+    summary = result.report["summary"]
+    assert summary["status"] == "WARN"
+    assert summary["issue_counts"] == {}
+    assert summary["residual_counts"]["under_min_duration"] == 0
+    assert summary["residual_counts"]["under_one_second"] == 1
+    assert summary["residual_counts"]["over_max_duration"] == 1
+    assert summary["thresholds"]["min_duration_seconds"] == 0.8
 
 
 def test_optimizer_off_keeps_segments_unchanged() -> None:
@@ -57,3 +87,4 @@ def test_optimizer_off_keeps_segments_unchanged() -> None:
     assert result.segments[0].end == 0.2
     assert result.segments[0].text_tgt == " b "
     assert result.report["summary"]["mode"] == "off"
+    assert result.report["summary"]["status"] == "OFF"

@@ -71,6 +71,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "translation_repair_enabled": getattr(args, "translation_repair_enabled", None),
         "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
+        "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
     }
 
 
@@ -82,7 +83,7 @@ _CURRENT_ROOT: Path | None = None
 
 
 def _print_json(data: object) -> None:
-    print(json.dumps(redact(data, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
+    print(json.dumps(redact(data, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2), flush=True)
 
 
 def _print_jsonl_event(event: dict[str, Any]) -> None:
@@ -132,6 +133,7 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--translation-repair-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
 
 
 def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
@@ -283,6 +285,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
         ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
+        ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
     ]
     for flag, value in mapping:
         _append_optional(args, flag, value)

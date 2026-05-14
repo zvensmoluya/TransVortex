@@ -152,9 +152,27 @@ class SubtitleCompressionConfig:
 
 
 @dataclass
+class SubtitleReflowConfig:
+    enabled: bool = False
+    trigger: str = "fail_only"
+    batch_windows: int = 10
+    max_windows: int = 30
+    max_window_segments: int = 10
+    context_before_segments: int = 8
+    context_after_segments: int = 8
+    max_input_chars: int = 60000
+    max_output_replacements: int = 80
+    memory: bool = True
+    max_attempts: int = 2
+    allow_merge: bool = True
+    allow_drop: bool = False
+
+
+@dataclass
 class SubtitleConfig:
     quality: SubtitleQualityConfig = field(default_factory=SubtitleQualityConfig)
     compression: SubtitleCompressionConfig = field(default_factory=SubtitleCompressionConfig)
+    reflow: SubtitleReflowConfig = field(default_factory=SubtitleReflowConfig)
 
 
 @dataclass

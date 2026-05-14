@@ -45,6 +45,7 @@ def test_events_and_cancel_request(tmp_path) -> None:
     assert event["progress"] == 1.0
     assert store.read_events("t1")[0]["message"] == "working"
     assert streamed[0]["message"] == "working"
+    assert store.load_task("t1").updated_at == event["created_at"]
 
     cancelled = store.request_cancel("t1")
     assert cancelled.status == "CANCEL_REQUESTED"
@@ -70,3 +71,24 @@ def test_read_events_tolerates_missing_events_file_for_existing_task(tmp_path) -
     write_json(store.task_file("legacy"), task)
 
     assert store.read_events("legacy") == []
+
+
+def test_append_event_rounds_progress_and_refreshes_task_updated_at(tmp_path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task = TaskRecord(
+        task_id="t1",
+        input_file="demo.mp4",
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        status="TRANSLATE",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:00+00:00",
+    )
+    store.save_task(task)
+
+    event = store.append_event("t1", "progress", stage="TRANSLATE", message="working", progress=0.41000000000000003)
+
+    assert event["progress"] == 0.41
+    assert store.read_events("t1")[0]["progress"] == 0.41
+    assert store.load_task("t1").updated_at == event["created_at"]

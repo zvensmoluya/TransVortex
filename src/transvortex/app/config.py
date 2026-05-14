@@ -33,6 +33,7 @@ from .models import (
     SubtitleCompressionConfig,
     SubtitleConfig,
     SubtitleQualityConfig,
+    SubtitleReflowConfig,
     TranslationConfig,
 )
 from ..prompts import load_prompt
@@ -362,11 +363,27 @@ def load_app_config(
         adjust_timing=_to_bool(quality_raw.get("adjust_timing"), True),
     )
     compression_raw = subtitle_raw.get("compression") or {}
+    reflow_raw = subtitle_raw.get("reflow") or {}
     subtitle = SubtitleConfig(
         quality=quality,
         compression=SubtitleCompressionConfig(
             enabled=_to_bool(compression_raw.get("enabled"), False),
             max_attempts=_to_int(compression_raw.get("max_attempts"), 1),
+        ),
+        reflow=SubtitleReflowConfig(
+            enabled=_to_bool(reflow_raw.get("enabled"), False),
+            trigger=_to_str(reflow_raw.get("trigger"), "fail_only"),
+            batch_windows=_to_int(reflow_raw.get("batch_windows"), 10),
+            max_windows=_to_int(reflow_raw.get("max_windows"), 30),
+            max_window_segments=_to_int(reflow_raw.get("max_window_segments"), 10),
+            context_before_segments=_to_int(reflow_raw.get("context_before_segments"), 8),
+            context_after_segments=_to_int(reflow_raw.get("context_after_segments"), 8),
+            max_input_chars=_to_int(reflow_raw.get("max_input_chars"), 60000),
+            max_output_replacements=_to_int(reflow_raw.get("max_output_replacements"), 80),
+            memory=_to_bool(reflow_raw.get("memory"), True),
+            max_attempts=_to_int(reflow_raw.get("max_attempts"), 2),
+            allow_merge=_to_bool(reflow_raw.get("allow_merge"), True),
+            allow_drop=_to_bool(reflow_raw.get("allow_drop"), False),
         ),
     )
     memory_raw = pip_yaml.get("memory") or {}
@@ -484,6 +501,8 @@ def load_app_config(
             pipeline.subtitle.quality.enabled = pipeline.subtitle.quality.mode != "off"
         elif key == "subtitle_compression_enabled":
             pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
+        elif key == "subtitle_reflow_enabled":
+            pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
             for style_key, style_value in value.items():
                 if hasattr(pipeline.subtitle_ass_style, style_key):

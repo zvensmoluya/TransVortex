@@ -93,6 +93,42 @@ def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: b
         if req.style_prompt:
             parts.append(req.style_prompt.strip())
         return "\n\n".join(parts)
+    if req.prompt_mode == "reflow":
+        parts.extend(
+            [
+                "Subtitle post-editing reflow mode:",
+                "- You are repairing readability and timing failures in already translated subtitles.",
+                "- Do not retranslate the whole scene or globally polish unaffected subtitles.",
+                "- Rewrite only the target-language subtitles in REFLOW_WINDOWS.",
+                "- Use CONTEXT_BEFORE and CONTEXT_AFTER only to understand tone, references, pronouns, terms, and jokes.",
+                "- Improve readability by shortening, merging adjacent subtitles, and making phrasing natural.",
+                "- Preserve meaning, tone, names, jokes, profanity, and key facts.",
+                "- Respect locked glossary and confirmed memory if provided.",
+                "- Do not invent content and do not translate context lines.",
+                "- Return only a JSON object with this shape:",
+                '{"windows":[{"window_id":1,"replacements":[{"source_ids":[1,2],"text_tgt":"...","reason":"..."}]}]}',
+                "- For single-window compatibility, this shape is also accepted:",
+                '{"replacements":[{"source_ids":[1,2],"text_tgt":"...","reason":"..."}]}',
+                "- source_ids must contain ids from the matching REFLOW_WINDOWS window only.",
+                "- Only merge adjacent ids when needed. Do not drop content unless explicitly allowed.",
+                "- Do not include Markdown, commentary, or extra text outside JSON.",
+                f"Target language: {req.target_lang}.",
+            ]
+        )
+        if req.style_prompt:
+            parts.append("Style instructions:\n" + req.style_prompt.strip())
+        if req.memory_prompt:
+            parts.append(req.memory_prompt.strip())
+        if req.repair_reason:
+            parts.append("Quality problems to fix:\n" + req.repair_reason.strip())
+        parts.extend(
+            [
+                _section("CONTEXT_BEFORE", req.context_before),
+                _section("REFLOW_WINDOWS", req.lines),
+                _section("CONTEXT_AFTER", req.context_after),
+            ]
+        )
+        return "\n\n".join(parts)
     parts.extend(
         [
             FIXED_TRANSLATION_CONSTRAINTS,

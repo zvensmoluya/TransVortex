@@ -27,6 +27,7 @@ src/transvortex/core/orchestrator.py
 src/transvortex/core/subtitle_compression.py
 src/transvortex/core/subtitle_optimizer.py
 src/transvortex/core/subtitle_quality.py
+src/transvortex/core/subtitle_reflow.py
 src/transvortex/core/translate.py
 src/transvortex/core/translation_validation.py
 src/transvortex/formats/__init__.py
