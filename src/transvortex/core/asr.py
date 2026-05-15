@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.credentials import resolve_credential
+from ..http import DEFAULT_USER_AGENT, merge_default_headers
 from ..utils import write_json
 
 
@@ -129,10 +130,14 @@ class AsrEngine:
             url=url,
             data=body,
             method=method,
-            headers={
-                **auth_headers,
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-            },
+            headers=merge_default_headers(
+                auth_headers,
+                Accept="application/json",
+                **{
+                    "User-Agent": DEFAULT_USER_AGENT,
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                },
+            ),
         )
         with urllib.request.urlopen(req, timeout=self.cloud_timeout_seconds) as resp:
             raw = resp.read().decode("utf-8")

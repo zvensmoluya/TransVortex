@@ -11,6 +11,7 @@ from typing import Any
 
 from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
 from ..app.credentials import resolve_provider_credential
+from ..http import DEFAULT_JSON_HEADERS, merge_default_headers
 from ..prompts import FALLBACK_TRANSLATION_SYSTEM_PROMPT
 from .base import ProviderClient
 
@@ -203,10 +204,13 @@ def _request_json(
     method: str = "POST",
 ) -> dict:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS)
+    if data is not None:
+        request_headers = merge_default_headers(request_headers, **{"Content-Type": "application/json"})
     req = urllib.request.Request(
         url=url,
         data=data,
-        headers=({**headers, "Content-Type": "application/json"} if data is not None else headers),
+        headers=request_headers,
         method=method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:

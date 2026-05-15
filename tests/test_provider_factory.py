@@ -12,6 +12,7 @@ from transvortex.app.models import (
 from transvortex.providers.factory import (
     ConfigurableProtocolClient,
     _build_payload,
+    _request_json,
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
@@ -42,6 +43,65 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
         NormalizedRequest(model="model-a", lines=["[1] ping"], source_lang="en", target_lang="zh-CN")
     )
     assert response.numbered_lines == ["[1] pong"]
+
+
+def test_request_json_adds_product_headers(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        captured["headers"] = dict(req.header_items())
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("transvortex.providers.factory.urllib.request.urlopen", fake_urlopen)
+
+    assert _request_json("https://example.com/v1/models", None, {}, 30, method="GET") == {"ok": True}
+
+    assert captured["headers"]["Accept"] == "application/json"
+    assert captured["headers"]["User-agent"] == "TransVortex/0.1.0"
+    assert "Content-type" not in captured["headers"]
+    assert captured["timeout"] == 30
+
+
+def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        captured["headers"] = dict(req.header_items())
+        return FakeResponse()
+
+    monkeypatch.setattr("transvortex.providers.factory.urllib.request.urlopen", fake_urlopen)
+
+    _request_json(
+        "https://example.com/v1/responses",
+        {"model": "m1", "input": "ping"},
+        {"user-agent": "CustomClient/1.0", "accept": "application/vnd.test+json"},
+        30,
+    )
+
+    assert captured["headers"]["User-agent"] == "CustomClient/1.0"
+    assert captured["headers"]["Accept"] == "application/vnd.test+json"
+    assert captured["headers"]["Content-type"] == "application/json"
 
 
 def test_response_mapping_multi_shape() -> None:
