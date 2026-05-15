@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from transvortex.app.models import MemoryPresetRef
+from transvortex.app.models import TaskRecord
+from transvortex.artifacts.task_store import TaskStore
+from transvortex.memory.exporter import (
+    MemoryPresetExportError,
+    MemoryPresetExportOptions,
+    export_runtime_memory_to_preset,
+)
 from transvortex.memory.presets import (
     MemoryPresetError,
     build_selected_presets_snapshot,
@@ -11,6 +19,7 @@ from transvortex.memory.presets import (
     materialize_entries,
     scope_matches,
 )
+from transvortex.utils import write_json
 
 
 def _write_preset(root: Path, name: str, payload: str) -> Path:
@@ -19,6 +28,30 @@ def _write_preset(root: Path, name: str, payload: str) -> Path:
     path = presets_dir / f"{name}.json"
     path.write_text(payload, encoding="utf-8")
     return path
+
+
+def _write_task_memory(root: Path, task_id: str, entries: list[dict], conflicts: list[dict] | None = None) -> None:
+    store = TaskStore(root / "artifacts")
+    store.save_task(
+        TaskRecord(
+            task_id=task_id,
+            input_file="demo.srt",
+            source_lang="ja",
+            target_lang="zh-CN",
+            bilingual=False,
+            status="DONE",
+            created_at="2026-05-15T00:00:00+00:00",
+            updated_at="2026-05-15T00:00:00+00:00",
+        )
+    )
+    memory_dir = store.task_dir(task_id) / "memory"
+    write_json(memory_dir / "translation_memory.json", {"version": 1, "entries": entries})
+    if conflicts:
+        for conflict in conflicts:
+            (memory_dir / "conflicts.jsonl").parent.mkdir(parents=True, exist_ok=True)
+            with (memory_dir / "conflicts.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(conflict, ensure_ascii=False))
+                f.write("\n")
 
 
 def test_load_preset_bundle_parses_metadata_and_entries(tmp_path: Path) -> None:
@@ -52,6 +85,137 @@ def test_load_preset_bundle_reports_invalid_payload(tmp_path: Path) -> None:
     result = load_preset_bundle(path)
     assert result.bundle is None
     assert "must be a JSON object" in result.error
+
+
+def test_export_runtime_memory_to_preset_writes_loadable_draft(tmp_path: Path) -> None:
+    _write_task_memory(
+        tmp_path,
+        "task1",
+        [
+            {
+                "source": "スバル",
+                "target": "昴",
+                "category": "name",
+                "status": "confirmed",
+                "aliases": ["Subaru"],
+                "confidence": 0.91,
+            },
+            {
+                "source": "エミリア",
+                "target": "爱蜜莉雅",
+                "category": "name",
+                "status": "proposed",
+                "confidence": 0.73,
+            },
+        ],
+        conflicts=[
+            {
+                "source": "エミリア",
+                "existing_target": "爱蜜莉雅",
+                "proposed_target": "艾米莉娅",
+                "reason": "different target proposed",
+            }
+        ],
+    )
+
+    payload = export_runtime_memory_to_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        options=MemoryPresetExportOptions(
+            task_id="task1",
+            preset_id="rezero",
+            name="Re:Zero",
+            description="Draft glossary",
+        ),
+    )
+
+    assert payload["ok"] is True
+    assert payload["report"]["exported"] == 2
+    path = tmp_path / "memory" / "presets" / "rezero.json"
+    result = load_preset_bundle(path)
+    assert result.bundle is not None
+    assert result.bundle.default_status == "proposed"
+    assert result.bundle.scope.language_pairs == ["ja->zh-cn"]
+    entries = {entry.source: entry for entry in result.bundle.entries}
+    assert entries["スバル"].target == "昴"
+    assert entries["スバル"].status == "proposed"
+    assert "艾米莉娅" in entries["エミリア"].notes
+
+
+def test_export_runtime_memory_filters_and_dedupes_entries(tmp_path: Path) -> None:
+    _write_task_memory(
+        tmp_path,
+        "task1",
+        [
+            {"source": "", "target": "空", "status": "proposed"},
+            {"source": "Ghost", "target": "", "status": "proposed"},
+            {"source": "Bad", "target": "坏", "status": "rejected"},
+            {"source": "Subaru", "target": "昴", "status": "proposed", "confidence": 0.5},
+            {"source": " subaru ", "target": "斯巴鲁", "status": "confirmed", "confidence": 0.8},
+        ],
+    )
+
+    payload = export_runtime_memory_to_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        options=MemoryPresetExportOptions(
+            task_id="task1",
+            preset_id="rezero",
+            default_status="confirmed",
+        ),
+    )
+
+    result = load_preset_bundle(tmp_path / "memory" / "presets" / "rezero.json")
+    assert result.bundle is not None
+    assert [(entry.source, entry.target, entry.status) for entry in result.bundle.entries] == [
+        ("subaru", "斯巴鲁", "confirmed")
+    ]
+    assert {row["reason"] for row in payload["report"]["skipped"]} == {
+        "empty_source",
+        "empty_target",
+        "status_not_exportable",
+    }
+    assert payload["report"]["duplicates"][0]["reason"] == "duplicate_source"
+    assert payload["report"]["conflicts"][0]["reason"] == "duplicate_source_different_target"
+
+
+def test_export_runtime_memory_dry_run_does_not_write_preset(tmp_path: Path) -> None:
+    _write_task_memory(tmp_path, "task1", [{"source": "Subaru", "target": "昴"}])
+
+    payload = export_runtime_memory_to_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        options=MemoryPresetExportOptions(task_id="task1", preset_id="rezero", dry_run=True),
+    )
+
+    assert payload["dry_run"] is True
+    assert payload["preset"]["entries"][0]["source"] == "Subaru"
+    assert not (tmp_path / "memory" / "presets" / "rezero.json").exists()
+
+
+def test_export_runtime_memory_requires_overwrite_for_existing_preset(tmp_path: Path) -> None:
+    _write_task_memory(tmp_path, "task1", [{"source": "Subaru", "target": "昴"}])
+    _write_preset(tmp_path, "rezero", """{"id": "rezero", "entries": [{"source": "Old", "target": "旧"}]}""")
+
+    try:
+        export_runtime_memory_to_preset(
+            root_dir=tmp_path,
+            artifacts_dir=tmp_path / "artifacts",
+            options=MemoryPresetExportOptions(task_id="task1", preset_id="rezero"),
+        )
+    except MemoryPresetExportError as exc:
+        assert "already exists" in str(exc)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("expected existing preset to fail")
+
+    export_runtime_memory_to_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        options=MemoryPresetExportOptions(task_id="task1", preset_id="rezero", overwrite=True),
+    )
+    result = load_preset_bundle(tmp_path / "memory" / "presets" / "rezero.json")
+    assert result.bundle is not None
+    assert [entry.source for entry in result.bundle.entries] == ["Subaru"]
 
 
 def test_scope_matches_accepts_pair_or_wildcards(tmp_path: Path) -> None:

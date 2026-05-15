@@ -8,6 +8,7 @@ from transvortex.cli import main
 from transvortex.protocol.errors import PipelineTaskError, error_info
 from transvortex.app.models import TaskRecord
 from transvortex.artifacts.task_store import TaskStore
+from transvortex.utils import write_json
 
 
 def _write_config(root: Path) -> None:
@@ -106,6 +107,54 @@ def test_tasks_cli_json_lists_recent_tasks(tmp_path: Path, monkeypatch, capsys) 
     assert [task["task_id"] for task in payload] == ["new", "old"]
     assert Path(payload[0]["task_dir"]).parts[-2:] == ("artifacts", "new")
     assert payload[0]["error"] == "boom"
+
+
+def test_memory_export_preset_cli_json_writes_preset(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    store.save_task(
+        TaskRecord(
+            task_id="task1",
+            input_file="demo.srt",
+            source_lang="ja",
+            target_lang="zh-CN",
+            bilingual=False,
+            status="DONE",
+            created_at="2026-05-15T00:00:00+00:00",
+            updated_at="2026-05-15T00:00:00+00:00",
+        )
+    )
+    write_json(
+        store.task_dir("task1") / "memory" / "translation_memory.json",
+        {"version": 1, "entries": [{"source": "スバル", "target": "昴", "status": "confirmed"}]},
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "memory",
+            "export-preset",
+            "--task-id",
+            "task1",
+            "--preset-id",
+            "rezero",
+            "--name",
+            "Re:Zero",
+            "--json",
+        ],
+    )
+    main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert payload["preset_id"] == "rezero"
+    assert payload["report"]["exported"] == 1
+    exported = json.loads((tmp_path / "memory" / "presets" / "rezero.json").read_text(encoding="utf-8"))
+    assert exported["entries"][0]["source"] == "スバル"
+    assert exported["entries"][0]["status"] == "proposed"
 
 
 def test_config_show_json_masks_secret_values(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -221,6 +270,7 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["protocol_version"]
     assert payload["machine_readable"] is True
     assert payload["commands"]["run"]["supports_detach"] is True
+    assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
     assert "super-secret-value" not in raw
 

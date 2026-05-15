@@ -33,6 +33,7 @@ from ..core.orchestrator import (
     task_status_json,
 )
 from ..providers.probe import probe_exit_code, probe_provider
+from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
 from ..providers.admin import (
     custom_adapter_template_payload,
     delete_provider_config,
@@ -487,7 +488,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
     public_commands = (
         "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,"
-        "probe-provider,provider,auth,result,reexport,asr,translate,export}"
+        "probe-provider,provider,auth,result,memory,reexport,asr,translate,export}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
@@ -608,6 +609,18 @@ def _build_parser() -> argparse.ArgumentParser:
     result_save_p.add_argument("--task-id", required=True)
     result_save_p.add_argument("--json-payload", required=True)
     result_save_p.add_argument("--json", action="store_true")
+
+    memory_p = sub.add_parser("memory", help="Manage translation memory presets")
+    memory_sub = memory_p.add_subparsers(dest="memory_command", required=True)
+    memory_export_p = memory_sub.add_parser("export-preset", help="Export runtime memory to a draft preset")
+    memory_export_p.add_argument("--task-id", required=True)
+    memory_export_p.add_argument("--preset-id", required=True)
+    memory_export_p.add_argument("--name", default="")
+    memory_export_p.add_argument("--description", default="")
+    memory_export_p.add_argument("--default-status", choices=["proposed", "confirmed", "locked"], default="proposed")
+    memory_export_p.add_argument("--overwrite", action="store_true")
+    memory_export_p.add_argument("--dry-run", action="store_true")
+    memory_export_p.add_argument("--json", action="store_true")
 
     reexport_p = sub.add_parser("reexport", help="Re-export subtitles from task final segments")
     reexport_p.add_argument("--task-id", required=True)
@@ -981,6 +994,31 @@ def main() -> None:
         if not isinstance(segments, list):
             raise ValueError("segments must be a list")
         _print_json(save_task_segments(root_dir=root, task_id=args.task_id, segments_payload=segments))
+        return
+
+    if args.command == "memory" and args.memory_command == "export-preset":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        payload = _run_or_exit(
+            lambda: export_runtime_memory_to_preset(
+                root_dir=root,
+                artifacts_dir=config.pipeline.artifacts_dir,
+                options=MemoryPresetExportOptions(
+                    task_id=args.task_id,
+                    preset_id=args.preset_id,
+                    name=args.name,
+                    description=args.description,
+                    default_status=args.default_status,
+                    overwrite=args.overwrite,
+                    dry_run=args.dry_run,
+                ),
+            ),
+            json_mode=args.json,
+            stream_events=False,
+        )
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload["path"])
         return
 
     if args.command == "reexport":
