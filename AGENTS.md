@@ -19,7 +19,8 @@
   - 改了哪些范围
   - 做了哪些验证
   - 是否有后续风险或限制
-- 提交时务必检查 commit body 是否是真实换行，不要把 `\n` 作为字面量写进提交信息；在 PowerShell 里优先用 here-string 或 `git commit -F`。
+- 提交时务必检查 commit body 是否是真实换行，不要把 `\n` 作为字面量写进提交信息；在 PowerShell 里优先用 here-string 和 `git commit -F`。
+- 写入 commit message 文件时必须避免 UTF-8 BOM；PowerShell 中优先用 `.NET UTF8Encoding($false)`，提交后用 `git log -1 --format=%B` 检查标题没有不可见字符。
 - 不得提交 `.env`、`auth.json`、API key、token 或任何 secret。
 
 ## Commit Message Format
@@ -45,10 +46,14 @@ If there is no known follow-up risk, write `风险/后续：无已知风险。`
 
 ## Credentials
 
-- 默认凭据方案是用户级 `~/.transvortex/auth.json`。
-- `.env` 只作为开发兼容 fallback，不作为常规主路径。
+- 默认凭据方案是用户级 `~/.transvortex/auth.json`；`.env` 只作为开发兼容 fallback。
 - Provider YAML 只能保存 `env_key`、`credential_id`、endpoint、model 等非敏感配置。
 - CLI、桌面端、doctor、provider test/models、ASR preflight 都应使用统一 credential resolver。
+
+## PowerShell
+
+- 当前 shell 是 PowerShell 时优先使用 PowerShell 原生命令，不要套用 Bash heredoc、`cat > file`、`&&` 等写法。
+- 移动、删除、重命名文件时优先使用 `-LiteralPath`；非平凡命令后用 `git status`、`git log` 或文件检查确认结果。
 
 ## Validation
 
