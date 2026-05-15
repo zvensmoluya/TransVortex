@@ -119,6 +119,25 @@ def test_selector_avoids_short_or_embedded_false_matches() -> None:
     assert [entry.source for entry in selected] == ["The Order"]
 
 
+def test_selector_matches_cjk_terms_without_word_boundaries() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id="1", source="スバル", target="昴", status="locked", priority=100),
+            MemoryEntry(id="2", source="エミリア", target="爱蜜莉雅", status="locked", priority=90, aliases=["エミリア様"]),
+            MemoryEntry(id="3", source="足", target="脚力", status="proposed", priority=10),
+        ]
+    )
+    chunk = Chunk(
+        chunk_id="c1",
+        segment_ids=[1],
+        lines=["[1] スバルはエミリア様を見た"],
+    )
+
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+
+    assert [entry.source for entry in selected] == ["スバル", "エミリア"]
+
+
 def test_selector_balanced_injects_strong_memory_without_match() -> None:
     doc = MemoryDocument(
         entries=[
@@ -245,6 +264,18 @@ def test_consistency_check_avoids_embedded_false_matches() -> None:
         [Segment(id=1, start=0, end=1, text_src="The mayor is here", text_tgt="市长来了")],
     )
     assert issues == []
+
+
+def test_consistency_check_matches_cjk_terms_without_word_boundaries() -> None:
+    doc = MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="スバル", target="昴", status="locked")])
+
+    issues = check_consistency(
+        doc,
+        [Segment(id=1, start=0, end=1, text_src="スバルは来た", text_tgt="斯巴鲁来了")],
+    )
+
+    assert len(issues) == 1
+    assert issues[0].expected_target == "昴"
 
 
 def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_path: Path, monkeypatch) -> None:

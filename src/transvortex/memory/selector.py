@@ -16,6 +16,10 @@ def term_matches_text(term: str, text: str) -> bool:
         return False
     if len(term) <= 2 and term.isascii() and term.isalnum():
         return False
+    if not term.isascii():
+        if len(term) <= 1:
+            return False
+        return term.casefold() in text.casefold()
     pattern = re.compile(rf"(?<![\w]){re.escape(term)}(?![\w])", re.IGNORECASE)
     return bool(pattern.search(text))
 

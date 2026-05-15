@@ -21,6 +21,21 @@ def test_root_default_prompt_files_load() -> None:
     assert load_prompt("memory_patch_system", root_dir=root).startswith("You are a translation memory curator")
 
 
+def test_memory_patch_prompt_emphasizes_conservative_deduplication() -> None:
+    prompt = FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
+    assert "Prefer precision over recall" in prompt
+    assert "ASR error" in prompt
+    assert "aliases" in prompt
+    assert "Do not create separate entries for the same entity" in prompt
+    assert "empty actions array" in prompt
+
+
+def test_memory_patch_file_matches_fallback() -> None:
+    root = Path(__file__).resolve().parents[1]
+    file_prompt = (root / "prompts" / "memory" / "patch_system.v1.md").read_text(encoding="utf-8").strip()
+    assert file_prompt == FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
+
+
 def test_prompt_override_path_wins(tmp_path: Path) -> None:
     override = tmp_path / "prompt.md"
     override.write_text("Custom prompt.", encoding="utf-8")
