@@ -1,36 +1,50 @@
 # TransVortex
 
-TransVortex is a CLI-first pipeline for generating subtitles from local videos with:
-- streaming/chunked processing (no whole-video memory load),
-- local faster-whisper or cloud OpenAI Whisper ASR,
-- configurable translation providers/models/base URLs,
-- resumable tasks and artifacts,
-- an optional Tauri desktop workbench for local configuration and progress viewing.
+TransVortex 是一个面向本地视频字幕生成的 CLI-first 流水线，支持：
+- 流式/分块处理，不需要一次把整片视频装入内存
+- 本地 faster-whisper 或云端 OpenAI Whisper ASR
+- 可配置的翻译 provider / model / base URL
+- 可恢复任务与稳定工件目录
+- 可选的 Tauri 桌面工作台
 
-## Product Direction
-TransVortex is intended to grow into an agent-callable headless core with both a human-friendly terminal experience and a desktop workbench. See `docs/PRODUCT_DIRECTION.md` for the long-term CLI, agent, desktop, i18n, and packaging direction.
+## 项目定位
 
-## Quick Start
-1. Install dependencies:
-   - `pip install -e .`
-   - optional ASR: `pip install -e .[asr]`
-2. Ensure `ffmpeg` and `ffprobe` are available in `PATH`.
-3. Put real provider config in `providers.local.yaml` (gitignored), and save API keys with `transvortex auth set <credential-id>`.
-   - Persistent keys are stored in `~/.transvortex/auth.json` by default, or under `TRANSVORTEX_HOME` if set.
-   - Environment variables using the configured `env_key` take priority for CI/agent/headless use.
-   - Project `.env` files remain supported as a development compatibility fallback.
-4. Run the local health check:
+TransVortex 目标是成为一个可被脚本和 agent 调用的无界面核心，同时保留对人类友好的命令行和桌面工作台。长期方向见 `docs/PRODUCT_DIRECTION.md`。
+
+## 快速开始
+
+1. 安装依赖
+   - `python -m pip install -e .`
+   - 如需本地 ASR：`python -m pip install -e .[asr]`
+2. 确保 `ffmpeg` 和 `ffprobe` 在 `PATH` 中。
+3. 准备 provider 配置和凭据。
+   - 推荐把真实配置放在 `providers.local.yaml`（已加入 `.gitignore`）。
+   - 长期默认凭据文件是 `~/.transvortex/auth.json`，可用 `TRANSVORTEX_HOME` 改目录。
+   - 推荐使用 `transvortex auth set <credential-id>` 保存 key。
+   - `.env` 只作为开发兼容 fallback。
+4. 先做健康检查：
    - `transvortex doctor`
    - `transvortex doctor --json`
-5. Probe provider compatibility first (zero-token local checks):
+5. 先做零 token 预检：
    - `transvortex probe-provider --strict`
-6. Run:
+6. 运行一次任务：
    - `transvortex run --input demo.mp4 --src en --tgt zh-CN`
-7. One-command demo run:
+7. 一键 demo：
    - `.\scripts\run_demo.ps1 -ApiKey "<your-key>"`
 
-## Desktop Quick Start
-The desktop app is the recommended V1 workflow for day-to-day use on Windows.
+## 凭据与配置
+
+更完整的配置说明见 `docs/CONFIG_GUIDE.md`。简要规则是：
+
+- `providers.example.yaml`：示例配置，可提交
+- `providers.local.yaml`：本机真实配置，建议不提交
+- `providers.yaml`：兼容旧流程的默认文件
+- 真实 key 不要写进 provider YAML
+- 真实运行优先用 `auth.json` 或环境变量，`.env` 只用于开发兼容
+
+## 桌面端
+
+桌面端是 Windows 日常使用的推荐入口。
 
 ```powershell
 cd desktop
@@ -40,15 +54,18 @@ npm run build
 npm run tauri dev
 ```
 
-In the app:
-- Check Environment first.
-- Save the provider key if needed.
-- Choose a video and configure Provider, ASR, Translation, and Output.
-- Choose `srt`, `ass`, or `both` as output format.
-- Start the task, then open SRT/ASS from History.
+在应用里：
+- 先检查 Environment
+- 需要时保存 provider key
+- 选择视频，配置 Provider、ASR、Translation 和 Output
+- 输出格式可选 `srt`、`ass` 或 `both`
+- 任务结束后可从 History 打开 SRT/ASS
 
-## Cloud ASR (OpenAI Whisper)
-Set `pipeline.yaml`:
+## 云端 ASR 示例
+
+如果要用 OpenAI Whisper-style 云端 ASR，可以这样配置：
+
+`pipeline.yaml`:
 
 ```yaml
 asr:
@@ -63,7 +80,7 @@ asr:
     timeout_seconds: 120
 ```
 
-Add a provider entry in `providers.local.yaml`:
+`providers.local.yaml`:
 
 ```yaml
 providers:
@@ -82,13 +99,14 @@ providers:
       method: POST
 ```
 
-Then save the key:
+保存 key：
 
 ```powershell
 transvortex auth set openai_asr
 ```
 
-## Commands
+## 常用命令
+
 - `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json] [--stream-events]`
 - `transvortex resume --task-id <id> [--json] [--stream-events]`
 - `transvortex status --task-id <id> [--json]`
@@ -100,68 +118,64 @@ transvortex auth set openai_asr
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
 - `transvortex auth set/delete/list/status [--json]`
 
-Common runtime overrides are available on `run` and `resume`: `--provider`, `--model`, `--asr-mode`, `--asr-device`, `--asr-model-size`, `--asr-compute-type`, `--asr-provider`, `--asr-model`, chunk settings, batch size, and concurrency.
+运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-provider`、`--asr-model`、chunk 设置、batch size 和并发。
 
-## Translation Design
-The translator uses numbered subtitle chunks and validates model output before applying translations back to the original timeline. Translation strategy lives in `pipeline.yaml`, while `providers.yaml` only describes provider protocol, routing, and capability limits.
+## 任务工件
 
-```yaml
-translation:
-  chunk_lines: 40
-  context_before_lines: 20
-  context_after_lines: 10
-  style_preset: subtitle_natural
-  style_prompt: |
-    Translate as natural subtitles.
-    Preserve tone, jokes, profanity, and adult references faithfully.
-    Do not censor, explain, or add content.
-  refusal_detection:
-    enabled: true
-  repair:
-    enabled: true
-    max_attempts: 2
-```
+每个任务都会写入稳定目录 `artifacts/<task_id>/`，常见内容包括：
 
-Each task writes validated translation artifacts under `translate/`, including `segments.translated.jsonl`, `validation.jsonl`, and `repairs.jsonl`.
-
-## Output Formats
-TransVortex can export SRT or ASS subtitles. SRT is plain subtitle text; ASS adds basic styling such as font, size, outline, shadow, and bilingual line order. Desktop V1 exposes the output format selector and writes generated files into the task `output/` directory.
-
-## Worker Protocol
-Each task writes a stable artifact directory under `artifacts/<task_id>/`:
-
-- `task.json` and `checkpoint.json`
+- `task.json`
+- `checkpoint.json`
 - `events.jsonl`
-- `media/`, `asr/`, `chunks/`, `translate/`, `final/`, `output/`
+- `media/`
+- `asr/`
+- `chunks/`
+- `translate/`
+- `final/`
+- `output/`
 
-`events.jsonl` contains structured JSONL events for scripts, agents, and future desktop UI consumers.
+其中：
 
-## Desktop Workbench
-The desktop app lives in `desktop/` and uses Tauri v2 + React + TypeScript + Vite. It is a development workbench, not a packaged installer yet.
+- `translate/` 保存 `segments.translated.jsonl`、`validation.jsonl`、`repairs.jsonl`
+- `final/` 保存对齐/重排后的段落
+- `output/` 保存最终字幕文件
 
-Prerequisites:
-- Node.js/npm
-- Rust toolchain with `cargo`
-- Python dependencies installed from the repo root
-- `ffmpeg` and `ffprobe` in `PATH`
+## 输出格式
 
-Run checks and build the frontend:
+TransVortex 可以导出 SRT 或 ASS。
+
+- SRT 使用 UTF-8 BOM，兼容部分旧播放器
+- ASS 支持基础样式、字号、描边、阴影和双语顺序
+- 最终文件写入任务目录的 `output/`
+
+## 参考文档
+
+- `docs/CONFIG_GUIDE.md`：配置、凭据和 provider 约定
+- `docs/运行与测试指南.md`：运行、验证和桌面端的简化说明
+- `docs/PRODUCT_DIRECTION.md`：长期产品方向
+- `docs/ARCHITECTURE.md`：代码结构与边界
+
+<details>
+<summary>English summary (secondary)</summary>
+
+TransVortex is a CLI-first subtitle pipeline for local videos.
+
+- Streamed/chunked processing
+- Local faster-whisper or cloud OpenAI Whisper ASR
+- Configurable translation providers and resumable tasks
+- Optional Tauri desktop workbench
+
+Key commands:
 
 ```powershell
-cd desktop
-npm install
-npm run typecheck
-npm run build
+transvortex doctor
+transvortex probe-provider --strict
+transvortex run --input demo.mp4 --src en --tgt zh-CN
 ```
 
-Run the desktop app after installing Rust:
+Credentials default to `~/.transvortex/auth.json`; `.env` is a development fallback.
 
-```powershell
-cd desktop
-npm run tauri dev
-```
-
-The UI calls the same Python worker protocol as CLI/agents. It can save provider keys into the repo-local `.env`, but it never reads or displays secret values.
+</details>
 
 ## License
 

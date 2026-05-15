@@ -19,6 +19,7 @@
   - 改了哪些范围
   - 做了哪些验证
   - 是否有后续风险或限制
+- 提交时务必检查 commit body 是否是真实换行，不要把 `\n` 作为字面量写进提交信息；在 PowerShell 里优先用 here-string 或 `git commit -F`。
 - 不得提交 `.env`、`auth.json`、API key、token 或任何 secret。
 
 ## Commit Message Format
