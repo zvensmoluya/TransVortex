@@ -91,7 +91,14 @@ memory:
         cli_overrides={
             "provider_timeout_seconds": 90,
             "provider_retry": 5,
+            "provider_http2": "false",
+            "provider_streaming_enabled": "true",
+            "provider_connect_timeout_seconds": 11,
+            "provider_read_timeout_seconds": 77,
+            "translation_batching_mode": "fixed",
+            "translation_min_chunk_lines": 12,
             "memory_patch_enabled": "false",
+            "memory_patch_window_chunks": 4,
         },
     )
 
@@ -99,7 +106,14 @@ memory:
     assert cfg.pipeline.retry == 5
     assert cfg.providers["p1"].limits.timeout_seconds == 90
     assert cfg.providers["p1"].limits.retry == 5
+    assert cfg.providers["p1"].limits.http2 is False
+    assert cfg.providers["p1"].limits.streaming_enabled is True
+    assert cfg.providers["p1"].limits.connect_timeout_seconds == 11
+    assert cfg.providers["p1"].limits.read_timeout_seconds == 77
+    assert cfg.pipeline.translation.batching.mode == "fixed"
+    assert cfg.pipeline.translation.batching.min_chunk_lines == 12
     assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.patch.window_chunks == 4
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
@@ -636,6 +650,9 @@ routing:
 memory:
   enabled: true
   mode: consistency_first
+  chunking:
+    min_initial_chunk_lines: 96
+    max_initial_chunks: 12
   inject:
     strategy: full
     proposed: false
@@ -652,6 +669,8 @@ memory:
     cfg = load_app_config(root_dir=tmp_path)
     assert cfg.pipeline.memory.enabled is True
     assert cfg.pipeline.memory.mode == "consistency_first"
+    assert cfg.pipeline.memory.chunking.min_initial_chunk_lines == 96
+    assert cfg.pipeline.memory.chunking.max_initial_chunks == 12
     assert cfg.pipeline.memory.inject.strategy == "full"
     assert cfg.pipeline.memory.inject.proposed is False
     assert cfg.pipeline.memory.inject.max_entries_per_chunk == 12

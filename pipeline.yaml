@@ -28,6 +28,10 @@ translation:
   chunk_lines: 120
   context_before_lines: 40
   context_after_lines: 20
+  batching:
+    mode: adaptive
+    min_chunk_lines: 20
+    grow_after_successes: 3
   style_preset: subtitle_natural
   refusal_detection:
     enabled: true
@@ -37,6 +41,9 @@ translation:
 memory:
   enabled: true
   mode: consistency_first
+  chunking:
+    min_initial_chunk_lines: 80
+    max_initial_chunks: 24
   inject:
     locked: true
     confirmed: true
@@ -46,6 +53,7 @@ memory:
   patch:
     enabled: true
     after_each_window: true
+    window_chunks: 8
   merge:
     auto_confirm_high_confidence: false
     conflict_policy: record

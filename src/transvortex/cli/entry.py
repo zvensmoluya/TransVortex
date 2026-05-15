@@ -79,13 +79,20 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "translation_context_before_lines": getattr(args, "translation_context_before_lines", None),
         "translation_context_after_lines": getattr(args, "translation_context_after_lines", None),
         "translation_repair_enabled": getattr(args, "translation_repair_enabled", None),
+        "translation_batching_mode": getattr(args, "translation_batching_mode", None),
+        "translation_min_chunk_lines": getattr(args, "translation_min_chunk_lines", None),
         "provider_timeout_seconds": getattr(args, "provider_timeout_seconds", None),
         "provider_retry": getattr(args, "provider_retry", None),
+        "provider_http2": getattr(args, "provider_http2", None),
+        "provider_streaming_enabled": getattr(args, "provider_streaming_enabled", None),
+        "provider_connect_timeout_seconds": getattr(args, "provider_connect_timeout_seconds", None),
+        "provider_read_timeout_seconds": getattr(args, "provider_read_timeout_seconds", None),
         "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
         "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
         "memory_enabled": getattr(args, "memory_enabled", None),
         "memory_patch_enabled": getattr(args, "memory_patch_enabled", None),
+        "memory_patch_window_chunks": getattr(args, "memory_patch_window_chunks", None),
         "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
 
@@ -179,13 +186,20 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--translation-context-before-lines", type=int, default=None)
     subparser.add_argument("--translation-context-after-lines", type=int, default=None)
     subparser.add_argument("--translation-repair-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--translation-batching-mode", choices=["fixed", "adaptive"], default=None)
+    subparser.add_argument("--translation-min-chunk-lines", type=int, default=None)
     subparser.add_argument("--provider-timeout-seconds", type=int, default=None)
     subparser.add_argument("--provider-retry", type=int, default=None)
+    subparser.add_argument("--provider-http2", choices=["true", "false"], default=None)
+    subparser.add_argument("--provider-streaming-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--provider-connect-timeout-seconds", type=float, default=None)
+    subparser.add_argument("--provider-read-timeout-seconds", type=float, default=None)
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-patch-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--memory-patch-window-chunks", type=int, default=None)
     subparser.add_argument(
         "--memory-preset",
         default=None,
@@ -350,13 +364,20 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--translation-context-before-lines", getattr(ns, "translation_context_before_lines", None)),
         ("--translation-context-after-lines", getattr(ns, "translation_context_after_lines", None)),
         ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
+        ("--translation-batching-mode", getattr(ns, "translation_batching_mode", None)),
+        ("--translation-min-chunk-lines", getattr(ns, "translation_min_chunk_lines", None)),
         ("--provider-timeout-seconds", getattr(ns, "provider_timeout_seconds", None)),
         ("--provider-retry", getattr(ns, "provider_retry", None)),
+        ("--provider-http2", getattr(ns, "provider_http2", None)),
+        ("--provider-streaming-enabled", getattr(ns, "provider_streaming_enabled", None)),
+        ("--provider-connect-timeout-seconds", getattr(ns, "provider_connect_timeout_seconds", None)),
+        ("--provider-read-timeout-seconds", getattr(ns, "provider_read_timeout_seconds", None)),
         ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
         ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
         ("--memory-enabled", getattr(ns, "memory_enabled", None)),
         ("--memory-patch-enabled", getattr(ns, "memory_patch_enabled", None)),
+        ("--memory-patch-window-chunks", getattr(ns, "memory_patch_window_chunks", None)),
         ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]
     for flag, value in mapping:

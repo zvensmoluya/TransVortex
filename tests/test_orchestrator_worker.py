@@ -256,6 +256,55 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     assert any(event["stage"] == "QUALITY" and event["type"] == "artifact" for event in events)
 
 
+def test_memory_mode_raises_initial_chunk_size_for_stability(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "segments.jsonl"
+    input_file.write_text(
+        "\n".join(
+            json.dumps({"id": idx, "start": idx, "end": idx + 0.5, "text_src": f"Line {idx}"})
+            for idx in range(1, 31)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": []})
+    observed_chunk_sizes: list[int] = []
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None, memory_dir=None, progress_callback=None):
+        observed_chunk_sizes.extend(len(chunk.segment_ids) for chunk in chunks)
+        return [
+            {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "ok"} for seg_id in chunk.segment_ids],
+                "errors": [],
+            }
+            for chunk in chunks
+        ]
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="zh-CN",
+        input_type="segments_translate",
+        cli_overrides={"translation_chunk_lines": 2, "memory_enabled": "true"},
+    )
+
+    store = TaskStore(root / "artifacts")
+    assert store.load_task(task_id).status == "DONE"
+    assert observed_chunk_sizes == [30]
+    events = store.read_events(task_id)
+    assert any(event["message"] == "Raised initial translation chunk size for memory stability" for event in events)
+
+
 def test_resume_backfills_missing_translation_validation_without_retranslation(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)

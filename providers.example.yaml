@@ -35,6 +35,14 @@ providers:
       concurrency: 8
       timeout_seconds: 30
       retry: 3
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 30
+      write_timeout_seconds: 30
+      pool_timeout_seconds: 5
+      max_connections: 20
+      max_keepalive_connections: 10
+      http2: true
+      streaming_enabled: false
 
 routing:
   primary:

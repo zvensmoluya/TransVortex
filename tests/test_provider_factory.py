@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from urllib.error import HTTPError
 
+import httpx
+
 from transvortex.app.models import (
     AuthConfig,
     CapabilityConfig,
@@ -18,6 +20,7 @@ from transvortex.providers.factory import (
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
+    _stream_response_payload,
     classify_error,
     response_shape_summary,
 )
@@ -36,11 +39,15 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
     )
     (tmp_path / ".env").write_text("KEY=from-dotenv\n", encoding="utf-8")
 
-    def fake_post_json(url, payload, headers, timeout, method="POST"):
+    def fake_provider_request_json(_config, url, payload, headers, method):
         assert headers["Authorization"] == "Bearer from-dotenv"
-        return {"choices": [{"message": {"content": "[1] pong"}}]}
+        return {"choices": [{"message": {"content": "[1] pong"}}]}, {
+            "transport": "httpx",
+            "http_version": "HTTP/2",
+            "streaming": False,
+        }
 
-    monkeypatch.setattr("transvortex.providers.factory._post_json", fake_post_json)
+    monkeypatch.setattr("transvortex.providers.factory._provider_request_json", fake_provider_request_json)
     client = ConfigurableProtocolClient(config=cfg, timeout=30)
     response = client.translate_request(
         NormalizedRequest(model="model-a", lines=["[1] ping"], source_lang="en", target_lang="zh-CN")
@@ -51,29 +58,32 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
 def test_request_json_adds_product_headers(monkeypatch) -> None:
     captured = {}
 
-    class FakeResponse:
+    class FakeClient:
+        def __init__(self, timeout, http2):
+            captured["timeout"] = timeout
+            captured["http2"] = http2
+
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def read(self):
-            return b'{"ok": true}'
+        def request(self, method, url, json, headers):
+            captured["method"] = method
+            captured["url"] = url
+            captured["payload"] = json
+            captured["headers"] = headers
+            return httpx.Response(200, json={"ok": True})
 
-    def fake_urlopen(req, timeout):
-        captured["headers"] = dict(req.header_items())
-        captured["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.providers.factory.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("transvortex.providers.factory.httpx.Client", FakeClient)
 
     assert _request_json("https://example.com/v1/models", None, {}, 30, method="GET") == {"ok": True}
 
     assert captured["headers"]["Accept"] == "application/json"
-    assert captured["headers"]["User-agent"] == "TransVortex/0.1.0"
-    assert "Content-type" not in captured["headers"]
-    assert captured["timeout"] == 30
+    assert captured["headers"]["User-Agent"] == "TransVortex/0.1.0"
+    assert "Content-Type" not in captured["headers"]
+    assert captured["timeout"] == 30.0
 
 
 def test_classify_error_treats_gateway_timeout_as_retryable_provider_error() -> None:
@@ -85,21 +95,21 @@ def test_classify_error_treats_gateway_timeout_as_retryable_provider_error() -> 
 def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) -> None:
     captured = {}
 
-    class FakeResponse:
+    class FakeClient:
+        def __init__(self, timeout, http2):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def read(self):
-            return b'{"ok": true}'
+        def request(self, method, url, json, headers):
+            captured["headers"] = headers
+            return httpx.Response(200, json={"ok": True})
 
-    def fake_urlopen(req, timeout):
-        captured["headers"] = dict(req.header_items())
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.providers.factory.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("transvortex.providers.factory.httpx.Client", FakeClient)
 
     _request_json(
         "https://example.com/v1/responses",
@@ -108,9 +118,10 @@ def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) 
         30,
     )
 
-    assert captured["headers"]["User-agent"] == "CustomClient/1.0"
-    assert captured["headers"]["Accept"] == "application/vnd.test+json"
-    assert captured["headers"]["Content-type"] == "application/json"
+    normalized = {key.lower(): value for key, value in captured["headers"].items()}
+    assert normalized["user-agent"] == "CustomClient/1.0"
+    assert normalized["accept"] == "application/vnd.test+json"
+    assert captured["headers"]["Content-Type"] == "application/json"
 
 
 def test_response_mapping_multi_shape() -> None:
@@ -452,3 +463,143 @@ def test_custom_json_renders_body_template_and_extracts_text() -> None:
     assert payload["meta"] == {"source": "en", "target": "zh-CN"}
     assert _extract_text_by_paths({"result": {"text": "[1] 你好"}}, cfg.mapping.response["text_paths"]) == "[1] 你好"
     assert response_shape_summary({"result": {"text": "[1] 你好"}}) == {"result": {"text": "str"}}
+
+
+def test_provider_client_streaming_sse_aggregates_openai_chat(tmp_path, monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="openai_like",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["model-a"],
+        credential_root_dir=tmp_path,
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={"text_paths": ["choices[0].message.content"]}),
+        limits=ProviderLimits(streaming_enabled=True),
+    )
+    (tmp_path / ".env").write_text("KEY=from-dotenv\n", encoding="utf-8")
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"[1] 你"}}]}',
+                    'data: {"choices":[{"delta":{"content":"好"}}]}',
+                    "data: [DONE]",
+                ]
+            )
+
+    class FakeClient:
+        is_closed = False
+
+        def stream(self, method, url, json, headers):
+            assert json["stream"] is True
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+    client = ConfigurableProtocolClient(config=cfg, timeout=30)
+
+    response = client.translate_request(
+        NormalizedRequest(model="model-a", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
+    )
+
+    assert response.numbered_lines == ["[1] 你好"]
+    assert response.provider_meta["streaming"] is True
+    assert response.provider_meta["transport"] == "httpx"
+    assert response.provider_meta["bytes_received"] > 0
+
+
+def test_stream_response_payload_returns_responses_output_text(monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+    )
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"type":"response.output_text.delta","delta":"[1] 你"}',
+                    'data: {"type":"response.output_text.delta","delta":"好"}',
+                ]
+            )
+
+    class FakeClient:
+        def stream(self, method, url, json, headers):
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+
+    payload, meta = _stream_response_payload(cfg, "https://example.com/v1/responses", {"model": "m1"}, {}, "POST")
+
+    assert payload["output_text"] == "[1] 你好"
+    assert meta["streaming"] is True
+    assert meta["http_version"] == "HTTP/2"
+
+
+def test_stream_response_payload_uses_responses_done_text_without_duplicate_delta(monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+    )
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"type":"response.output_text.delta","delta":"[1] 你"}',
+                    'data: {"type":"response.output_text.delta","delta":"好"}',
+                    'data: {"type":"response.output_text.done","text":"[1] 你好"}',
+                ]
+            )
+
+    class FakeClient:
+        def stream(self, method, url, json, headers):
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+
+    payload, _meta = _stream_response_payload(cfg, "https://example.com/v1/responses", {"model": "m1"}, {}, "POST")
+
+    assert payload["output_text"] == "[1] 你好"

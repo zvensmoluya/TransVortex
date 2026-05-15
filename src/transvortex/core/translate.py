@@ -3,7 +3,8 @@ from __future__ import annotations
 import concurrent.futures
 import inspect
 import time
-from dataclasses import replace
+from collections import deque
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,6 +27,36 @@ from .translation_validation import (
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
+@dataclass
+class AdaptiveBatchState:
+    target_lines: int
+    original_lines: int
+    min_lines: int
+    grow_after_successes: int
+    successes: int = 0
+
+    def split(self) -> None:
+        next_target = max(self.min_lines, max(1, self.target_lines // 2))
+        if next_target == self.target_lines and self.target_lines > self.min_lines:
+            next_target = self.min_lines
+        self.target_lines = next_target
+        self.successes = 0
+
+    def success(self) -> None:
+        if self.target_lines >= self.original_lines:
+            return
+        self.successes += 1
+        if self.successes >= self.grow_after_successes:
+            self.target_lines = min(self.original_lines, max(self.target_lines + 1, self.target_lines * 2))
+            self.successes = 0
+
+
+class AdaptiveTranslationError(RuntimeError):
+    def __init__(self, message: str, partial_results: list[dict] | None = None) -> None:
+        super().__init__(message)
+        self.partial_results = partial_results or []
+
+
 def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
     if progress_callback is None:
         return
@@ -35,9 +66,30 @@ def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any)
         pass
 
 
+_RETRYABLE_SPLIT_ERRORS = {
+    "provider_timeout",
+    "connect_timeout",
+    "read_timeout",
+    "write_timeout",
+    "pool_timeout",
+    "timeout",
+    "gateway_timeout",
+    "bad_gateway",
+    "service_unavailable",
+    "provider_server_error",
+}
+
+
 def _translate_chunk_accepts_progress_callback() -> bool:
     try:
         return "progress_callback" in inspect.signature(translate_chunk).parameters
+    except Exception:
+        return False
+
+
+def _translate_chunk_adaptive_accepts_progress_callback() -> bool:
+    try:
+        return "progress_callback" in inspect.signature(translate_chunk_adaptive).parameters
     except Exception:
         return False
 
@@ -50,7 +102,21 @@ def _submit_translate_chunk(
     target_lang: str,
     memory_prompt: str,
     progress_callback: ProgressCallback | None,
+    already_done: set[str] | None = None,
 ):
+    if config.pipeline.translation.batching.mode == "adaptive":
+        if _translate_chunk_adaptive_accepts_progress_callback():
+            return pool.submit(
+                translate_chunk_adaptive,
+                config,
+                chunk,
+                source_lang,
+                target_lang,
+                memory_prompt=memory_prompt,
+                progress_callback=progress_callback,
+                already_done=already_done,
+            )
+        return pool.submit(translate_chunk_adaptive, config, chunk, source_lang, target_lang, memory_prompt)
     if _translate_chunk_accepts_progress_callback():
         return pool.submit(
             translate_chunk,
@@ -62,6 +128,26 @@ def _submit_translate_chunk(
             progress_callback=progress_callback,
         )
     return pool.submit(translate_chunk, config, chunk, source_lang, target_lang, memory_prompt)
+
+
+def _call_translate_chunk(
+    config: AppConfig,
+    chunk: Chunk,
+    source_lang: str,
+    target_lang: str,
+    memory_prompt: str,
+    progress_callback: ProgressCallback | None,
+) -> dict:
+    if _translate_chunk_accepts_progress_callback():
+        return translate_chunk(
+            config,
+            chunk,
+            source_lang,
+            target_lang,
+            memory_prompt=memory_prompt,
+            progress_callback=progress_callback,
+        )
+    return translate_chunk(config, chunk, source_lang, target_lang, memory_prompt)
 
 
 def _generate_memory_patch_accepts_progress_callback() -> bool:
@@ -83,6 +169,99 @@ def _chunk_source_by_id(chunk: Chunk) -> dict[int, str]:
         except ValueError:
             continue
     return out
+
+
+def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
+    midpoint = max(1, len(chunk.segment_ids) // 2)
+    left_ids = chunk.segment_ids[:midpoint]
+    right_ids = chunk.segment_ids[midpoint:]
+    left_lines = chunk.lines[:midpoint]
+    right_lines = chunk.lines[midpoint:]
+    left = replace(
+        chunk,
+        chunk_id=f"{chunk.chunk_id}s0",
+        segment_ids=left_ids,
+        lines=left_lines,
+        context_after=right_lines + chunk.context_after,
+        asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in left_ids],
+    )
+    right = replace(
+        chunk,
+        chunk_id=f"{chunk.chunk_id}s1",
+        segment_ids=right_ids,
+        lines=right_lines,
+        context_before=chunk.context_before + left_lines,
+        asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in right_ids],
+    )
+    return left, right
+
+
+def _partition_chunk_to_target_lines(chunk: Chunk, target_lines: int) -> list[Chunk]:
+    target_lines = max(1, target_lines)
+    if len(chunk.segment_ids) <= target_lines:
+        return [chunk]
+    left, right = _split_chunk(chunk)
+    return [
+        *_partition_chunk_to_target_lines(left, target_lines),
+        *_partition_chunk_to_target_lines(right, target_lines),
+    ]
+
+
+def _build_adaptive_batch_state(config: AppConfig) -> AdaptiveBatchState:
+    configured_lines = max(1, int(config.pipeline.translation.chunk_lines))
+    min_lines = max(1, int(config.pipeline.translation.batching.min_chunk_lines))
+    return AdaptiveBatchState(
+        target_lines=configured_lines,
+        original_lines=configured_lines,
+        min_lines=min_lines,
+        grow_after_successes=max(1, int(config.pipeline.translation.batching.grow_after_successes)),
+    )
+
+
+def _retryable_split_failure(exc: Exception) -> bool:
+    text = str(exc)
+    return any(f"'error_type': '{item}'" in text or f'"error_type": "{item}"' in text or item in text for item in _RETRYABLE_SPLIT_ERRORS)
+
+
+def _chunk_completed(chunk: Chunk, done: set[str]) -> bool:
+    if chunk.chunk_id in done:
+        return True
+    if len(chunk.segment_ids) <= 1:
+        return False
+    left, right = _split_chunk(chunk)
+    return _chunk_completed(left, done) and _chunk_completed(right, done)
+
+
+def _source_chunk_completed_count(chunks: list[Chunk], done: set[str]) -> int:
+    return sum(1 for chunk in chunks if _chunk_completed(chunk, done))
+
+
+def _adaptive_chunk_by_id(chunks: list[Chunk], chunk_id: str) -> Chunk | None:
+    for chunk in sorted(chunks, key=lambda item: len(item.chunk_id), reverse=True):
+        if chunk.chunk_id == chunk_id:
+            return chunk
+        if not chunk_id.startswith(f"{chunk.chunk_id}s"):
+            continue
+        suffix = chunk_id[len(chunk.chunk_id) :]
+        current = chunk
+        while suffix:
+            if len(suffix) < 2 or suffix[0] != "s" or suffix[1] not in {"0", "1"}:
+                current = None
+                break
+            if len(current.segment_ids) <= 1:
+                current = None
+                break
+            left, right = _split_chunk(current)
+            current = left if suffix[1] == "0" else right
+            suffix = suffix[2:]
+        if current is not None and current.chunk_id == chunk_id:
+            return current
+    return None
+
+
+def _has_completed_child(chunk: Chunk, done: set[str]) -> bool:
+    prefix = f"{chunk.chunk_id}s"
+    return any(item.startswith(prefix) for item in done)
 
 
 def _rows_to_dicts(rows: list[ParsedTranslationRow]) -> list[dict]:
@@ -350,12 +529,29 @@ def translate_chunk(
                 error_messages.extend(repair_errors)
                 if validation.errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
+                provider_meta = dict(response.provider_meta or {})
+                _notify_progress(
+                    progress_callback,
+                    mode="translate",
+                    chunk_id=chunk.chunk_id,
+                    segment_ids=chunk.segment_ids,
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt + 1,
+                    max_attempts=retries,
+                    memory_entries=memory_prompt.count(" => "),
+                    provider_meta=provider_meta,
+                )
                 return {
                     "chunk_id": chunk.chunk_id,
                     "provider": route.provider,
                     "model": route.model,
                     "compat_mode": provider.compat_mode,
                     "base_url": provider.base_url,
+                    "transport": provider_meta.get("transport", ""),
+                    "http_version": provider_meta.get("http_version", ""),
+                    "streaming": bool(provider_meta.get("streaming", False)),
+                    "provider_meta": provider_meta,
                     "rows": _rows_to_dicts(validation.rows),
                     "validation": validation_to_json(validation),
                     "repairs": repairs,
@@ -376,6 +572,93 @@ def translate_chunk(
     raise RuntimeError(f"All translation routes failed: {error_messages}")
 
 
+def translate_chunk_adaptive(
+    config: AppConfig,
+    chunk: Chunk,
+    source_lang: str,
+    target_lang: str,
+    memory_prompt: str = "",
+    progress_callback: ProgressCallback | None = None,
+    already_done: set[str] | None = None,
+    *,
+    parent_chunk_id: str | None = None,
+) -> list[dict]:
+    already_done = already_done or set()
+    if _chunk_completed(chunk, already_done):
+        return []
+    min_lines = max(1, int(config.pipeline.translation.batching.min_chunk_lines))
+    parent_id = parent_chunk_id or chunk.chunk_id
+    if _has_completed_child(chunk, already_done) and len(chunk.segment_ids) > 1:
+        left, right = _split_chunk(chunk)
+        results: list[dict] = []
+        for child in (left, right):
+            try:
+                results.extend(
+                    translate_chunk_adaptive(
+                        config,
+                        child,
+                        source_lang,
+                        target_lang,
+                        memory_prompt=memory_prompt,
+                        progress_callback=progress_callback,
+                        already_done=already_done,
+                        parent_chunk_id=parent_id,
+                    )
+                )
+            except AdaptiveTranslationError as exc:
+                results.extend(exc.partial_results)
+                raise AdaptiveTranslationError(str(exc), results) from exc
+        return results
+    try:
+        result = _call_translate_chunk(
+            config,
+            chunk,
+            source_lang,
+            target_lang,
+            memory_prompt,
+            progress_callback,
+        )
+        if parent_id != chunk.chunk_id:
+            result["adaptive_parent_chunk"] = parent_id
+        return [result]
+    except Exception as exc:
+        if (
+            config.pipeline.translation.batching.mode != "adaptive"
+            or len(chunk.segment_ids) <= min_lines
+            or not _retryable_split_failure(exc)
+        ):
+            raise
+        left, right = _split_chunk(chunk)
+        _notify_progress(
+            progress_callback,
+            mode="adaptive_split",
+            chunk_id=chunk.chunk_id,
+            chunk_ids=[left.chunk_id, right.chunk_id],
+            adaptive_parent_chunk=parent_id,
+            adaptive_child_chunks=[left.chunk_id, right.chunk_id],
+        )
+        results: list[dict] = []
+        for child in (left, right):
+            try:
+                results.extend(
+                    translate_chunk_adaptive(
+                        config,
+                        child,
+                        source_lang,
+                        target_lang,
+                        memory_prompt=memory_prompt,
+                        progress_callback=progress_callback,
+                        already_done=already_done,
+                        parent_chunk_id=parent_id,
+                    )
+                )
+            except Exception as child_exc:
+                if isinstance(child_exc, AdaptiveTranslationError):
+                    results.extend(child_exc.partial_results)
+                raise AdaptiveTranslationError(str(child_exc), results) from child_exc
+        return results
+
+
 def iter_translate_all_chunks(
     config: AppConfig,
     chunks: list[Chunk],
@@ -386,7 +669,7 @@ def iter_translate_all_chunks(
     progress_callback: ProgressCallback | None = None,
 ):
     already_done = already_done or set()
-    todo = [chunk for chunk in chunks if chunk.chunk_id not in already_done]
+    todo = [chunk for chunk in chunks if not _chunk_completed(chunk, already_done)]
     if not todo:
         return
     if config.pipeline.memory.enabled and memory_dir is not None:
@@ -397,16 +680,83 @@ def iter_translate_all_chunks(
             target_lang=target_lang,
             memory_dir=memory_dir,
             progress_callback=progress_callback,
+            already_done=already_done,
+        )
+        return
+    if config.pipeline.translation.batching.mode == "adaptive" and max(1, config.pipeline.default_concurrency) == 1:
+        yield from _iter_translate_all_chunks_adaptive_serial(
+            config,
+            todo,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            already_done=already_done,
+            progress_callback=progress_callback,
         )
         return
     max_workers = max(1, config.pipeline.default_concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            _submit_translate_chunk(pool, config, chunk, source_lang, target_lang, "", progress_callback): chunk
+            _submit_translate_chunk(pool, config, chunk, source_lang, target_lang, "", progress_callback, already_done): chunk
             for chunk in todo
         }
         for future in concurrent.futures.as_completed(futures):
-            yield future.result()
+            try:
+                result = future.result()
+            except AdaptiveTranslationError as exc:
+                for item in exc.partial_results:
+                    yield item
+                raise RuntimeError(str(exc)) from exc
+            if isinstance(result, list):
+                for item in result:
+                    yield item
+            else:
+                yield result
+
+
+def _iter_translate_all_chunks_adaptive_serial(
+    config: AppConfig,
+    chunks: list[Chunk],
+    *,
+    source_lang: str,
+    target_lang: str,
+    already_done: set[str],
+    progress_callback: ProgressCallback | None = None,
+):
+    state = _build_adaptive_batch_state(config)
+    queue: deque[Chunk] = deque(chunks)
+    while queue:
+        chunk = queue.popleft()
+        if _chunk_completed(chunk, already_done):
+            continue
+        partitions = _partition_chunk_to_target_lines(chunk, state.target_lines)
+        if len(partitions) > 1:
+            queue.extendleft(reversed(partitions))
+            continue
+        try:
+            results = translate_chunk_adaptive(
+                config,
+                chunk,
+                source_lang,
+                target_lang,
+                progress_callback=progress_callback,
+                already_done=already_done,
+            )
+        except AdaptiveTranslationError as exc:
+            for item in exc.partial_results:
+                already_done.add(str(item.get("chunk_id")))
+                state.success()
+                yield item
+            state.split()
+            raise RuntimeError(str(exc)) from exc
+        except Exception:
+            state.split()
+            raise
+        if len(results) > 1 or any(result.get("adaptive_parent_chunk") for result in results):
+            state.split()
+        for result in results:
+            already_done.add(str(result.get("chunk_id")))
+            state.success()
+            yield result
 
 
 def _iter_translate_window(
@@ -417,6 +767,7 @@ def _iter_translate_window(
     target_lang: str,
     memory_store: MemoryStore,
     progress_callback: ProgressCallback | None = None,
+    already_done: set[str] | None = None,
 ):
     document = memory_store.load_effective()
     chunk_memory_prompts = {}
@@ -426,35 +777,30 @@ def _iter_translate_window(
     max_workers = max(1, config.pipeline.default_concurrency)
     if config.pipeline.memory.mode == "consistency_first":
         max_workers = 1
-    results: list[dict] = []
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                _submit_translate_chunk(
-                    pool,
-                    config,
-                    chunk,
-                    source_lang,
-                    target_lang,
-                    chunk_memory_prompts.get(chunk.chunk_id, ""),
-                    progress_callback,
-                ): chunk
-                for chunk in window
-            }
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                results.append(result)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            _submit_translate_chunk(
+                pool,
+                config,
+                chunk,
+                source_lang,
+                target_lang,
+                chunk_memory_prompts.get(chunk.chunk_id, ""),
+                progress_callback,
+                already_done,
+            ): chunk
+            for chunk in window
+        }
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future_result = future.result()
+            except AdaptiveTranslationError as exc:
+                for item in exc.partial_results:
+                    yield item
+                raise RuntimeError(str(exc)) from exc
+            result_items = future_result if isinstance(future_result, list) else [future_result]
+            for result in result_items:
                 yield result
-    finally:
-        _update_memory_after_window(
-            config,
-            window,
-            results,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            memory_store=memory_store,
-            progress_callback=progress_callback,
-        )
 
 
 def _update_memory_after_window(
@@ -470,8 +816,24 @@ def _update_memory_after_window(
     if not results:
         return
     if config.pipeline.memory.patch.enabled and config.pipeline.memory.patch.after_each_window:
-        successful_chunk_ids = {str(result.get("chunk_id") or "") for result in results}
-        successful_window = [chunk for chunk in window if chunk.chunk_id in successful_chunk_ids]
+        chunks_by_id = {chunk.chunk_id: chunk for chunk in window}
+        successful_window: list[Chunk] = []
+        for result in results:
+            chunk_id = str(result.get("chunk_id") or "")
+            chunk = chunks_by_id.get(chunk_id)
+            if chunk is not None:
+                successful_window.append(chunk)
+                continue
+            rows = result.get("rows") or []
+            if rows:
+                lines = [f"[{item.get('id')}]" for item in rows if isinstance(item, dict)]
+                successful_window.append(
+                    Chunk(
+                        chunk_id=chunk_id,
+                        segment_ids=[int(item.get("id")) for item in rows if isinstance(item, dict) and item.get("id") is not None],
+                        lines=lines,
+                    )
+                )
         if not successful_window:
             return
         patch_kwargs: dict[str, Any] = {"source_lang": source_lang, "target_lang": target_lang}
@@ -500,26 +862,77 @@ def _iter_translate_all_chunks_with_memory(
     target_lang: str,
     memory_dir: Path,
     progress_callback: ProgressCallback | None = None,
+    already_done: set[str] | None = None,
 ):
     memory_store = MemoryStore(memory_dir)
+    already_done = already_done or set()
     memory_store.ensure_runtime_document()
     window_size = max(1, config.pipeline.default_concurrency)
     if config.pipeline.memory.mode == "consistency_first":
         window_size = 1
     snapshot_index = 0
-    for start in range(0, len(chunks), window_size):
-        window = chunks[start : start + window_size]
-        for result in _iter_translate_window(
-            config,
-            window,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            memory_store=memory_store,
-            progress_callback=progress_callback,
-        ):
-            yield result
-        snapshot_index += 1
-        memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
+    patch_chunks: list[Chunk] = []
+    patch_results: list[dict] = []
+    patch_window_chunks = max(1, int(config.pipeline.memory.patch.window_chunks))
+    try:
+        for start in range(0, len(chunks), window_size):
+            window = chunks[start : start + window_size]
+            for result in _iter_translate_window(
+                config,
+                window,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                memory_store=memory_store,
+                progress_callback=progress_callback,
+                already_done=already_done,
+            ):
+                matching_chunk = next((chunk for chunk in window if chunk.chunk_id == result.get("chunk_id")), None)
+                if matching_chunk is not None:
+                    patch_chunks.append(matching_chunk)
+                else:
+                    rows = result.get("rows") or []
+                    patch_chunks.append(
+                        Chunk(
+                            chunk_id=str(result.get("chunk_id") or ""),
+                            segment_ids=[
+                                int(item.get("id"))
+                                for item in rows
+                                if isinstance(item, dict) and item.get("id") is not None
+                            ],
+                            lines=[
+                                f"[{item.get('id')}]"
+                                for item in rows
+                                if isinstance(item, dict) and item.get("id") is not None
+                            ],
+                        )
+                    )
+                patch_results.append(result)
+                yield result
+                if len(patch_results) >= patch_window_chunks:
+                    _update_memory_after_window(
+                        config,
+                        patch_chunks,
+                        patch_results,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        memory_store=memory_store,
+                        progress_callback=progress_callback,
+                    )
+                    patch_chunks = []
+                    patch_results = []
+            snapshot_index += 1
+            memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
+    finally:
+        if patch_results:
+            _update_memory_after_window(
+                config,
+                patch_chunks,
+                patch_results,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                memory_store=memory_store,
+                progress_callback=progress_callback,
+            )
 
 
 def translate_all_chunks(

@@ -2,18 +2,31 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
-import urllib.request
 import posixpath
 from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
 from ..app.credentials import resolve_provider_credential
 from ..http import DEFAULT_JSON_HEADERS, merge_default_headers
 from ..prompts import FALLBACK_TRANSLATION_SYSTEM_PROMPT
 from .base import ProviderClient
+
+
+_CLIENTS: dict[tuple, httpx.Client] = {}
+_HTTP2_AVAILABLE: bool | None = None
+
+
+class ProviderTransportError(RuntimeError):
+    def __init__(self, error_type: str, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.status_code = status_code
 
 
 def _extract_numbered_lines(text: str) -> list[str]:
@@ -181,6 +194,37 @@ def _translation_prompt(
 
 def classify_error(exc: Exception) -> str:
     text = str(exc).lower()
+    if isinstance(exc, ProviderTransportError):
+        return exc.error_type
+    if isinstance(exc, httpx.ConnectTimeout):
+        return "connect_timeout"
+    if isinstance(exc, httpx.ReadTimeout):
+        return "read_timeout"
+    if isinstance(exc, httpx.WriteTimeout):
+        return "write_timeout"
+    if isinstance(exc, httpx.PoolTimeout):
+        return "pool_timeout"
+    if isinstance(exc, httpx.TimeoutException):
+        return "provider_timeout"
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in {401, 403}:
+            return "auth_error"
+        if code in {429}:
+            return "rate_limit"
+        if code == 408:
+            return "provider_timeout"
+        if code == 502:
+            return "bad_gateway"
+        if code == 503:
+            return "service_unavailable"
+        if code == 504:
+            return "gateway_timeout"
+        if 500 <= code <= 599:
+            return "provider_server_error"
+        return "bad_schema"
+    if isinstance(exc, httpx.TransportError):
+        return "network_error"
     if isinstance(exc, HTTPError):
         if exc.code in {401, 403}:
             return "auth_error"
@@ -213,19 +257,243 @@ def _request_json(
     timeout: int,
     method: str = "POST",
 ) -> dict:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
     request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS)
-    if data is not None:
+    if payload is not None:
         request_headers = merge_default_headers(request_headers, **{"Content-Type": "application/json"})
-    req = urllib.request.Request(
-        url=url,
-        data=data,
-        headers=request_headers,
-        method=method,
+    with httpx.Client(timeout=float(timeout), http2=_http2_enabled(True)) as client:
+        response = client.request(
+            method=method,
+            url=url,
+            json=payload,
+            headers=request_headers,
+        )
+        if response.status_code >= 400:
+            response.raise_for_status()
+        return response.json()
+
+
+def _client_key(config: ProviderConfig) -> tuple:
+    limits = config.limits
+    return (
+        config.name,
+        config.base_url,
+        _http2_enabled(limits.http2),
+        limits.connect_timeout_seconds,
+        limits.read_timeout_seconds,
+        limits.write_timeout_seconds,
+        limits.pool_timeout_seconds,
+        limits.max_connections,
+        limits.max_keepalive_connections,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8")
-    return json.loads(body)
+
+
+def _provider_timeout(config: ProviderConfig) -> httpx.Timeout:
+    limits = config.limits
+    return httpx.Timeout(
+        connect=float(limits.connect_timeout_seconds),
+        read=float(limits.read_timeout_seconds),
+        write=float(limits.write_timeout_seconds),
+        pool=float(limits.pool_timeout_seconds),
+    )
+
+
+def _provider_limits(config: ProviderConfig) -> httpx.Limits:
+    limits = config.limits
+    return httpx.Limits(
+        max_connections=max(1, int(limits.max_connections)),
+        max_keepalive_connections=max(0, int(limits.max_keepalive_connections)),
+    )
+
+
+def _http2_enabled(requested: bool) -> bool:
+    global _HTTP2_AVAILABLE
+    if not requested:
+        return False
+    if _HTTP2_AVAILABLE is None:
+        try:
+            import h2  # noqa: F401
+
+            _HTTP2_AVAILABLE = True
+        except ImportError:
+            _HTTP2_AVAILABLE = False
+    return bool(_HTTP2_AVAILABLE)
+
+
+def _get_provider_client(config: ProviderConfig) -> httpx.Client:
+    key = _client_key(config)
+    client = _CLIENTS.get(key)
+    if client is None or client.is_closed:
+        client = httpx.Client(
+            timeout=_provider_timeout(config),
+            limits=_provider_limits(config),
+            http2=_http2_enabled(config.limits.http2),
+        )
+        _CLIENTS[key] = client
+    return client
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        error_type = classify_error(exc)
+        raise ProviderTransportError(
+            error_type,
+            f"provider upstream returned HTTP {response.status_code}: {response.text[:500]}",
+            status_code=response.status_code,
+        ) from exc
+
+
+def _transport_meta(response: httpx.Response, *, streaming: bool, stream_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    meta: dict[str, Any] = {
+        "transport": "httpx",
+        "http_version": response.extensions.get("http_version", b""),
+        "streaming": streaming,
+    }
+    if isinstance(meta["http_version"], bytes):
+        meta["http_version"] = meta["http_version"].decode("ascii", errors="ignore")
+    if stream_meta:
+        meta.update(stream_meta)
+    return meta
+
+
+def _response_json(data: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ProviderTransportError("bad_schema", f"bad_schema: invalid JSON response: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ProviderTransportError("bad_schema", "bad_schema: provider response must be a JSON object")
+    return payload
+
+
+def _provider_request_json(
+    config: ProviderConfig,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    method: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS, **{"Content-Type": "application/json"})
+    response = _get_provider_client(config).request(method=method, url=url, json=payload, headers=request_headers)
+    _raise_for_status(response)
+    return _response_json(response.content), _transport_meta(response, streaming=False)
+
+
+def _extract_sse_json(line: str) -> dict[str, Any] | None:
+    stripped = line.strip()
+    if not stripped.startswith("data:"):
+        return None
+    data = stripped[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _stream_text_parts(event: dict[str, Any], compat_mode: str) -> tuple[list[str], str | None]:
+    event_type = str(event.get("type") or "")
+    delta_parts: list[str] = []
+    final_text: str | None = None
+    if compat_mode == "openai_responses":
+        if event_type in {"response.output_text.delta", "output_text.delta"} and isinstance(event.get("delta"), str):
+            return [event["delta"]], None
+        if event_type in {"response.output_text.done", "output_text.done"} and isinstance(event.get("text"), str):
+            return [], event["text"]
+        if event_type in {"response.completed", "response.done"}:
+            response = event.get("response")
+            if isinstance(response, dict):
+                extracted = _extract_text_by_paths(response, ["output_text", "output[].content[].text"])
+                if extracted:
+                    return [], extracted
+            if isinstance(event.get("output_text"), str):
+                return [], event["output_text"]
+            return [], None
+        if event_type:
+            return [], None
+    if "choices" in event and isinstance(event["choices"], list):
+        for choice in event["choices"]:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                delta_parts.append(delta["content"])
+            text = choice.get("text")
+            if isinstance(text, str):
+                delta_parts.append(text)
+            message = choice.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                final_text = message["content"]
+    if isinstance(event.get("delta"), str):
+        delta_parts.append(event["delta"])
+    if not delta_parts and isinstance(event.get("text"), str):
+        final_text = event["text"]
+    if not delta_parts and isinstance(event.get("output_text"), str):
+        final_text = event["output_text"]
+    return delta_parts, final_text
+
+
+def _stream_response_payload(
+    config: ProviderConfig,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    method: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS, **{"Content-Type": "application/json"})
+    payload = dict(payload)
+    payload["stream"] = True
+    request_started = time.time()
+    first_byte_at: float | None = None
+    last_chunk_at: float | None = None
+    bytes_received = 0
+    text_parts: list[str] = []
+    final_text: str | None = None
+    usage: dict[str, Any] = {}
+    final_payload: dict[str, Any] | None = None
+    with _get_provider_client(config).stream(method=method, url=url, json=payload, headers=request_headers) as response:
+        _raise_for_status(response)
+        for line in response.iter_lines():
+            if not line:
+                continue
+            now = time.time()
+            first_byte_at = first_byte_at or now
+            last_chunk_at = now
+            bytes_received += len(line.encode("utf-8"))
+            event = _extract_sse_json(line)
+            if event is None:
+                continue
+            final_payload = event
+            if isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+            deltas, event_final_text = _stream_text_parts(event, config.compat_mode)
+            text_parts.extend(deltas)
+            if event_final_text:
+                final_text = event_final_text
+        stream_meta = {
+            "request_started_at": request_started,
+            "first_byte_at": first_byte_at,
+            "last_chunk_at": last_chunk_at,
+            "bytes_received": bytes_received,
+            "elapsed_ms": int((time.time() - request_started) * 1000),
+        }
+        text = final_text if final_text is not None else "".join(text_parts)
+        if config.compat_mode == "openai_chat":
+            data = {"choices": [{"message": {"content": text}}]}
+        elif config.compat_mode == "openai_responses":
+            data = {"output_text": text}
+        else:
+            data = final_payload or {"text": text}
+        if usage:
+            data["usage"] = usage
+        return data, _transport_meta(response, streaming=True, stream_meta=stream_meta)
+
+
+def _can_stream(config: ProviderConfig) -> bool:
+    return bool(config.limits.streaming_enabled) and config.compat_mode in {"openai_chat", "openai_responses"}
 
 
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, method: str = "POST") -> dict:
@@ -590,13 +858,22 @@ class ConfigurableProtocolClient(ProviderClient):
         headers.update(self.config.extra_headers)
         if self.config.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")
-        data = _post_json(
-            url,
-            payload,
-            headers,
-            timeout=self.timeout,
-            method=self.config.endpoint.method,
-        )
+        if _can_stream(self.config):
+            data, transport_meta = _stream_response_payload(
+                self.config,
+                url,
+                payload,
+                headers,
+                method=self.config.endpoint.method,
+            )
+        else:
+            data, transport_meta = _provider_request_json(
+                self.config,
+                url,
+                payload,
+                headers,
+                method=self.config.endpoint.method,
+            )
         text_paths = self.config.mapping.response.get("text_paths", [])
         text = _extract_text_by_paths(data, text_paths)
         if not text:
@@ -608,6 +885,7 @@ class ConfigurableProtocolClient(ProviderClient):
             provider_meta={
                 "compat_mode": self.config.compat_mode,
                 "base_url": self.config.base_url,
+                **transport_meta,
             },
         )
         return normalized

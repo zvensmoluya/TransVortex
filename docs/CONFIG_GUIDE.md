@@ -97,6 +97,14 @@ providers:
       concurrency: 8
       timeout_seconds: 30
       retry: 3
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 30
+      write_timeout_seconds: 30
+      pool_timeout_seconds: 5
+      max_connections: 20
+      max_keepalive_connections: 10
+      http2: true
+      streaming_enabled: false
 
 routing:
   primary:
@@ -118,6 +126,10 @@ translation:
   chunk_lines: 120
   context_before_lines: 40
   context_after_lines: 20
+  batching:
+    mode: adaptive
+    min_chunk_lines: 20
+    grow_after_successes: 3
   style_preset: subtitle_natural
   style_prompt: |
     Translate as natural subtitles.
@@ -132,9 +144,18 @@ translation:
 
 说明：
 - `chunk_lines` 是当前 chunk 的待翻译行数；运行时会自动受 provider `capabilities.max_batch_lines` 限制。
+- `batching.mode: adaptive` 会在 provider 超时或网关错误时对失败 chunk 二分重试，避免一开始就拆成大量小请求。
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
+- memory 开启时还会应用 `memory.chunking` 的初始切片保护，避免术语表滚动更新被大量短 chunk 污染；adaptive 二分只用于失败 chunk 的局部退避。
+
+```yaml
+memory:
+  chunking:
+    min_initial_chunk_lines: 80
+    max_initial_chunks: 24
+```
 
 ## 5. ASR 与视频字幕来源
 

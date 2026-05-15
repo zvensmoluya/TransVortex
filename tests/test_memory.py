@@ -331,3 +331,46 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
         raise AssertionError("expected translation failure")
     doc = MemoryStore(tmp_path / "memory").load()
     assert any(entry.source == "Alpha" for entry in doc.entries)
+
+
+def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path, default_concurrency=1),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+    config.pipeline.memory.enabled = True
+    config.pipeline.memory.patch.window_chunks = 3
+    chunks = [Chunk(chunk_id=f"c{i}", segment_ids=[i], lines=[f"[{i}] Term {i}"]) for i in range(5)]
+    patch_windows: list[list[str]] = []
+
+    def fake_translate_chunk(_config, chunk, source_lang: str, target_lang: str, memory_prompt: str = ""):
+        return {
+            "chunk_id": chunk.chunk_id,
+            "provider": "p1",
+            "model": "m1",
+            "rows": [{"id": chunk.segment_ids[0], "text_tgt": f"译文 {chunk.segment_ids[0]}"}],
+            "errors": [],
+        }
+
+    def fake_generate_memory_patch(_config, window, translated_rows, *, source_lang: str, target_lang: str):
+        patch_windows.append([chunk.chunk_id for chunk in window])
+        payload = {"chunk_ids": [chunk.chunk_id for chunk in window], "actions": []}
+        from transvortex.memory.merger import patch_from_payload
+
+        return patch_from_payload(payload), payload
+
+    monkeypatch.setattr("transvortex.core.translate.translate_chunk", fake_translate_chunk)
+    monkeypatch.setattr("transvortex.core.translate.generate_memory_patch", fake_generate_memory_patch)
+
+    list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
+
+    assert patch_windows == [["c0", "c1", "c2"], ["c3", "c4"]]

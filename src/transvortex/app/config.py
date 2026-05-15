@@ -22,6 +22,7 @@ from .models import (
     MemoryBootstrapConfig,
     MemoryConfig,
     MemoryConsistencyCheckConfig,
+    MemoryChunkingConfig,
     MemoryInjectConfig,
     MemoryMergeConfig,
     MemoryPatchConfig,
@@ -39,6 +40,7 @@ from .models import (
     SubtitleConfig,
     SubtitleQualityConfig,
     SubtitleReflowConfig,
+    TranslationBatchingConfig,
     TranslationConfig,
 )
 from ..prompts import load_prompt
@@ -363,6 +365,7 @@ def load_app_config(
     refusal_raw = translation_raw.get("refusal_detection") or {}
     repair_raw = translation_raw.get("repair") or {}
     asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
+    batching_raw = translation_raw.get("batching") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
         context_before_lines=_to_int(translation_raw.get("context_before_lines"), 40),
@@ -379,6 +382,11 @@ def load_app_config(
         ),
         asr_uncertainty_hints=AsrUncertaintyHintsConfig(
             enabled=_to_bool(asr_uncertainty_raw.get("enabled"), False),
+        ),
+        batching=TranslationBatchingConfig(
+            mode=_to_str(batching_raw.get("mode"), "adaptive"),
+            min_chunk_lines=_to_int(batching_raw.get("min_chunk_lines"), 20),
+            grow_after_successes=_to_int(batching_raw.get("grow_after_successes"), 3),
         ),
     )
     subtitle_raw = pip_yaml.get("subtitle") or {}
@@ -423,6 +431,7 @@ def load_app_config(
     )
     memory_raw = pip_yaml.get("memory") or {}
     memory_bootstrap_raw = memory_raw.get("bootstrap") or {}
+    memory_chunking_raw = memory_raw.get("chunking") or {}
     memory_inject_raw = memory_raw.get("inject") or {}
     memory_patch_raw = memory_raw.get("patch") or {}
     memory_merge_raw = memory_raw.get("merge") or {}
@@ -436,6 +445,10 @@ def load_app_config(
             enabled=_to_bool(memory_bootstrap_raw.get("enabled"), False),
             max_candidates=_to_int(memory_bootstrap_raw.get("max_candidates"), 80),
         ),
+        chunking=MemoryChunkingConfig(
+            min_initial_chunk_lines=_to_int(memory_chunking_raw.get("min_initial_chunk_lines"), 80),
+            max_initial_chunks=_to_int(memory_chunking_raw.get("max_initial_chunks"), 24),
+        ),
         inject=MemoryInjectConfig(
             locked=_to_bool(memory_inject_raw.get("locked"), True),
             confirmed=_to_bool(memory_inject_raw.get("confirmed"), True),
@@ -446,6 +459,7 @@ def load_app_config(
         patch=MemoryPatchConfig(
             enabled=_to_bool(memory_patch_raw.get("enabled"), True),
             after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), True),
+            window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 8),
             system_prompt=load_prompt(
                 "memory_patch_system",
                 root_dir=root_dir,
@@ -545,6 +559,10 @@ def load_app_config(
             pipeline.translation.context_after_lines = _to_int(value, pipeline.translation.context_after_lines)
         elif key == "translation_repair_enabled":
             pipeline.translation.repair.enabled = _to_bool(value, pipeline.translation.repair.enabled)
+        elif key == "translation_batching_mode":
+            pipeline.translation.batching.mode = _to_str(value, pipeline.translation.batching.mode)
+        elif key == "translation_min_chunk_lines":
+            pipeline.translation.batching.min_chunk_lines = _to_int(value, pipeline.translation.batching.min_chunk_lines)
         elif key == "translation_asr_uncertainty_hints_enabled":
             pipeline.translation.asr_uncertainty_hints.enabled = _to_bool(
                 value,
@@ -597,6 +615,8 @@ def load_app_config(
             pipeline.memory.enabled = _to_bool(value, pipeline.memory.enabled)
         elif key == "memory_patch_enabled":
             pipeline.memory.patch.enabled = _to_bool(value, pipeline.memory.patch.enabled)
+        elif key == "memory_patch_window_chunks":
+            pipeline.memory.patch.window_chunks = _to_int(value, pipeline.memory.patch.window_chunks)
         elif key == "memory_presets":
             pipeline.memory.presets = _parse_memory_presets(value)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
@@ -617,13 +637,37 @@ def load_app_config(
         api_type = row["api_type"]
         compat_mode = row.get("compat_mode") or _infer_compat_mode(api_type)
         limits_raw = row.get("limits", {})
+        timeout_seconds = _to_int(
+            cli_overrides.get("provider_timeout_seconds", limits_raw.get("timeout_seconds")),
+            pipeline.timeout_seconds,
+        )
         limits = ProviderLimits(
             concurrency=_to_int(limits_raw.get("concurrency"), pipeline.default_concurrency),
-            timeout_seconds=_to_int(
-                cli_overrides.get("provider_timeout_seconds", limits_raw.get("timeout_seconds")),
-                pipeline.timeout_seconds,
-            ),
+            timeout_seconds=timeout_seconds,
             retry=_to_int(cli_overrides.get("provider_retry", limits_raw.get("retry")), pipeline.retry),
+            connect_timeout_seconds=_to_float(
+                cli_overrides.get("provider_connect_timeout_seconds", limits_raw.get("connect_timeout_seconds")),
+                min(10.0, float(timeout_seconds)),
+            ),
+            read_timeout_seconds=_to_float(
+                cli_overrides.get("provider_read_timeout_seconds", limits_raw.get("read_timeout_seconds")),
+                float(timeout_seconds),
+            ),
+            write_timeout_seconds=_to_float(
+                limits_raw.get("write_timeout_seconds"),
+                float(timeout_seconds),
+            ),
+            pool_timeout_seconds=_to_float(
+                limits_raw.get("pool_timeout_seconds"),
+                5.0,
+            ),
+            max_connections=_to_int(limits_raw.get("max_connections"), 20),
+            max_keepalive_connections=_to_int(limits_raw.get("max_keepalive_connections"), 10),
+            http2=_to_bool(cli_overrides.get("provider_http2", limits_raw.get("http2")), True),
+            streaming_enabled=_to_bool(
+                cli_overrides.get("provider_streaming_enabled", limits_raw.get("streaming_enabled")),
+                False,
+            ),
         )
         endpoint_default = _default_endpoint_for_mode(compat_mode)
         endpoint_raw = row.get("endpoint", {})

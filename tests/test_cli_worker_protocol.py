@@ -311,8 +311,22 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
             "90",
             "--provider-retry",
             "5",
+            "--provider-http2",
+            "false",
+            "--provider-streaming-enabled",
+            "true",
+            "--provider-connect-timeout-seconds",
+            "11",
+            "--provider-read-timeout-seconds",
+            "77",
+            "--translation-batching-mode",
+            "adaptive",
+            "--translation-min-chunk-lines",
+            "12",
             "--memory-patch-enabled",
             "false",
+            "--memory-patch-window-chunks",
+            "4",
             "--detach",
             "--json",
         ],
@@ -327,8 +341,16 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
     assert "90" in spawned["cmd"]
     assert "--provider-retry" in spawned["cmd"]
     assert "5" in spawned["cmd"]
+    assert "--provider-http2" in spawned["cmd"]
+    assert "--provider-streaming-enabled" in spawned["cmd"]
+    assert "--provider-connect-timeout-seconds" in spawned["cmd"]
+    assert "--provider-read-timeout-seconds" in spawned["cmd"]
+    assert "--translation-batching-mode" in spawned["cmd"]
+    assert "--translation-min-chunk-lines" in spawned["cmd"]
     assert "--memory-patch-enabled" in spawned["cmd"]
     assert "false" in spawned["cmd"]
+    assert "--memory-patch-window-chunks" in spawned["cmd"]
+    assert "4" in spawned["cmd"]
 
 
 def test_detach_and_stream_events_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:

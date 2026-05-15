@@ -47,6 +47,14 @@ class ProviderLimits:
     concurrency: int = 8
     timeout_seconds: int = 30
     retry: int = 3
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float = 30.0
+    write_timeout_seconds: float = 30.0
+    pool_timeout_seconds: float = 5.0
+    max_connections: int = 20
+    max_keepalive_connections: int = 10
+    http2: bool = True
+    streaming_enabled: bool = False
 
 
 @dataclass
@@ -134,6 +142,13 @@ class AsrCloudConfig:
 
 
 @dataclass
+class TranslationBatchingConfig:
+    mode: str = "adaptive"  # fixed | adaptive
+    min_chunk_lines: int = 20
+    grow_after_successes: int = 3
+
+
+@dataclass
 class TranslationConfig:
     chunk_lines: int = 120
     context_before_lines: int = 40
@@ -144,6 +159,7 @@ class TranslationConfig:
     refusal_detection: RefusalDetectionConfig = field(default_factory=RefusalDetectionConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
     asr_uncertainty_hints: AsrUncertaintyHintsConfig = field(default_factory=AsrUncertaintyHintsConfig)
+    batching: TranslationBatchingConfig = field(default_factory=TranslationBatchingConfig)
 
 
 @dataclass
@@ -226,7 +242,14 @@ class MemoryInjectConfig:
 class MemoryPatchConfig:
     enabled: bool = True
     after_each_window: bool = True
+    window_chunks: int = 8
     system_prompt: str = ""
+
+
+@dataclass
+class MemoryChunkingConfig:
+    min_initial_chunk_lines: int = 80
+    max_initial_chunks: int = 24
 
 
 @dataclass
@@ -252,6 +275,7 @@ class MemoryConfig:
     mode: str = "balanced"
     presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
+    chunking: MemoryChunkingConfig = field(default_factory=MemoryChunkingConfig)
     inject: MemoryInjectConfig = field(default_factory=MemoryInjectConfig)
     patch: MemoryPatchConfig = field(default_factory=MemoryPatchConfig)
     merge: MemoryMergeConfig = field(default_factory=MemoryMergeConfig)

@@ -30,7 +30,12 @@ from ..formats.srt import parse_srt_file
 from .subtitle_compression import compress_overlong_subtitles
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_reflow import reflow_subtitles
-from .translate import iter_translate_all_chunks, translate_all_chunks
+from .translate import (
+    _adaptive_chunk_by_id,
+    _source_chunk_completed_count,
+    iter_translate_all_chunks,
+    translate_all_chunks,
+)
 from .translation_validation import validate_translation_response, validation_to_json
 from ..utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
 
@@ -121,6 +126,14 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "translate_current_mode",
         "translate_attempt_started_at",
         "translate_memory_entries",
+        "transport",
+        "http_version",
+        "streaming",
+        "first_byte_at",
+        "last_chunk_at",
+        "bytes_received",
+        "adaptive_parent_chunk",
+        "adaptive_child_chunks",
     ]
     detail = {key: checkpoint[key] for key in keys if key in checkpoint}
     if "translate_done_chunks" in checkpoint:
@@ -171,8 +184,27 @@ def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: d
                 checkpoint.pop("translate_current_segment_id", None)
             if event.get("memory_entries") is not None:
                 checkpoint["translate_memory_entries"] = int(event.get("memory_entries") or 0)
+            provider_meta = event.get("provider_meta") if isinstance(event.get("provider_meta"), dict) else {}
+            for source_key, target_key in [
+                ("transport", "transport"),
+                ("http_version", "http_version"),
+                ("streaming", "streaming"),
+                ("first_byte_at", "first_byte_at"),
+                ("last_chunk_at", "last_chunk_at"),
+                ("bytes_received", "bytes_received"),
+                ("adaptive_parent_chunk", "adaptive_parent_chunk"),
+                ("adaptive_child_chunks", "adaptive_child_chunks"),
+            ]:
+                value = event.get(source_key, provider_meta.get(source_key))
+                if value is not None:
+                    checkpoint[target_key] = value
             store.save_checkpoint(task_id, checkpoint)
-            label = "Memory patch request" if mode == "memory_patch" else f"Translation {mode} request"
+            if mode == "memory_patch":
+                label = "Memory patch request"
+            elif mode == "adaptive_split":
+                label = "Adaptive translation split"
+            else:
+                label = f"Translation {mode} request"
             store.append_event(
                 task_id,
                 "provider_attempt",
@@ -190,6 +222,14 @@ def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: d
                         "attempt": event.get("attempt"),
                         "max_attempts": event.get("max_attempts"),
                         "memory_entries": event.get("memory_entries"),
+                        "transport": event.get("transport", provider_meta.get("transport")),
+                        "http_version": event.get("http_version", provider_meta.get("http_version")),
+                        "streaming": event.get("streaming", provider_meta.get("streaming")),
+                        "first_byte_at": event.get("first_byte_at", provider_meta.get("first_byte_at")),
+                        "last_chunk_at": event.get("last_chunk_at", provider_meta.get("last_chunk_at")),
+                        "bytes_received": event.get("bytes_received", provider_meta.get("bytes_received")),
+                        "adaptive_parent_chunk": event.get("adaptive_parent_chunk"),
+                        "adaptive_child_chunks": event.get("adaptive_child_chunks"),
                     }.items()
                     if value is not None
                 },
@@ -476,6 +516,61 @@ def _effective_translation_chunk_lines(config: AppConfig) -> int:
     return min(configured, min(provider_limits))
 
 
+def _effective_initial_chunk_lines(config: AppConfig, segment_count: int) -> tuple[int, list[dict[str, Any]]]:
+    configured = max(1, config.pipeline.translation.chunk_lines)
+    effective = _effective_translation_chunk_lines(config)
+    warnings: list[dict[str, Any]] = []
+    if effective < configured:
+        warnings.append(
+            {
+                "message": "Reduced translation chunk size to provider capability limit",
+                "details": {
+                    "configured_chunk_lines": configured,
+                    "effective_chunk_lines": effective,
+                },
+            }
+        )
+    if not config.pipeline.memory.enabled:
+        return effective, warnings
+    memory_min = max(1, int(config.pipeline.memory.chunking.min_initial_chunk_lines))
+    memory_max_chunks = max(1, int(config.pipeline.memory.chunking.max_initial_chunks))
+    chunk_lines_for_max_chunks = max(1, (max(0, segment_count) + memory_max_chunks - 1) // memory_max_chunks)
+    memory_floor = max(memory_min, chunk_lines_for_max_chunks)
+    provider_cap = min(
+        [max(1, provider.capabilities.max_batch_lines) for provider in _translation_route_providers(config)] or [memory_floor]
+    )
+    guarded = min(max(effective, memory_floor), provider_cap)
+    if guarded > effective:
+        warnings.append(
+            {
+                "message": "Raised initial translation chunk size for memory stability",
+                "details": {
+                    "configured_chunk_lines": configured,
+                    "previous_effective_chunk_lines": effective,
+                    "effective_chunk_lines": guarded,
+                    "min_initial_chunk_lines": memory_min,
+                    "max_initial_chunks": memory_max_chunks,
+                    "segment_count": segment_count,
+                },
+            }
+        )
+        effective = guarded
+    elif memory_floor > effective:
+        warnings.append(
+            {
+                "message": "Memory chunking guard limited by provider capability",
+                "details": {
+                    "configured_chunk_lines": configured,
+                    "effective_chunk_lines": effective,
+                    "memory_requested_chunk_lines": memory_floor,
+                    "provider_max_batch_lines": provider_cap,
+                    "segment_count": segment_count,
+                },
+            }
+        )
+    return effective, warnings
+
+
 def _verified_translated_chunks(translated_rows: list[dict], validation_rows: list[dict]) -> set[str]:
     translated_ids = {str(row.get("chunk_id")) for row in translated_rows if row.get("chunk_id")}
     valid_ids: set[str] = set()
@@ -509,14 +604,13 @@ def _backfill_translation_validation(
     store: TaskStore,
     task_id: str,
 ) -> tuple[list[dict], set[str]]:
-    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
     validated_ids = {str(row.get("chunk_id")) for row in validation_rows if row.get("chunk_id")}
     current_validation_rows = list(validation_rows)
     for row in translated_rows:
         chunk_id = str(row.get("chunk_id", ""))
         if not chunk_id or chunk_id in validated_ids:
             continue
-        chunk = chunks_by_id.get(chunk_id)
+        chunk = _adaptive_chunk_by_id(chunks, chunk_id)
         if chunk is None:
             continue
         validation = validate_translation_response(
@@ -536,6 +630,14 @@ def _backfill_translation_validation(
             message=f"Backfilled validation for translated chunk {chunk_id}",
         )
     return current_validation_rows, _verified_translated_chunks(translated_rows, current_validation_rows)
+
+
+def _translation_done_count(chunks, translated_done: set[str]) -> int:
+    return _source_chunk_completed_count(chunks, translated_done)
+
+
+def _translation_progress_value(chunks, translated_done: set[str]) -> float:
+    return 0.65 + 0.18 * (_translation_done_count(chunks, translated_done) / max(len(chunks), 1))
 
 
 def _translation_row_for_artifact(row: dict) -> dict:
@@ -1024,18 +1126,15 @@ def _execute_task(
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
-        effective_chunk_lines = _effective_translation_chunk_lines(config)
-        if effective_chunk_lines < config.pipeline.translation.chunk_lines:
+        effective_chunk_lines, chunking_warnings = _effective_initial_chunk_lines(config, len(all_segments))
+        for warning in chunking_warnings:
             store.append_event(
                 task_id,
                 "warning",
                 stage="SEGMENT",
                 level="warning",
-                message="Reduced translation chunk size to provider capability limit",
-                details={
-                    "configured_chunk_lines": config.pipeline.translation.chunk_lines,
-                    "effective_chunk_lines": effective_chunk_lines,
-                },
+                message=str(warning.get("message", "")),
+                details=dict(warning.get("details") or {}),
             )
         chunks = number_and_chunk_segments(
             all_segments,
@@ -1046,7 +1145,10 @@ def _execute_task(
         write_json(paths["chunks"] / "chunks.json", chunks)
         checkpoint["status"] = "SEGMENT"
         checkpoint["translate_total_chunks"] = len(chunks)
-        checkpoint["translate_done_count"] = len(checkpoint.get("translate_done_chunks", []))
+        checkpoint["translate_done_count"] = _translation_done_count(
+            chunks,
+            {str(item) for item in checkpoint.get("translate_done_chunks", [])},
+        )
         store.save_checkpoint(task_id, checkpoint)
 
         _check_cancel(store, task_id)
@@ -1095,7 +1197,7 @@ def _execute_task(
         )
         checkpoint["translate_total_chunks"] = len(chunks)
         checkpoint["translate_done_chunks"] = sorted(translated_done)
-        checkpoint["translate_done_count"] = len(translated_done)
+        checkpoint["translate_done_count"] = _translation_done_count(chunks, translated_done)
         store.save_checkpoint(task_id, checkpoint)
         translation_progress = _translation_progress_callback(store, task_id, checkpoint)
         for row in _iter_translation_results(
@@ -1114,7 +1216,7 @@ def _execute_task(
                 append_jsonl(repairs_file, repair)
             translated_done.add(row["chunk_id"])
             checkpoint["translate_done_chunks"] = sorted(translated_done)
-            checkpoint["translate_done_count"] = len(translated_done)
+            checkpoint["translate_done_count"] = _translation_done_count(chunks, translated_done)
             checkpoint["status"] = "TRANSLATE"
             checkpoint.pop("translate_current_chunk", None)
             checkpoint.pop("translate_current_chunk_ids", None)
@@ -1130,8 +1232,8 @@ def _execute_task(
                 task_id,
                 "progress",
                 stage="TRANSLATE",
-                message=f"Translated chunk {len(translated_done)}/{len(chunks)}",
-                progress=0.65 + 0.18 * (len(translated_done) / max(len(chunks), 1)),
+                message=f"Translated chunk {checkpoint['translate_done_count']}/{len(chunks)}",
+                progress=_translation_progress_value(chunks, translated_done),
             )
 
         _check_cancel(store, task_id)
