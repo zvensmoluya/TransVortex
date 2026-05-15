@@ -54,7 +54,7 @@ class ProviderLimits:
     max_connections: int = 20
     max_keepalive_connections: int = 10
     http2: bool = True
-    streaming_enabled: bool = False
+    streaming_enabled: bool = True
 
 
 @dataclass

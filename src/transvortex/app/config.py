@@ -666,7 +666,7 @@ def load_app_config(
             http2=_to_bool(cli_overrides.get("provider_http2", limits_raw.get("http2")), True),
             streaming_enabled=_to_bool(
                 cli_overrides.get("provider_streaming_enabled", limits_raw.get("streaming_enabled")),
-                False,
+                True,
             ),
         )
         endpoint_default = _default_endpoint_for_mode(compat_mode)

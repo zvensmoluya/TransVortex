@@ -339,9 +339,22 @@ def _raise_for_status(response: httpx.Response) -> None:
         error_type = classify_error(exc)
         raise ProviderTransportError(
             error_type,
-            f"provider upstream returned HTTP {response.status_code}: {response.text[:500]}",
+            f"provider upstream returned HTTP {response.status_code}: {_response_text_preview(response)}",
             status_code=response.status_code,
         ) from exc
+
+
+def _response_text_preview(response: httpx.Response) -> str:
+    try:
+        return response.text[:500]
+    except httpx.ResponseNotRead:
+        try:
+            response.read()
+            return response.text[:500]
+        except Exception:
+            return ""
+    except Exception:
+        return ""
 
 
 def _transport_meta(response: httpx.Response, *, streaming: bool, stream_meta: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.error import HTTPError
 
 import httpx
+import pytest
 
 from transvortex.app.models import (
     AuthConfig,
@@ -15,6 +16,7 @@ from transvortex.app.models import (
 )
 from transvortex.providers.factory import (
     ConfigurableProtocolClient,
+    ProviderTransportError,
     _build_payload,
     _request_json,
     _build_url_and_headers,
@@ -36,6 +38,7 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
         models=["model-a"],
         credential_root_dir=tmp_path,
         mapping=MappingConfig(request={"style": "openai_chat"}, response={"text_paths": ["choices[0].message.content"]}),
+        limits=ProviderLimits(streaming_enabled=False),
     )
     (tmp_path / ".env").write_text("KEY=from-dotenv\n", encoding="utf-8")
 
@@ -520,6 +523,10 @@ def test_provider_client_streaming_sse_aggregates_openai_chat(tmp_path, monkeypa
     assert response.provider_meta["bytes_received"] > 0
 
 
+def test_provider_limits_streaming_enabled_by_default() -> None:
+    assert ProviderLimits().streaming_enabled is True
+
+
 def test_stream_response_payload_returns_responses_output_text(monkeypatch) -> None:
     cfg = ProviderConfig(
         name="responses",
@@ -561,6 +568,41 @@ def test_stream_response_payload_returns_responses_output_text(monkeypatch) -> N
     assert payload["output_text"] == "[1] 你好"
     assert meta["streaming"] is True
     assert meta["http_version"] == "HTTP/2"
+
+
+def test_stream_response_payload_wraps_http_error(monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+    )
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            request = httpx.Request("POST", "https://example.com/v1/responses")
+            self.response = httpx.Response(503, content=b"busy", request=request)
+            return self.response
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def stream(self, method, url, json, headers):
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+
+    with pytest.raises(ProviderTransportError) as excinfo:
+        _stream_response_payload(cfg, "https://example.com/v1/responses", {"model": "m1"}, {}, "POST")
+
+    assert excinfo.value.error_type == "service_unavailable"
+    assert excinfo.value.status_code == 503
+    assert "busy" in str(excinfo.value)
 
 
 def test_stream_response_payload_uses_responses_done_text_without_duplicate_delta(monkeypatch) -> None:
