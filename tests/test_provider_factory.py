@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.error import HTTPError
+
 from transvortex.app.models import (
     AuthConfig,
     CapabilityConfig,
@@ -16,6 +18,7 @@ from transvortex.providers.factory import (
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
+    classify_error,
     response_shape_summary,
 )
 
@@ -71,6 +74,12 @@ def test_request_json_adds_product_headers(monkeypatch) -> None:
     assert captured["headers"]["User-agent"] == "TransVortex/0.1.0"
     assert "Content-type" not in captured["headers"]
     assert captured["timeout"] == 30
+
+
+def test_classify_error_treats_gateway_timeout_as_retryable_provider_error() -> None:
+    exc = HTTPError("https://example.com/v1/chat/completions", 504, "Gateway Timeout", hdrs=None, fp=None)
+
+    assert classify_error(exc) == "gateway_timeout"
 
 
 def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) -> None:

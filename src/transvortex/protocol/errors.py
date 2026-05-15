@@ -115,6 +115,33 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             hint_zh="没有解析到可用字幕片段，请检查输入 SRT 或 segments 文件。",
             retryable=False,
         )
+    if "gateway_timeout" in lowered or "http error 504" in lowered or "gateway timeout" in lowered:
+        return error_info(
+            code="provider_gateway_timeout",
+            error_type="provider_timeout",
+            stage=stage,
+            message=message,
+            hint_zh="Provider 网关超时，通常是网络、模型排队或请求过大导致。可以重试，或调低 chunk/context/reasoning。",
+            retryable=True,
+        )
+    if "provider_timeout" in lowered or "timed out" in lowered:
+        return error_info(
+            code="provider_timeout",
+            error_type="provider_timeout",
+            stage=stage,
+            message=message,
+            hint_zh="Provider 请求超时，可以重试，或调低 chunk/context/reasoning。",
+            retryable=True,
+        )
+    if any(marker in lowered for marker in ("bad_gateway", "service_unavailable", "provider_server_error")):
+        return error_info(
+            code="provider_retryable_http_error",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="Provider 服务端或网关临时失败，可以重试。",
+            retryable=True,
+        )
     if "all translation routes failed" in lowered:
         return error_info(
             code="translation_failed",

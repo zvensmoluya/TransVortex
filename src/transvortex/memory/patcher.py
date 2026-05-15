@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest
 from ..prompts import FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
@@ -12,6 +12,18 @@ from .merger import patch_from_payload
 
 
 MEMORY_PATCH_SYSTEM_PROMPT = FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
 
 
 def _json_from_text(text: str) -> dict[str, Any]:
@@ -61,16 +73,26 @@ def generate_memory_patch(
     *,
     source_lang: str,
     target_lang: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[MemoryPatch | None, dict[str, Any] | None]:
     route_candidates = [config.routing.primary] + list(config.routing.fallback)
     errors: list[dict[str, Any]] = []
-    for route in route_candidates:
+    for attempt, route in enumerate(route_candidates, start=1):
         provider = config.providers.get(route.provider)
         if not provider:
             errors.append({"provider": route.provider, "model": route.model, "error_type": "bad_schema", "message": "provider not found"})
             continue
         client = build_provider_client(provider)
         try:
+            _notify_progress(
+                progress_callback,
+                mode="memory_patch",
+                chunk_ids=[chunk.chunk_id for chunk in chunks],
+                provider=route.provider,
+                model=route.model,
+                attempt=attempt,
+                max_attempts=len(route_candidates),
+            )
             req = NormalizedRequest(
                 model=route.model,
                 lines=[],

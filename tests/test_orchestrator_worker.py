@@ -323,6 +323,95 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
     assert all(not row["issues"] for row in rows)
 
 
+def test_status_reports_translation_attempt_detail_and_resume_clears_checkpoint_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "segments.jsonl"
+    input_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": 1, "start": 0, "end": 1, "text_src": "Hello"}),
+                json.dumps({"id": 2, "start": 1, "end": 2, "text_src": "World"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": []})
+
+    call_count = {"value": 0}
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None, progress_callback=None):
+        already_done = already_done or set()
+        for chunk in chunks:
+            if chunk.chunk_id in already_done:
+                continue
+            call_count["value"] += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "mode": "translate",
+                        "chunk_id": chunk.chunk_id,
+                        "provider": "p1",
+                        "model": "m1",
+                        "attempt": 1,
+                        "max_attempts": 3,
+                        "memory_entries": 0,
+                    }
+                )
+            if call_count["value"] == 1:
+                raise RuntimeError("All translation routes failed: [{'error_type': 'gateway_timeout'}]")
+            yield {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "ok"} for seg_id in chunk.segment_ids],
+                "errors": [],
+            }
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+
+    try:
+        run_pipeline(
+            root_dir=root,
+            input_file=input_file,
+            source_lang="en",
+            target_lang="zh-CN",
+            input_type="segments_translate",
+            cli_overrides={"translation_chunk_lines": 1},
+        )
+    except Exception:
+        pass
+    else:
+        raise AssertionError("expected first translation attempt to fail")
+
+    store = TaskStore(root / "artifacts")
+    task = store.list_tasks()[0]
+    checkpoint_file = store.checkpoint_file(task.task_id)
+    checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    assert checkpoint["error_info"]["type"] == "provider_timeout"
+    assert checkpoint["translate_current_chunk"] == "c00000"
+    status = task_status_json(store.load_task(task.task_id), store=store)
+    assert status["progress_detail"]["translate_current_chunk"] == "c00000"
+    assert status["progress_detail"]["translate_current_attempt"] == 1
+    events = store.read_events(task.task_id)
+    assert any(event["type"] == "provider_attempt" for event in events)
+
+    call_count["value"] = 1
+    resume_pipeline(root_dir=root, task_id=task.task_id, cli_overrides={"translation_chunk_lines": 1})
+
+    final_checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    assert "error" not in final_checkpoint
+    assert "error_info" not in final_checkpoint
+    assert final_checkpoint["status"] == "DONE"
+
+
 def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)

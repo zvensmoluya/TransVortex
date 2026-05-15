@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment
 from ..memory.injector import build_memory_prompt
@@ -19,6 +21,54 @@ from .translation_validation import (
     validate_translation_response,
     validation_to_json,
 )
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
+
+
+def _translate_chunk_accepts_progress_callback() -> bool:
+    try:
+        return "progress_callback" in inspect.signature(translate_chunk).parameters
+    except Exception:
+        return False
+
+
+def _submit_translate_chunk(
+    pool: concurrent.futures.ThreadPoolExecutor,
+    config: AppConfig,
+    chunk: Chunk,
+    source_lang: str,
+    target_lang: str,
+    memory_prompt: str,
+    progress_callback: ProgressCallback | None,
+):
+    if _translate_chunk_accepts_progress_callback():
+        return pool.submit(
+            translate_chunk,
+            config,
+            chunk,
+            source_lang,
+            target_lang,
+            memory_prompt=memory_prompt,
+            progress_callback=progress_callback,
+        )
+    return pool.submit(translate_chunk, config, chunk, source_lang, target_lang, memory_prompt)
+
+
+def _generate_memory_patch_accepts_progress_callback() -> bool:
+    try:
+        return "progress_callback" in inspect.signature(generate_memory_patch).parameters
+    except Exception:
+        return False
 
 
 def _chunk_source_by_id(chunk: Chunk) -> dict[int, str]:
@@ -104,6 +154,7 @@ def _repair_row(
     issue: TranslationValidationIssue,
     current_rows: list[ParsedTranslationRow],
     memory_prompt: str = "",
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[ParsedTranslationRow, list[dict]]:
     provider = config.providers[provider_name]
     client = build_provider_client(provider)
@@ -119,6 +170,16 @@ def _repair_row(
     max_attempts = max(1, config.pipeline.translation.repair.max_attempts)
     for attempt in range(max_attempts):
         try:
+            _notify_progress(
+                progress_callback,
+                mode="repair",
+                chunk_id=chunk.chunk_id,
+                segment_id=seg_id,
+                provider=provider_name,
+                model=model,
+                attempt=attempt + 1,
+                max_attempts=max_attempts,
+            )
             req = NormalizedRequest(
                 model=model,
                 lines=repair_chunk.lines,
@@ -178,6 +239,7 @@ def _repair_rows(
     model: str,
     validation: TranslationValidationResult,
     memory_prompt: str = "",
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[TranslationValidationResult, list[dict], list[dict]]:
     if not config.pipeline.translation.repair.enabled or not validation.repairable_errors:
         return validation, [], []
@@ -195,6 +257,7 @@ def _repair_rows(
             issue=issue,
             current_rows=rows,
             memory_prompt=memory_prompt,
+            progress_callback=progress_callback,
         )
         repair_errors.extend(errors)
         rows = _replace_row(rows, repaired)
@@ -225,6 +288,7 @@ def translate_chunk(
     source_lang: str,
     target_lang: str,
     memory_prompt: str = "",
+    progress_callback: ProgressCallback | None = None,
 ) -> dict:
     route_candidates = [config.routing.primary] + list(config.routing.fallback)
     error_messages: list[dict] = []
@@ -244,6 +308,17 @@ def translate_chunk(
         retries = max(1, provider.limits.retry)
         for attempt in range(retries):
             try:
+                _notify_progress(
+                    progress_callback,
+                    mode="translate",
+                    chunk_id=chunk.chunk_id,
+                    segment_ids=chunk.segment_ids,
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt + 1,
+                    max_attempts=retries,
+                    memory_entries=memory_prompt.count(" => "),
+                )
                 req = _base_request(
                     config=config,
                     chunk=chunk,
@@ -270,6 +345,7 @@ def translate_chunk(
                     model=route.model,
                     validation=validation,
                     memory_prompt=memory_prompt,
+                    progress_callback=progress_callback,
                 )
                 error_messages.extend(repair_errors)
                 if validation.errors:
@@ -307,6 +383,7 @@ def iter_translate_all_chunks(
     target_lang: str,
     already_done: set[str] | None = None,
     memory_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ):
     already_done = already_done or set()
     todo = [chunk for chunk in chunks if chunk.chunk_id not in already_done]
@@ -319,12 +396,13 @@ def iter_translate_all_chunks(
             source_lang=source_lang,
             target_lang=target_lang,
             memory_dir=memory_dir,
+            progress_callback=progress_callback,
         )
         return
     max_workers = max(1, config.pipeline.default_concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(translate_chunk, config, chunk, source_lang, target_lang): chunk
+            _submit_translate_chunk(pool, config, chunk, source_lang, target_lang, "", progress_callback): chunk
             for chunk in todo
         }
         for future in concurrent.futures.as_completed(futures):
@@ -338,6 +416,7 @@ def _iter_translate_window(
     source_lang: str,
     target_lang: str,
     memory_store: MemoryStore,
+    progress_callback: ProgressCallback | None = None,
 ):
     document = memory_store.load_effective()
     chunk_memory_prompts = {}
@@ -351,13 +430,14 @@ def _iter_translate_window(
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(
-                    translate_chunk,
+                _submit_translate_chunk(
+                    pool,
                     config,
                     chunk,
                     source_lang,
                     target_lang,
                     chunk_memory_prompts.get(chunk.chunk_id, ""),
+                    progress_callback,
                 ): chunk
                 for chunk in window
             }
@@ -373,6 +453,7 @@ def _iter_translate_window(
             source_lang=source_lang,
             target_lang=target_lang,
             memory_store=memory_store,
+            progress_callback=progress_callback,
         )
 
 
@@ -384,6 +465,7 @@ def _update_memory_after_window(
     source_lang: str,
     target_lang: str,
     memory_store: MemoryStore,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     if not results:
         return
@@ -392,13 +474,10 @@ def _update_memory_after_window(
         successful_window = [chunk for chunk in window if chunk.chunk_id in successful_chunk_ids]
         if not successful_window:
             return
-        patch, payload = generate_memory_patch(
-            config,
-            successful_window,
-            results,
-            source_lang=source_lang,
-            target_lang=target_lang,
-        )
+        patch_kwargs: dict[str, Any] = {"source_lang": source_lang, "target_lang": target_lang}
+        if _generate_memory_patch_accepts_progress_callback():
+            patch_kwargs["progress_callback"] = progress_callback
+        patch, payload = generate_memory_patch(config, successful_window, results, **patch_kwargs)
         if payload is not None:
             memory_store.append_patch(payload)
         if patch is not None:
@@ -420,6 +499,7 @@ def _iter_translate_all_chunks_with_memory(
     source_lang: str,
     target_lang: str,
     memory_dir: Path,
+    progress_callback: ProgressCallback | None = None,
 ):
     memory_store = MemoryStore(memory_dir)
     memory_store.ensure_runtime_document()
@@ -435,6 +515,7 @@ def _iter_translate_all_chunks_with_memory(
             source_lang=source_lang,
             target_lang=target_lang,
             memory_store=memory_store,
+            progress_callback=progress_callback,
         ):
             yield result
         snapshot_index += 1
@@ -448,6 +529,7 @@ def translate_all_chunks(
     target_lang: str,
     already_done: set[str] | None = None,
     memory_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
     return list(
         iter_translate_all_chunks(
@@ -457,5 +539,6 @@ def translate_all_chunks(
             target_lang=target_lang,
             already_done=already_done,
             memory_dir=memory_dir,
+            progress_callback=progress_callback,
         )
     )

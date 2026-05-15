@@ -59,6 +59,49 @@ routing:
     assert cfg.providers["p1"].capabilities.max_batch_lines == 200
 
 
+def test_cli_overrides_provider_limits_and_memory_patch(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+    limits:
+      timeout_seconds: 30
+      retry: 3
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  enabled: true
+  patch:
+    enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "provider_timeout_seconds": 90,
+            "provider_retry": 5,
+            "memory_patch_enabled": "false",
+        },
+    )
+
+    assert cfg.pipeline.timeout_seconds == 90
+    assert cfg.pipeline.retry == 5
+    assert cfg.providers["p1"].limits.timeout_seconds == 90
+    assert cfg.providers["p1"].limits.retry == 5
+    assert cfg.pipeline.memory.patch.enabled is False
+
+
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

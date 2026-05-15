@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -91,7 +92,110 @@ def _stage_progress(stage: str) -> float:
 
 def _emit_stage(store: TaskStore, task_id: str, stage: str, message: str) -> None:
     store.update_task_status(task_id, stage, clear_error=True)
+    try:
+        checkpoint = store.load_checkpoint(task_id)
+        _clear_checkpoint_error(checkpoint)
+        checkpoint["status"] = stage
+        store.save_checkpoint(task_id, checkpoint)
+    except Exception:
+        pass
     store.append_event(task_id, "stage", stage=stage, message=message, progress=_stage_progress(stage))
+
+
+def _clear_checkpoint_error(checkpoint: dict[str, Any]) -> None:
+    checkpoint.pop("error", None)
+    checkpoint.pop("error_info", None)
+
+
+def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "translate_total_chunks",
+        "translate_done_count",
+        "translate_current_chunk",
+        "translate_current_chunk_ids",
+        "translate_current_segment_id",
+        "translate_current_attempt",
+        "translate_current_max_attempts",
+        "translate_current_provider",
+        "translate_current_model",
+        "translate_current_mode",
+        "translate_attempt_started_at",
+        "translate_memory_entries",
+    ]
+    detail = {key: checkpoint[key] for key in keys if key in checkpoint}
+    if "translate_done_chunks" in checkpoint:
+        detail["translate_done_chunks"] = checkpoint.get("translate_done_chunks") or []
+    return detail
+
+
+def _checkpoint_status_payload(store: TaskStore, task_id: str) -> dict[str, Any]:
+    try:
+        checkpoint = store.load_checkpoint(task_id)
+    except Exception:
+        return {}
+    payload: dict[str, Any] = {
+        "checkpoint_status": checkpoint.get("status"),
+        "checkpoint_updated_at": checkpoint.get("updated_at"),
+    }
+    progress_detail = _progress_detail_from_checkpoint(checkpoint)
+    if progress_detail:
+        payload["progress_detail"] = progress_detail
+    return payload
+
+
+def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: dict[str, Any]):
+    lock = threading.Lock()
+
+    def handle(event: dict[str, Any]) -> None:
+        with lock:
+            mode = str(event.get("mode") or "translate")
+            now = utc_now_iso()
+            checkpoint["status"] = "TRANSLATE"
+            checkpoint["translate_current_mode"] = mode
+            checkpoint["translate_current_attempt"] = int(event.get("attempt") or 1)
+            checkpoint["translate_current_max_attempts"] = int(event.get("max_attempts") or 1)
+            checkpoint["translate_attempt_started_at"] = now
+            if event.get("provider") is not None:
+                checkpoint["translate_current_provider"] = str(event.get("provider"))
+            if event.get("model") is not None:
+                checkpoint["translate_current_model"] = str(event.get("model"))
+            if event.get("chunk_id") is not None:
+                checkpoint["translate_current_chunk"] = str(event.get("chunk_id"))
+                checkpoint.pop("translate_current_chunk_ids", None)
+            if event.get("chunk_ids") is not None:
+                checkpoint["translate_current_chunk_ids"] = [str(item) for item in event.get("chunk_ids") or []]
+                checkpoint.pop("translate_current_chunk", None)
+            if event.get("segment_id") is not None:
+                checkpoint["translate_current_segment_id"] = int(event.get("segment_id"))
+            else:
+                checkpoint.pop("translate_current_segment_id", None)
+            if event.get("memory_entries") is not None:
+                checkpoint["translate_memory_entries"] = int(event.get("memory_entries") or 0)
+            store.save_checkpoint(task_id, checkpoint)
+            label = "Memory patch request" if mode == "memory_patch" else f"Translation {mode} request"
+            store.append_event(
+                task_id,
+                "provider_attempt",
+                stage="TRANSLATE",
+                message=label,
+                details={
+                    key: value
+                    for key, value in {
+                        "mode": mode,
+                        "chunk_id": event.get("chunk_id"),
+                        "chunk_ids": event.get("chunk_ids"),
+                        "segment_id": event.get("segment_id"),
+                        "provider": event.get("provider"),
+                        "model": event.get("model"),
+                        "attempt": event.get("attempt"),
+                        "max_attempts": event.get("max_attempts"),
+                        "memory_entries": event.get("memory_entries"),
+                    }.items()
+                    if value is not None
+                },
+            )
+
+    return handle
 
 
 def _check_cancel(store: TaskStore, task_id: str) -> None:
@@ -214,8 +318,8 @@ def _preflight(
             raise RuntimeError(f"Provider preflight failed: {'; '.join(failures)}")
 
 
-def _status_json(task: TaskRecord) -> dict[str, Any]:
-    return {
+def _status_json(task: TaskRecord, store: TaskStore | None = None) -> dict[str, Any]:
+    payload = {
         "task_id": task.task_id,
         "status": task.status,
         "input_file": task.input_file,
@@ -229,6 +333,9 @@ def _status_json(task: TaskRecord) -> dict[str, Any]:
         "error": None if task.status == "DONE" else task.error,
         "error_info": None if task.status == "DONE" else task.error_info,
     }
+    if store is not None:
+        payload.update(_checkpoint_status_payload(store, task.task_id))
+    return payload
 
 
 def _create_task(
@@ -439,6 +546,15 @@ def _translation_row_for_artifact(row: dict) -> dict:
     }
 
 
+def _translate_all_chunks_accepts_progress_callback() -> bool:
+    try:
+        import inspect
+
+        return "progress_callback" in inspect.signature(translate_all_chunks).parameters
+    except Exception:
+        return False
+
+
 def _iter_translation_results(
     config: AppConfig,
     chunks,
@@ -447,8 +563,10 @@ def _iter_translation_results(
     target_lang: str,
     already_done: set[str],
     memory_dir: Path | None = None,
+    progress_callback=None,
 ):
     if translate_all_chunks.__module__ != "transvortex.core.translate":
+        extra = {"progress_callback": progress_callback} if _translate_all_chunks_accepts_progress_callback() else {}
         if memory_dir is not None:
             yield from translate_all_chunks(
                 config,
@@ -457,6 +575,7 @@ def _iter_translation_results(
                 target_lang=target_lang,
                 already_done=already_done,
                 memory_dir=memory_dir,
+                **extra,
             )
         else:
             yield from translate_all_chunks(
@@ -465,6 +584,7 @@ def _iter_translation_results(
                 source_lang=source_lang,
                 target_lang=target_lang,
                 already_done=already_done,
+                **extra,
             )
         return
     yield from iter_translate_all_chunks(
@@ -474,6 +594,7 @@ def _iter_translation_results(
         target_lang=target_lang,
         already_done=already_done,
         memory_dir=memory_dir,
+        progress_callback=progress_callback,
     )
 
 
@@ -639,6 +760,7 @@ def _execute_task(
     _ensure_artifact_dirs(paths)
 
     checkpoint = store.load_checkpoint(task_id)
+    _clear_checkpoint_error(checkpoint)
     try:
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "PRECHECK", "Running preflight checks")
@@ -923,6 +1045,8 @@ def _execute_task(
         )
         write_json(paths["chunks"] / "chunks.json", chunks)
         checkpoint["status"] = "SEGMENT"
+        checkpoint["translate_total_chunks"] = len(chunks)
+        checkpoint["translate_done_count"] = len(checkpoint.get("translate_done_chunks", []))
         store.save_checkpoint(task_id, checkpoint)
 
         _check_cancel(store, task_id)
@@ -969,6 +1093,11 @@ def _execute_task(
             store=store,
             task_id=task_id,
         )
+        checkpoint["translate_total_chunks"] = len(chunks)
+        checkpoint["translate_done_chunks"] = sorted(translated_done)
+        checkpoint["translate_done_count"] = len(translated_done)
+        store.save_checkpoint(task_id, checkpoint)
+        translation_progress = _translation_progress_callback(store, task_id, checkpoint)
         for row in _iter_translation_results(
             config,
             chunks,
@@ -976,6 +1105,7 @@ def _execute_task(
             target_lang=task.target_lang,
             already_done=translated_done,
             memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
+            progress_callback=translation_progress,
         ):
             _check_cancel(store, task_id)
             append_jsonl(translated_file, _translation_row_for_artifact(row))
@@ -984,7 +1114,17 @@ def _execute_task(
                 append_jsonl(repairs_file, repair)
             translated_done.add(row["chunk_id"])
             checkpoint["translate_done_chunks"] = sorted(translated_done)
+            checkpoint["translate_done_count"] = len(translated_done)
             checkpoint["status"] = "TRANSLATE"
+            checkpoint.pop("translate_current_chunk", None)
+            checkpoint.pop("translate_current_chunk_ids", None)
+            checkpoint.pop("translate_current_segment_id", None)
+            checkpoint.pop("translate_current_attempt", None)
+            checkpoint.pop("translate_current_max_attempts", None)
+            checkpoint.pop("translate_current_provider", None)
+            checkpoint.pop("translate_current_model", None)
+            checkpoint.pop("translate_current_mode", None)
+            checkpoint.pop("translate_attempt_started_at", None)
             store.save_checkpoint(task_id, checkpoint)
             store.append_event(
                 task_id,
@@ -1183,5 +1323,5 @@ def _execute_task(
         raise PipelineTaskError(task_id, err) from exc
 
 
-def task_status_json(task: TaskRecord) -> dict[str, Any]:
-    return _status_json(task)
+def task_status_json(task: TaskRecord, store: TaskStore | None = None) -> dict[str, Any]:
+    return _status_json(task, store=store)

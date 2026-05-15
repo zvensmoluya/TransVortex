@@ -186,6 +186,16 @@ def classify_error(exc: Exception) -> str:
             return "auth_error"
         if exc.code in {429}:
             return "rate_limit"
+        if exc.code == 408:
+            return "provider_timeout"
+        if exc.code == 502:
+            return "bad_gateway"
+        if exc.code == 503:
+            return "service_unavailable"
+        if exc.code == 504:
+            return "gateway_timeout"
+        if 500 <= exc.code <= 599:
+            return "provider_server_error"
         return "bad_schema"
     if isinstance(exc, URLError):
         return "timeout" if "timed out" in text else "network_error"

@@ -550,6 +550,10 @@ def load_app_config(
                 value,
                 pipeline.translation.asr_uncertainty_hints.enabled,
             )
+        elif key == "provider_timeout_seconds":
+            pipeline.timeout_seconds = _to_int(value, pipeline.timeout_seconds)
+        elif key == "provider_retry":
+            pipeline.retry = _to_int(value, pipeline.retry)
         elif key == "asr_device":
             pipeline.asr_local.device = _to_str(value, pipeline.asr_local.device)
         elif key == "asr_model_size":
@@ -591,6 +595,8 @@ def load_app_config(
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
         elif key == "memory_enabled":
             pipeline.memory.enabled = _to_bool(value, pipeline.memory.enabled)
+        elif key == "memory_patch_enabled":
+            pipeline.memory.patch.enabled = _to_bool(value, pipeline.memory.patch.enabled)
         elif key == "memory_presets":
             pipeline.memory.presets = _parse_memory_presets(value)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
@@ -613,8 +619,11 @@ def load_app_config(
         limits_raw = row.get("limits", {})
         limits = ProviderLimits(
             concurrency=_to_int(limits_raw.get("concurrency"), pipeline.default_concurrency),
-            timeout_seconds=_to_int(limits_raw.get("timeout_seconds"), pipeline.timeout_seconds),
-            retry=_to_int(limits_raw.get("retry"), pipeline.retry),
+            timeout_seconds=_to_int(
+                cli_overrides.get("provider_timeout_seconds", limits_raw.get("timeout_seconds")),
+                pipeline.timeout_seconds,
+            ),
+            retry=_to_int(cli_overrides.get("provider_retry", limits_raw.get("retry")), pipeline.retry),
         )
         endpoint_default = _default_endpoint_for_mode(compat_mode)
         endpoint_raw = row.get("endpoint", {})

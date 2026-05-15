@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import subprocess
 import sys
 import time
@@ -78,10 +79,13 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "translation_context_before_lines": getattr(args, "translation_context_before_lines", None),
         "translation_context_after_lines": getattr(args, "translation_context_after_lines", None),
         "translation_repair_enabled": getattr(args, "translation_repair_enabled", None),
+        "provider_timeout_seconds": getattr(args, "provider_timeout_seconds", None),
+        "provider_retry": getattr(args, "provider_retry", None),
         "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
         "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
         "memory_enabled": getattr(args, "memory_enabled", None),
+        "memory_patch_enabled": getattr(args, "memory_patch_enabled", None),
         "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
 
@@ -110,11 +114,19 @@ _CURRENT_ROOT: Path | None = None
 
 
 def _print_json(data: object) -> None:
-    print(json.dumps(redact(data, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2), flush=True)
+    payload = redact(data, root_dir=_CURRENT_ROOT)
+    try:
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+    except UnicodeEncodeError:
+        print(json.dumps(payload, ensure_ascii=True, indent=2), flush=True)
 
 
 def _print_jsonl_event(event: dict[str, Any]) -> None:
-    print(json.dumps(redact(event, root_dir=_CURRENT_ROOT), ensure_ascii=False), flush=True)
+    payload = redact(event, root_dir=_CURRENT_ROOT)
+    try:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    except UnicodeEncodeError:
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def _print_jsonl_error(task_id: str | None, err: dict[str, Any]) -> None:
@@ -167,10 +179,13 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--translation-context-before-lines", type=int, default=None)
     subparser.add_argument("--translation-context-after-lines", type=int, default=None)
     subparser.add_argument("--translation-repair-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--provider-timeout-seconds", type=int, default=None)
+    subparser.add_argument("--provider-retry", type=int, default=None)
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--memory-patch-enabled", choices=["true", "false"], default=None)
     subparser.add_argument(
         "--memory-preset",
         default=None,
@@ -184,7 +199,8 @@ def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
 
 
 def _task_payload(task, artifacts_dir: Path | None = None) -> dict[str, Any]:
-    payload = task_status_json(task)
+    store = TaskStore(artifacts_dir) if artifacts_dir is not None else None
+    payload = task_status_json(task, store=store)
     if artifacts_dir is not None:
         payload["task_dir"] = str(artifacts_dir / task.task_id)
     return payload
@@ -334,10 +350,13 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--translation-context-before-lines", getattr(ns, "translation_context_before_lines", None)),
         ("--translation-context-after-lines", getattr(ns, "translation_context_after_lines", None)),
         ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
+        ("--provider-timeout-seconds", getattr(ns, "provider_timeout_seconds", None)),
+        ("--provider-retry", getattr(ns, "provider_retry", None)),
         ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
         ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
         ("--memory-enabled", getattr(ns, "memory_enabled", None)),
+        ("--memory-patch-enabled", getattr(ns, "memory_patch_enabled", None)),
         ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]
     for flag, value in mapping:
@@ -357,6 +376,9 @@ def _spawn_detached_worker(
     stdout = stdout_path.open("ab")
     stderr = stderr_path.open("ab")
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
     try:
         proc = subprocess.Popen(
             [sys.executable, "-m", "transvortex.cli", "--root", str(root), *worker_args],
@@ -366,6 +388,7 @@ def _spawn_detached_worker(
             stdin=subprocess.DEVNULL,
             close_fds=False,
             creationflags=creationflags,
+            env=env,
         )
     finally:
         stdout.close()
@@ -794,7 +817,7 @@ def main() -> None:
         config = load_app_config(root_dir=root, providers_file=providers_file)
         store = TaskStore(config.pipeline.artifacts_dir)
         task = store.request_cancel(args.task_id)
-        payload = task_status_json(task)
+        payload = task_status_json(task, store=store)
         if args.json:
             _print_json(payload)
         else:

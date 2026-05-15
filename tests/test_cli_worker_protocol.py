@@ -275,9 +275,60 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
     assert "_worker" in spawned["cmd"]
     assert "--providers-file" in spawned["cmd"]
     assert "--provider" in spawned["cmd"]
+    assert spawned["kwargs"]["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert spawned["kwargs"]["env"]["PYTHONUTF8"] == "1"
     store = TaskStore(tmp_path / "artifacts")
     task = store.load_task(payload["task_id"])
     assert task.status == "QUEUED"
+
+
+def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    spawned = {}
+
+    class FakePopen:
+        pid = 4321
+
+        def __init__(self, cmd, **kwargs):
+            spawned["cmd"] = cmd
+            spawned["kwargs"] = kwargs
+
+    monkeypatch.setattr("transvortex.cli.entry.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "translate",
+            "--segments",
+            str(tmp_path / "segments.jsonl"),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--provider-timeout-seconds",
+            "90",
+            "--provider-retry",
+            "5",
+            "--memory-patch-enabled",
+            "false",
+            "--detach",
+            "--json",
+        ],
+    )
+    (tmp_path / "segments.jsonl").write_text('{"id":1,"start":0,"end":1,"text_src":"hello"}\n', encoding="utf-8")
+
+    main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert "--provider-timeout-seconds" in spawned["cmd"]
+    assert "90" in spawned["cmd"]
+    assert "--provider-retry" in spawned["cmd"]
+    assert "5" in spawned["cmd"]
+    assert "--memory-patch-enabled" in spawned["cmd"]
+    assert "false" in spawned["cmd"]
 
 
 def test_detach_and_stream_events_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
