@@ -61,6 +61,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_device": args.asr_device,
         "asr_model_size": args.asr_model_size,
         "asr_compute_type": args.asr_compute_type,
+        "asr_max_initial_timestamp": getattr(args, "asr_max_initial_timestamp", None),
         "asr_cloud_base_url": getattr(args, "asr_cloud_base_url", None),
         "asr_cloud_endpoint": getattr(args, "asr_cloud_endpoint", None),
         "asr_cloud_model": args.asr_model,
@@ -168,6 +169,7 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-device", default=None)
     subparser.add_argument("--asr-model-size", default=None)
     subparser.add_argument("--asr-compute-type", default=None)
+    subparser.add_argument("--asr-max-initial-timestamp", type=float, default=None)
     subparser.add_argument("--asr-cloud-base-url", default=None)
     subparser.add_argument("--asr-cloud-endpoint", default=None)
     subparser.add_argument("--asr-model", default=None, help="Cloud ASR model override")
@@ -346,6 +348,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-device", getattr(ns, "asr_device", None)),
         ("--asr-model-size", getattr(ns, "asr_model_size", None)),
         ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
+        ("--asr-max-initial-timestamp", getattr(ns, "asr_max_initial_timestamp", None)),
         ("--asr-cloud-base-url", getattr(ns, "asr_cloud_base_url", None)),
         ("--asr-cloud-endpoint", getattr(ns, "asr_cloud_endpoint", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),

@@ -22,6 +22,7 @@ class AsrEngine:
         compute_type: str,
         mode: str = "local",
         source_lang: str | None = None,
+        local_max_initial_timestamp: float = 30.0,
         cloud_base_url: str = "https://api.openai.com",
         cloud_endpoint: str = "/v1/audio/transcriptions",
         cloud_model: str = "whisper-1",
@@ -35,6 +36,7 @@ class AsrEngine:
         self.compute_type = compute_type
         self.mode = mode
         self.source_lang = source_lang
+        self.local_max_initial_timestamp = max(float(local_max_initial_timestamp), 0.0)
         self.cloud_base_url = cloud_base_url.rstrip("/")
         self.cloud_endpoint = cloud_endpoint
         self.cloud_model = cloud_model
@@ -68,7 +70,12 @@ class AsrEngine:
 
     def _transcribe_segment_local(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
         model = self._ensure_model()
-        segments, _info = model.transcribe(str(audio_path), vad_filter=False)
+        transcribe_kwargs: dict[str, Any] = {"vad_filter": False}
+        language = _normalize_whisper_language(self.source_lang)
+        if language:
+            transcribe_kwargs["language"] = language
+        transcribe_kwargs["max_initial_timestamp"] = self.local_max_initial_timestamp
+        segments, _info = model.transcribe(str(audio_path), **transcribe_kwargs)
         rows = []
         for item in segments:
             rows.append(

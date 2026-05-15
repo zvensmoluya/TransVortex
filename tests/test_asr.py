@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from transvortex.core.asr import AsrEngine, _build_url_and_auth_headers, _normalize_whisper_language
 from transvortex.app.models import AuthConfig, CapabilityConfig, EndpointConfig, MappingConfig, ProviderConfig, ProviderLimits
@@ -68,3 +69,35 @@ def test_cloud_asr_request_uses_product_headers(tmp_path, monkeypatch) -> None:
     assert captured["headers"]["Content-type"].startswith("multipart/form-data; boundary=")
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert captured["timeout"] == 12
+
+
+def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    captured = {}
+
+    class FakeModel:
+        def transcribe(self, path, **kwargs):
+            captured["path"] = path
+            captured["kwargs"] = kwargs
+            return [SimpleNamespace(start=3.2, end=4.4, text="やったわ", avg_logprob=-0.1)], object()
+
+    engine = AsrEngine(
+        model_size="small",
+        device="cpu",
+        compute_type="int8",
+        mode="local",
+        source_lang="ja-JP",
+        local_max_initial_timestamp=30.0,
+    )
+    engine._model = FakeModel()
+
+    rows = engine.transcribe_segment(audio, 10.0)
+
+    assert captured["path"] == str(audio)
+    assert captured["kwargs"] == {
+        "vad_filter": False,
+        "language": "ja",
+        "max_initial_timestamp": 30.0,
+    }
+    assert rows == [{"start": 13.2, "end": 14.4, "text": "やったわ", "confidence": -0.1}]

@@ -171,6 +171,7 @@ asr:
     device: auto
     model_size: small
     compute_type: int8
+    max_initial_timestamp: 30.0
   chunking:
     mode: auto           # auto | fixed | none
     window_seconds: 300
@@ -188,10 +189,12 @@ asr:
 
 说明：
 - `auto` ASR 会对短音频使用单窗口；长音频使用 sliding window，并在合并时只采信 trusted region。
+- 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
+- `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。
 - `mode: cloud` 使用独立 ASR 云端配置，不复用翻译 provider routing；当前适配的是 OpenAI Whisper-style multipart transcription。
 - `asr.cloud.model` 是云 ASR 模型入口；`--asr-model` 只覆盖这个字段，不影响翻译模型。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
-- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds` 覆盖。
+- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds` 覆盖。
 
 ## 6. 零 Token 协议预检
 

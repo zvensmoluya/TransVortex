@@ -1031,6 +1031,7 @@ def _execute_task(
                     compute_type=config.pipeline.asr_local.compute_type,
                     mode=config.pipeline.asr_mode,
                     source_lang=task.source_lang,
+                    local_max_initial_timestamp=config.pipeline.asr_local.max_initial_timestamp,
                     cloud_base_url=config.pipeline.asr_cloud.base_url,
                     cloud_endpoint=config.pipeline.asr_cloud.endpoint,
                     cloud_model=config.pipeline.asr_cloud.model,

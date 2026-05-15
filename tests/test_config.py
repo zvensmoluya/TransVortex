@@ -868,6 +868,7 @@ routing:
             "asr_device": "cuda",
             "asr_model_size": "medium",
             "asr_compute_type": "float16",
+            "asr_max_initial_timestamp": 8.5,
             "asr_cloud_model": "whisper-large",
             "asr_cloud_base_url": "https://asr.example.com",
             "asr_cloud_endpoint": "/v1/audio/transcriptions",
@@ -885,6 +886,7 @@ routing:
     assert cfg.pipeline.asr_local.device == "cuda"
     assert cfg.pipeline.asr_local.model_size == "medium"
     assert cfg.pipeline.asr_local.compute_type == "float16"
+    assert cfg.pipeline.asr_local.max_initial_timestamp == 8.5
     assert cfg.pipeline.asr_cloud.model == "whisper-large"
     assert cfg.pipeline.asr_cloud.base_url == "https://asr.example.com"
     assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
@@ -917,6 +919,7 @@ routing:
     cfg = load_app_config(root_dir=tmp_path)
 
     assert cfg.pipeline.asr_local.device == "auto"
+    assert cfg.pipeline.asr_local.max_initial_timestamp == 30.0
     assert cfg.pipeline.asr_chunking.mode == "auto"
     assert cfg.pipeline.asr_chunking.window_seconds == 300
     assert cfg.pipeline.asr_chunking.overlap_seconds == 30

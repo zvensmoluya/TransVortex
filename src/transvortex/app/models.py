@@ -129,6 +129,7 @@ class AsrLocalConfig:
     model_size: str = "small"
     device: str = "auto"
     compute_type: str = "int8"
+    max_initial_timestamp: float = 30.0
 
 
 @dataclass

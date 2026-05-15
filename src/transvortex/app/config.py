@@ -508,6 +508,7 @@ def load_app_config(
             model_size=_to_str(asr_local_raw.get("model_size"), "small"),
             device=_to_str(asr_local_raw.get("device"), "auto"),
             compute_type=_to_str(asr_local_raw.get("compute_type"), "int8"),
+            max_initial_timestamp=_to_float(asr_local_raw.get("max_initial_timestamp"), 30.0),
         ),
         asr_cloud=AsrCloudConfig(
             base_url=_to_str(asr_cloud_raw.get("base_url"), "https://api.openai.com"),
@@ -578,6 +579,8 @@ def load_app_config(
             pipeline.asr_local.model_size = _to_str(value, pipeline.asr_local.model_size)
         elif key == "asr_compute_type":
             pipeline.asr_local.compute_type = _to_str(value, pipeline.asr_local.compute_type)
+        elif key == "asr_max_initial_timestamp":
+            pipeline.asr_local.max_initial_timestamp = _to_float(value, pipeline.asr_local.max_initial_timestamp)
         elif key == "asr_cloud_base_url":
             pipeline.asr_cloud.base_url = _to_str(value, pipeline.asr_cloud.base_url)
         elif key == "asr_cloud_endpoint":

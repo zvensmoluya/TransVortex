@@ -65,6 +65,7 @@ asr:
     model_size: small
     device: auto
     compute_type: int8
+    max_initial_timestamp: 30.0
   chunking:
     mode: auto
     window_seconds: 300
