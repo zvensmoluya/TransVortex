@@ -146,6 +146,61 @@ def test_payload_contains_memory_prompt_between_style_and_context() -> None:
     assert user_text.index("LOCKED GLOSSARY") < user_text.index("\n\nTRANSLATE_ONLY")
 
 
+def test_payload_omits_asr_uncertainty_hints_by_default() -> None:
+    cfg = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={}),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(
+        model="m1",
+        lines=["[2] malformed source"],
+        source_lang="ja",
+        target_lang="zh-CN",
+        asr_uncertain_ids=[2],
+    )
+
+    payload = _build_payload(cfg, req)
+    user_text = payload["messages"][1]["content"]
+
+    assert "ASR_UNCERTAIN_LINES" not in user_text
+    assert "internal risk hints only" not in user_text
+    assert user_text.index("TRANSLATE_ONLY") > 0
+
+
+def test_payload_contains_asr_uncertainty_hints_when_enabled() -> None:
+    cfg = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={}),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(
+        model="m1",
+        lines=["[2] malformed source"],
+        source_lang="ja",
+        target_lang="zh-CN",
+        asr_uncertain_ids=[2],
+        include_asr_uncertainty_hints=True,
+    )
+
+    payload = _build_payload(cfg, req)
+    user_text = payload["messages"][1]["content"]
+
+    assert "ASR_UNCERTAIN_LINES\n- 2" in user_text
+    assert "internal risk hints only" in user_text
+    assert user_text.index("ASR_UNCERTAIN_LINES") < user_text.index("\n\nTRANSLATE_ONLY")
+
+
 def test_openai_responses_payload_and_mapping() -> None:
     cfg = ProviderConfig(
         name="responses",

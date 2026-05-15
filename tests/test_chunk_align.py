@@ -57,6 +57,18 @@ def test_chunk_context_windows_do_not_enter_translate_only_lines() -> None:
     assert chunks[2].context_after == []
 
 
+def test_chunk_marks_asr_uncertain_lines_from_confidence_and_density() -> None:
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, text_src="stable line", confidence=-0.1),
+        Segment(id=2, start=1.0, end=2.0, text_src="very uncertain", confidence=-1.4),
+        Segment(id=3, start=2.0, end=2.2, text_src="too many source characters"),
+    ]
+
+    chunks = number_and_chunk_segments(segments, batch_size=3)
+
+    assert chunks[0].asr_uncertain_ids == [2, 3]
+
+
 def test_overlap_dedupe_reassigns_ids() -> None:
     segments = [
         Segment(id=10, start=0.0, end=1.0, text_src="Hello"),

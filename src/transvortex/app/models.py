@@ -103,6 +103,11 @@ class RepairConfig:
 
 
 @dataclass
+class AsrUncertaintyHintsConfig:
+    enabled: bool = False
+
+
+@dataclass
 class TranslationConfig:
     chunk_lines: int = 40
     context_before_lines: int = 20
@@ -112,6 +117,7 @@ class TranslationConfig:
     system_prompt: str = ""
     refusal_detection: RefusalDetectionConfig = field(default_factory=RefusalDetectionConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
+    asr_uncertainty_hints: AsrUncertaintyHintsConfig = field(default_factory=AsrUncertaintyHintsConfig)
 
 
 @dataclass
@@ -282,6 +288,7 @@ class Chunk:
     lines: list[str]
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)
+    asr_uncertain_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -292,6 +299,8 @@ class NormalizedRequest:
     target_lang: str
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)
+    asr_uncertain_ids: list[int] = field(default_factory=list)
+    include_asr_uncertainty_hints: bool = False
     style_prompt: str = ""
     memory_prompt: str = ""
     prompt_mode: str = "translate"

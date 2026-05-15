@@ -54,7 +54,26 @@ def _section(title: str, lines: list[str]) -> str:
     return f"{title}\n{body}"
 
 
-def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: bool = False) -> str:
+def _asr_uncertainty_section(ids: list[int]) -> str:
+    if not ids:
+        return ""
+    unique_ids = sorted({int(item) for item in ids})
+    lines = [f"- {item}" for item in unique_ids]
+    return "\n".join(
+        [
+            "ASR_UNCERTAIN_LINES",
+            *(lines or ["(none)"]),
+            "These ids are internal risk hints only. Some listed source lines may contain ASR mishearing, malformed fragments, or punctuation errors. Use surrounding context and glossary to resolve clearly malformed ASR text, but do not invent unsupported content. Do not output this section or any uncertainty labels.",
+        ]
+    )
+
+
+def _translation_prompt(
+    req: NormalizedRequest,
+    *,
+    include_system_constraints: bool = False,
+    include_asr_uncertainty_hints: bool = False,
+) -> str:
     parts: list[str] = []
     if include_system_constraints:
         parts.append(TRANSLATION_SYSTEM_PROMPT)
@@ -139,6 +158,8 @@ def _translation_prompt(req: NormalizedRequest, *, include_system_constraints: b
         parts.append("User style preferences:\n" + req.style_prompt.strip())
     if req.memory_prompt:
         parts.append(req.memory_prompt.strip())
+    if include_asr_uncertainty_hints and (asr_uncertainty := _asr_uncertainty_section(req.asr_uncertain_ids)):
+        parts.append(asr_uncertainty)
     if req.prompt_mode == "repair":
         parts.append(
             "Repair mode:\n"
@@ -306,6 +327,8 @@ def _template_context(
         "context_before_text": "\n".join(req.context_before),
         "context_after": req.context_after,
         "context_after_text": "\n".join(req.context_after),
+        "asr_uncertain_ids": req.asr_uncertain_ids,
+        "asr_uncertain_ids_text": "\n".join(str(item) for item in req.asr_uncertain_ids),
         "style_prompt": req.style_prompt,
         "memory_prompt": req.memory_prompt,
         "prompt_mode": req.prompt_mode,
@@ -464,7 +487,11 @@ def _build_url_and_headers_for_path(
 
 def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
     style = config.mapping.request.get("style", config.compat_mode)
-    prompt = _translation_prompt(req, include_system_constraints=not config.capabilities.supports_system_prompt)
+    prompt = _translation_prompt(
+        req,
+        include_system_constraints=not config.capabilities.supports_system_prompt,
+        include_asr_uncertainty_hints=req.include_asr_uncertainty_hints,
+    )
     system_prompt = req.system_prompt or TRANSLATION_SYSTEM_PROMPT
     context = _template_context(req, prompt=prompt, system_prompt=system_prompt)
     if style == "openai_chat":

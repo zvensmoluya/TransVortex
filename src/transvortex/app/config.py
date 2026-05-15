@@ -10,6 +10,7 @@ import yaml
 
 from .models import (
     AppConfig,
+    AsrUncertaintyHintsConfig,
     AssStyleConfig,
     AuthConfig,
     CapabilityConfig,
@@ -353,6 +354,7 @@ def load_app_config(
         style_prompt_default = str(translation_raw.get("style_prompt") or "")
     refusal_raw = translation_raw.get("refusal_detection") or {}
     repair_raw = translation_raw.get("repair") or {}
+    asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
         context_before_lines=_to_int(translation_raw.get("context_before_lines"), 20),
@@ -366,6 +368,9 @@ def load_app_config(
         repair=RepairConfig(
             enabled=_to_bool(repair_raw.get("enabled"), True),
             max_attempts=_to_int(repair_raw.get("max_attempts"), 2),
+        ),
+        asr_uncertainty_hints=AsrUncertaintyHintsConfig(
+            enabled=_to_bool(asr_uncertainty_raw.get("enabled"), False),
         ),
     )
     subtitle_raw = pip_yaml.get("subtitle") or {}
@@ -520,6 +525,11 @@ def load_app_config(
             pipeline.translation.context_after_lines = _to_int(value, pipeline.translation.context_after_lines)
         elif key == "translation_repair_enabled":
             pipeline.translation.repair.enabled = _to_bool(value, pipeline.translation.repair.enabled)
+        elif key == "translation_asr_uncertainty_hints_enabled":
+            pipeline.translation.asr_uncertainty_hints.enabled = _to_bool(
+                value,
+                pipeline.translation.asr_uncertainty_hints.enabled,
+            )
         elif key == "subtitle_quality_mode":
             pipeline.subtitle.quality.mode = _to_str(value, pipeline.subtitle.quality.mode)
             pipeline.subtitle.quality.enabled = pipeline.subtitle.quality.mode != "off"

@@ -455,6 +455,35 @@ translation:
     assert cfg.pipeline.translation.repair.max_attempts == 3
 
 
+def test_translation_asr_uncertainty_hints_default_and_override(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation:
+  asr_uncertainty_hints:
+    enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.translation.asr_uncertainty_hints.enabled is True
+
+    cfg2 = load_app_config(root_dir=tmp_path, cli_overrides={"translation_asr_uncertainty_hints_enabled": "false"})
+    assert cfg2.pipeline.translation.asr_uncertainty_hints.enabled is False
+
+
 def test_prompt_files_can_override_defaults(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
