@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+
 from ..app.models import Segment
 
 
@@ -36,15 +38,37 @@ def normalize_timeline(
     return ordered
 
 
-def dedupe_overlap_segments(segments: list[Segment], *, overlap_window_seconds: float = 1.5) -> list[Segment]:
+def _normalized_text(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def _similar_enough(left: str, right: str, *, threshold: float) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if len(left) < 12 or len(right) < 12:
+        return False
+    return SequenceMatcher(None, left, right).ratio() >= threshold
+
+
+def dedupe_overlap_segments(
+    segments: list[Segment],
+    *,
+    overlap_window_seconds: float = 1.5,
+    fuzzy: bool = False,
+    fuzzy_threshold: float = 0.9,
+) -> list[Segment]:
     ordered = sorted(segments, key=lambda seg: (seg.start, seg.end, seg.id))
     out: list[Segment] = []
     for seg in ordered:
-        text = " ".join(seg.text_src.lower().split())
+        text = _normalized_text(seg.text_src)
         duplicate = False
         for prev in reversed(out[-5:]):
-            prev_text = " ".join(prev.text_src.lower().split())
-            if text and text == prev_text and seg.start <= prev.end + overlap_window_seconds:
+            prev_text = _normalized_text(prev.text_src)
+            if text and seg.start <= prev.end + overlap_window_seconds and (
+                text == prev_text or (fuzzy and _similar_enough(text, prev_text, threshold=fuzzy_threshold))
+            ):
                 duplicate = True
                 break
         if not duplicate:
@@ -52,6 +76,38 @@ def dedupe_overlap_segments(segments: list[Segment], *, overlap_window_seconds: 
     for idx, seg in enumerate(out, start=1):
         seg.id = idx
     return out
+
+
+def merge_asr_window_segments(
+    window_segments: list[tuple[dict, list[Segment]]],
+    *,
+    fuzzy_dedupe: bool = True,
+) -> list[Segment]:
+    kept: list[Segment] = []
+    max_overlap = 1.5
+    for manifest_item, segments in window_segments:
+        trusted_start = float(manifest_item.get("trusted_start", manifest_item.get("start", 0.0)))
+        trusted_end = float(
+            manifest_item.get(
+                "trusted_end",
+                float(manifest_item.get("start", 0.0)) + float(manifest_item.get("duration", 0.0)),
+            )
+        )
+        start = float(manifest_item.get("start", trusted_start))
+        duration = float(manifest_item.get("duration", max(trusted_end - trusted_start, 0.0)))
+        overlap_seconds = max(duration - max(trusted_end - trusted_start, 0.0), 0.0)
+        max_overlap = max(max_overlap, overlap_seconds + 1.5)
+        for seg in segments:
+            midpoint = (seg.start + seg.end) / 2.0
+            if trusted_start <= midpoint <= trusted_end:
+                seg.meta["asr_window_index"] = manifest_item.get("segment_index")
+                seg.meta["asr_window_start"] = start
+                kept.append(seg)
+    return dedupe_overlap_segments(
+        kept,
+        overlap_window_seconds=max_overlap,
+        fuzzy=fuzzy_dedupe,
+    )
 
 
 def validate_segments(

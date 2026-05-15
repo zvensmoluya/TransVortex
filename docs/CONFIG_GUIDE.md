@@ -136,7 +136,33 @@ translation:
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
 
-## 5. 零 Token 协议预检
+## 5. ASR 与视频字幕来源
+
+视频输入默认使用 `source_mode: auto`：如果视频里存在匹配 `source_lang` 的文本字幕轨，先提取字幕轨并跳过 ASR；否则抽取音频并运行 ASR。
+
+```yaml
+source_mode: auto        # auto | asr | embedded_subtitle
+subtitle_track: auto     # auto 或 ffprobe stream index
+
+asr:
+  mode: local
+  device: auto
+  model_size: small
+  compute_type: int8
+  chunking:
+    mode: auto           # auto | fixed | none
+    window_seconds: 300
+    overlap_seconds: 30
+    short_audio_seconds: 300
+    fuzzy_dedupe: true
+```
+
+说明：
+- `auto` ASR 会对短音频使用单窗口；长音频使用 sliding window，并在合并时只采信 trusted region。
+- 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
+- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds` 覆盖。
+
+## 6. 零 Token 协议预检
 
 在正式 `run` 前建议先执行：
 

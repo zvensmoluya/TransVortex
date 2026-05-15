@@ -54,8 +54,8 @@ class FakeAsrEngine:
                 {"start": 1.2, "end": 2.0, "text": "World"},
             ]
         return [
-            {"start": 0.0, "end": 0.8, "text": "Hello"},
-            {"start": 1.0, "end": 1.6, "text": "Again"},
+            {"start": segment_start_offset, "end": segment_start_offset + 0.8, "text": "Hello"},
+            {"start": segment_start_offset + 1.0, "end": segment_start_offset + 1.6, "text": "Again"},
         ]
 
 
@@ -73,16 +73,20 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 61.0}
 
-    def fake_split_audio_with_overlap(
+    def fake_split_audio_for_asr(
         _audio_path: Path,
         segments_dir: Path,
         *,
-        chunk_seconds: int,
+        mode: str,
+        window_seconds: int,
         overlap_seconds: int,
+        short_audio_seconds: int,
         duration_seconds: float,
     ) -> list[dict]:
-        assert chunk_seconds == 60
-        assert overlap_seconds == 1
+        assert mode == "auto"
+        assert window_seconds == 300
+        assert overlap_seconds == 30
+        assert short_audio_seconds == 300
         assert duration_seconds == 61.0
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
@@ -90,8 +94,22 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         first.write_bytes(b"one")
         second.write_bytes(b"two")
         return [
-            {"segment_index": 0, "start": 0.0, "duration": 60.0, "path": str(first)},
-            {"segment_index": 1, "start": 59.0, "duration": 2.0, "path": str(second)},
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 60.0,
+                "trusted_start": 0.0,
+                "trusted_end": 59.5,
+                "path": str(first),
+            },
+            {
+                "segment_index": 1,
+                "start": 59.0,
+                "duration": 2.0,
+                "trusted_start": 59.5,
+                "trusted_end": 61.0,
+                "path": str(second),
+            },
         ]
 
     def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None):
@@ -117,7 +135,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
 
     FakeAsrEngine.calls = []
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
@@ -176,11 +194,11 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
 
-    def fake_split_audio_with_overlap(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "path": str(first)}]
+        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "trusted_start": 0.0, "trusted_end": 1.0, "path": str(first)}]
 
     def fake_translate_all_chunks(config, chunks, source_lang: str, target_lang: str, already_done=None):
         assert config.pipeline.translation.style_prompt == "Use dramatic subtitles."
@@ -201,7 +219,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
         ]
 
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
@@ -252,11 +270,11 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
 
-    def fake_split_audio_with_overlap(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "path": str(first)}]
+        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "trusted_start": 0.0, "trusted_end": 1.0, "path": str(first)}]
 
     call_count = {"requested_chunks": 0}
 
@@ -278,7 +296,7 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
         ]
 
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
@@ -319,11 +337,11 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
 
-    def fake_split_audio_with_overlap(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "path": str(first)}]
+        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "trusted_start": 0.0, "trusted_end": 1.0, "path": str(first)}]
 
     def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None):
         already_done = already_done or set()
@@ -343,7 +361,7 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
 
     FakeAsrEngine.calls = []
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 
@@ -357,6 +375,66 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
 
     assert asr_file.exists()
     assert FakeAsrEngine.calls.count("part_00000.wav") == 2
+
+
+def test_video_auto_source_uses_matching_embedded_subtitle_and_skips_asr(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "demo.mkv"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fail_asr(*_args, **_kwargs):
+        raise AssertionError("ASR should not run when matching embedded subtitles are available")
+
+    def fake_list_subtitle_streams(_path: Path) -> list[dict]:
+        return [
+            {
+                "index": 2,
+                "codec_name": "subrip",
+                "language": "en",
+                "title": "English",
+                "default": True,
+                "forced": False,
+                "supported": True,
+            }
+        ]
+
+    def fake_extract_subtitle_stream(_video_path: Path, output_srt: Path, *, stream_index: int) -> None:
+        assert stream_index == 2
+        output_srt.parent.mkdir(parents=True, exist_ok=True)
+        output_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None):
+        return [
+            {
+                "chunk_id": chunks[0].chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "你好"} for seg_id in chunks[0].segment_ids],
+                "errors": [],
+            }
+        ]
+
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", fail_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.list_subtitle_streams", fake_list_subtitle_streams)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_subtitle_stream", fake_extract_subtitle_stream)
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+
+    task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN")
+
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    assert (task_dir / "media" / "embedded_subtitle.srt").exists()
+    assert (task_dir / "media" / "subtitle_streams.json").exists()
+    assert (task_dir / "asr" / "segments.raw.jsonl").exists()
+    events = store.read_events(task_id)
+    warning = next(event for event in events if "Auto-selected embedded subtitle stream" in event.get("message", ""))
+    assert warning["level"] == "warning"
+    assert warning["details"]["stream"]["index"] == 2
 
 
 def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -> None:
@@ -373,11 +451,11 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
 
-    def fake_split_audio_with_overlap(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "path": str(first)}]
+        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "trusted_start": 0.0, "trusted_end": 1.0, "path": str(first)}]
 
     def fake_translate_all_chunks(config, chunks, source_lang: str, target_lang: str, already_done=None):
         assert config.routing.primary.provider == "p1"
@@ -396,7 +474,7 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
 
     streamed: list[dict] = []
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
-    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_with_overlap", fake_split_audio_with_overlap)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
 

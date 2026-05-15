@@ -62,6 +62,11 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_compute_type": args.asr_compute_type,
         "asr_provider": args.asr_provider,
         "asr_provider_model": args.asr_model,
+        "asr_chunking_mode": getattr(args, "asr_chunking_mode", None),
+        "asr_window_seconds": getattr(args, "asr_window_seconds", None),
+        "asr_overlap_seconds": getattr(args, "asr_overlap_seconds", None),
+        "source_mode": getattr(args, "source_mode", None),
+        "subtitle_track": getattr(args, "subtitle_track", None),
         "output_format": getattr(args, "output_format", None),
         "translation_style_preset": getattr(args, "translation_style_preset", None),
         "translation_style_prompt": getattr(args, "translation_style_prompt", None),
@@ -142,6 +147,11 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-compute-type", default=None)
     subparser.add_argument("--asr-provider", default=None)
     subparser.add_argument("--asr-model", default=None)
+    subparser.add_argument("--asr-chunking-mode", choices=["auto", "fixed", "none"], default=None)
+    subparser.add_argument("--asr-window-seconds", type=int, default=None)
+    subparser.add_argument("--asr-overlap-seconds", type=int, default=None)
+    subparser.add_argument("--source-mode", choices=["auto", "asr", "embedded_subtitle"], default=None)
+    subparser.add_argument("--subtitle-track", default=None)
     subparser.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
     subparser.add_argument("--translation-style-preset", default=None)
     subparser.add_argument("--translation-style-prompt", default=None)
@@ -300,6 +310,11 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
         ("--asr-provider", getattr(ns, "asr_provider", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),
+        ("--asr-chunking-mode", getattr(ns, "asr_chunking_mode", None)),
+        ("--asr-window-seconds", getattr(ns, "asr_window_seconds", None)),
+        ("--asr-overlap-seconds", getattr(ns, "asr_overlap_seconds", None)),
+        ("--source-mode", getattr(ns, "source_mode", None)),
+        ("--subtitle-track", getattr(ns, "subtitle_track", None)),
         ("--output-format", getattr(ns, "output_format", None)),
         ("--translation-style-preset", getattr(ns, "translation_style_preset", None)),
         ("--translation-style-prompt", getattr(ns, "translation_style_prompt", None)),

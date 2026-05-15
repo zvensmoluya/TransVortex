@@ -33,6 +33,11 @@ struct StartTaskRequest {
     asr_compute_type: Option<String>,
     asr_provider: Option<String>,
     asr_model: Option<String>,
+    asr_chunking_mode: Option<String>,
+    asr_window_seconds: Option<u32>,
+    asr_overlap_seconds: Option<u32>,
+    source_mode: Option<String>,
+    subtitle_track: Option<String>,
     chunk_seconds: Option<u32>,
     chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
@@ -63,6 +68,11 @@ struct ResumeTaskRequest {
     asr_compute_type: Option<String>,
     asr_provider: Option<String>,
     asr_model: Option<String>,
+    asr_chunking_mode: Option<String>,
+    asr_window_seconds: Option<u32>,
+    asr_overlap_seconds: Option<u32>,
+    source_mode: Option<String>,
+    subtitle_track: Option<String>,
     chunk_seconds: Option<u32>,
     chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
@@ -85,6 +95,17 @@ struct ResumeTaskRequest {
 #[serde(rename_all = "camelCase")]
 struct StartTaskResponse {
     started: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SubtitleStream {
+    index: i64,
+    codec_name: String,
+    language: String,
+    title: String,
+    default: bool,
+    forced: bool,
+    supported: bool,
 }
 
 fn repo_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -166,6 +187,70 @@ fn push_bool_arg(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
         args.push(flag.to_string());
         args.push(if value { "true" } else { "false" }.to_string());
     }
+}
+
+fn subtitle_streams_from_probe(payload: Value) -> Vec<SubtitleStream> {
+    let text_codecs = ["subrip", "ass", "ssa", "webvtt", "mov_text"];
+    payload
+        .get("streams")
+        .and_then(Value::as_array)
+        .map(|streams| {
+            streams
+                .iter()
+                .filter(|stream| stream.get("codec_type").and_then(Value::as_str) == Some("subtitle"))
+                .map(|stream| {
+                    let codec = stream
+                        .get("codec_name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let tags = stream.get("tags").and_then(Value::as_object);
+                    let disposition = stream.get("disposition").and_then(Value::as_object);
+                    SubtitleStream {
+                        index: stream.get("index").and_then(Value::as_i64).unwrap_or(-1),
+                        codec_name: codec.clone(),
+                        language: tags
+                            .and_then(|value| value.get("language"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        title: tags
+                            .and_then(|value| value.get("title"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        default: disposition
+                            .and_then(|value| value.get("default"))
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0)
+                            == 1,
+                        forced: disposition
+                            .and_then(|value| value.get("forced"))
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0)
+                            == 1,
+                        supported: text_codecs.contains(&codec.as_str()),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn push_asr_source_args(args: &mut Vec<String>, request: &StartTaskRequest) {
+    push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
+    push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
+    push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
+    push_arg(args, "--source-mode", &request.source_mode);
+    push_arg(args, "--subtitle-track", &request.subtitle_track);
+}
+
+fn push_resume_asr_source_args(args: &mut Vec<String>, request: &ResumeTaskRequest) {
+    push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
+    push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
+    push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
+    push_arg(args, "--source-mode", &request.source_mode);
+    push_arg(args, "--subtitle-track", &request.subtitle_track);
 }
 
 fn ensure_no_running(state: &State<WorkerState>) -> Result<(), String> {
@@ -440,6 +525,7 @@ fn start_task(
     let root = repo_root(&app)?;
     let input_path = request.input.clone();
     let target_lang = request.target_lang.clone();
+    let input_type = request.input_type.clone().unwrap_or_else(|| "video".into());
     let mut args = vec![
         "-m".into(),
         "transvortex.cli".into(),
@@ -449,7 +535,7 @@ fn start_task(
         "--input".into(),
         input_path.clone(),
         "--input-type".into(),
-        request.input_type.unwrap_or_else(|| "video".into()),
+        input_type,
         "--src".into(),
         request.source_lang.clone(),
         "--tgt".into(),
@@ -459,7 +545,11 @@ fn start_task(
     if request.bilingual {
         args.push("--bilingual".into());
     }
-    if let Some(output_dir) = request.output_dir.filter(|value| !value.trim().is_empty()) {
+    if let Some(output_dir) = request
+        .output_dir
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         let input_stem = Path::new(&input_path)
             .file_stem()
             .and_then(|value| value.to_str())
@@ -476,8 +566,7 @@ fn start_task(
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
     push_arg(&mut args, "--asr-provider", &request.asr_provider);
     push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_num_arg(&mut args, "--chunk-seconds", request.chunk_seconds);
-    push_num_arg(&mut args, "--chunk-overlap-seconds", request.chunk_overlap_seconds);
+    push_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
     push_arg(&mut args, "--output-format", &request.output_format);
@@ -524,6 +613,7 @@ fn resume_task(
 ) -> Result<StartTaskResponse, String> {
     ensure_no_running(&state)?;
     let root = repo_root(&app)?;
+    let task_id = request.task_id.clone();
     let mut args = vec![
         "-m".into(),
         "transvortex.cli".into(),
@@ -531,7 +621,7 @@ fn resume_task(
         root.to_string_lossy().to_string(),
         "resume".into(),
         "--task-id".into(),
-        request.task_id,
+        task_id,
         "--stream-events".into(),
     ];
     push_arg(&mut args, "--provider", &request.provider);
@@ -542,8 +632,7 @@ fn resume_task(
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
     push_arg(&mut args, "--asr-provider", &request.asr_provider);
     push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_num_arg(&mut args, "--chunk-seconds", request.chunk_seconds);
-    push_num_arg(&mut args, "--chunk-overlap-seconds", request.chunk_overlap_seconds);
+    push_resume_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
     push_arg(&mut args, "--output-format", &request.output_format);
@@ -600,6 +689,26 @@ fn open_path(app: AppHandle, path: String) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+fn probe_subtitle_streams(input: String) -> Result<Vec<SubtitleStream>, String> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_streams",
+            "-of",
+            "json",
+            input.as_str(),
+        ])
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    let payload: Value = serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())?;
+    Ok(subtitle_streams_from_probe(payload))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -622,6 +731,7 @@ fn main() {
             start_task,
             resume_task,
             cancel_task,
+            probe_subtitle_streams,
             open_path
         ])
         .run(tauri::generate_context!())

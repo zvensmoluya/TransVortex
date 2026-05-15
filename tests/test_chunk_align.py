@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from transvortex.core.aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
+from transvortex.core.aligner import (
+    apply_translations,
+    dedupe_overlap_segments,
+    merge_asr_window_segments,
+    normalize_timeline,
+    validate_segments,
+)
 from transvortex.core.chunking import number_and_chunk_segments
 from transvortex.app.models import Segment
 
@@ -78,6 +84,33 @@ def test_overlap_dedupe_reassigns_ids() -> None:
     out = dedupe_overlap_segments(segments)
     assert [seg.text_src for seg in out] == ["Hello", "World"]
     assert [seg.id for seg in out] == [1, 2]
+
+
+def test_trusted_region_merge_filters_overlap_context_and_fuzzy_duplicates() -> None:
+    windows = [
+        (
+            {"segment_index": 0, "start": 0.0, "duration": 300.0, "trusted_start": 0.0, "trusted_end": 285.0},
+            [
+                Segment(id=1, start=10.0, end=12.0, text_src="opening line"),
+                Segment(id=2, start=286.0, end=288.0, text_src="context only"),
+            ],
+        ),
+        (
+            {"segment_index": 1, "start": 270.0, "duration": 300.0, "trusted_start": 285.0, "trusted_end": 555.0},
+            [
+                Segment(id=3, start=283.0, end=284.0, text_src="context only"),
+                Segment(id=4, start=300.0, end=302.0, text_src="This is almost the same subtitle line."),
+                Segment(id=5, start=301.0, end=303.0, text_src="This is almost the same subtitle lines"),
+                Segment(id=6, start=310.0, end=311.0, text_src="No"),
+                Segment(id=7, start=310.2, end=311.2, text_src="No"),
+            ],
+        ),
+    ]
+
+    out = merge_asr_window_segments(windows, fuzzy_dedupe=True)
+
+    assert [seg.text_src for seg in out] == ["opening line", "This is almost the same subtitle line.", "No"]
+    assert [seg.id for seg in out] == [1, 2, 3]
 
 
 def test_timeline_normalization_and_quality_warnings() -> None:

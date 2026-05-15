@@ -218,6 +218,8 @@ export type ActiveView = "start" | "translation" | "provider" | "history" | "res
 export type FormState = {
   input: string;
   inputType: "video" | "srt";
+  sourceMode: "auto" | "asr" | "embedded_subtitle";
+  subtitleTrack: string;
   outputDir: string;
   sourceLang: string;
   targetLang: string;
@@ -230,6 +232,7 @@ export type FormState = {
   asrComputeType: string;
   asrProvider: string;
   asrModel: string;
+  asrChunkingMode: "auto" | "fixed" | "none";
   chunkSeconds: number;
   chunkOverlapSeconds: number;
   translationBatchSize: number;
@@ -253,6 +256,8 @@ export type FormState = {
 export const emptyForm: FormState = {
   input: "",
   inputType: "video",
+  sourceMode: "auto",
+  subtitleTrack: "auto",
   outputDir: "",
   sourceLang: "en",
   targetLang: "zh-CN",
@@ -260,13 +265,14 @@ export const emptyForm: FormState = {
   provider: "",
   model: "",
   asrMode: "local",
-  asrDevice: "cpu",
+  asrDevice: "auto",
   asrModelSize: "small",
   asrComputeType: "int8",
   asrProvider: "",
   asrModel: "whisper-1",
-  chunkSeconds: 60,
-  chunkOverlapSeconds: 1,
+  asrChunkingMode: "auto",
+  chunkSeconds: 300,
+  chunkOverlapSeconds: 30,
   translationBatchSize: 40,
   translationStylePreset: "subtitle_natural",
   translationStylePrompt: "",
@@ -286,6 +292,16 @@ export const emptyForm: FormState = {
 };
 
 export type DroppedFile = File & { path?: string };
+
+export type SubtitleStream = {
+  index: number;
+  codec_name: string;
+  language: string;
+  title: string;
+  default: boolean;
+  forced: boolean;
+  supported: boolean;
+};
 
 export const languageOptions = [
   { code: "en", label: "英语" },

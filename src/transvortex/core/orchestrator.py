@@ -5,14 +5,20 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
-from .aligner import apply_translations, dedupe_overlap_segments, normalize_timeline, validate_segments
+from .aligner import apply_translations, merge_asr_window_segments, normalize_timeline, validate_segments
 from ..artifacts.task_store import TaskStore
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments
 from ..app.config import apply_route_overrides, load_app_config
 from ..app.credentials import resolve_credential, resolve_provider_credential
 from ..formats.exporter import export_ass, export_srt
-from .media import extract_audio, split_audio_with_overlap
+from .media import (
+    extract_audio,
+    extract_subtitle_stream,
+    list_subtitle_streams,
+    select_subtitle_stream,
+    split_audio_for_asr,
+)
 from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
@@ -129,6 +135,26 @@ def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path) -> bool:
     return True
 
 
+def _video_needs_asr(config: AppConfig, task: TaskRecord) -> bool:
+    input_type = str(task.settings.get("input_type", "video_asr_translate"))
+    if input_type not in {"video_asr_translate", "video_asr"}:
+        return False
+    if str(task.settings.get("source_mode", config.pipeline.source_mode)) == "asr":
+        return True
+    if str(task.settings.get("source_mode", config.pipeline.source_mode)) == "embedded_subtitle":
+        return False
+    try:
+        streams = list_subtitle_streams(Path(task.input_file))
+    except Exception:
+        return True
+    selected = select_subtitle_stream(
+        streams,
+        source_lang=task.source_lang,
+        subtitle_track=str(task.settings.get("subtitle_track", config.pipeline.subtitle_track)),
+    )
+    return selected is None
+
+
 def _preflight(
     config: AppConfig,
     store: TaskStore,
@@ -155,9 +181,10 @@ def _preflight(
         probe_file.write_text("ok", encoding="utf-8")
     finally:
         probe_file.unlink(missing_ok=True)
-    if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
+    needs_asr = _video_needs_asr(config, task)
+    if needs_asr and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
         raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
-    if input_type in {"video_asr_translate", "video_asr"} and config.pipeline.asr_mode == "openai":
+    if needs_asr and config.pipeline.asr_mode == "openai":
         credential = resolve_credential(
             env_key=config.pipeline.asr_cloud_env_key,
             credential_id=config.pipeline.asr_cloud_env_key,
@@ -269,9 +296,32 @@ def create_pipeline_task(
 def _task_settings(config: AppConfig, *, input_type: str) -> dict[str, Any]:
     settings = to_plain(config.pipeline)
     settings["input_type"] = input_type
+    settings["source_mode"] = config.pipeline.source_mode
+    settings["subtitle_track"] = config.pipeline.subtitle_track
     settings["routing"] = to_plain(config.routing)
     settings.setdefault("edited", False)
     return settings
+
+
+def _resolve_video_source_mode(config: AppConfig, task: TaskRecord) -> tuple[str, dict | None, list[dict]]:
+    requested = str(task.settings.get("source_mode", config.pipeline.source_mode))
+    subtitle_track = str(task.settings.get("subtitle_track", config.pipeline.subtitle_track))
+    if requested == "asr":
+        return "asr", None, []
+    try:
+        streams = list_subtitle_streams(Path(task.input_file))
+    except Exception:
+        if requested == "embedded_subtitle":
+            raise
+        return "asr", None, []
+    selected = select_subtitle_stream(streams, source_lang=task.source_lang, subtitle_track=subtitle_track)
+    if requested == "embedded_subtitle":
+        if selected is None:
+            raise RuntimeError("No matching text subtitle stream found")
+        return "embedded_subtitle", selected, streams
+    if selected is not None:
+        return "embedded_subtitle", selected, streams
+    return "asr", None, streams
 
 
 def _load_segments_from_raw_jsonl(raw_file: Path) -> list[Segment]:
@@ -647,135 +697,222 @@ def _execute_task(
                 all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
         else:
             _check_cancel(store, task_id)
-            _emit_stage(store, task_id, "INGEST", "Extracting and splitting audio")
-            audio_full = paths["media"] / "audio_full.m4a"
-            manifest_file = paths["media"] / "segments_manifest.json"
-            if not checkpoint.get("ingest_done") or not _ingest_artifacts_valid(audio_full, manifest_file):
-                media_meta = extract_audio(Path(task.input_file), audio_full)
-                segments_manifest = split_audio_with_overlap(
-                    audio_full,
-                    paths["media"] / "segments",
-                    chunk_seconds=config.pipeline.chunk_seconds,
-                    overlap_seconds=config.pipeline.chunk_overlap_seconds,
-                    duration_seconds=float(media_meta["duration_seconds"]),
+            source_mode, subtitle_stream, subtitle_streams = _resolve_video_source_mode(config, task)
+            if source_mode == "embedded_subtitle":
+                _emit_stage(store, task_id, "INGEST", "Extracting embedded subtitles")
+                raw_jsonl = paths["asr"] / "segments.raw.jsonl"
+                embedded_srt = paths["media"] / "embedded_subtitle.srt"
+                requested_source_mode = str(task.settings.get("source_mode", config.pipeline.source_mode))
+                if requested_source_mode == "auto" and subtitle_stream is not None:
+                    store.append_event(
+                        task_id,
+                        "warning",
+                        stage="INGEST",
+                        level="warning",
+                        message="Auto-selected embedded subtitle stream; use --source-mode asr to force ASR if this track is wrong",
+                        details={
+                            "stream": subtitle_stream,
+                            "available_streams": subtitle_streams,
+                        },
+                    )
+                if not checkpoint.get("ingest_done") or not _is_nonempty_file(raw_jsonl):
+                    if subtitle_stream is None:
+                        raise RuntimeError("No matching text subtitle stream found")
+                    extract_subtitle_stream(
+                        Path(task.input_file),
+                        embedded_srt,
+                        stream_index=int(subtitle_stream["index"]),
+                    )
+                    all_segments = parse_srt_file(embedded_srt)
+                    if not all_segments:
+                        raise RuntimeError("No subtitle segments parsed from embedded subtitle stream")
+                    _persist_segments_jsonl(raw_jsonl, all_segments)
+                    write_json(
+                        paths["media"] / "subtitle_streams.json",
+                        {
+                            "selected": subtitle_stream,
+                            "streams": subtitle_streams,
+                        },
+                    )
+                    checkpoint["ingest_done"] = True
+                    checkpoint["status"] = "INGEST"
+                    store.save_checkpoint(task_id, checkpoint)
+                    store.append_event(
+                        task_id,
+                        "artifact",
+                        stage="INGEST",
+                        message="Embedded subtitle segments ready",
+                        progress=0.52,
+                        details={
+                            "path": str(raw_jsonl),
+                            "segments": len(all_segments),
+                            "stream": subtitle_stream,
+                        },
+                    )
+                else:
+                    all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
+                if input_type == "video_asr":
+                    checkpoint["status"] = "DONE"
+                    checkpoint.pop("error", None)
+                    checkpoint.pop("error_info", None)
+                    store.save_checkpoint(task_id, checkpoint)
+                    store.update_task_status(
+                        task_id,
+                        "DONE",
+                        output_path=str(raw_jsonl),
+                        output_paths={"segments": str(raw_jsonl)},
+                        clear_error=True,
+                    )
+                    store.append_event(
+                        task_id,
+                        "done",
+                        stage="DONE",
+                        message="Subtitle extraction task completed",
+                        progress=1.0,
+                        details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
+                    )
+                    return
+            else:
+                _emit_stage(store, task_id, "INGEST", "Extracting and splitting audio")
+                audio_full = paths["media"] / "audio_full.m4a"
+                manifest_file = paths["media"] / "segments_manifest.json"
+                if not checkpoint.get("ingest_done") or not _ingest_artifacts_valid(audio_full, manifest_file):
+                    media_meta = extract_audio(Path(task.input_file), audio_full)
+                    segments_manifest = split_audio_for_asr(
+                        audio_full,
+                        paths["media"] / "segments",
+                        mode=config.pipeline.asr_chunking.mode,
+                        window_seconds=config.pipeline.asr_chunking.window_seconds,
+                        overlap_seconds=config.pipeline.asr_chunking.overlap_seconds,
+                        short_audio_seconds=config.pipeline.asr_chunking.short_audio_seconds,
+                        duration_seconds=float(media_meta["duration_seconds"]),
+                    )
+                    write_json(paths["media"] / "media_meta.json", media_meta)
+                    write_json(manifest_file, segments_manifest)
+                    _require_file(audio_full, "media/audio_full.m4a")
+                    checkpoint["ingest_done"] = True
+                    checkpoint["status"] = "INGEST"
+                    store.save_checkpoint(task_id, checkpoint)
+                    store.append_event(
+                        task_id,
+                        "artifact",
+                        stage="INGEST",
+                        message="Audio segments ready",
+                        progress=0.18,
+                        details={"path": str(manifest_file), "segments": len(segments_manifest)},
+                    )
+                else:
+                    segments_manifest = read_json(manifest_file)
+
+                _check_cancel(store, task_id)
+                _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
+                asr_provider = None
+                asr_provider_model = config.pipeline.asr_provider_model
+                if config.pipeline.asr_mode == "openai" and config.pipeline.asr_provider:
+                    asr_provider = config.providers.get(config.pipeline.asr_provider)
+                    if asr_provider is None:
+                        raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
+                    if not asr_provider_model:
+                        asr_provider_model = asr_provider.models[0] if asr_provider.models else config.pipeline.asr_cloud_model
+                asr = AsrEngine(
+                    model_size=config.pipeline.asr_model_size,
+                    device=config.pipeline.asr_device,
+                    compute_type=config.pipeline.asr_compute_type,
+                    mode=config.pipeline.asr_mode,
+                    source_lang=task.source_lang,
+                    cloud_base_url=config.pipeline.asr_cloud_base_url,
+                    cloud_endpoint=config.pipeline.asr_cloud_endpoint,
+                    cloud_model=config.pipeline.asr_cloud_model,
+                    cloud_env_key=config.pipeline.asr_cloud_env_key,
+                    cloud_timeout_seconds=config.pipeline.asr_cloud_timeout_seconds,
+                    cloud_provider=asr_provider,
+                    cloud_provider_model=asr_provider_model,
+                    root_dir=root_dir,
                 )
-                write_json(paths["media"] / "media_meta.json", media_meta)
-                write_json(manifest_file, segments_manifest)
-                _require_file(audio_full, "media/audio_full.m4a")
-                checkpoint["ingest_done"] = True
-                checkpoint["status"] = "INGEST"
-                store.save_checkpoint(task_id, checkpoint)
+                asr_done = set(checkpoint.get("asr_done_segments", []))
+                segment_files = []
+                for item in segments_manifest:
+                    _check_cancel(store, task_id)
+                    idx = int(item["segment_index"])
+                    segment_output = paths["asr"] / f"segment_{idx:05d}.json"
+                    segment_files.append((idx, segment_output))
+                    if idx in asr_done and _is_valid_json_list(segment_output):
+                        continue
+                    rows = asr.transcribe_segment(Path(item["path"]), float(item["start"]))
+                    write_segment_asr_output(segment_output, rows)
+                    asr_done.add(idx)
+                    checkpoint["asr_done_segments"] = sorted(asr_done)
+                    checkpoint["status"] = "ASR"
+                    store.save_checkpoint(task_id, checkpoint)
+                    store.append_event(
+                        task_id,
+                        "progress",
+                        stage="ASR",
+                        message=f"Transcribed segment {len(asr_done)}/{len(segments_manifest)}",
+                        progress=0.25 + 0.25 * (len(asr_done) / max(len(segments_manifest), 1)),
+                    )
+
+                all_segments = []
+                next_id = 1
+                window_segments = []
+                for _idx, seg_file in sorted(segment_files, key=lambda x: x[0]):
+                    _require_file(seg_file, f"asr/{seg_file.name}")
+                    rows = read_json(seg_file)
+                    parsed = _parse_asr_rows(rows, start_id=next_id)
+                    manifest_item = next(
+                        (item for item in segments_manifest if int(item["segment_index"]) == _idx),
+                        {"segment_index": _idx},
+                    )
+                    window_segments.append((manifest_item, parsed))
+                    all_segments.extend(parsed)
+                    next_id = all_segments[-1].id + 1 if all_segments else next_id
+                deduped_segments = merge_asr_window_segments(
+                    window_segments,
+                    fuzzy_dedupe=config.pipeline.asr_chunking.fuzzy_dedupe,
+                )
+                if len(deduped_segments) != len(all_segments):
+                    store.append_event(
+                        task_id,
+                        "warning",
+                        stage="ASR",
+                        level="warning",
+                        message="Removed duplicate overlap segments",
+                        details={"before": len(all_segments), "after": len(deduped_segments)},
+                    )
+                all_segments = deduped_segments
+
+                raw_jsonl = paths["asr"] / "segments.raw.jsonl"
+                _persist_segments_jsonl(raw_jsonl, all_segments)
                 store.append_event(
                     task_id,
                     "artifact",
-                    stage="INGEST",
-                    message="Audio segments ready",
-                    progress=0.18,
-                    details={"path": str(manifest_file), "segments": len(segments_manifest)},
-                )
-            else:
-                segments_manifest = read_json(manifest_file)
-
-            _check_cancel(store, task_id)
-            _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
-            asr_provider = None
-            asr_provider_model = config.pipeline.asr_provider_model
-            if config.pipeline.asr_mode == "openai" and config.pipeline.asr_provider:
-                asr_provider = config.providers.get(config.pipeline.asr_provider)
-                if asr_provider is None:
-                    raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
-                if not asr_provider_model:
-                    asr_provider_model = asr_provider.models[0] if asr_provider.models else config.pipeline.asr_cloud_model
-            asr = AsrEngine(
-                model_size=config.pipeline.asr_model_size,
-                device=config.pipeline.asr_device,
-                compute_type=config.pipeline.asr_compute_type,
-                mode=config.pipeline.asr_mode,
-                source_lang=task.source_lang,
-                cloud_base_url=config.pipeline.asr_cloud_base_url,
-                cloud_endpoint=config.pipeline.asr_cloud_endpoint,
-                cloud_model=config.pipeline.asr_cloud_model,
-                cloud_env_key=config.pipeline.asr_cloud_env_key,
-                cloud_timeout_seconds=config.pipeline.asr_cloud_timeout_seconds,
-                cloud_provider=asr_provider,
-                cloud_provider_model=asr_provider_model,
-                root_dir=root_dir,
-            )
-            asr_done = set(checkpoint.get("asr_done_segments", []))
-            segment_files = []
-            for item in segments_manifest:
-                _check_cancel(store, task_id)
-                idx = int(item["segment_index"])
-                segment_output = paths["asr"] / f"segment_{idx:05d}.json"
-                segment_files.append((idx, segment_output))
-                if idx in asr_done and _is_valid_json_list(segment_output):
-                    continue
-                rows = asr.transcribe_segment(Path(item["path"]), float(item["start"]))
-                write_segment_asr_output(segment_output, rows)
-                asr_done.add(idx)
-                checkpoint["asr_done_segments"] = sorted(asr_done)
-                checkpoint["status"] = "ASR"
-                store.save_checkpoint(task_id, checkpoint)
-                store.append_event(
-                    task_id,
-                    "progress",
                     stage="ASR",
-                    message=f"Transcribed segment {len(asr_done)}/{len(segments_manifest)}",
-                    progress=0.25 + 0.25 * (len(asr_done) / max(len(segments_manifest), 1)),
+                    message="Raw ASR segments ready",
+                    progress=0.52,
+                    details={"path": str(raw_jsonl), "segments": len(all_segments)},
                 )
 
-            all_segments = []
-            next_id = 1
-            for _idx, seg_file in sorted(segment_files, key=lambda x: x[0]):
-                _require_file(seg_file, f"asr/{seg_file.name}")
-                rows = read_json(seg_file)
-                parsed = _parse_asr_rows(rows, start_id=next_id)
-                all_segments.extend(parsed)
-                next_id = all_segments[-1].id + 1 if all_segments else 1
-            deduped_segments = dedupe_overlap_segments(all_segments)
-            if len(deduped_segments) != len(all_segments):
-                store.append_event(
-                    task_id,
-                    "warning",
-                    stage="ASR",
-                    level="warning",
-                    message="Removed duplicate overlap segments",
-                    details={"before": len(all_segments), "after": len(deduped_segments)},
-                )
-            all_segments = deduped_segments
-
-            raw_jsonl = paths["asr"] / "segments.raw.jsonl"
-            _persist_segments_jsonl(raw_jsonl, all_segments)
-            store.append_event(
-                task_id,
-                "artifact",
-                stage="ASR",
-                message="Raw ASR segments ready",
-                progress=0.52,
-                details={"path": str(raw_jsonl), "segments": len(all_segments)},
-            )
-
-            if input_type == "video_asr":
-                checkpoint["status"] = "DONE"
-                checkpoint.pop("error", None)
-                checkpoint.pop("error_info", None)
-                store.save_checkpoint(task_id, checkpoint)
-                store.update_task_status(
-                    task_id,
-                    "DONE",
-                    output_path=str(raw_jsonl),
-                    output_paths={"segments": str(raw_jsonl)},
-                    clear_error=True,
-                )
-                store.append_event(
-                    task_id,
-                    "done",
-                    stage="DONE",
-                    message="ASR task completed",
-                    progress=1.0,
-                    details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
-                )
-                return
+                if input_type == "video_asr":
+                    checkpoint["status"] = "DONE"
+                    checkpoint.pop("error", None)
+                    checkpoint.pop("error_info", None)
+                    store.save_checkpoint(task_id, checkpoint)
+                    store.update_task_status(
+                        task_id,
+                        "DONE",
+                        output_path=str(raw_jsonl),
+                        output_paths={"segments": str(raw_jsonl)},
+                        clear_error=True,
+                    )
+                    store.append_event(
+                        task_id,
+                        "done",
+                        stage="DONE",
+                        message="ASR task completed",
+                        progress=1.0,
+                        details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
+                    )
+                    return
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")

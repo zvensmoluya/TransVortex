@@ -74,6 +74,7 @@ import type {
   ResultSegment,
   RouteTarget,
   RoutingProfile,
+  SubtitleStream,
   TaskRecord,
   TaskResultPayload,
   WorkerEvent,
@@ -169,6 +170,7 @@ function App() {
   const [providerAdvancedOpen, setProviderAdvancedOpen] = useState(false);
   const [providerResult, setProviderResult] = useState<ProviderDiagnostic | ProviderTestPayload | null>(null);
   const [customModel, setCustomModel] = useState("");
+  const [subtitleStreams, setSubtitleStreams] = useState<SubtitleStream[]>([]);
   const [routingProfilesDraft, setRoutingProfilesDraft] = useState<RoutingProfile[]>([]);
   const [activeRoutingProfileId, setActiveRoutingProfileId] = useState("default");
   const [routingProfileNextSeq, setRoutingProfileNextSeq] = useState(1);
@@ -242,6 +244,7 @@ function App() {
       const providerConfig = payload.providers.find((item) => item.name === provider);
       const memory = objectValue(payload.pipeline.memory);
       const subtitle = objectValue(payload.pipeline.subtitle);
+      const asrChunking = objectValue(payload.pipeline.asr_chunking);
       const reflow = objectValue(subtitle.reflow);
       return {
         ...current,
@@ -253,8 +256,11 @@ function App() {
         asrComputeType: textValue(payload.pipeline.asr_compute_type, current.asrComputeType),
         asrProvider: textValue(payload.pipeline.asr_provider, current.asrProvider),
         asrModel: textValue(payload.pipeline.asr_provider_model, current.asrModel),
-        chunkSeconds: numberValue(payload.pipeline.chunk_seconds, current.chunkSeconds),
-        chunkOverlapSeconds: numberValue(payload.pipeline.chunk_overlap_seconds, current.chunkOverlapSeconds),
+        sourceMode: textValue(payload.pipeline.source_mode, current.sourceMode) as FormState["sourceMode"],
+        subtitleTrack: textValue(payload.pipeline.subtitle_track, current.subtitleTrack),
+        asrChunkingMode: textValue(asrChunking?.mode, current.asrChunkingMode) as FormState["asrChunkingMode"],
+        chunkSeconds: numberValue(asrChunking?.window_seconds, current.chunkSeconds),
+        chunkOverlapSeconds: numberValue(asrChunking?.overlap_seconds, current.chunkOverlapSeconds),
         translationBatchSize: numberValue(payload.pipeline.translation_batch_size, current.translationBatchSize),
         translationStylePreset: textValue(translation?.style_preset, current.translationStylePreset),
         translationStylePrompt: textValue(translation?.style_prompt, current.translationStylePrompt),
@@ -346,6 +352,37 @@ function App() {
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function applySubtitleStreams(streams: SubtitleStream[], sourceLang: string) {
+    const normalize = (value: string) => {
+      const raw = value.trim().toLowerCase().replace("_", "-");
+      const aliases: Record<string, string> = {
+        jpn: "ja",
+        jp: "ja",
+        japanese: "ja",
+        eng: "en",
+        english: "en",
+        chi: "zh",
+        zho: "zh",
+        chs: "zh",
+        cht: "zh",
+        "zh-cn": "zh",
+        "zh-tw": "zh",
+      };
+      return aliases[raw] || raw.split("-")[0];
+    };
+    const wanted = normalize(sourceLang);
+    const supported = streams.filter((stream) => stream.supported);
+    const matched = supported.find((stream) => normalize(stream.language || "") === wanted);
+    setSubtitleStreams(streams);
+    if (matched) {
+      update("sourceMode", "embedded_subtitle");
+      update("subtitleTrack", String(matched.index));
+    } else {
+      update("sourceMode", "asr");
+      update("subtitleTrack", "auto");
+    }
   }
 
   function updateProviderDraft(patch: Partial<ProviderDraft>) {
@@ -522,7 +559,20 @@ function App() {
           ? [{ name: "Subtitle", extensions: ["srt"] }]
           : [{ name: "Video", extensions: ["mp4", "mkv", "mov", "webm", "avi"] }],
     });
-    if (typeof selected === "string") update("input", selected);
+    if (typeof selected === "string") await setInputPath(selected);
+  }
+
+  async function setInputPath(path: string) {
+    update("input", path);
+    if (form.inputType !== "video") return;
+    try {
+      const streams = await invoke<SubtitleStream[]>("probe_subtitle_streams", { input: path });
+      applySubtitleStreams(streams, form.sourceLang);
+    } catch {
+      setSubtitleStreams([]);
+      update("sourceMode", "asr");
+      update("subtitleTrack", "auto");
+    }
   }
 
   async function chooseOutputDir() {
@@ -717,8 +767,11 @@ function App() {
       asrComputeType: form.asrComputeType || null,
       asrProvider: form.asrProvider || null,
       asrModel: form.asrModel || null,
-      chunkSeconds: form.chunkSeconds,
-      chunkOverlapSeconds: form.chunkOverlapSeconds,
+      asrChunkingMode: form.asrChunkingMode || null,
+      asrWindowSeconds: form.chunkSeconds,
+      asrOverlapSeconds: form.chunkOverlapSeconds,
+      sourceMode: form.sourceMode || null,
+      subtitleTrack: form.subtitleTrack || null,
       translationBatchSize: form.translationBatchSize,
       translationStylePreset: form.translationStylePreset,
       translationStylePrompt: buildTranslationStylePrompt(form.projectPrompt, form.translationStylePrompt),
@@ -923,7 +976,9 @@ function App() {
           running={running}
           advancedOpen={advancedOpen}
           setAdvancedOpen={setAdvancedOpen}
+          subtitleStreams={subtitleStreams}
           chooseVideo={chooseVideo}
+          setInputPath={setInputPath}
           chooseOutputDir={chooseOutputDir}
           startTask={startTask}
           cancelTask={cancelTask}
@@ -1124,7 +1179,9 @@ function TaskWorkspace({
   running,
   advancedOpen,
   setAdvancedOpen,
+  subtitleStreams,
   chooseVideo,
+  setInputPath,
   chooseOutputDir,
   startTask,
   cancelTask,
@@ -1136,7 +1193,9 @@ function TaskWorkspace({
   running: boolean;
   advancedOpen: boolean;
   setAdvancedOpen: (open: boolean) => void;
+  subtitleStreams: SubtitleStream[];
   chooseVideo: () => void;
+  setInputPath: (path: string) => Promise<void>;
   chooseOutputDir: () => void;
   startTask: () => void;
   cancelTask: () => void;
@@ -1162,7 +1221,7 @@ function TaskWorkspace({
           onDrop={(event) => {
             event.preventDefault();
             const file = event.dataTransfer.files.item(0) as DroppedFile | null;
-            if (file) update("input", file.path || file.name);
+            if (file) void setInputPath(file.path || file.name);
           }}
         >
           <Video className="text-brand" size={34} />
@@ -1184,6 +1243,31 @@ function TaskWorkspace({
             <LanguageSelect value={form.targetLang} onChange={(value) => update("targetLang", value)} />
           </label>
         </div>
+        {form.inputType === "video" && (
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            <label className="tvx-label">
+              {t("sourceMode")}
+              <select className="tvx-input" value={form.sourceMode} onChange={(event) => update("sourceMode", event.target.value as FormState["sourceMode"])}>
+                <option value="auto">{t("sourceAuto")}</option>
+                <option value="asr">{t("sourceAsr")}</option>
+                <option value="embedded_subtitle">{t("sourceEmbeddedSubtitle")}</option>
+              </select>
+            </label>
+            <label className="tvx-label">
+              {t("subtitleTrack")}
+              <select className="tvx-input" value={form.subtitleTrack} onChange={(event) => update("subtitleTrack", event.target.value)}>
+                <option value="auto">{subtitleStreams.some((stream) => stream.supported) ? t("sourceAuto") : t("noSubtitleTrack")}</option>
+                {subtitleStreams
+                  .filter((stream) => stream.supported)
+                  .map((stream) => (
+                    <option value={String(stream.index)} key={stream.index}>
+                      #{stream.index} {stream.language || "-"} {stream.title || stream.codec_name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
+        )}
       </Panel>
 
       <Panel title={t("preTranslation")}>
@@ -1264,6 +1348,14 @@ function TaskWorkspace({
         </button>
         {advancedOpen && (
           <div className="grid grid-cols-4 gap-4">
+            <label className="tvx-label">
+              ASR chunking
+              <select className="tvx-input" value={form.asrChunkingMode} onChange={(event) => update("asrChunkingMode", event.target.value as FormState["asrChunkingMode"])}>
+                <option value="auto">auto</option>
+                <option value="fixed">fixed</option>
+                <option value="none">none</option>
+              </select>
+            </label>
             <label className="tvx-label">
               {t("chunkSec")}
               <input className="tvx-input" type="number" value={form.chunkSeconds} onChange={(event) => update("chunkSeconds", Number(event.target.value))} />

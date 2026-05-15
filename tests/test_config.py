@@ -754,6 +754,11 @@ routing:
             "asr_compute_type": "float16",
             "asr_provider": "p1",
             "asr_provider_model": "whisper-large",
+            "asr_chunking_mode": "fixed",
+            "asr_window_seconds": 420,
+            "asr_overlap_seconds": 45,
+            "source_mode": "embedded_subtitle",
+            "subtitle_track": "3",
         },
     )
     assert cfg.pipeline.asr_mode == "openai"
@@ -762,3 +767,36 @@ routing:
     assert cfg.pipeline.asr_compute_type == "float16"
     assert cfg.pipeline.asr_provider == "p1"
     assert cfg.pipeline.asr_provider_model == "whisper-large"
+    assert cfg.pipeline.asr_chunking.mode == "fixed"
+    assert cfg.pipeline.asr_chunking.window_seconds == 420
+    assert cfg.pipeline.asr_chunking.overlap_seconds == 45
+    assert cfg.pipeline.source_mode == "embedded_subtitle"
+    assert cfg.pipeline.subtitle_track == "3"
+
+
+def test_asr_chunking_defaults(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.asr_device == "auto"
+    assert cfg.pipeline.asr_chunking.mode == "auto"
+    assert cfg.pipeline.asr_chunking.window_seconds == 300
+    assert cfg.pipeline.asr_chunking.overlap_seconds == 30
+    assert cfg.pipeline.asr_chunking.short_audio_seconds == 300
+    assert cfg.pipeline.asr_chunking.fuzzy_dedupe is True
+    assert cfg.pipeline.source_mode == "auto"
+    assert cfg.pipeline.subtitle_track == "auto"

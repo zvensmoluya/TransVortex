@@ -10,6 +10,7 @@ import yaml
 
 from .models import (
     AppConfig,
+    AsrChunkingConfig,
     AsrUncertaintyHintsConfig,
     AssStyleConfig,
     AuthConfig,
@@ -337,6 +338,7 @@ def load_app_config(
     artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
     asr_raw = pip_yaml.get("asr") or {}
     asr_cloud_raw = asr_raw.get("cloud") or {}
+    asr_chunking_raw = asr_raw.get("chunking") or {}
     translation_raw = pip_yaml.get("translation") or {}
     legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 40)
     chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
@@ -485,6 +487,13 @@ def load_app_config(
         asr_device=str(asr_raw.get("device", "auto")),
         asr_compute_type=str(asr_raw.get("compute_type", "int8")),
         asr_mode=str(asr_raw.get("mode", "local")),
+        asr_chunking=AsrChunkingConfig(
+            mode=_to_str(asr_chunking_raw.get("mode"), "auto"),
+            window_seconds=_to_int(asr_chunking_raw.get("window_seconds"), 300),
+            overlap_seconds=_to_int(asr_chunking_raw.get("overlap_seconds"), 30),
+            short_audio_seconds=_to_int(asr_chunking_raw.get("short_audio_seconds"), 300),
+            fuzzy_dedupe=_to_bool(asr_chunking_raw.get("fuzzy_dedupe"), True),
+        ),
         asr_provider=str(asr_raw.get("provider", "")),
         asr_provider_model=str(asr_raw.get("model", "")),
         asr_cloud_base_url=str(asr_cloud_raw.get("base_url", "https://api.openai.com")),
@@ -492,6 +501,8 @@ def load_app_config(
         asr_cloud_model=str(asr_cloud_raw.get("model", "whisper-1")),
         asr_cloud_env_key=str(asr_cloud_raw.get("env_key", "TVX_MODEL_API_KEY")),
         asr_cloud_timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 120),
+        source_mode=_to_str(pip_yaml.get("source_mode"), "auto"),
+        subtitle_track=_to_str(pip_yaml.get("subtitle_track"), "auto"),
     )
 
     for field_name, env_name in ENV_MAP.items():
@@ -530,6 +541,20 @@ def load_app_config(
                 value,
                 pipeline.translation.asr_uncertainty_hints.enabled,
             )
+        elif key == "asr_chunking_mode":
+            pipeline.asr_chunking.mode = _to_str(value, pipeline.asr_chunking.mode)
+        elif key == "asr_window_seconds":
+            pipeline.asr_chunking.window_seconds = _to_int(value, pipeline.asr_chunking.window_seconds)
+        elif key == "asr_overlap_seconds":
+            pipeline.asr_chunking.overlap_seconds = _to_int(value, pipeline.asr_chunking.overlap_seconds)
+        elif key == "asr_short_audio_seconds":
+            pipeline.asr_chunking.short_audio_seconds = _to_int(value, pipeline.asr_chunking.short_audio_seconds)
+        elif key == "asr_fuzzy_dedupe":
+            pipeline.asr_chunking.fuzzy_dedupe = _to_bool(value, pipeline.asr_chunking.fuzzy_dedupe)
+        elif key == "source_mode":
+            pipeline.source_mode = _to_str(value, pipeline.source_mode)
+        elif key == "subtitle_track":
+            pipeline.subtitle_track = _to_str(value, pipeline.subtitle_track)
         elif key == "subtitle_quality_mode":
             pipeline.subtitle.quality.mode = _to_str(value, pipeline.subtitle.quality.mode)
             pipeline.subtitle.quality.enabled = pipeline.subtitle.quality.mode != "off"

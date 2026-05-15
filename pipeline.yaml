@@ -58,8 +58,14 @@ asr:
   provider: openai_asr
   model: whisper-1
   model_size: small
-  device: cpu
+  device: auto
   compute_type: int8
+  chunking:
+    mode: auto
+    window_seconds: 300
+    overlap_seconds: 30
+    short_audio_seconds: 300
+    fuzzy_dedupe: true
   cloud:
     base_url: https://api.vectorengine.ai/v1
     endpoint: /v1/audio/transcriptions

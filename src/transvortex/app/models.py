@@ -108,6 +108,15 @@ class AsrUncertaintyHintsConfig:
 
 
 @dataclass
+class AsrChunkingConfig:
+    mode: str = "auto"  # auto | fixed | none
+    window_seconds: int = 300
+    overlap_seconds: int = 30
+    short_audio_seconds: int = 300
+    fuzzy_dedupe: bool = True
+
+
+@dataclass
 class TranslationConfig:
     chunk_lines: int = 40
     context_before_lines: int = 20
@@ -251,6 +260,7 @@ class PipelineConfig:
     asr_device: str = "auto"
     asr_compute_type: str = "int8"
     asr_mode: str = "local"
+    asr_chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
     asr_provider: str = ""
     asr_provider_model: str = ""
     asr_cloud_base_url: str = "https://api.openai.com"
@@ -258,6 +268,8 @@ class PipelineConfig:
     asr_cloud_model: str = "whisper-1"
     asr_cloud_env_key: str = "TVX_MODEL_API_KEY"
     asr_cloud_timeout_seconds: int = 120
+    source_mode: str = "auto"
+    subtitle_track: str = "auto"
 
 
 @dataclass
