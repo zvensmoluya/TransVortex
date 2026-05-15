@@ -271,6 +271,8 @@ def test_materialize_entries_applies_default_status_and_tags_preset(tmp_path: Pa
     entries = materialize_entries(bundle)
     statuses = {entry.source: entry.status for entry in entries}
     assert statuses == {"Tom": "locked", "Cooper": "confirmed"}
+    constraints = {entry.source: entry.constraint for entry in entries}
+    assert constraints == {"Tom": "must_use", "Cooper": "must_use"}
     assert all(entry.source_preset == "nold" for entry in entries)
 
 

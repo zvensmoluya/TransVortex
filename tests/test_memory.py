@@ -8,7 +8,7 @@ from transvortex.core.translate import iter_translate_all_chunks
 from transvortex.memory.checker import check_consistency
 from transvortex.memory.injector import build_memory_prompt
 from transvortex.memory.merger import merge_patch, patch_from_payload
-from transvortex.memory.schema import MemoryDocument, MemoryEntry
+from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, MemoryTargetVariant
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
 
@@ -96,10 +96,66 @@ def test_selector_and_injector_group_relevant_entries() -> None:
     selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=3))
     assert [entry.source for entry in selected] == ["Subaru", "The Order", "Mercury"]
     prompt = build_memory_prompt(selected)
-    assert "LOCKED GLOSSARY" in prompt
+    assert "LOCKED TERMS" in prompt
     assert "Subaru => 斯巴鲁" in prompt
     assert "CONFIRMED MEMORY" in prompt
     assert "PROPOSED HINTS" in prompt
+
+
+def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="1",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="locked",
+                alias_details=[MemoryAlias(source="エミリア様", kind="honorific")],
+                target_variants=[
+                    MemoryTargetVariant(source="エミリアタン", target="爱蜜莉雅碳", kind="nickname"),
+                ],
+                memory_type="entity",
+                constraint="must_use",
+                priority=100,
+            ),
+            MemoryEntry(
+                id="2",
+                source="スバル",
+                target="昴",
+                status="locked",
+                alias_details=[MemoryAlias(source="スヴァル", kind="asr_error")],
+                memory_type="entity",
+                constraint="must_use",
+                priority=90,
+            ),
+            MemoryEntry(
+                id="3",
+                source="死者の書",
+                target="死者之书",
+                status="proposed",
+                alias_details=[MemoryAlias(source="死者の過去を追体験する本", kind="broad_hint")],
+                memory_type="concept_hint",
+                constraint="hint",
+            ),
+        ]
+    )
+    chunk = Chunk(
+        chunk_id="c1",
+        segment_ids=[1],
+        lines=["[1] エミリアタンとスヴァルは死者の過去を追体験する本を見た"],
+    )
+
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    prompt = build_memory_prompt(selected)
+
+    assert [entry.source for entry in selected] == ["エミリア", "スバル", "死者の書"]
+    assert "LOCKED TERMS" in prompt
+    assert "ADDRESS VARIANTS" in prompt
+    assert "エミリアタン => 爱蜜莉雅碳; canonical: エミリア => 爱蜜莉雅; kind: nickname" in prompt
+    assert "ASR CORRECTION HINTS" in prompt
+    assert "スヴァル => 昴; canonical: スバル; kind: asr_error" in prompt
+    assert "CONCEPT HINTS" in prompt
+    assert "死者の過去を追体験する本 => 死者之书; canonical: 死者の書; kind: broad_hint" in prompt
 
 
 def test_selector_avoids_short_or_embedded_false_matches() -> None:
@@ -244,6 +300,52 @@ def test_merger_protects_preset_entries_without_writing_runtime_duplicate(tmp_pa
     assert "preset entry cannot be overwritten" in store.conflicts_file.read_text(encoding="utf-8")
 
 
+def test_merger_preserves_v2_alias_details_and_target_variants() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_emilia",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="proposed",
+                alias_details=[MemoryAlias(source="エミリア様", kind="honorific")],
+            )
+        ]
+    )
+    patch = patch_from_payload(
+        {
+            "chunk_ids": ["c1"],
+            "actions": [
+                {
+                    "action": "upsert",
+                    "source": "エミリア",
+                    "target": "爱蜜莉雅",
+                    "status": "proposed",
+                    "memory_type": "entity",
+                    "constraint": "preferred",
+                    "alias_details": [{"source": "エミリアたん", "kind": "nickname"}],
+                    "target_variants": [{"source": "エミリアたん", "target": "爱蜜莉雅碳", "kind": "nickname"}],
+                    "evidence_ids": [1],
+                }
+            ],
+        }
+    )
+
+    merged, conflicts = merge_patch(doc, patch)
+    entry = merged.entries[0]
+
+    assert conflicts == []
+    assert [(alias.source, alias.kind) for alias in entry.alias_details] == [
+        ("エミリア様", "honorific"),
+        ("エミリアたん", "nickname"),
+    ]
+    assert [(variant.source, variant.target, variant.kind) for variant in entry.target_variants] == [
+        ("エミリアたん", "爱蜜莉雅碳", "nickname")
+    ]
+    assert entry.memory_type == "entity"
+    assert entry.constraint == "preferred"
+
+
 def test_consistency_check_reports_missing_locked_translation() -> None:
     doc = MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")])
     issues = check_consistency(
@@ -276,6 +378,113 @@ def test_consistency_check_matches_cjk_terms_without_word_boundaries() -> None:
 
     assert len(issues) == 1
     assert issues[0].expected_target == "昴"
+
+
+def test_consistency_check_accepts_target_variants_for_address_forms() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_emilia",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="locked",
+                target_variants=[MemoryTargetVariant(source="エミリアタン", target="爱蜜莉雅碳", kind="nickname")],
+                constraint="must_use",
+            )
+        ]
+    )
+
+    issues = check_consistency(
+        doc,
+        [
+            Segment(id=1, start=0, end=1, text_src="エミリアタンだよ", text_tgt="爱蜜莉雅碳来了"),
+            Segment(id=2, start=1, end=2, text_src="エミリアタンだよ", text_tgt="爱蜜莉雅来了"),
+            Segment(id=3, start=2, end=3, text_src="エミリアタンだよ", text_tgt="艾米莉娅来了"),
+        ],
+    )
+
+    assert len(issues) == 1
+    assert issues[0].issue_type == "variant_miss"
+    assert issues[0].level == "suggestion"
+    assert issues[0].matched_source == "エミリアタン"
+    assert issues[0].expected_variants == ["爱蜜莉雅", "爱蜜莉雅碳"]
+
+
+def test_consistency_check_asr_alias_uses_canonical_target_without_literal_alias_pressure() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_subaru",
+                source="スバル",
+                target="昴",
+                status="locked",
+                alias_details=[MemoryAlias(source="スヴァル", kind="asr_error")],
+                constraint="must_use",
+            )
+        ]
+    )
+
+    ok = check_consistency(
+        doc,
+        [Segment(id=1, start=0, end=1, text_src="スヴァルは来た", text_tgt="昴来了")],
+    )
+    missing = check_consistency(
+        doc,
+        [Segment(id=2, start=1, end=2, text_src="スヴァルは来た", text_tgt="斯巴鲁来了")],
+    )
+
+    assert ok == []
+    assert len(missing) == 1
+    assert missing[0].issue_type == "hint_miss"
+    assert missing[0].level == "suggestion"
+    assert missing[0].matched_kind == "asr_error"
+
+
+def test_consistency_check_asr_alias_accepts_known_entity_variants() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_emilia",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="locked",
+                alias_details=[MemoryAlias(source="エミリヤ", kind="asr_error")],
+                target_variants=[MemoryTargetVariant(source="エミリアタン", target="爱蜜莉雅碳", kind="nickname")],
+                constraint="must_use",
+            )
+        ]
+    )
+
+    issues = check_consistency(
+        doc,
+        [Segment(id=1, start=0, end=1, text_src="エミリヤが来た", text_tgt="爱蜜莉雅碳来了")],
+    )
+
+    assert issues == []
+
+
+def test_consistency_check_concept_hint_is_suggestion_only() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_book",
+                source="死者の書",
+                target="死者之书",
+                status="locked",
+                memory_type="concept_hint",
+                constraint="hint",
+            )
+        ]
+    )
+
+    issues = check_consistency(
+        doc,
+        [Segment(id=1, start=0, end=1, text_src="死者の書を読んだ", text_tgt="读了那本书")],
+    )
+
+    assert len(issues) == 1
+    assert issues[0].issue_type == "hint_miss"
+    assert issues[0].level == "suggestion"
 
 
 def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_path: Path, monkeypatch) -> None:

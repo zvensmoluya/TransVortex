@@ -61,7 +61,11 @@ def _window_prompt(chunks: list[Chunk], translated_rows: list[dict], source_lang
         + "\n".join(translated_lines)
         + "\n\nReturn JSON exactly in this shape:\n"
         '{"chunk_ids":["..."],"actions":[{"action":"upsert","source":"...","target":"...",'
-        '"category":"term","status":"proposed","confidence":0.0,"evidence_ids":[1],"aliases":[],"notes":""}]}\n'
+        '"category":"term","status":"proposed","memory_type":"term","constraint":"hint",'
+        '"confidence":0.0,"evidence_ids":[1],"aliases":[],'
+        '"alias_details":[{"source":"...","kind":"asr_error"}],'
+        '"target_variants":[{"source":"...","target":"...","kind":"nickname"}],'
+        '"notes":""}]}\n'
         "When no useful candidate exists, return the same shape with an empty actions array."
     )
 

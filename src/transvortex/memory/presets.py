@@ -10,6 +10,8 @@ from ..utils import read_json, to_plain, utc_now_iso
 from .schema import (
     MEMORY_STATUS_ORDER,
     MemoryEntry,
+    entry_from_dict,
+    normalize_constraint,
     normalize_source_key,
     normalize_status,
 )
@@ -74,23 +76,15 @@ def _scope_from_payload(raw: Any) -> MemoryPresetScope:
 
 
 def _preset_entry_from_row(row: dict[str, Any]) -> MemoryEntry:
+    entry = entry_from_dict(row)
     raw_status = str(row.get("status") or "").strip().lower()
     status = raw_status if raw_status in MEMORY_STATUS_ORDER else ""
-    return MemoryEntry(
-        id=str(row.get("id") or ""),
-        source=str(row.get("source") or ""),
-        target=str(row.get("target") or ""),
-        category=str(row.get("category") or "term"),
-        status=status,
-        origin=str(row.get("origin") or ""),
-        priority=int(row.get("priority") or 50),
-        aliases=[str(item) for item in row.get("aliases", []) or []],
-        notes=str(row.get("notes") or ""),
-        confidence=float(row.get("confidence") or 0.0),
-        evidence_ids=[int(item) for item in row.get("evidence_ids", []) or [] if str(item).isdigit()],
-        created_by=str(row.get("created_by") or ""),
-        updated_at=str(row.get("updated_at") or ""),
-    )
+    entry.status = status
+    if "constraint" not in row:
+        entry.constraint = ""
+    entry.origin = str(row.get("origin") or "")
+    entry.created_by = str(row.get("created_by") or "")
+    return entry
 
 
 def _bundle_from_payload(payload: dict[str, Any], *, fallback_id: str, path: Path | None) -> MemoryPresetBundle:
@@ -186,6 +180,7 @@ def materialize_entries(
             entry,
             id=entry.id or _preset_entry_id(bundle.id, entry.source, entry.category),
             status=status,
+            constraint=normalize_constraint(entry.constraint, status=status),
             origin=entry.origin or "preset",
             source_preset=bundle.id,
             created_by=entry.created_by or "preset",

@@ -7,11 +7,13 @@ from typing import Any
 from ..utils import to_plain, utc_now_iso
 from .schema import (
     MEMORY_STATUS_ORDER,
+    MemoryAlias,
     MemoryConflict,
     MemoryDocument,
     MemoryEntry,
     MemoryPatch,
     MemoryPatchAction,
+    MemoryTargetVariant,
     normalize_source_key,
     patch_action_from_dict,
 )
@@ -28,6 +30,30 @@ def _merge_lists(a: list, b: list) -> list:
     for item in [*a, *b]:
         if item not in out:
             out.append(item)
+    return out
+
+
+def _merge_alias_details(a: list[MemoryAlias], b: list[MemoryAlias]) -> list[MemoryAlias]:
+    out: list[MemoryAlias] = []
+    seen: set[tuple[str, str]] = set()
+    for item in [*a, *b]:
+        key = (normalize_source_key(item.source), item.kind)
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _merge_target_variants(a: list[MemoryTargetVariant], b: list[MemoryTargetVariant]) -> list[MemoryTargetVariant]:
+    out: list[MemoryTargetVariant] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in [*a, *b]:
+        key = (normalize_source_key(item.source), item.target, item.kind)
+        if not key[0] or not item.target or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
     return out
 
 
@@ -122,6 +148,10 @@ def merge_patch(
             category=existing.category or action.category,
             status=stronger_status,
             aliases=_merge_lists(existing.aliases, action.aliases),
+            alias_details=_merge_alias_details(existing.alias_details, action.alias_details),
+            target_variants=_merge_target_variants(existing.target_variants, action.target_variants),
+            constraint=existing.constraint or action.constraint,
+            memory_type=existing.memory_type or action.memory_type,
             evidence_ids=_merge_lists(existing.evidence_ids, action.evidence_ids),
             confidence=max(float(existing.confidence), float(action.confidence)),
             notes=existing.notes or action.notes,
@@ -145,6 +175,10 @@ def action_to_entry(action: MemoryPatchAction):
         origin=action.origin,
         priority=50,
         aliases=action.aliases,
+        alias_details=action.alias_details,
+        target_variants=action.target_variants,
+        constraint=action.constraint,
+        memory_type=action.memory_type,
         notes=action.notes,
         confidence=action.confidence,
         evidence_ids=action.evidence_ids,

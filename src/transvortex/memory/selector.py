@@ -3,11 +3,13 @@ from __future__ import annotations
 import re
 
 from ..app.models import Chunk, MemoryInjectConfig
-from .schema import MEMORY_STATUS_ORDER, MemoryDocument, MemoryEntry
+from .schema import MEMORY_STATUS_ORDER, MemoryDocument, MemoryEntry, entry_alias_details
 
 
 def _entry_terms(entry: MemoryEntry) -> list[str]:
-    return [term for term in [entry.source, *entry.aliases] if term.strip()]
+    variant_sources = [variant.source for variant in entry.target_variants]
+    alias_sources = [alias.source for alias in entry_alias_details(entry)]
+    return [term for term in [entry.source, *alias_sources, *variant_sources] if term.strip()]
 
 
 def term_matches_text(term: str, text: str) -> bool:

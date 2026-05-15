@@ -1,0 +1,261 @@
+{
+  "id": "rezero_s04e05_reference",
+  "version": "1.0.0",
+  "name": "Re:Zero S04E05 reference glossary",
+  "description": "Reference Simplified Chinese glossary for the Re:Zero S04E05 ASR E2E run. Built from prior E2E runtime memory, embedded Traditional Chinese reference subtitles, and public Re:Zero character naming references.",
+  "scope": {
+    "language_pairs": [
+      "ja->zh-CN"
+    ],
+    "works": [
+      "rezero_s04e05"
+    ],
+    "tags": [
+      "anime",
+      "rezero",
+      "asr-e2e",
+      "reference"
+    ]
+  },
+  "default_status": "locked",
+  "entries": [
+    {
+      "source": "スバル",
+      "target": "昴",
+      "category": "name",
+      "priority": 100,
+      "aliases": [
+        "スヴァル",
+        "すばる",
+        "すばら",
+        "ナツキ・スバル",
+        "菜月昴"
+      ],
+      "notes": "主角菜月昴；对白称呼统一用“昴”，不要混用“斯巴鲁”。"
+    },
+    {
+      "source": "エミリア",
+      "target": "爱蜜莉雅",
+      "category": "name",
+      "priority": 100,
+      "aliases": [
+        "エミリアタン",
+        "エミリアたん",
+        "エミリア様",
+        "エミヤザ",
+        "エミリアたちは"
+      ],
+      "notes": "统一为“爱蜜莉雅”；エミリアタン可译为“爱蜜莉雅碳/爱蜜莉雅酱”，但名字本体不要写成“艾米莉娅”。"
+    },
+    {
+      "source": "シャウラ",
+      "target": "夏乌拉",
+      "category": "name",
+      "priority": 100,
+      "aliases": [
+        "シャオラ",
+        "シャオラー",
+        "シャオラさん",
+        "シャウラさん",
+        "シャウラ女子"
+      ],
+      "notes": "贤者之塔相关角色；ASR 常误作シャオラ，统一译为“夏乌拉”。"
+    },
+    {
+      "source": "ティフォン",
+      "target": "缇丰",
+      "category": "name",
+      "priority": 100,
+      "aliases": [
+        "テューフォン",
+        "テュフォン"
+      ],
+      "notes": "傲慢魔女；简中本轮统一为“缇丰”，不要混用“提丰”。"
+    },
+    {
+      "source": "アナスタシア",
+      "target": "安娜塔西亚",
+      "category": "name",
+      "priority": 95,
+      "aliases": [
+        "アナスタシアさん",
+        "アナスタシア様",
+        "アナスタシオ"
+      ],
+      "notes": "统一为“安娜塔西亚”，不要混用“安娜塔西娅”。"
+    },
+    {
+      "source": "ユリウス",
+      "target": "尤里乌斯",
+      "category": "name",
+      "priority": 95,
+      "aliases": [
+        "ユーリウス"
+      ],
+      "notes": "骑士尤里乌斯；本轮简中统一使用“尤里乌斯”。"
+    },
+    {
+      "source": "ベア子",
+      "target": "碧翠子",
+      "category": "name",
+      "priority": 95,
+      "aliases": [
+        "ベアコ",
+        "ベアゴー",
+        "ベアトリス"
+      ],
+      "notes": "Beako/贝蒂昵称；本轮沿用参考字幕口径统一为“碧翠子”。"
+    },
+    {
+      "source": "ラム",
+      "target": "拉姆",
+      "category": "name",
+      "priority": 90,
+      "aliases": [],
+      "notes": "角色名。"
+    },
+    {
+      "source": "メイリー",
+      "target": "梅莉",
+      "category": "name",
+      "priority": 90,
+      "aliases": [
+        "メィリィ",
+        "メィリー"
+      ],
+      "notes": "角色名。"
+    },
+    {
+      "source": "ノアリベルタス",
+      "target": "诺亚·利贝尔塔斯",
+      "category": "name",
+      "priority": 80,
+      "aliases": [
+        "ノア・リベルタス"
+      ],
+      "notes": "书名/死者名上下文中出现。"
+    },
+    {
+      "source": "エイゴンボラ",
+      "target": "艾贡·波拉",
+      "category": "name",
+      "priority": 80,
+      "aliases": [
+        "エイゴン・ボラ"
+      ],
+      "notes": "书名/死者名上下文中出现。"
+    },
+    {
+      "source": "バルロイ・テメグリフ",
+      "target": "巴尔洛伊·特梅格里夫",
+      "category": "name",
+      "priority": 80,
+      "aliases": [
+        "バルロイテメグリフ"
+      ],
+      "notes": "书名/死者名上下文中出现。"
+    },
+    {
+      "source": "ボラキア帝国",
+      "target": "佛拉基亚帝国",
+      "category": "place",
+      "priority": 85,
+      "aliases": [
+        "ヴォラキア帝国"
+      ],
+      "notes": "地名。"
+    },
+    {
+      "source": "ルグニカ王国",
+      "target": "露格尼卡王国",
+      "category": "place",
+      "priority": 85,
+      "aliases": [
+        "レグニカ王国"
+      ],
+      "notes": "地名；ASR 可能误作レグニカ。"
+    },
+    {
+      "source": "墓所",
+      "target": "墓所",
+      "category": "place",
+      "priority": 80,
+      "aliases": [],
+      "notes": "圣域试炼相关地点。"
+    },
+    {
+      "source": "プレアデス監視塔",
+      "target": "普勒阿得斯监视塔",
+      "category": "place",
+      "priority": 80,
+      "aliases": [
+        "監視塔",
+        "塔"
+      ],
+      "notes": "本集舞台；若原文只说“塔”，可按上下文译为“塔”。"
+    },
+    {
+      "source": "傲慢の魔女",
+      "target": "傲慢魔女",
+      "category": "title",
+      "priority": 85,
+      "aliases": [
+        "ゴーマンの魔女",
+        "傲慢の魔女 ティフォン"
+      ],
+      "notes": "ASR 可能误作ゴーマンの魔女。"
+    },
+    {
+      "source": "死者の書",
+      "target": "死者之书",
+      "category": "term",
+      "priority": 85,
+      "aliases": [
+        "死者の過去を追体験する本",
+        "世界中の死者の名前"
+      ],
+      "notes": "记录死者记忆/人生的书；不要泛译成普通的“书”。"
+    },
+    {
+      "source": "お師様",
+      "target": "师父",
+      "category": "term",
+      "priority": 95,
+      "aliases": [
+        "おっしさま",
+        "おし様",
+        "おっしゃま",
+        "師匠様"
+      ],
+      "notes": "夏乌拉对昴的称呼；需要尊敬或撒娇语气时可译“师父大人”，短对白优先“师父”。"
+    },
+    {
+      "source": "天剣に至りし愚者",
+      "target": "已臻天剑的愚者",
+      "category": "term",
+      "priority": 100,
+      "aliases": [
+        "天鮮に至り失くさ",
+        "天拳に至りしくしや",
+        "天拳…くしゃ",
+        "天賢にいたり宿舎",
+        "天剣の愚者"
+      ],
+      "notes": "重复咒文/机关句；ASR 误听很多，核心词“愚者”必须保留。"
+    },
+    {
+      "source": "彼の者の許しを得よ",
+      "target": "获得其许可吧",
+      "category": "term",
+      "priority": 100,
+      "aliases": [
+        "かのものの許しを得",
+        "カノモノの許しを得",
+        "賢者の許ようでよ",
+        "賢者の許ようへよ",
+        "許し"
+      ],
+      "notes": "与“天剣に至りし愚者”连成咒文时译作“已臻天剑的愚者，获得其许可吧”。"
+    }
+  ]
+}
