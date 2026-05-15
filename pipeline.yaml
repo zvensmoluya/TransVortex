@@ -1,7 +1,5 @@
 artifacts_dir: artifacts
-chunk_seconds: 60
-chunk_overlap_seconds: 1
-translation_batch_size: 40
+translation_batch_size: 120
 default_concurrency: 8
 timeout_seconds: 30
 retry: 3
@@ -27,8 +25,8 @@ subtitle:
     enabled: false
     max_attempts: 1
 translation:
-  chunk_lines: 8
-  context_before_lines: 30
+  chunk_lines: 120
+  context_before_lines: 40
   context_after_lines: 20
   style_preset: subtitle_natural
   refusal_detection:

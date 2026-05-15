@@ -92,7 +92,7 @@ providers:
       supports_system_prompt: true
       supports_temperature: true
       supports_json_mode: false
-      max_batch_lines: 50
+      max_batch_lines: 200
     limits:
       concurrency: 8
       timeout_seconds: 30
@@ -115,9 +115,9 @@ routing:
 
 ```yaml
 translation:
-  chunk_lines: 40
-  context_before_lines: 20
-  context_after_lines: 10
+  chunk_lines: 120
+  context_before_lines: 40
+  context_after_lines: 20
   style_preset: subtitle_natural
   style_prompt: |
     Translate as natural subtitles.

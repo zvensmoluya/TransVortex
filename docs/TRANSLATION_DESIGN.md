@@ -138,23 +138,23 @@ size-bounded chunks + sliding read-only context
 
 ```yaml
 translation:
-  chunk_lines: 40
-  min_chunk_lines: 20
-  max_chunk_lines: 80
-  context_before_lines: 20
-  context_after_lines: 10
+  chunk_lines: 120
+  min_chunk_lines: 40
+  max_chunk_lines: 200
+  context_before_lines: 40
+  context_after_lines: 20
   boundary_hints:
     punctuation: true
     pause_seconds: 2.0
     hard_pause_seconds: 6.0
 ```
 
-强模型可以调大：
+强模型可以进一步调大：
 
 ```yaml
 translation:
-  chunk_lines: 120
-  max_chunk_lines: 200
+  chunk_lines: 200
+  max_chunk_lines: 300
   context_before_lines: 80
   context_after_lines: 40
 ```
@@ -210,13 +210,13 @@ CONTEXT_AFTER
 
 ```yaml
 translation:
-  context_before_lines: 20
-  context_after_lines: 10
+  context_before_lines: 40
+  context_after_lines: 20
 ```
 
 滑动上下文不会改变最终回填范围。系统只接受 `TRANSLATE_ONLY` 中的 id，context 区域若被模型输出，应视为多余 id 并触发校验失败或 repair。
 
-这种策略比纯固定 40 行孤立翻译更连贯，也比整片一次输出更容易恢复和校验。
+这种策略比纯固定小块孤立翻译更连贯，也比整片一次输出更容易恢复和校验。
 
 ## 6. Prompt 分层
 
@@ -611,11 +611,11 @@ refine/
 ```yaml
 translation:
   chunking: size_bounded
-  chunk_lines: 40
-  min_chunk_lines: 20
-  max_chunk_lines: 80
-  context_before_lines: 20
-  context_after_lines: 10
+  chunk_lines: 120
+  min_chunk_lines: 40
+  max_chunk_lines: 200
+  context_before_lines: 40
+  context_after_lines: 20
   boundary_hints:
     punctuation: true
     pause_seconds: 2.0

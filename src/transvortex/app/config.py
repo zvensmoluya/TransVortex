@@ -340,7 +340,7 @@ def load_app_config(
     asr_cloud_raw = asr_raw.get("cloud") or {}
     asr_chunking_raw = asr_raw.get("chunking") or {}
     translation_raw = pip_yaml.get("translation") or {}
-    legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 40)
+    legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 120)
     chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
     translation_system_prompt = load_prompt(
         "translation_system",
@@ -359,8 +359,8 @@ def load_app_config(
     asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
-        context_before_lines=_to_int(translation_raw.get("context_before_lines"), 20),
-        context_after_lines=_to_int(translation_raw.get("context_after_lines"), 10),
+        context_before_lines=_to_int(translation_raw.get("context_before_lines"), 40),
+        context_after_lines=_to_int(translation_raw.get("context_after_lines"), 20),
         style_preset=str(translation_raw.get("style_preset", "subtitle_natural")),
         style_prompt=style_prompt_default,
         system_prompt=translation_system_prompt,
@@ -620,7 +620,7 @@ def load_app_config(
             supports_system_prompt=bool(capabilities_raw.get("supports_system_prompt", True)),
             supports_temperature=bool(capabilities_raw.get("supports_temperature", True)),
             supports_json_mode=bool(capabilities_raw.get("supports_json_mode", False)),
-            max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines"), 50),
+            max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines"), 200),
         )
         cfg = ProviderConfig(
             name=row["name"],

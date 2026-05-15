@@ -32,6 +32,31 @@ default_concurrency: 8
     assert cfg.pipeline.chunk_seconds == 30
 
 
+def test_long_context_translation_defaults(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.translation_batch_size == 120
+    assert cfg.pipeline.translation.chunk_lines == 120
+    assert cfg.pipeline.translation.context_before_lines == 40
+    assert cfg.pipeline.translation.context_after_lines == 20
+    assert cfg.providers["p1"].capabilities.max_batch_lines == 200
+
+
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

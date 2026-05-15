@@ -54,7 +54,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "openai_responses": {
@@ -71,7 +71,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "openai_completions": {
@@ -88,7 +88,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "anthropic_messages": {
@@ -106,7 +106,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "gemini_generate_content": {
@@ -127,7 +127,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "gemini_ai_studio_native": {
@@ -154,7 +154,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "gemini_openai_compatible": {
@@ -177,7 +177,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "vertex_native": {
@@ -197,7 +197,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "vertex_openai_compatible": {
@@ -214,7 +214,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
     "custom_json": {
@@ -237,7 +237,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 50,
+            "max_batch_lines": 200,
         },
     },
 }

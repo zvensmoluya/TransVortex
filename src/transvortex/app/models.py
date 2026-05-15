@@ -26,7 +26,7 @@ class CapabilityConfig:
     supports_system_prompt: bool = True
     supports_temperature: bool = True
     supports_json_mode: bool = False
-    max_batch_lines: int = 50
+    max_batch_lines: int = 200
 
 
 @dataclass
@@ -118,9 +118,9 @@ class AsrChunkingConfig:
 
 @dataclass
 class TranslationConfig:
-    chunk_lines: int = 40
-    context_before_lines: int = 20
-    context_after_lines: int = 10
+    chunk_lines: int = 120
+    context_before_lines: int = 40
+    context_after_lines: int = 20
     style_preset: str = "subtitle_natural"
     style_prompt: str = DEFAULT_TRANSLATION_STYLE_PROMPT
     system_prompt: str = ""
@@ -246,7 +246,7 @@ class PipelineConfig:
     artifacts_dir: Path
     chunk_seconds: int = 60
     chunk_overlap_seconds: int = 1
-    translation_batch_size: int = 40
+    translation_batch_size: int = 120
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     subtitle: SubtitleConfig = field(default_factory=SubtitleConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)

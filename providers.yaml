@@ -27,7 +27,7 @@ providers:
       supports_system_prompt: true
       supports_temperature: true
       supports_json_mode: false
-      max_batch_lines: 50
+      max_batch_lines: 200
     limits:
       concurrency: 8
       timeout_seconds: 30
