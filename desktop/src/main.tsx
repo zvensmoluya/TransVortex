@@ -244,6 +244,8 @@ function App() {
       const providerConfig = payload.providers.find((item) => item.name === provider);
       const memory = objectValue(payload.pipeline.memory);
       const subtitle = objectValue(payload.pipeline.subtitle);
+      const asrLocal = objectValue(payload.pipeline.asr_local);
+      const asrCloud = objectValue(payload.pipeline.asr_cloud);
       const asrChunking = objectValue(payload.pipeline.asr_chunking);
       const reflow = objectValue(subtitle.reflow);
       return {
@@ -251,11 +253,15 @@ function App() {
         provider,
         model: current.model || payload.routing.primary.model || providerConfig?.models[0] || "",
         asrMode: textValue(payload.pipeline.asr_mode, current.asrMode),
-        asrDevice: textValue(payload.pipeline.asr_device, current.asrDevice),
-        asrModelSize: textValue(payload.pipeline.asr_model_size, current.asrModelSize),
-        asrComputeType: textValue(payload.pipeline.asr_compute_type, current.asrComputeType),
-        asrProvider: textValue(payload.pipeline.asr_provider, current.asrProvider),
-        asrModel: textValue(payload.pipeline.asr_provider_model, current.asrModel),
+        asrDevice: textValue(asrLocal.device, current.asrDevice),
+        asrModelSize: textValue(asrLocal.model_size, current.asrModelSize),
+        asrComputeType: textValue(asrLocal.compute_type, current.asrComputeType),
+        asrCloudBaseUrl: textValue(asrCloud.base_url, current.asrCloudBaseUrl),
+        asrCloudEndpoint: textValue(asrCloud.endpoint, current.asrCloudEndpoint),
+        asrModel: textValue(asrCloud.model, current.asrModel),
+        asrCloudEnvKey: textValue(asrCloud.env_key, current.asrCloudEnvKey),
+        asrCloudCredentialId: textValue(asrCloud.credential_id, current.asrCloudCredentialId),
+        asrCloudTimeoutSeconds: numberValue(asrCloud.timeout_seconds, current.asrCloudTimeoutSeconds),
         sourceMode: textValue(payload.pipeline.source_mode, current.sourceMode) as FormState["sourceMode"],
         subtitleTrack: textValue(payload.pipeline.subtitle_track, current.subtitleTrack),
         asrChunkingMode: textValue(asrChunking?.mode, current.asrChunkingMode) as FormState["asrChunkingMode"],
@@ -765,8 +771,12 @@ function App() {
       asrDevice: form.asrDevice || null,
       asrModelSize: form.asrModelSize || null,
       asrComputeType: form.asrComputeType || null,
-      asrProvider: form.asrProvider || null,
+      asrCloudBaseUrl: form.asrCloudBaseUrl || null,
+      asrCloudEndpoint: form.asrCloudEndpoint || null,
       asrModel: form.asrModel || null,
+      asrCloudEnvKey: form.asrCloudEnvKey || null,
+      asrCloudCredentialId: form.asrCloudCredentialId || null,
+      asrCloudTimeoutSeconds: form.asrCloudTimeoutSeconds,
       asrChunkingMode: form.asrChunkingMode || null,
       asrWindowSeconds: form.chunkSeconds,
       asrOverlapSeconds: form.chunkOverlapSeconds,
@@ -2046,7 +2056,7 @@ function ConfigPanel({
             {t("asrMode")}
             <select className="tvx-input" value={form.asrMode} onChange={(event) => update("asrMode", event.target.value)}>
               <option value="local">local</option>
-              <option value="openai">openai</option>
+              <option value="cloud">cloud</option>
             </select>
           </label>
           <label className="tvx-label">
@@ -2064,6 +2074,36 @@ function ConfigPanel({
           <label className="tvx-label">
             {t("compute")}
             <input className="tvx-input" value={form.asrComputeType} onChange={(event) => update("asrComputeType", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudBaseUrl")}
+            <input className="tvx-input" value={form.asrCloudBaseUrl} onChange={(event) => update("asrCloudBaseUrl", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudEndpoint")}
+            <input className="tvx-input" value={form.asrCloudEndpoint} onChange={(event) => update("asrCloudEndpoint", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudModel")}
+            <input className="tvx-input" value={form.asrModel} onChange={(event) => update("asrModel", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudTimeout")}
+            <input
+              className="tvx-input"
+              type="number"
+              min="1"
+              value={form.asrCloudTimeoutSeconds}
+              onChange={(event) => update("asrCloudTimeoutSeconds", Number(event.target.value))}
+            />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudEnvKey")}
+            <input className="tvx-input" value={form.asrCloudEnvKey} onChange={(event) => update("asrCloudEnvKey", event.target.value)} />
+          </label>
+          <label className="tvx-label">
+            {t("asrCloudCredentialId")}
+            <input className="tvx-input" value={form.asrCloudCredentialId} onChange={(event) => update("asrCloudCredentialId", event.target.value)} />
           </label>
         </div>
       </Panel>

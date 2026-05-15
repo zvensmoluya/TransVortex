@@ -60,8 +60,12 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_device": args.asr_device,
         "asr_model_size": args.asr_model_size,
         "asr_compute_type": args.asr_compute_type,
-        "asr_provider": args.asr_provider,
-        "asr_provider_model": args.asr_model,
+        "asr_cloud_base_url": getattr(args, "asr_cloud_base_url", None),
+        "asr_cloud_endpoint": getattr(args, "asr_cloud_endpoint", None),
+        "asr_cloud_model": args.asr_model,
+        "asr_cloud_env_key": getattr(args, "asr_cloud_env_key", None),
+        "asr_cloud_credential_id": getattr(args, "asr_cloud_credential_id", None),
+        "asr_cloud_timeout_seconds": getattr(args, "asr_cloud_timeout_seconds", None),
         "asr_chunking_mode": getattr(args, "asr_chunking_mode", None),
         "asr_window_seconds": getattr(args, "asr_window_seconds", None),
         "asr_overlap_seconds": getattr(args, "asr_overlap_seconds", None),
@@ -141,12 +145,16 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--chunk-overlap-seconds", type=int, default=None)
     subparser.add_argument("--translation-batch-size", type=int, default=None)
     subparser.add_argument("--concurrency", type=int, default=None)
-    subparser.add_argument("--asr-mode", choices=["local", "openai"], default=None)
+    subparser.add_argument("--asr-mode", choices=["local", "cloud"], default=None)
     subparser.add_argument("--asr-device", default=None)
     subparser.add_argument("--asr-model-size", default=None)
     subparser.add_argument("--asr-compute-type", default=None)
-    subparser.add_argument("--asr-provider", default=None)
-    subparser.add_argument("--asr-model", default=None)
+    subparser.add_argument("--asr-cloud-base-url", default=None)
+    subparser.add_argument("--asr-cloud-endpoint", default=None)
+    subparser.add_argument("--asr-model", default=None, help="Cloud ASR model override")
+    subparser.add_argument("--asr-cloud-env-key", default=None)
+    subparser.add_argument("--asr-cloud-credential-id", default=None)
+    subparser.add_argument("--asr-cloud-timeout-seconds", type=int, default=None)
     subparser.add_argument("--asr-chunking-mode", choices=["auto", "fixed", "none"], default=None)
     subparser.add_argument("--asr-window-seconds", type=int, default=None)
     subparser.add_argument("--asr-overlap-seconds", type=int, default=None)
@@ -308,8 +316,12 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-device", getattr(ns, "asr_device", None)),
         ("--asr-model-size", getattr(ns, "asr_model_size", None)),
         ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
-        ("--asr-provider", getattr(ns, "asr_provider", None)),
+        ("--asr-cloud-base-url", getattr(ns, "asr_cloud_base_url", None)),
+        ("--asr-cloud-endpoint", getattr(ns, "asr_cloud_endpoint", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),
+        ("--asr-cloud-env-key", getattr(ns, "asr_cloud_env_key", None)),
+        ("--asr-cloud-credential-id", getattr(ns, "asr_cloud_credential_id", None)),
+        ("--asr-cloud-timeout-seconds", getattr(ns, "asr_cloud_timeout_seconds", None)),
         ("--asr-chunking-mode", getattr(ns, "asr_chunking_mode", None)),
         ("--asr-window-seconds", getattr(ns, "asr_window_seconds", None)),
         ("--asr-overlap-seconds", getattr(ns, "asr_overlap_seconds", None)),

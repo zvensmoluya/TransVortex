@@ -161,15 +161,13 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
             "--model",
             "m1",
             "--asr-mode",
-            "openai",
+            "cloud",
             "--asr-device",
             "cpu",
             "--asr-model-size",
             "tiny",
             "--asr-compute-type",
             "int8",
-            "--asr-provider",
-            "p1",
             "--asr-model",
             "whisper-1",
             "--stream-events",
@@ -180,8 +178,8 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
     assert [event["type"] for event in events] == ["task_created", "done"]
     assert captured["provider_name"] == "p1"
     assert captured["model"] == "m1"
-    assert captured["cli_overrides"]["asr_mode"] == "openai"
-    assert captured["cli_overrides"]["asr_provider_model"] == "whisper-1"
+    assert captured["cli_overrides"]["asr_mode"] == "cloud"
+    assert captured["cli_overrides"]["asr_cloud_model"] == "whisper-1"
 
 
 def test_stream_events_and_json_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from transvortex.app.config import load_app_config
 
 
@@ -421,24 +423,51 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 asr:
-  mode: openai
-  provider: p1
-  model: whisper-1
+  mode: cloud
   cloud:
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
     env_key: OPENAI_API_KEY
+    credential_id: openai_asr
     timeout_seconds: 180
         """.strip(),
         encoding="utf-8",
     )
     cfg = load_app_config(root_dir=tmp_path)
-    assert cfg.pipeline.asr_mode == "openai"
-    assert cfg.pipeline.asr_provider == "p1"
-    assert cfg.pipeline.asr_provider_model == "whisper-1"
-    assert cfg.pipeline.asr_cloud_model == "whisper-1"
-    assert cfg.pipeline.asr_cloud_timeout_seconds == 180
+    assert cfg.pipeline.asr_mode == "cloud"
+    assert cfg.pipeline.asr_cloud.base_url == "https://api.openai.com"
+    assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
+    assert cfg.pipeline.asr_cloud.model == "whisper-1"
+    assert cfg.pipeline.asr_cloud.env_key == "OPENAI_API_KEY"
+    assert cfg.pipeline.asr_cloud.credential_id == "openai_asr"
+    assert cfg.pipeline.asr_cloud.timeout_seconds == 180
+
+
+def test_asr_mode_rejects_legacy_openai_value(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  mode: openai
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported asr.mode: openai"):
+        load_app_config(root_dir=tmp_path)
 
 
 def test_translation_config_nested_and_legacy_batch_alias(tmp_path: Path) -> None:
@@ -773,12 +802,16 @@ routing:
     cfg = load_app_config(
         root_dir=tmp_path,
         cli_overrides={
-            "asr_mode": "openai",
+            "asr_mode": "cloud",
             "asr_device": "cuda",
             "asr_model_size": "medium",
             "asr_compute_type": "float16",
-            "asr_provider": "p1",
-            "asr_provider_model": "whisper-large",
+            "asr_cloud_model": "whisper-large",
+            "asr_cloud_base_url": "https://asr.example.com",
+            "asr_cloud_endpoint": "/v1/audio/transcriptions",
+            "asr_cloud_env_key": "ASR_API_KEY",
+            "asr_cloud_credential_id": "asr",
+            "asr_cloud_timeout_seconds": 240,
             "asr_chunking_mode": "fixed",
             "asr_window_seconds": 420,
             "asr_overlap_seconds": 45,
@@ -786,12 +819,16 @@ routing:
             "subtitle_track": "3",
         },
     )
-    assert cfg.pipeline.asr_mode == "openai"
-    assert cfg.pipeline.asr_device == "cuda"
-    assert cfg.pipeline.asr_model_size == "medium"
-    assert cfg.pipeline.asr_compute_type == "float16"
-    assert cfg.pipeline.asr_provider == "p1"
-    assert cfg.pipeline.asr_provider_model == "whisper-large"
+    assert cfg.pipeline.asr_mode == "cloud"
+    assert cfg.pipeline.asr_local.device == "cuda"
+    assert cfg.pipeline.asr_local.model_size == "medium"
+    assert cfg.pipeline.asr_local.compute_type == "float16"
+    assert cfg.pipeline.asr_cloud.model == "whisper-large"
+    assert cfg.pipeline.asr_cloud.base_url == "https://asr.example.com"
+    assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
+    assert cfg.pipeline.asr_cloud.env_key == "ASR_API_KEY"
+    assert cfg.pipeline.asr_cloud.credential_id == "asr"
+    assert cfg.pipeline.asr_cloud.timeout_seconds == 240
     assert cfg.pipeline.asr_chunking.mode == "fixed"
     assert cfg.pipeline.asr_chunking.window_seconds == 420
     assert cfg.pipeline.asr_chunking.overlap_seconds == 45
@@ -817,7 +854,7 @@ routing:
 
     cfg = load_app_config(root_dir=tmp_path)
 
-    assert cfg.pipeline.asr_device == "auto"
+    assert cfg.pipeline.asr_local.device == "auto"
     assert cfg.pipeline.asr_chunking.mode == "auto"
     assert cfg.pipeline.asr_chunking.window_seconds == 300
     assert cfg.pipeline.asr_chunking.overlap_seconds == 30

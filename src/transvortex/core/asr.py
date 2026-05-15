@@ -8,8 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from ..app.models import ProviderConfig
-from ..app.credentials import resolve_credential, resolve_provider_credential
+from ..app.credentials import resolve_credential
 from ..utils import write_json
 
 
@@ -26,9 +25,8 @@ class AsrEngine:
         cloud_endpoint: str = "/v1/audio/transcriptions",
         cloud_model: str = "whisper-1",
         cloud_env_key: str = "TVX_MODEL_API_KEY",
+        cloud_credential_id: str = "TVX_MODEL_API_KEY",
         cloud_timeout_seconds: int = 120,
-        cloud_provider: ProviderConfig | None = None,
-        cloud_provider_model: str = "",
         root_dir: Path | None = None,
     ) -> None:
         self.model_size = model_size
@@ -40,9 +38,8 @@ class AsrEngine:
         self.cloud_endpoint = cloud_endpoint
         self.cloud_model = cloud_model
         self.cloud_env_key = cloud_env_key
+        self.cloud_credential_id = cloud_credential_id
         self.cloud_timeout_seconds = cloud_timeout_seconds
-        self.cloud_provider = cloud_provider
-        self.cloud_provider_model = cloud_provider_model
         self.root_dir = root_dir
         self._model = None
 
@@ -64,7 +61,7 @@ class AsrEngine:
     def transcribe_segment(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
         if self.mode == "local":
             return self._transcribe_segment_local(audio_path, segment_start_offset)
-        if self.mode == "openai":
+        if self.mode == "cloud":
             return self._transcribe_segment_openai(audio_path, segment_start_offset)
         raise RuntimeError(f"Unsupported ASR mode: {self.mode}")
 
@@ -84,15 +81,12 @@ class AsrEngine:
         return rows
 
     def _transcribe_segment_openai(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
-        if self.cloud_provider:
-            credential = resolve_provider_credential(self.cloud_provider, root_dir=self.root_dir)
-        else:
-            credential = resolve_credential(
-                env_key=self.cloud_env_key,
-                credential_id=self.cloud_env_key,
-                provider_name="",
-                root_dir=self.root_dir,
-            )
+        credential = resolve_credential(
+            env_key=self.cloud_env_key,
+            credential_id=self.cloud_credential_id,
+            provider_name="",
+            root_dir=self.root_dir,
+        )
         if not credential.found:
             raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
         response = self._call_openai_transcriptions(audio_path, api_key=credential.key)
@@ -127,15 +121,10 @@ class AsrEngine:
     def _call_openai_transcriptions(self, audio_path: Path, *, api_key: str) -> dict[str, Any]:
         boundary = f"----TransVortex{uuid.uuid4().hex}"
         body = self._build_multipart_body(audio_path=audio_path, boundary=boundary)
-        if self.cloud_provider:
-            model = self.cloud_provider_model or self.cloud_model
-            url, auth_headers = _build_url_and_auth_headers(self.cloud_provider, api_key, model=model)
-            method = self.cloud_provider.endpoint.method
-        else:
-            endpoint = self.cloud_endpoint if self.cloud_endpoint.startswith("/") else f"/{self.cloud_endpoint}"
-            url = f"{self.cloud_base_url}{endpoint}"
-            auth_headers = {"Authorization": f"Bearer {api_key}"}
-            method = "POST"
+        endpoint = self.cloud_endpoint if self.cloud_endpoint.startswith("/") else f"/{self.cloud_endpoint}"
+        url = f"{self.cloud_base_url}{endpoint}"
+        auth_headers = {"Authorization": f"Bearer {api_key}"}
+        method = "POST"
         req = urllib.request.Request(
             url=url,
             data=body,
@@ -160,8 +149,7 @@ class AsrEngine:
             chunks.append(b"\r\n")
 
         chunks: list[bytes] = []
-        model = self.cloud_provider_model or self.cloud_model
-        add_field(chunks, "model", model)
+        add_field(chunks, "model", self.cloud_model)
         add_field(chunks, "response_format", "verbose_json")
         language = _normalize_whisper_language(self.source_lang)
         if language:
@@ -190,7 +178,7 @@ def _normalize_whisper_language(source_lang: str | None) -> str | None:
     return source_lang.split("-", 1)[0].strip().lower() or None
 
 
-def _build_url_and_auth_headers(config: ProviderConfig, api_key: str, *, model: str) -> tuple[str, dict[str, str]]:
+def _build_url_and_auth_headers(config: Any, api_key: str, *, model: str) -> tuple[str, dict[str, str]]:
     raw_path = config.endpoint.path_template.format(model=model)
     if not raw_path.startswith("/"):
         raw_path = f"/{raw_path}"

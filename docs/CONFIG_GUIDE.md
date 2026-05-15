@@ -146,21 +146,31 @@ subtitle_track: auto     # auto 或 ffprobe stream index
 
 asr:
   mode: local
-  device: auto
-  model_size: small
-  compute_type: int8
+  local:
+    device: auto
+    model_size: small
+    compute_type: int8
   chunking:
     mode: auto           # auto | fixed | none
     window_seconds: 300
     overlap_seconds: 30
     short_audio_seconds: 300
     fuzzy_dedupe: true
+  cloud:
+    base_url: https://api.openai.com
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: TVX_MODEL_API_KEY
+    credential_id: openai_asr
+    timeout_seconds: 120
 ```
 
 说明：
 - `auto` ASR 会对短音频使用单窗口；长音频使用 sliding window，并在合并时只采信 trusted region。
+- `mode: cloud` 使用独立 ASR 云端配置，不复用翻译 provider routing；当前适配的是 OpenAI Whisper-style multipart transcription。
+- `asr.cloud.model` 是云 ASR 模型入口；`--asr-model` 只覆盖这个字段，不影响翻译模型。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
-- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds` 覆盖。
+- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds` 覆盖。
 
 ## 6. 零 Token 协议预检
 

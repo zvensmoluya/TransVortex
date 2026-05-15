@@ -117,6 +117,23 @@ class AsrChunkingConfig:
 
 
 @dataclass
+class AsrLocalConfig:
+    model_size: str = "small"
+    device: str = "auto"
+    compute_type: str = "int8"
+
+
+@dataclass
+class AsrCloudConfig:
+    base_url: str = "https://api.openai.com"
+    endpoint: str = "/v1/audio/transcriptions"
+    model: str = "whisper-1"
+    env_key: str = "TVX_MODEL_API_KEY"
+    credential_id: str = "TVX_MODEL_API_KEY"
+    timeout_seconds: int = 120
+
+
+@dataclass
 class TranslationConfig:
     chunk_lines: int = 120
     context_before_lines: int = 40
@@ -256,18 +273,10 @@ class PipelineConfig:
     timeout_seconds: int = 30
     retry: int = 3
     max_cps: int = 20
-    asr_model_size: str = "small"
-    asr_device: str = "auto"
-    asr_compute_type: str = "int8"
     asr_mode: str = "local"
+    asr_local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
+    asr_cloud: AsrCloudConfig = field(default_factory=AsrCloudConfig)
     asr_chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
-    asr_provider: str = ""
-    asr_provider_model: str = ""
-    asr_cloud_base_url: str = "https://api.openai.com"
-    asr_cloud_endpoint: str = "/v1/audio/transcriptions"
-    asr_cloud_model: str = "whisper-1"
-    asr_cloud_env_key: str = "TVX_MODEL_API_KEY"
-    asr_cloud_timeout_seconds: int = 120
     source_mode: str = "auto"
     subtitle_track: str = "auto"
 

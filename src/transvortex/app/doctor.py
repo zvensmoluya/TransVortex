@@ -407,33 +407,14 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                 )
             )
 
-    if config.pipeline.asr_mode == "openai":
-        env_key = config.pipeline.asr_cloud_env_key
-        if config.pipeline.asr_provider:
-            asr_provider = config.providers.get(config.pipeline.asr_provider)
-            if asr_provider is None:
-                checks.append(
-                    _check(
-                        "asr_provider",
-                        "FAIL",
-                        "asr_provider_missing",
-                        f"ASR provider not found: {config.pipeline.asr_provider}",
-                        f"ASR provider 不存在：{config.pipeline.asr_provider}。",
-                    )
-                )
-            else:
-                env_key = asr_provider.env_key
-                asr_credential_id = asr_provider.credential_id or asr_provider.name
-                asr_provider_name = asr_provider.name
-        else:
-            asr_credential_id = env_key
-            asr_provider_name = ""
+    if config.pipeline.asr_mode == "cloud":
+        env_key = config.pipeline.asr_cloud.env_key
         checks.append(
             _env_key_check(
                 root_dir=root_dir,
                 env_key=env_key,
-                credential_id=asr_credential_id,
-                provider_name=asr_provider_name,
+                credential_id=config.pipeline.asr_cloud.credential_id,
+                provider_name="",
                 name="asr_env_key",
                 message_subject="ASR",
             )

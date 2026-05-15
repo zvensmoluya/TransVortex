@@ -53,11 +53,10 @@ memory:
     enabled: true
 asr:
   mode: local
-  provider: openai_asr
-  model: whisper-1
-  model_size: small
-  device: auto
-  compute_type: int8
+  local:
+    model_size: small
+    device: auto
+    compute_type: int8
   chunking:
     mode: auto
     window_seconds: 300
@@ -69,4 +68,5 @@ asr:
     endpoint: /v1/audio/transcriptions
     model: whisper-1
     env_key: TVX_MODEL_API_KEY
+    credential_id: TVX_MODEL_API_KEY
     timeout_seconds: 300

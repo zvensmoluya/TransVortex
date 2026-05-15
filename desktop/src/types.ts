@@ -230,8 +230,12 @@ export type FormState = {
   asrDevice: string;
   asrModelSize: string;
   asrComputeType: string;
-  asrProvider: string;
+  asrCloudBaseUrl: string;
+  asrCloudEndpoint: string;
   asrModel: string;
+  asrCloudEnvKey: string;
+  asrCloudCredentialId: string;
+  asrCloudTimeoutSeconds: number;
   asrChunkingMode: "auto" | "fixed" | "none";
   chunkSeconds: number;
   chunkOverlapSeconds: number;
@@ -268,8 +272,12 @@ export const emptyForm: FormState = {
   asrDevice: "auto",
   asrModelSize: "small",
   asrComputeType: "int8",
-  asrProvider: "",
+  asrCloudBaseUrl: "https://api.openai.com",
+  asrCloudEndpoint: "/v1/audio/transcriptions",
   asrModel: "whisper-1",
+  asrCloudEnvKey: "TVX_MODEL_API_KEY",
+  asrCloudCredentialId: "TVX_MODEL_API_KEY",
+  asrCloudTimeoutSeconds: 120,
   asrChunkingMode: "auto",
   chunkSeconds: 300,
   chunkOverlapSeconds: 30,

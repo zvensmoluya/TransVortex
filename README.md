@@ -69,34 +69,14 @@ npm run tauri dev
 
 ```yaml
 asr:
-  mode: openai
-  provider: openai_asr
-  model: whisper-1
+  mode: cloud
   cloud:
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
     env_key: TVX_MODEL_API_KEY
+    credential_id: openai_asr
     timeout_seconds: 120
-```
-
-`providers.local.yaml`:
-
-```yaml
-providers:
-  - name: openai_asr
-    api_type: openai-compatible
-    compat_mode: openai_chat
-    base_url: https://api.openai.com
-    env_key: TVX_MODEL_API_KEY
-    models: [whisper-1]
-    auth:
-      type: bearer
-      header_name: Authorization
-      prefix: "Bearer "
-    endpoint:
-      path_template: /v1/audio/transcriptions
-      method: POST
 ```
 
 保存 key：
@@ -118,7 +98,7 @@ transvortex auth set openai_asr
 - `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
 - `transvortex auth set/delete/list/status [--json]`
 
-运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-provider`、`--asr-model`、chunk 设置、batch size 和并发。
+运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-model`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、chunk 设置、batch size 和并发。
 
 ## 任务工件
 

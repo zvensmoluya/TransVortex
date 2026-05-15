@@ -31,8 +31,12 @@ struct StartTaskRequest {
     asr_device: Option<String>,
     asr_model_size: Option<String>,
     asr_compute_type: Option<String>,
-    asr_provider: Option<String>,
+    asr_cloud_base_url: Option<String>,
+    asr_cloud_endpoint: Option<String>,
     asr_model: Option<String>,
+    asr_cloud_env_key: Option<String>,
+    asr_cloud_credential_id: Option<String>,
+    asr_cloud_timeout_seconds: Option<u32>,
     asr_chunking_mode: Option<String>,
     asr_window_seconds: Option<u32>,
     asr_overlap_seconds: Option<u32>,
@@ -66,8 +70,12 @@ struct ResumeTaskRequest {
     asr_device: Option<String>,
     asr_model_size: Option<String>,
     asr_compute_type: Option<String>,
-    asr_provider: Option<String>,
+    asr_cloud_base_url: Option<String>,
+    asr_cloud_endpoint: Option<String>,
     asr_model: Option<String>,
+    asr_cloud_env_key: Option<String>,
+    asr_cloud_credential_id: Option<String>,
+    asr_cloud_timeout_seconds: Option<u32>,
     asr_chunking_mode: Option<String>,
     asr_window_seconds: Option<u32>,
     asr_overlap_seconds: Option<u32>,
@@ -564,8 +572,12 @@ fn start_task(
     push_arg(&mut args, "--asr-device", &request.asr_device);
     push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
-    push_arg(&mut args, "--asr-provider", &request.asr_provider);
+    push_arg(&mut args, "--asr-cloud-base-url", &request.asr_cloud_base_url);
+    push_arg(&mut args, "--asr-cloud-endpoint", &request.asr_cloud_endpoint);
     push_arg(&mut args, "--asr-model", &request.asr_model);
+    push_arg(&mut args, "--asr-cloud-env-key", &request.asr_cloud_env_key);
+    push_arg(&mut args, "--asr-cloud-credential-id", &request.asr_cloud_credential_id);
+    push_num_arg(&mut args, "--asr-cloud-timeout-seconds", request.asr_cloud_timeout_seconds);
     push_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
@@ -630,8 +642,12 @@ fn resume_task(
     push_arg(&mut args, "--asr-device", &request.asr_device);
     push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
-    push_arg(&mut args, "--asr-provider", &request.asr_provider);
+    push_arg(&mut args, "--asr-cloud-base-url", &request.asr_cloud_base_url);
+    push_arg(&mut args, "--asr-cloud-endpoint", &request.asr_cloud_endpoint);
     push_arg(&mut args, "--asr-model", &request.asr_model);
+    push_arg(&mut args, "--asr-cloud-env-key", &request.asr_cloud_env_key);
+    push_arg(&mut args, "--asr-cloud-credential-id", &request.asr_cloud_credential_id);
+    push_num_arg(&mut args, "--asr-cloud-timeout-seconds", request.asr_cloud_timeout_seconds);
     push_resume_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
