@@ -367,7 +367,7 @@ translate/
 它不应依赖模型在多次请求之间“自己记住”。当前翻译过程会分 chunk 并发请求模型，不同请求之间没有共享内部状态。正确做法是把记忆作为外部 artifact 管理：
 
 ```text
-segments.raw.jsonl
+segments.normalized.jsonl
   -> memory bootstrap
   -> memory/translation_memory.json
   -> chunk translation prompt injects confirmed memory as read-only context

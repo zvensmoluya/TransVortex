@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,9 +16,10 @@ from ..app.config import apply_route_overrides, load_app_config
 from ..app.credentials import resolve_credential
 from ..formats.exporter import export_ass, export_srt
 from .media import (
-    extract_audio,
+    extract_audio_for_asr,
     extract_subtitle_stream,
     list_subtitle_streams,
+    prepare_cloud_asr_audio_upload,
     select_subtitle_stream,
     split_audio_for_asr,
 )
@@ -58,10 +61,575 @@ def _parse_asr_rows(rows: list[dict], start_id: int) -> list[Segment]:
                 end=float(row["end"]),
                 text_src=text,
                 confidence=row.get("confidence"),
+                meta=dict(row.get("meta") or {"source": "asr"}),
             )
         )
         next_id += 1
     return out
+
+
+def _transcribe_asr_segment(asr: Any, audio_path: Path, segment_start_offset: float) -> tuple[list[dict], dict | None]:
+    if hasattr(asr, "transcribe_segment_result"):
+        result = asr.transcribe_segment_result(audio_path, segment_start_offset)
+        return list(result.rows), result.raw_response
+    return list(asr.transcribe_segment(audio_path, segment_start_offset)), None
+
+
+def _build_asr_engine(config: AppConfig, *, task: TaskRecord, root_dir: Path) -> AsrEngine:
+    return AsrEngine(
+        model_size=config.pipeline.asr_local.model_size,
+        device=config.pipeline.asr_local.device,
+        compute_type=config.pipeline.asr_local.compute_type,
+        mode=config.pipeline.asr_mode,
+        source_lang=task.source_lang,
+        local_max_initial_timestamp=config.pipeline.asr_local.max_initial_timestamp,
+        prompt=_asr_prompt_text(config),
+        asr_provider=config.asr_providers.get(config.pipeline.asr_provider),
+        root_dir=root_dir,
+    )
+
+
+def _is_retryable_asr_exception(exc: Exception) -> bool:
+    lowered = str(exc).lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout",
+            "http error 408",
+            "http error 429",
+            "http error 500",
+            "http error 502",
+            "http error 503",
+            "http error 504",
+            "provider_timeout",
+            "unexpected_eof",
+            "eof occurred",
+            "connection reset",
+            "connection aborted",
+            "remote end closed connection",
+        )
+    )
+
+
+def _apply_audio_preprocess_meta(rows: list[dict], preprocess_meta: dict[str, Any]) -> list[dict]:
+    summary = {
+        "enabled": preprocess_meta.get("enabled", False),
+        "backend": preprocess_meta.get("backend", ""),
+        "leading_silence_seconds": preprocess_meta.get("leading_silence_seconds", 0.0),
+        "trailing_silence_seconds": preprocess_meta.get("trailing_silence_seconds", 0.0),
+        "trim_start_seconds": preprocess_meta.get("trim_start_seconds", 0.0),
+        "trim_end_seconds": preprocess_meta.get("trim_end_seconds", 0.0),
+        "skipped": preprocess_meta.get("skipped", False),
+        "reason": preprocess_meta.get("reason", ""),
+        "fallback_used": preprocess_meta.get("fallback_used", False),
+        "fallback_reason": preprocess_meta.get("fallback_reason", ""),
+    }
+    out = []
+    for row in rows:
+        item = dict(row)
+        meta = dict(item.get("meta") or {})
+        meta["audio_preprocess"] = summary
+        item["meta"] = meta
+        out.append(item)
+    return out
+
+
+def _should_retry_cloud_asr_without_preprocess(rows: list[dict]) -> bool:
+    texts = [str(row.get("text", "")).strip() for row in rows if str(row.get("text", "")).strip()]
+    if not texts:
+        return True
+    combined = "".join(texts)
+    return not any(ch.isalnum() for ch in combined)
+
+
+def _max_char_run(value: str) -> int:
+    longest = 0
+    current = 0
+    previous = ""
+    for ch in value:
+        if ch == previous:
+            current += 1
+        else:
+            current = 1
+            previous = ch
+        longest = max(longest, current)
+    return longest
+
+
+def _asr_row_quality_decision(row: dict) -> tuple[str, list[str]]:
+    text = str(row.get("text", "")).strip()
+    duration = max(float(row.get("end", 0.0)) - float(row.get("start", 0.0)), 0.001)
+    reasons: list[str] = []
+    if not text:
+        return "drop", ["empty_text"]
+    if text in {"♪", "♪♪"} or not any(ch.isalnum() for ch in text):
+        return "drop", ["non_speech_symbols"]
+    if "�" in text:
+        return "drop", ["replacement_character"]
+    run = _max_char_run(text)
+    cps = len(text) / duration
+    if duration >= 10.0 and run >= 8:
+        return "drop", ["long_repeated_hallucination"]
+    if run >= 12 and cps >= 10:
+        return "drop", ["extreme_repeated_sound"]
+    if run >= 6:
+        reasons.append("short_repeated_sound")
+    if cps >= 18:
+        reasons.append("high_source_cps")
+    return ("warn" if reasons else "keep"), reasons
+
+
+def filter_asr_rows_for_source(rows: list[dict]) -> tuple[list[dict], dict[str, Any]]:
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    warnings: list[dict] = []
+    for row in rows:
+        decision, reasons = _asr_row_quality_decision(row)
+        item = dict(row)
+        if decision == "drop":
+            dropped.append(
+                {
+                    "start": row.get("start"),
+                    "end": row.get("end"),
+                    "text": row.get("text"),
+                    "reasons": reasons,
+                }
+            )
+            continue
+        if decision == "warn":
+            meta = dict(item.get("meta") or {})
+            existing = list(meta.get("quality_warnings") or [])
+            meta["quality_warnings"] = existing + reasons
+            item["meta"] = meta
+            warnings.append(
+                {
+                    "start": row.get("start"),
+                    "end": row.get("end"),
+                    "text": row.get("text"),
+                    "reasons": reasons,
+                }
+            )
+        kept.append(item)
+    return kept, {
+        "input_rows": len(rows),
+        "kept_rows": len(kept),
+        "dropped_rows": len(dropped),
+        "warning_rows": len(warnings),
+        "dropped": dropped,
+        "warnings": warnings,
+    }
+
+
+def _asr_artifact_paths(paths: dict[str, Path], idx: int) -> dict[str, Path]:
+    return {
+        "rows": paths["source"] / "asr" / "rows" / f"segment_{idx:05d}.json",
+        "raw": paths["source"] / "asr" / "raw" / f"segment_{idx:05d}.json",
+        "preprocess": paths["source"] / "asr" / "preprocess" / f"segment_{idx:05d}.json",
+        "upload": paths["source"] / "asr" / "upload" / f"segment_{idx:05d}.wav",
+        "quality": paths["source"] / "asr" / "quality" / f"segment_{idx:05d}.json",
+    }
+
+
+def _write_asr_segment_artifacts(
+    *,
+    artifact_paths: dict[str, Path],
+    rows: list[dict],
+    raw_response: dict | None,
+    preprocess_meta: dict[str, Any] | None,
+) -> None:
+    if preprocess_meta is not None:
+        write_json(artifact_paths["preprocess"], preprocess_meta)
+    if raw_response is not None:
+        write_json(artifact_paths["raw"], raw_response)
+    filtered_rows, quality = filter_asr_rows_for_source(rows)
+    write_json(artifact_paths["quality"], quality)
+    write_segment_asr_output(artifact_paths["rows"], filtered_rows)
+
+
+def _process_asr_manifest_item(
+    *,
+    item: dict,
+    asr: Any,
+    paths: dict[str, Path],
+    config: AppConfig,
+    task: TaskRecord | None = None,
+    root_dir: Path | None = None,
+    allow_split_retry: bool = True,
+) -> dict[str, Any]:
+    idx = int(item["segment_index"])
+    artifact_paths = _asr_artifact_paths(paths, idx)
+    audio_path = Path(item["path"])
+    transcribe_path = audio_path
+    transcribe_offset = float(item["start"])
+    preprocess_meta: dict[str, Any] | None = None
+    if config.pipeline.asr_mode == "cloud":
+        trim_config = config.pipeline.asr_preprocessing.cloud_trim_silence
+        preprocess_meta = prepare_cloud_asr_audio_upload(
+            audio_path,
+            artifact_paths["upload"],
+            duration_seconds=float(item.get("duration", 0.0)),
+            enabled=trim_config.enabled,
+            backend=trim_config.backend,
+            noise_db=trim_config.noise_db,
+            min_silence_seconds=trim_config.min_silence_seconds,
+            keep_preroll_seconds=trim_config.keep_preroll_seconds,
+            trim_trailing=trim_config.trim_trailing,
+            keep_postroll_seconds=trim_config.keep_postroll_seconds,
+            min_upload_seconds=trim_config.min_upload_seconds,
+        )
+        if preprocess_meta.get("skipped"):
+            rows: list[dict] = []
+            _write_asr_segment_artifacts(
+                artifact_paths=artifact_paths,
+                rows=rows,
+                raw_response=None,
+                preprocess_meta=preprocess_meta,
+            )
+            return {"idx": idx, "rows": rows, "raw_response": None, "preprocess_meta": preprocess_meta, "skipped": True}
+        transcribe_path = Path(preprocess_meta.get("upload_path") or audio_path)
+        transcribe_offset += float(preprocess_meta.get("trim_start_seconds") or 0.0)
+    try:
+        rows, raw_response = _transcribe_asr_segment(asr, transcribe_path, transcribe_offset)
+    except Exception as exc:
+        if (
+            allow_split_retry
+            and config.pipeline.asr_mode == "cloud"
+            and _is_retryable_asr_exception(exc)
+            and task is not None
+            and root_dir is not None
+            and float(item.get("duration", 0.0)) > max(float(config.pipeline.asr_chunking.min_window_seconds) * 2.0, 20.0)
+        ):
+            return _retry_asr_manifest_item_with_subsegments(
+                item=item,
+                paths=paths,
+                config=config,
+                task=task,
+                root_dir=root_dir,
+                failure=exc,
+            )
+        raise
+    if preprocess_meta is not None:
+        if preprocess_meta.get("reason") == "trimmed" and _should_retry_cloud_asr_without_preprocess(rows):
+            fallback_rows, fallback_raw_response = _transcribe_asr_segment(asr, audio_path, float(item["start"]))
+            if not _should_retry_cloud_asr_without_preprocess(fallback_rows):
+                preprocess_meta["fallback_used"] = True
+                preprocess_meta["fallback_reason"] = "preprocessed_asr_looked_empty_or_nonspeech"
+                preprocess_meta["upload_path"] = str(audio_path)
+                preprocess_meta["trim_start_seconds"] = 0.0
+                preprocess_meta["trim_end_seconds"] = float(item.get("duration", 0.0))
+                rows = fallback_rows
+                raw_response = fallback_raw_response
+        rows = _apply_audio_preprocess_meta(rows, preprocess_meta)
+    _write_asr_segment_artifacts(
+        artifact_paths=artifact_paths,
+        rows=rows,
+        raw_response=raw_response,
+        preprocess_meta=preprocess_meta,
+    )
+    return {"idx": idx, "rows": rows, "raw_response": raw_response, "preprocess_meta": preprocess_meta, "skipped": False}
+
+
+def _retry_asr_manifest_item_with_subsegments(
+    *,
+    item: dict,
+    paths: dict[str, Path],
+    config: AppConfig,
+    task: TaskRecord,
+    root_dir: Path,
+    failure: Exception,
+) -> dict[str, Any]:
+    idx = int(item["segment_index"])
+    artifact_paths = _asr_artifact_paths(paths, idx)
+    duration = float(item.get("duration", 0.0))
+    retry_dir = paths["media"] / "segments_retry" / f"segment_{idx:05d}"
+    max_child_window = max(
+        float(config.pipeline.asr_chunking.min_window_seconds),
+        min(float(config.pipeline.asr_chunking.max_window_seconds), duration / 2.0),
+    )
+    source_audio_path_raw = item.get("source_audio_path")
+    source_audio_path = Path(str(source_audio_path_raw or item.get("path")))
+    source_start_seconds = float(item.get("start", 0.0)) if source_audio_path_raw else 0.0
+    child_manifest = split_audio_for_asr(
+        source_audio_path,
+        retry_dir,
+        mode=config.pipeline.asr_chunking.mode,
+        window_seconds=int(max_child_window),
+        max_window_seconds=int(max_child_window),
+        min_window_seconds=config.pipeline.asr_chunking.min_window_seconds,
+        overlap_seconds=config.pipeline.asr_chunking.overlap_seconds,
+        short_audio_seconds=0,
+        max_upload_mb=config.pipeline.asr_chunking.max_upload_mb,
+        silence_noise_db=config.pipeline.asr_chunking.silence.noise_db,
+        silence_min_seconds=config.pipeline.asr_chunking.silence.min_silence_seconds,
+        silence_cut_padding_seconds=config.pipeline.asr_chunking.silence.cut_padding_seconds,
+        duration_seconds=duration,
+        source_start_seconds=source_start_seconds,
+    )
+    if not source_audio_path_raw:
+        parent_start = float(item.get("start", 0.0))
+        for child in child_manifest:
+            child["start"] = parent_start + float(child.get("start", 0.0))
+            child["trusted_start"] = parent_start + float(child.get("trusted_start", 0.0))
+            child["trusted_end"] = parent_start + float(child.get("trusted_end", 0.0))
+            child["source_audio_path"] = str(source_audio_path)
+    retry_artifact_paths = dict(paths)
+    retry_artifact_paths["source"] = paths["source"] / "asr" / "retry" / f"segment_{idx:05d}"
+    rows: list[dict] = []
+    raw_children: list[dict] = []
+    preprocess_children: list[dict] = []
+    for child_idx, child in enumerate(child_manifest):
+        child_item = dict(child)
+        child_item["segment_index"] = child_idx
+        child_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
+        child_result = _process_asr_manifest_item(
+            item=child_item,
+            asr=child_asr,
+            paths=retry_artifact_paths,
+            config=config,
+            task=task,
+            root_dir=root_dir,
+            allow_split_retry=False,
+        )
+        child_rows_path = _asr_artifact_paths(retry_artifact_paths, int(child_item["segment_index"]))["rows"]
+        if child_rows_path.exists():
+            rows.extend(read_json(child_rows_path))
+        if child_result.get("raw_response") is not None:
+            raw_children.append(child_result["raw_response"])
+        if child_result.get("preprocess_meta") is not None:
+            preprocess_children.append(child_result["preprocess_meta"])
+    rows.sort(key=lambda row: (float(row.get("start", 0.0)), float(row.get("end", 0.0)), str(row.get("text", ""))))
+    parent_preprocess = {
+        "enabled": True,
+        "reason": "split_retry",
+        "source_path": str(item.get("path", "")),
+        "duration_seconds": duration,
+        "initial_error": str(failure),
+        "children": child_manifest,
+        "child_artifact_dir": str(retry_artifact_paths["source"]),
+        "child_preprocess": preprocess_children,
+    }
+    _write_asr_segment_artifacts(
+        artifact_paths=artifact_paths,
+        rows=rows,
+        raw_response={"split_retry": True, "children": raw_children},
+        preprocess_meta=parent_preprocess,
+    )
+    return {
+        "idx": idx,
+        "rows": rows,
+        "raw_response": {"split_retry": True, "children": raw_children},
+        "preprocess_meta": parent_preprocess,
+        "skipped": False,
+        "split_retry": True,
+    }
+
+
+def _complete_asr_segment(
+    *,
+    idx: int,
+    asr_done: set[int],
+    checkpoint: dict,
+    store: TaskStore,
+    task_id: str,
+    total_segments: int,
+    skipped: bool = False,
+) -> None:
+    asr_done.add(idx)
+    checkpoint["asr_done_segments"] = sorted(asr_done)
+    checkpoint["status"] = "ASR"
+    store.save_checkpoint(task_id, checkpoint)
+    verb = "Skipped silent" if skipped else "Transcribed"
+    store.append_event(
+        task_id,
+        "progress",
+        stage="ASR",
+        message=f"{verb} segment {len(asr_done)}/{total_segments}",
+        progress=0.25 + 0.25 * (len(asr_done) / max(total_segments, 1)),
+    )
+
+
+def _run_asr_segments_serial(
+    *,
+    items: list[dict],
+    asr: Any,
+    paths: dict[str, Path],
+    config: AppConfig,
+    store: TaskStore,
+    task_id: str,
+    checkpoint: dict,
+    asr_done: set[int],
+    total_segments: int,
+    task: TaskRecord | None = None,
+    root_dir: Path | None = None,
+) -> None:
+    for item in items:
+        _check_cancel(store, task_id)
+        result = _process_asr_manifest_item(
+            item=item,
+            asr=asr,
+            paths=paths,
+            config=config,
+            task=task,
+            root_dir=root_dir,
+        )
+        preprocess_meta = result.get("preprocess_meta")
+        if isinstance(preprocess_meta, dict) and preprocess_meta.get("fallback_used"):
+            store.append_event(
+                task_id,
+                "warning",
+                stage="ASR",
+                level="warning",
+                message="Retried cloud ASR without silence trim",
+                details={"segment_index": result["idx"], "reason": preprocess_meta.get("fallback_reason", "")},
+            )
+        _complete_asr_segment(
+            idx=int(result["idx"]),
+            asr_done=asr_done,
+            checkpoint=checkpoint,
+            store=store,
+            task_id=task_id,
+            total_segments=total_segments,
+            skipped=bool(result.get("skipped")),
+        )
+
+
+def _asr_item_upload_mb(item: dict) -> float:
+    try:
+        raw_path = item.get("path")
+        path = Path(str(raw_path)) if raw_path else None
+        if path is not None and path.is_file():
+            return path.stat().st_size / (1024 * 1024)
+    except OSError:
+        pass
+    duration = max(float(item.get("duration", 0.0)), 0.1)
+    return duration * 16000 * 2 / (1024 * 1024)
+
+
+def _take_asr_upload_batch(items: list[dict], *, max_items: int, max_upload_mb: float) -> tuple[list[dict], list[dict]]:
+    if not items:
+        return [], []
+    max_items = max(1, int(max_items))
+    max_upload_mb = max(float(max_upload_mb), 0.1)
+    batch: list[dict] = []
+    total_mb = 0.0
+    remaining = list(items)
+    while remaining and len(batch) < max_items:
+        candidate = remaining[0]
+        candidate_mb = _asr_item_upload_mb(candidate)
+        if batch and total_mb + candidate_mb > max_upload_mb:
+            break
+        batch.append(candidate)
+        total_mb += candidate_mb
+        remaining.pop(0)
+    return batch, remaining
+
+
+def _run_asr_segments_concurrent(
+    *,
+    items: list[dict],
+    asr: Any,
+    paths: dict[str, Path],
+    config: AppConfig,
+    store: TaskStore,
+    task_id: str,
+    checkpoint: dict,
+    asr_done: set[int],
+    total_segments: int,
+    task: TaskRecord,
+    root_dir: Path,
+) -> None:
+    max_workers = max(1, int(config.pipeline.asr_execution.cloud_concurrency))
+    max_workers = min(max_workers, max(1, int(config.pipeline.asr_execution.max_cloud_concurrency)))
+    current_limit = max_workers
+    pending = list(items)
+    while pending:
+        _check_cancel(store, task_id)
+        batch, pending = _take_asr_upload_batch(
+            pending,
+            max_items=current_limit,
+            max_upload_mb=config.pipeline.asr_execution.max_inflight_upload_mb,
+        )
+        retryable_failure = False
+        successes = 0
+        with ThreadPoolExecutor(max_workers=current_limit) as executor:
+            def submit_item(manifest_item: dict):
+                worker_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
+                return _process_asr_manifest_item(
+                    item=manifest_item,
+                    asr=worker_asr,
+                    paths=paths,
+                    config=config,
+                    task=task,
+                    root_dir=root_dir,
+                )
+
+            futures = {
+                executor.submit(submit_item, item): item
+                for item in batch
+            }
+            for future in as_completed(futures):
+                _check_cancel(store, task_id)
+                item = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    if (
+                        config.pipeline.asr_execution.adaptive_concurrency
+                        and _is_retryable_asr_exception(exc)
+                        and current_limit > int(config.pipeline.asr_execution.min_cloud_concurrency)
+                    ):
+                        retryable_failure = True
+                        pending = [item] + pending
+                        continue
+                    raise
+                preprocess_meta = result.get("preprocess_meta")
+                if isinstance(preprocess_meta, dict) and preprocess_meta.get("fallback_used"):
+                    store.append_event(
+                        task_id,
+                        "warning",
+                        stage="ASR",
+                        level="warning",
+                        message="Retried cloud ASR without silence trim",
+                        details={"segment_index": result["idx"], "reason": preprocess_meta.get("fallback_reason", "")},
+                    )
+                if result.get("split_retry"):
+                    store.append_event(
+                        task_id,
+                        "warning",
+                        stage="ASR",
+                        level="warning",
+                        message="Retried cloud ASR segment as smaller subsegments",
+                        details={"segment_index": result["idx"]},
+                    )
+                _complete_asr_segment(
+                    idx=int(result["idx"]),
+                    asr_done=asr_done,
+                    checkpoint=checkpoint,
+                    store=store,
+                    task_id=task_id,
+                    total_segments=total_segments,
+                    skipped=bool(result.get("skipped")),
+                )
+                successes += 1
+        if config.pipeline.asr_execution.adaptive_concurrency:
+            if retryable_failure:
+                current_limit = max(int(config.pipeline.asr_execution.min_cloud_concurrency), max(1, current_limit // 2))
+            elif successes >= current_limit:
+                current_limit = min(max_workers, current_limit + 1)
+
+
+def _asr_prompt_text(config: AppConfig) -> str:
+    prompt = config.pipeline.asr_prompt
+    if not prompt.enabled:
+        return ""
+    text = str(prompt.text or "").strip()
+    if not text:
+        return ""
+    max_chars = max(int(prompt.max_chars), 0)
+    if max_chars and len(text) > max_chars:
+        return text[-max_chars:]
+    return text
 
 
 def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
@@ -70,6 +638,7 @@ def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
         "base": base,
         "media": base / "media",
         "asr": base / "asr",
+        "source": base / "source",
         "translate": base / "translate",
         "final": base / "final",
         "quality": base / "quality",
@@ -329,9 +898,14 @@ def _preflight(
     if needs_asr and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
         raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
     if needs_asr and config.pipeline.asr_mode == "cloud":
+        asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
+        if asr_provider is None:
+            raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
+        if asr_provider.protocol != "openai_transcriptions":
+            raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
         credential = resolve_credential(
-            env_key=config.pipeline.asr_cloud.env_key,
-            credential_id=config.pipeline.asr_cloud.credential_id,
+            env_key=asr_provider.env_key,
+            credential_id=asr_provider.credential_id,
             root_dir=root_dir,
         )
         if not credential.found:
@@ -445,6 +1019,30 @@ def _task_settings(config: AppConfig, *, input_type: str) -> dict[str, Any]:
     return settings
 
 
+def _apply_saved_pipeline_settings(config: AppConfig, settings: dict[str, Any]) -> None:
+    def apply_dataclass(target: Any, values: dict[str, Any]) -> None:
+        if not is_dataclass(target):
+            return
+        field_names = {item.name for item in fields(target)}
+        for name, value in values.items():
+            if name not in field_names or name in {"artifacts_dir"}:
+                continue
+            current = getattr(target, name)
+            if is_dataclass(current) and isinstance(value, dict):
+                apply_dataclass(current, value)
+                continue
+            if isinstance(current, Path):
+                setattr(target, name, Path(str(value)))
+                continue
+            if isinstance(current, list):
+                continue
+            if isinstance(value, dict):
+                continue
+            setattr(target, name, value)
+
+    apply_dataclass(config.pipeline, settings)
+
+
 def _resolve_video_source_mode(config: AppConfig, task: TaskRecord) -> tuple[str, dict | None, list[dict]]:
     requested = str(task.settings.get("source_mode", config.pipeline.source_mode))
     subtitle_track = str(task.settings.get("subtitle_track", config.pipeline.subtitle_track))
@@ -475,9 +1073,28 @@ def _load_segments_from_raw_jsonl(raw_file: Path) -> list[Segment]:
     return segments
 
 
-def _load_segments_from_input(path: Path) -> list[Segment]:
+def _segments_with_source(segments: list[Segment], source: str) -> list[Segment]:
+    out: list[Segment] = []
+    for seg in segments:
+        meta = dict(seg.meta or {})
+        meta.setdefault("source", source)
+        out.append(
+            Segment(
+                id=seg.id,
+                start=seg.start,
+                end=seg.end,
+                text_src=seg.text_src,
+                text_tgt=seg.text_tgt,
+                confidence=seg.confidence,
+                meta=meta,
+            )
+        )
+    return out
+
+
+def _load_segments_from_input(path: Path, *, source: str = "segments_input") -> list[Segment]:
     if path.suffix.lower() == ".srt":
-        return parse_srt_file(path)
+        return _segments_with_source(parse_srt_file(path), "srt")
     rows = read_jsonl(path)
     segments: list[Segment] = []
     for idx, row in enumerate(rows, start=1):
@@ -486,14 +1103,44 @@ def _load_segments_from_input(path: Path) -> list[Segment]:
             payload.setdefault("id", idx)
             if "text_src" not in payload and "text" in payload:
                 payload["text_src"] = payload.pop("text")
+            meta = dict(payload.get("meta") or {})
+            meta.setdefault("source", source)
+            payload["meta"] = meta
             segments.append(Segment(**payload))
     return sorted(segments, key=lambda seg: seg.id)
 
 
 def _persist_segments_jsonl(path: Path, segments: list[Segment]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
     for seg in segments:
         append_jsonl(path, seg)
+
+
+def _source_segments_path(paths: dict[str, Path]) -> Path:
+    return paths["source"] / "segments.normalized.jsonl"
+
+
+def _legacy_asr_segments_path(paths: dict[str, Path]) -> Path:
+    return paths["asr"] / "segments.raw.jsonl"
+
+
+def persist_source_segments(paths: dict[str, Path], segments: list[Segment]) -> Path:
+    path = _source_segments_path(paths)
+    _persist_segments_jsonl(path, segments)
+    return path
+
+
+def load_source_segments(paths: dict[str, Path]) -> list[Segment]:
+    source_file = _source_segments_path(paths)
+    if _is_nonempty_file(source_file):
+        return _load_segments_from_raw_jsonl(source_file)
+    legacy_file = _legacy_asr_segments_path(paths)
+    if _is_nonempty_file(legacy_file):
+        segments = _load_segments_from_raw_jsonl(legacy_file)
+        persist_source_segments(paths, segments)
+        return segments
+    return []
 
 
 def _translation_route_providers(config: AppConfig) -> list:
@@ -786,7 +1433,8 @@ def resume_pipeline(
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
     config = apply_route_overrides(config, provider_name=provider_name, model=model)
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
-    store.load_task(task_id)
+    task = store.load_task(task_id)
+    _apply_saved_pipeline_settings(config, task.settings)
     store.clear_cancel(task_id)
     store.update_task_status(task_id, "QUEUED", clear_error=True)
     store.append_event(task_id, "resume_requested", stage="QUEUED", message="Resume requested")
@@ -873,12 +1521,12 @@ def _execute_task(
         if input_type == "segments_translate":
             _check_cancel(store, task_id)
             _emit_stage(store, task_id, "INGEST", "Loading source segments")
-            raw_jsonl = paths["asr"] / "segments.raw.jsonl"
-            if not checkpoint.get("ingest_done") or not _is_nonempty_file(raw_jsonl):
+            source_jsonl = _source_segments_path(paths)
+            if not checkpoint.get("ingest_done") or not _is_nonempty_file(source_jsonl):
                 all_segments = _load_segments_from_input(Path(task.input_file))
                 if not all_segments:
                     raise RuntimeError("No subtitle segments parsed from input")
-                _persist_segments_jsonl(raw_jsonl, all_segments)
+                source_jsonl = persist_source_segments(paths, all_segments)
                 checkpoint["ingest_done"] = True
                 checkpoint["status"] = "INGEST"
                 store.save_checkpoint(task_id, checkpoint)
@@ -888,19 +1536,19 @@ def _execute_task(
                     stage="INGEST",
                     message="Source segments ready",
                     progress=0.52,
-                    details={"path": str(raw_jsonl), "segments": len(all_segments)},
+                    details={"path": str(source_jsonl), "segments": len(all_segments)},
                 )
             else:
-                all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
+                all_segments = load_source_segments(paths)
         elif input_type == "srt_translate":
             _check_cancel(store, task_id)
             _emit_stage(store, task_id, "INGEST", "Parsing SRT subtitles")
-            raw_jsonl = paths["asr"] / "segments.raw.jsonl"
-            if not checkpoint.get("ingest_done") or not _is_nonempty_file(raw_jsonl):
-                all_segments = parse_srt_file(Path(task.input_file))
+            source_jsonl = _source_segments_path(paths)
+            if not checkpoint.get("ingest_done") or not _is_nonempty_file(source_jsonl):
+                all_segments = _segments_with_source(parse_srt_file(Path(task.input_file)), "srt")
                 if not all_segments:
                     raise RuntimeError("No subtitle segments parsed from SRT input")
-                _persist_segments_jsonl(raw_jsonl, all_segments)
+                source_jsonl = persist_source_segments(paths, all_segments)
                 checkpoint["ingest_done"] = True
                 checkpoint["status"] = "INGEST"
                 store.save_checkpoint(task_id, checkpoint)
@@ -910,16 +1558,16 @@ def _execute_task(
                     stage="INGEST",
                     message="SRT segments ready",
                     progress=0.52,
-                    details={"path": str(raw_jsonl), "segments": len(all_segments)},
+                    details={"path": str(source_jsonl), "segments": len(all_segments)},
                 )
             else:
-                all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
+                all_segments = load_source_segments(paths)
         else:
             _check_cancel(store, task_id)
             source_mode, subtitle_stream, subtitle_streams = _resolve_video_source_mode(config, task)
             if source_mode == "embedded_subtitle":
                 _emit_stage(store, task_id, "INGEST", "Extracting embedded subtitles")
-                raw_jsonl = paths["asr"] / "segments.raw.jsonl"
+                source_jsonl = _source_segments_path(paths)
                 embedded_srt = paths["media"] / "embedded_subtitle.srt"
                 requested_source_mode = str(task.settings.get("source_mode", config.pipeline.source_mode))
                 if requested_source_mode == "auto" and subtitle_stream is not None:
@@ -934,7 +1582,7 @@ def _execute_task(
                             "available_streams": subtitle_streams,
                         },
                     )
-                if not checkpoint.get("ingest_done") or not _is_nonempty_file(raw_jsonl):
+                if not checkpoint.get("ingest_done") or not _is_nonempty_file(source_jsonl):
                     if subtitle_stream is None:
                         raise RuntimeError("No matching text subtitle stream found")
                     extract_subtitle_stream(
@@ -942,10 +1590,10 @@ def _execute_task(
                         embedded_srt,
                         stream_index=int(subtitle_stream["index"]),
                     )
-                    all_segments = parse_srt_file(embedded_srt)
+                    all_segments = _segments_with_source(parse_srt_file(embedded_srt), "embedded_subtitle")
                     if not all_segments:
                         raise RuntimeError("No subtitle segments parsed from embedded subtitle stream")
-                    _persist_segments_jsonl(raw_jsonl, all_segments)
+                    source_jsonl = persist_source_segments(paths, all_segments)
                     write_json(
                         paths["media"] / "subtitle_streams.json",
                         {
@@ -963,13 +1611,13 @@ def _execute_task(
                         message="Embedded subtitle segments ready",
                         progress=0.52,
                         details={
-                            "path": str(raw_jsonl),
+                            "path": str(source_jsonl),
                             "segments": len(all_segments),
                             "stream": subtitle_stream,
                         },
                     )
                 else:
-                    all_segments = _load_segments_from_raw_jsonl(raw_jsonl)
+                    all_segments = load_source_segments(paths)
                 if input_type == "video_asr":
                     checkpoint["status"] = "DONE"
                     checkpoint.pop("error", None)
@@ -978,8 +1626,8 @@ def _execute_task(
                     store.update_task_status(
                         task_id,
                         "DONE",
-                        output_path=str(raw_jsonl),
-                        output_paths={"segments": str(raw_jsonl)},
+                        output_path=str(source_jsonl),
+                        output_paths={"segments": str(source_jsonl)},
                         clear_error=True,
                     )
                     store.append_event(
@@ -988,7 +1636,7 @@ def _execute_task(
                         stage="DONE",
                         message="Subtitle extraction task completed",
                         progress=1.0,
-                        details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
+                        details={"output_path": str(source_jsonl), "output_paths": {"segments": str(source_jsonl)}},
                     )
                     return
             else:
@@ -996,14 +1644,25 @@ def _execute_task(
                 audio_full = paths["media"] / "audio_full.m4a"
                 manifest_file = paths["media"] / "segments_manifest.json"
                 if not checkpoint.get("ingest_done") or not _ingest_artifacts_valid(audio_full, manifest_file):
-                    media_meta = extract_audio(Path(task.input_file), audio_full)
+                    media_meta = extract_audio_for_asr(
+                        Path(task.input_file),
+                        audio_full,
+                        source_lang=task.source_lang,
+                        audio_track=config.pipeline.asr_audio_track,
+                    )
                     segments_manifest = split_audio_for_asr(
                         audio_full,
                         paths["media"] / "segments",
                         mode=config.pipeline.asr_chunking.mode,
                         window_seconds=config.pipeline.asr_chunking.window_seconds,
+                        max_window_seconds=config.pipeline.asr_chunking.max_window_seconds,
+                        min_window_seconds=config.pipeline.asr_chunking.min_window_seconds,
                         overlap_seconds=config.pipeline.asr_chunking.overlap_seconds,
                         short_audio_seconds=config.pipeline.asr_chunking.short_audio_seconds,
+                        max_upload_mb=config.pipeline.asr_chunking.max_upload_mb,
+                        silence_noise_db=config.pipeline.asr_chunking.silence.noise_db,
+                        silence_min_seconds=config.pipeline.asr_chunking.silence.min_silence_seconds,
+                        silence_cut_padding_seconds=config.pipeline.asr_chunking.silence.cut_padding_seconds,
                         duration_seconds=float(media_meta["duration_seconds"]),
                     )
                     write_json(paths["media"] / "media_meta.json", media_meta)
@@ -1025,49 +1684,51 @@ def _execute_task(
 
                 _check_cancel(store, task_id)
                 _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
-                asr = AsrEngine(
-                    model_size=config.pipeline.asr_local.model_size,
-                    device=config.pipeline.asr_local.device,
-                    compute_type=config.pipeline.asr_local.compute_type,
-                    mode=config.pipeline.asr_mode,
-                    source_lang=task.source_lang,
-                    local_max_initial_timestamp=config.pipeline.asr_local.max_initial_timestamp,
-                    cloud_base_url=config.pipeline.asr_cloud.base_url,
-                    cloud_endpoint=config.pipeline.asr_cloud.endpoint,
-                    cloud_model=config.pipeline.asr_cloud.model,
-                    cloud_env_key=config.pipeline.asr_cloud.env_key,
-                    cloud_credential_id=config.pipeline.asr_cloud.credential_id,
-                    cloud_timeout_seconds=config.pipeline.asr_cloud.timeout_seconds,
-                    root_dir=root_dir,
-                )
+                asr = _build_asr_engine(config, task=task, root_dir=root_dir)
                 asr_done = set(checkpoint.get("asr_done_segments", []))
                 segment_files = []
+                pending_asr_items = []
                 for item in segments_manifest:
-                    _check_cancel(store, task_id)
                     idx = int(item["segment_index"])
-                    segment_output = paths["asr"] / f"segment_{idx:05d}.json"
-                    segment_files.append((idx, segment_output))
-                    if idx in asr_done and _is_valid_json_list(segment_output):
+                    artifact_paths = _asr_artifact_paths(paths, idx)
+                    segment_files.append((idx, artifact_paths["rows"]))
+                    if idx in asr_done and _is_valid_json_list(artifact_paths["rows"]):
                         continue
-                    rows = asr.transcribe_segment(Path(item["path"]), float(item["start"]))
-                    write_segment_asr_output(segment_output, rows)
-                    asr_done.add(idx)
-                    checkpoint["asr_done_segments"] = sorted(asr_done)
-                    checkpoint["status"] = "ASR"
-                    store.save_checkpoint(task_id, checkpoint)
-                    store.append_event(
-                        task_id,
-                        "progress",
-                        stage="ASR",
-                        message=f"Transcribed segment {len(asr_done)}/{len(segments_manifest)}",
-                        progress=0.25 + 0.25 * (len(asr_done) / max(len(segments_manifest), 1)),
+                    pending_asr_items.append(item)
+                if config.pipeline.asr_mode == "cloud":
+                    _run_asr_segments_concurrent(
+                        items=pending_asr_items,
+                        asr=asr,
+                        paths=paths,
+                        config=config,
+                        store=store,
+                        task_id=task_id,
+                        checkpoint=checkpoint,
+                        asr_done=asr_done,
+                        total_segments=len(segments_manifest),
+                        task=task,
+                        root_dir=root_dir,
+                    )
+                else:
+                    _run_asr_segments_serial(
+                        items=pending_asr_items,
+                        asr=asr,
+                        paths=paths,
+                        config=config,
+                        store=store,
+                        task_id=task_id,
+                        checkpoint=checkpoint,
+                        asr_done=asr_done,
+                        total_segments=len(segments_manifest),
+                        task=task,
+                        root_dir=root_dir,
                     )
 
                 all_segments = []
                 next_id = 1
                 window_segments = []
                 for _idx, seg_file in sorted(segment_files, key=lambda x: x[0]):
-                    _require_file(seg_file, f"asr/{seg_file.name}")
+                    _require_file(seg_file, f"source/asr/rows/{seg_file.name}")
                     rows = read_json(seg_file)
                     parsed = _parse_asr_rows(rows, start_id=next_id)
                     manifest_item = next(
@@ -1091,16 +1752,35 @@ def _execute_task(
                         details={"before": len(all_segments), "after": len(deduped_segments)},
                     )
                 all_segments = deduped_segments
+                quality_dir = paths["source"] / "asr" / "quality"
+                if quality_dir.exists():
+                    quality_rows = [read_json(path) for path in sorted(quality_dir.glob("segment_*.json"))]
+                    quality_summary = {
+                        "segments": len(quality_rows),
+                        "input_rows": sum(int(row.get("input_rows", 0)) for row in quality_rows),
+                        "kept_rows": sum(int(row.get("kept_rows", 0)) for row in quality_rows),
+                        "dropped_rows": sum(int(row.get("dropped_rows", 0)) for row in quality_rows),
+                        "warning_rows": sum(int(row.get("warning_rows", 0)) for row in quality_rows),
+                    }
+                    write_json(quality_dir / "summary.json", quality_summary)
+                    if quality_summary["dropped_rows"]:
+                        store.append_event(
+                            task_id,
+                            "warning",
+                            stage="ASR",
+                            level="warning",
+                            message="Dropped low-quality ASR rows before source normalization",
+                            details=quality_summary,
+                        )
 
-                raw_jsonl = paths["asr"] / "segments.raw.jsonl"
-                _persist_segments_jsonl(raw_jsonl, all_segments)
+                source_jsonl = persist_source_segments(paths, all_segments)
                 store.append_event(
                     task_id,
                     "artifact",
                     stage="ASR",
-                    message="Raw ASR segments ready",
+                    message="Normalized source segments ready",
                     progress=0.52,
-                    details={"path": str(raw_jsonl), "segments": len(all_segments)},
+                    details={"path": str(source_jsonl), "segments": len(all_segments)},
                 )
 
                 if input_type == "video_asr":
@@ -1111,8 +1791,8 @@ def _execute_task(
                     store.update_task_status(
                         task_id,
                         "DONE",
-                        output_path=str(raw_jsonl),
-                        output_paths={"segments": str(raw_jsonl)},
+                        output_path=str(source_jsonl),
+                        output_paths={"segments": str(source_jsonl)},
                         clear_error=True,
                     )
                     store.append_event(
@@ -1121,7 +1801,7 @@ def _execute_task(
                         stage="DONE",
                         message="ASR task completed",
                         progress=1.0,
-                        details={"output_path": str(raw_jsonl), "output_paths": {"segments": str(raw_jsonl)}},
+                        details={"output_path": str(source_jsonl), "output_paths": {"segments": str(source_jsonl)}},
                     )
                     return
 

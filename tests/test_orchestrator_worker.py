@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import shutil
 from pathlib import Path
 
-from transvortex.core.orchestrator import resume_pipeline, run_pipeline, task_status_json
+from transvortex.core.orchestrator import create_pipeline_task, resume_pipeline, run_pipeline, task_status_json
+from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
 
 
@@ -19,6 +20,11 @@ default_concurrency: 1
 max_cps: 8
 asr:
   mode: local
+  chunking:
+    mode: auto
+    window_seconds: 300
+    overlap_seconds: 30
+    short_audio_seconds: 300
   model_size: tiny
   device: cpu
   compute_type: int8
@@ -68,7 +74,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
-    def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 61.0}
@@ -81,12 +87,19 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         window_seconds: int,
         overlap_seconds: int,
         short_audio_seconds: int,
+        max_upload_mb: float,
+        max_window_seconds: int,
+        min_window_seconds: int,
         duration_seconds: float,
+        **_kwargs,
     ) -> list[dict]:
         assert mode == "auto"
         assert window_seconds == 300
         assert overlap_seconds == 30
         assert short_audio_seconds == 300
+        assert max_upload_mb == 24
+        assert max_window_seconds == 120
+        assert min_window_seconds == 12
         assert duration_seconds == 61.0
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
@@ -134,7 +147,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         return rows
 
     FakeAsrEngine.calls = []
-    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
@@ -153,7 +166,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         "checkpoint.json",
         "events.jsonl",
         "media",
-        "asr",
+        "source",
         "chunks",
         "translate",
         "final",
@@ -189,7 +202,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
-    def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
@@ -218,7 +231,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
             if chunk.chunk_id not in already_done
         ]
 
-    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
@@ -254,6 +267,756 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     done = next(event for event in events if event["type"] == "done")
     assert set(done["details"]["output_paths"]) == {"srt", "ass"}
     assert any(event["stage"] == "QUALITY" and event["type"] == "artifact" for event in events)
+
+
+def test_resume_uses_saved_pipeline_settings_for_asr_mode(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    task_id, _artifacts_dir = create_pipeline_task(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        cli_overrides={
+            "asr_mode": "cloud",
+            "source_mode": "asr",
+            "asr_cloud_concurrency": 3,
+        },
+        input_type="video_asr",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_execute_task(config, store, task_id, **_kwargs):
+        captured["asr_mode"] = config.pipeline.asr_mode
+        captured["source_mode"] = config.pipeline.source_mode
+        captured["cloud_concurrency"] = config.pipeline.asr_execution.cloud_concurrency
+
+    monkeypatch.setattr("transvortex.core.orchestrator._execute_task", fake_execute_task)
+
+    resume_pipeline(root_dir=root, task_id=task_id)
+
+    assert captured == {
+        "asr_mode": "cloud",
+        "source_mode": "asr",
+        "cloud_concurrency": 3,
+    }
+
+
+def test_cloud_asr_trims_silence_before_provider_and_records_preprocess_artifact(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    pipeline = root / "pipeline.yaml"
+    pipeline.write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  prompt:
+    enabled: true
+    text: "Names: Subaru"
+    max_chars: 80
+  preprocessing:
+    cloud_trim_silence:
+      enabled: true
+      noise_db: -35
+      min_silence_seconds: 0.2
+      keep_preroll_seconds: 0.25
+      trim_trailing: true
+      keep_postroll_seconds: 0.1
+      min_upload_seconds: 0.5
+  chunking:
+    mode: none
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 10.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        first.write_bytes(b"one")
+        return [{"segment_index": 0, "start": 20.0, "duration": 10.0, "trusted_start": 20.0, "trusted_end": 30.0, "path": str(first)}]
+
+    def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(b"trimmed")
+        return {
+            "enabled": True,
+            "backend": "ffmpeg_silencedetect",
+            "source_path": str(audio_path),
+            "upload_path": str(upload_path),
+            "duration_seconds": 10.0,
+            "silence_ranges": [{"start": 0.0, "end": 3.0, "duration": 3.0}],
+            "leading_silence_seconds": 3.0,
+            "trailing_silence_seconds": 0.0,
+            "trim_start_seconds": 2.75,
+            "trim_end_seconds": 10.0,
+            "skipped": False,
+            "reason": "trimmed",
+        }
+
+    seen = {}
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **kwargs) -> None:
+            seen["mode"] = kwargs["mode"]
+            seen["prompt"] = kwargs["prompt"]
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            seen["audio_path"] = audio_path
+            seen["offset"] = segment_start_offset
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": "Hello",
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"segments": []},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.prepare_cloud_asr_audio_upload", fake_prepare)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.probe_provider",
+        lambda **_kwargs: {"checks": [{"status": "PASS"}]},
+    )
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="en",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    assert seen["mode"] == "cloud"
+    assert seen["prompt"] == "Names: Subaru"
+    assert seen["audio_path"] == task_dir / "source" / "asr" / "upload" / "segment_00000.wav"
+    assert seen["offset"] == 22.75
+    preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert preprocess["reason"] == "trimmed"
+    rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert rows[0]["meta"]["audio_preprocess"]["trim_start_seconds"] == 2.75
+    source_lines = (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(source_lines[0])["start"] == 22.75
+
+
+def test_cloud_asr_retries_original_audio_when_trimmed_result_is_nonspeech(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  preprocessing:
+    cloud_trim_silence:
+      enabled: true
+  chunking:
+    mode: none
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 10.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        first.write_bytes(b"one")
+        return [{"segment_index": 0, "start": 0.0, "duration": 10.0, "trusted_start": 0.0, "trusted_end": 10.0, "path": str(first)}]
+
+    def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(b"trimmed")
+        return {
+            "enabled": True,
+            "backend": "ffmpeg_silencedetect",
+            "source_path": str(audio_path),
+            "upload_path": str(upload_path),
+            "duration_seconds": 10.0,
+            "silence_ranges": [{"start": 0.0, "end": 0.5, "duration": 0.5}],
+            "leading_silence_seconds": 0.5,
+            "trailing_silence_seconds": 0.0,
+            "trim_start_seconds": 0.25,
+            "trim_end_seconds": 10.0,
+            "skipped": False,
+            "reason": "trimmed",
+        }
+
+    seen_paths = []
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            seen_paths.append(audio_path.name)
+            text = "♪♪" if audio_path.name == "segment_00000.wav" else "やったわ"
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": text,
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"text": text},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.prepare_cloud_asr_audio_upload", fake_prepare)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    assert seen_paths == ["segment_00000.wav", "part_00000.wav"]
+    preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert preprocess["fallback_used"] is True
+    rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert rows[0]["text"] == "やったわ"
+    assert rows[0]["meta"]["audio_preprocess"]["fallback_used"] is True
+
+
+def test_cloud_asr_filters_hard_garbage_rows_before_source_artifact(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: none
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 10.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        first.write_bytes(b"one")
+        return [{"segment_index": 0, "start": 0.0, "duration": 10.0, "trusted_start": 0.0, "trusted_end": 10.0, "path": str(first)}]
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, _audio_path: Path, segment_start_offset: float):
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {"start": segment_start_offset, "end": segment_start_offset + 1, "text": "♪♪", "meta": {"source": "asr"}},
+                        {"start": segment_start_offset + 1, "end": segment_start_offset + 2, "text": "やったわ", "meta": {"source": "asr"}},
+                    ],
+                    "raw_response": {"segments": []},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert [row["text"] for row in rows] == ["やったわ"]
+    quality = json.loads((task_dir / "source" / "asr" / "quality" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert quality["dropped_rows"] == 1
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_rows] == ["やったわ"]
+
+
+def test_cloud_asr_concurrent_segments_merge_in_manifest_order(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  execution:
+    cloud_concurrency: 4
+    max_cloud_concurrency: 4
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: fixed
+    window_seconds: 10
+    overlap_seconds: 0
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 20.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for idx, start in enumerate([0.0, 10.0]):
+            part = segments_dir / f"part_{idx:05d}.wav"
+            part.write_bytes(str(idx).encode("utf-8"))
+            out.append(
+                {
+                    "segment_index": idx,
+                    "start": start,
+                    "duration": 10.0,
+                    "trusted_start": start,
+                    "trusted_end": start + 10.0,
+                    "path": str(part),
+                }
+            )
+        return out
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            idx = int(audio_path.stem.rsplit("_", 1)[-1])
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": f"line {idx}",
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"segments": []},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_rows] == ["line 0", "line 1"]
+    checkpoint = json.loads((task_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["asr_done_segments"] == [0, 1]
+
+
+def test_cloud_asr_retryable_failure_splits_segment_from_original_timeline(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  execution:
+    cloud_concurrency: 1
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: fixed
+    window_seconds: 60
+    max_window_seconds: 60
+    min_window_seconds: 12
+    overlap_seconds: 0
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 60.0}
+
+    split_calls = []
+
+    def fake_split_audio_for_asr(audio_path: Path, segments_dir: Path, **kwargs) -> list[dict]:
+        split_calls.append({"audio_path": audio_path, "segments_dir": segments_dir, "kwargs": kwargs})
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        if "segments_retry" in str(segments_dir):
+            out = []
+            for idx, start in enumerate([0.0, 30.0]):
+                part = segments_dir / f"part_{idx:05d}.wav"
+                part.write_bytes(str(idx).encode("utf-8"))
+                out.append(
+                    {
+                        "segment_index": idx,
+                        "start": start,
+                        "duration": 30.0,
+                        "trusted_start": start,
+                        "trusted_end": start + 30.0,
+                        "path": str(part),
+                    }
+                )
+            return out
+        part = segments_dir / "part_00000.wav"
+        part.write_bytes(b"parent")
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 60.0,
+                "trusted_start": 0.0,
+                "trusted_end": 60.0,
+                "path": str(part),
+                "source_audio_path": str(root / "artifacts" / "placeholder_full_audio.m4a"),
+            }
+        ]
+
+    calls = {"count": 0}
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            calls["count"] += 1
+            if audio_path.name == "part_00000.wav" and "segments_retry" not in str(audio_path):
+                raise RuntimeError("provider_timeout: first upload timed out")
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": f"child {audio_path.stem}",
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"segments": []},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_rows] == ["child part_00000", "child part_00001"]
+    retry_call = next(call for call in split_calls if "segments_retry" in str(call["segments_dir"]))
+    assert retry_call["kwargs"]["source_start_seconds"] == 0.0
+    assert retry_call["audio_path"] == root / "artifacts" / "placeholder_full_audio.m4a"
+    preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert preprocess["reason"] == "split_retry"
+    assert "source/asr/retry/segment_00000" in preprocess["child_artifact_dir"].replace("\\", "/")
+    assert not (task_dir / "source" / "asr" / "rows" / "segment_00001.json").exists()
+    assert (task_dir / "source" / "asr" / "retry" / "segment_00000" / "asr" / "rows" / "segment_00001.json").exists()
+
+
+def test_cloud_asr_adaptive_concurrency_requeues_retryable_failure(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  execution:
+    cloud_concurrency: 2
+    max_cloud_concurrency: 2
+    min_cloud_concurrency: 1
+    adaptive_concurrency: true
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: fixed
+    window_seconds: 10
+    overlap_seconds: 0
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 20.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        out = []
+        for idx, start in enumerate([0.0, 10.0]):
+            part = segments_dir / f"part_{idx:05d}.wav"
+            part.write_bytes(str(idx).encode("utf-8"))
+            out.append(
+                {
+                    "segment_index": idx,
+                    "start": start,
+                    "duration": 10.0,
+                    "trusted_start": start,
+                    "trusted_end": start + 10.0,
+                    "path": str(part),
+                }
+            )
+        return out
+
+    attempts: dict[str, int] = {}
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            attempts[audio_path.name] = attempts.get(audio_path.name, 0) + 1
+            if audio_path.name == "part_00000.wav" and attempts[audio_path.name] == 1:
+                raise RuntimeError("provider_timeout: temporary timeout")
+            idx = int(audio_path.stem.rsplit("_", 1)[-1])
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": f"line {idx}",
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"segments": []},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_rows] == ["line 0", "line 1"]
+    assert attempts["part_00000.wav"] == 2
+
+
+def test_asr_upload_batch_respects_worker_and_upload_limits(tmp_path: Path) -> None:
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    third = tmp_path / "third.wav"
+    first.write_bytes(b"0" * 1024 * 1024)
+    second.write_bytes(b"0" * 1024 * 1024)
+    third.write_bytes(b"0" * 1024 * 1024)
+    items = [
+        {"segment_index": 0, "path": str(first), "duration": 10.0},
+        {"segment_index": 1, "path": str(second), "duration": 10.0},
+        {"segment_index": 2, "path": str(third), "duration": 10.0},
+    ]
+
+    batch, remaining = _take_asr_upload_batch(items, max_items=3, max_upload_mb=2.5)
+
+    assert [item["segment_index"] for item in batch] == [0, 1]
+    assert [item["segment_index"] for item in remaining] == [2]
+
+    batch, remaining = _take_asr_upload_batch(items, max_items=1, max_upload_mb=10)
+
+    assert [item["segment_index"] for item in batch] == [0]
+    assert [item["segment_index"] for item in remaining] == [1, 2]
+
+
+def test_asr_upload_size_estimate_uses_duration_when_file_is_missing() -> None:
+    item = {"segment_index": 0, "duration": 60.0, "path": ""}
+
+    assert round(_asr_item_upload_mb(item), 2) == 1.83
 
 
 def test_memory_mode_raises_initial_chunk_size_for_stability(tmp_path: Path, monkeypatch) -> None:
@@ -314,7 +1077,7 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
-    def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
@@ -344,7 +1107,7 @@ def test_resume_backfills_missing_translation_validation_without_retranslation(t
             for chunk in todo
         ]
 
-    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
@@ -470,7 +1233,7 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
-    def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
@@ -498,7 +1261,7 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
         ]
 
     FakeAsrEngine.calls = []
-    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
@@ -506,13 +1269,57 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
     task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN")
     store = TaskStore(root / "artifacts")
     task_dir = store.task_dir(task_id)
-    asr_file = task_dir / "asr" / "segment_00000.json"
+    asr_file = task_dir / "source" / "asr" / "rows" / "segment_00000.json"
     asr_file.unlink()
 
     resume_pipeline(root_dir=root, task_id=task_id)
 
     assert asr_file.exists()
     assert FakeAsrEngine.calls.count("part_00000.wav") == 2
+
+
+def test_resume_migrates_legacy_asr_segments_to_source_artifact(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "segments.jsonl"
+    input_file.write_text('{"id": 1, "start": 0, "end": 1, "text_src": "Hello"}\n', encoding="utf-8")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": []})
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, already_done=None, **_kwargs):
+        return [
+            {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "ok"} for seg_id in chunk.segment_ids],
+                "errors": [],
+            }
+            for chunk in chunks
+            if chunk.chunk_id not in (already_done or set())
+        ]
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+    task_id = run_pipeline(root_dir=root, input_file=input_file, source_lang="en", target_lang="zh-CN", input_type="segments_translate")
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    source_file = task_dir / "source" / "segments.normalized.jsonl"
+    legacy_file = task_dir / "asr" / "segments.raw.jsonl"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_file.write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
+    source_file.unlink()
+    checkpoint_file = task_dir / "checkpoint.json"
+    checkpoint = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+    checkpoint["status"] = "INGEST"
+    checkpoint_file.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    resume_pipeline(root_dir=root, task_id=task_id)
+
+    assert source_file.exists()
+    rows = [json.loads(line) for line in source_file.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["text_src"] == "Hello"
 
 
 def test_video_auto_source_uses_matching_embedded_subtitle_and_skips_asr(tmp_path: Path, monkeypatch) -> None:
@@ -568,7 +1375,10 @@ def test_video_auto_source_uses_matching_embedded_subtitle_and_skips_asr(tmp_pat
     task_dir = store.task_dir(task_id)
     assert (task_dir / "media" / "embedded_subtitle.srt").exists()
     assert (task_dir / "media" / "subtitle_streams.json").exists()
-    assert (task_dir / "asr" / "segments.raw.jsonl").exists()
+    source_file = task_dir / "source" / "segments.normalized.jsonl"
+    assert source_file.exists()
+    rows = [json.loads(line) for line in source_file.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["meta"]["source"] == "embedded_subtitle"
     events = store.read_events(task_id)
     warning = next(event for event in events if "Auto-selected embedded subtitle stream" in event.get("message", ""))
     assert warning["level"] == "warning"
@@ -584,7 +1394,7 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
 
-    def fake_extract_audio(_video_path: Path, output_audio: Path) -> dict:
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
         output_audio.parent.mkdir(parents=True, exist_ok=True)
         output_audio.write_bytes(b"audio")
         return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
@@ -611,7 +1421,7 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
         ]
 
     streamed: list[dict] = []
-    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
     monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
     monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)

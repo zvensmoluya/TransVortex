@@ -63,20 +63,54 @@ npm run tauri dev
 
 ## 云端 ASR 示例
 
-如果要用 OpenAI Whisper-style 云端 ASR，可以这样配置：
+如果要用 OpenAI `whisper-1` 云端 ASR，可以这样配置：
 
 `pipeline.yaml`:
 
 ```yaml
 asr:
   mode: cloud
-  cloud:
+  provider: openai_whisper
+  prompt:
+    enabled: true
+    text: ""
+    include_previous_text: false
+    max_chars: 800
+  preprocessing:
+    cloud_trim_silence:
+      enabled: true
+      backend: ffmpeg_silencedetect
+  execution:
+    cloud_concurrency: 8
+    adaptive_concurrency: true
+  chunking:
+    mode: silence
+    window_seconds: 300
+    max_window_seconds: 120
+    min_window_seconds: 12
+    overlap_seconds: 5
+    max_upload_mb: 24
+    silence:
+      noise_db: -35
+      min_silence_seconds: 0.25
+
+asr_providers:
+  - name: openai_whisper
+    protocol: openai_transcriptions
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
     env_key: TVX_MODEL_API_KEY
     credential_id: openai_asr
-    timeout_seconds: 120
+    timeout_seconds: 300
+    retry: 2
+    request:
+      response_format: verbose_json
+      temperature: 0
+      timestamp_granularities: [segment]
+      include: []
+      array_format: brackets
+      extra_form_fields: {}
 ```
 
 保存 key：
@@ -84,6 +118,8 @@ asr:
 ```powershell
 transvortex auth set openai_asr
 ```
+
+当前云端 ASR 适配的是 OpenAI Transcriptions multipart API；原始响应会先归一化为 `source/segments.normalized.jsonl`，翻译层不直接依赖 ASR 原始格式。`asr.prompt.text` 是任务级 ASR hint，会作为 transcription `prompt` 发送；provider `request` 保存 OpenAI transcription 表单字段和受限 `extra_form_fields` 扩展，`response_format` 第一版固定使用 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。`timestamp_granularities` 默认请求 `segment`。Cloud ASR 默认用 ffmpeg 静音边界切成约 120 秒以内的自然片段，并发 8 个上传；`max_upload_mb: 24` 只作为 OpenAI 25MB 上传限制保护。请求遇到 timeout、429 或 5xx 会重试并降并发，单片仍失败会细分重跑。明显垃圾 ASR 行会在进入标准 source 前过滤，raw 和 quality diagnostics 会保留。
 
 ## 常用命令
 

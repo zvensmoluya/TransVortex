@@ -2,22 +2,22 @@
 
 ## 1. 当前判断
 
-当前 TransVortex 的云端 ASR 支持是基础可用状态，但适配层比较窄。
+当前 TransVortex 的云端 ASR 首先面向 OpenAI Transcriptions API。
 
-现有实现更接近：
+现有实现路线是：
 
 ```text
-OpenAI Whisper-style /v1/audio/transcriptions adapter
+OpenAI /v1/audio/transcriptions adapter
 ```
 
 也就是：
 
 - 将 FFmpeg 切出的音频片段上传到 `/v1/audio/transcriptions`。
-- 传入 `model` 和 `response_format=verbose_json`。
+- 传入 `model`、`response_format=verbose_json`、`temperature`、`timestamp_granularities[]` 等 OpenAI transcription 字段。
 - 优先解析响应里的 `segments[]`。
 - 若服务只返回整段 `text`，当前只能退化成一条弱时间轴结果，不适合高质量字幕。
 
-因此，当前最稳的云端 ASR 目标仍是 `whisper-1` 或与它高度兼容的服务。它还不是完整的多厂商云端 ASR provider gateway。
+因此，当前最稳的云端 ASR 目标是 OpenAI `whisper-1`。多厂商 ASR provider gateway 是后续方向，不影响当前 OpenAI 适配优先级。
 
 参考：
 
@@ -193,11 +193,14 @@ platform policy:
 
 ### 阶段 1：把现有 whisper-1 路线跑稳
 
-- 明确当前云端 ASR 是 OpenAI-style transcription。
-- 保证 `whisper-1` 返回的 `segments[]` 能稳定进入 `asr/segments.raw.jsonl`。
+- 明确当前云端 ASR 是 OpenAI Transcriptions API 适配。
+- 保证 `whisper-1` 返回的 `segments[]` 能稳定进入 `source/segments.normalized.jsonl`。
 - 在 doctor/probe 中区分“云端 ASR key 缺失”和“翻译 provider key 缺失”。
+- 完整化 OpenAI transcription 常用请求字段：`prompt`、`temperature`、`timestamp_granularities[]`、`include[]` 和受限 `extra_form_fields`。
+- 对 timeout、429 和 5xx 增加短重试；重试仍失败时保留失败状态，不静默丢弃音频片段。
+- 在 cloud ASR 前增加 ffmpeg 静音预处理：裁剪真实静音、记录 preprocess artifact、把时间轴 offset 回填到 source segments。
 
-### 阶段 2：ASR response mapping
+### 阶段 2：ASR response mapping 与更强 VAD
 
 为 ASR 单独引入 response mapping：
 
@@ -221,6 +224,7 @@ asr_providers:
 - `words[]`
 - `speaker`
 - `confidence`
+- word-level alignment 与真正的人声 VAD，可用于处理“开头有音乐但无人声”的场景；第一阶段的 ffmpeg silence trim 只处理真实静音。
 
 ### 阶段 3：云端 ASR 并发
 

@@ -117,7 +117,7 @@ World
     assert task.status == "DONE"
     assert task.settings["input_type"] == "srt_translate"
     assert set(task.output_paths) == {"srt", "ass"}
-    assert (store.task_dir(task_id) / "asr" / "segments.raw.jsonl").exists()
+    assert (store.task_dir(task_id) / "source" / "segments.normalized.jsonl").exists()
     assert not (store.task_dir(task_id) / "media" / "audio_full.m4a").exists()
 
     result = open_task_result(root_dir=root, task_id=task_id)

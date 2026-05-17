@@ -63,6 +63,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_model_size": args.asr_model_size,
         "asr_compute_type": args.asr_compute_type,
         "asr_max_initial_timestamp": getattr(args, "asr_max_initial_timestamp", None),
+        "asr_provider": getattr(args, "asr_provider", None),
         "asr_cloud_base_url": getattr(args, "asr_cloud_base_url", None),
         "asr_cloud_endpoint": getattr(args, "asr_cloud_endpoint", None),
         "asr_cloud_model": args.asr_model,
@@ -72,6 +73,9 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_chunking_mode": getattr(args, "asr_chunking_mode", None),
         "asr_window_seconds": getattr(args, "asr_window_seconds", None),
         "asr_overlap_seconds": getattr(args, "asr_overlap_seconds", None),
+        "asr_max_upload_mb": getattr(args, "asr_max_upload_mb", None),
+        "asr_audio_track": getattr(args, "asr_audio_track", None),
+        "asr_cloud_concurrency": getattr(args, "asr_cloud_concurrency", None),
         "source_mode": getattr(args, "source_mode", None),
         "subtitle_track": getattr(args, "subtitle_track", None),
         "output_format": getattr(args, "output_format", None),
@@ -171,15 +175,19 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-model-size", default=None)
     subparser.add_argument("--asr-compute-type", default=None)
     subparser.add_argument("--asr-max-initial-timestamp", type=float, default=None)
+    subparser.add_argument("--asr-provider", default=None)
     subparser.add_argument("--asr-cloud-base-url", default=None)
     subparser.add_argument("--asr-cloud-endpoint", default=None)
     subparser.add_argument("--asr-model", default=None, help="Cloud ASR model override")
     subparser.add_argument("--asr-cloud-env-key", default=None)
     subparser.add_argument("--asr-cloud-credential-id", default=None)
     subparser.add_argument("--asr-cloud-timeout-seconds", type=int, default=None)
-    subparser.add_argument("--asr-chunking-mode", choices=["auto", "fixed", "none"], default=None)
+    subparser.add_argument("--asr-chunking-mode", choices=["auto", "fixed", "none", "silence"], default=None)
     subparser.add_argument("--asr-window-seconds", type=int, default=None)
     subparser.add_argument("--asr-overlap-seconds", type=int, default=None)
+    subparser.add_argument("--asr-max-upload-mb", type=float, default=None)
+    subparser.add_argument("--asr-audio-track", default=None)
+    subparser.add_argument("--asr-cloud-concurrency", type=int, default=None)
     subparser.add_argument("--source-mode", choices=["auto", "asr", "embedded_subtitle"], default=None)
     subparser.add_argument("--subtitle-track", default=None)
     subparser.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
@@ -350,6 +358,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-model-size", getattr(ns, "asr_model_size", None)),
         ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
         ("--asr-max-initial-timestamp", getattr(ns, "asr_max_initial_timestamp", None)),
+        ("--asr-provider", getattr(ns, "asr_provider", None)),
         ("--asr-cloud-base-url", getattr(ns, "asr_cloud_base_url", None)),
         ("--asr-cloud-endpoint", getattr(ns, "asr_cloud_endpoint", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),
@@ -359,6 +368,9 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-chunking-mode", getattr(ns, "asr_chunking_mode", None)),
         ("--asr-window-seconds", getattr(ns, "asr_window_seconds", None)),
         ("--asr-overlap-seconds", getattr(ns, "asr_overlap_seconds", None)),
+        ("--asr-max-upload-mb", getattr(ns, "asr_max_upload_mb", None)),
+        ("--asr-audio-track", getattr(ns, "asr_audio_track", None)),
+        ("--asr-cloud-concurrency", getattr(ns, "asr_cloud_concurrency", None)),
         ("--source-mode", getattr(ns, "source_mode", None)),
         ("--subtitle-track", getattr(ns, "subtitle_track", None)),
         ("--output-format", getattr(ns, "output_format", None)),

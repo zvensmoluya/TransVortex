@@ -408,17 +408,50 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
             )
 
     if config.pipeline.asr_mode == "cloud":
-        env_key = config.pipeline.asr_cloud.env_key
-        checks.append(
-            _env_key_check(
-                root_dir=root_dir,
-                env_key=env_key,
-                credential_id=config.pipeline.asr_cloud.credential_id,
-                provider_name="",
-                name="asr_env_key",
-                message_subject="ASR",
+        asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
+        if asr_provider is None:
+            checks.append(
+                _check(
+                    "asr_provider",
+                    "FAIL",
+                    "asr_provider_missing",
+                    f"ASR provider not found: {config.pipeline.asr_provider}",
+                    f"ASR provider 不存在：{config.pipeline.asr_provider}。",
+                    details={"provider": config.pipeline.asr_provider},
+                )
             )
-        )
+        elif asr_provider.protocol != "openai_transcriptions":
+            checks.append(
+                _check(
+                    "asr_provider",
+                    "FAIL",
+                    "unsupported_asr_protocol",
+                    f"unsupported ASR protocol: {asr_provider.protocol}",
+                    f"暂不支持 ASR protocol：{asr_provider.protocol}。",
+                    details={"provider": asr_provider.name, "protocol": asr_provider.protocol},
+                )
+            )
+        else:
+            checks.append(
+                _check(
+                    "asr_provider",
+                    "PASS",
+                    "asr_provider_valid",
+                    "ASR provider is valid",
+                    "ASR provider 配置有效。",
+                    details={"provider": asr_provider.name, "protocol": asr_provider.protocol},
+                )
+            )
+            checks.append(
+                _env_key_check(
+                    root_dir=root_dir,
+                    env_key=asr_provider.env_key,
+                    credential_id=asr_provider.credential_id,
+                    provider_name="",
+                    name="asr_env_key",
+                    message_subject="ASR",
+                )
+            )
 
     return {
         "status": _overall_status(checks),

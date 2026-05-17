@@ -48,11 +48,11 @@ Use these when an agent needs part of the pipeline:
 
 ```powershell
 transvortex asr --input video.mp4 --src en --detach --json
-transvortex translate --segments segments.raw.jsonl --src en --tgt zh-CN --detach --json
+transvortex translate --segments source/segments.normalized.jsonl --src en --tgt zh-CN --detach --json
 transvortex export --segments segments.final.json --format both --output subtitles --json
 ```
 
-`asr` emits source segments under `asr/segments.raw.jsonl`. `translate` accepts a
+`asr` emits normalized source segments under `source/segments.normalized.jsonl`. `translate` accepts a
 segments JSONL file or SRT and emits translated/final artifacts. `export` writes
 SRT/ASS from final segments.
 
@@ -80,7 +80,7 @@ task.json
 checkpoint.json
 events.jsonl
 media/
-asr/segments.raw.jsonl
+source/segments.normalized.jsonl
 chunks/chunks.json
 translate/segments.translated.jsonl
 translate/validation.jsonl

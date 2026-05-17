@@ -12,7 +12,14 @@ from .models import (
     AppConfig,
     AsrChunkingConfig,
     AsrCloudConfig,
+    AsrCloudTrimSilenceConfig,
+    AsrExecutionConfig,
     AsrLocalConfig,
+    AsrPreprocessingConfig,
+    AsrPromptConfig,
+    AsrProviderConfig,
+    AsrProviderRequestConfig,
+    AsrSilenceChunkingConfig,
     AsrUncertaintyHintsConfig,
     AssStyleConfig,
     AuthConfig,
@@ -97,6 +104,16 @@ def _to_str(value: Any, default: str) -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _to_str_list(value: Any, default: list[str] | None = None) -> list[str]:
+    if value is None:
+        return list(default or [])
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
 
 
 def _parse_memory_presets(raw: Any) -> list[MemoryPresetRef]:
@@ -309,6 +326,49 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
     return RoutingConfig(primary=active.primary, fallback=list(active.fallback)), profiles, active_profile, next_profile_seq
 
 
+def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
+    name = str(row.get("name") or "").strip()
+    if not name:
+        raise ValueError("asr_providers[].name is required")
+    env_key = _to_str(row.get("env_key"), "TVX_MODEL_API_KEY")
+    request_raw = row.get("request") if isinstance(row.get("request"), dict) else {}
+    return AsrProviderConfig(
+        name=name,
+        protocol=_to_str(row.get("protocol"), "openai_transcriptions"),
+        base_url=_to_str(row.get("base_url"), "https://api.openai.com").rstrip("/"),
+        endpoint=_to_str(row.get("endpoint"), "/v1/audio/transcriptions"),
+        model=_to_str(row.get("model"), "whisper-1"),
+        env_key=env_key,
+        credential_id=_to_str(row.get("credential_id"), env_key),
+        timeout_seconds=_to_int(row.get("timeout_seconds"), 300),
+        retry=_to_int(row.get("retry"), 2),
+        request=AsrProviderRequestConfig(
+            response_format=_to_str(request_raw.get("response_format"), "verbose_json"),
+            temperature=_to_float(request_raw.get("temperature"), 0.0),
+            timestamp_granularities=_to_str_list(request_raw.get("timestamp_granularities"), ["segment"]),
+            include=_to_str_list(request_raw.get("include"), []),
+            extra_form_fields=dict(request_raw.get("extra_form_fields") or {})
+            if isinstance(request_raw.get("extra_form_fields"), dict)
+            else {},
+            array_format=_to_str(request_raw.get("array_format"), "brackets"),
+        ),
+    )
+
+
+def _legacy_asr_provider_from_cloud(asr_cloud_raw: dict[str, Any]) -> AsrProviderConfig:
+    env_key = _to_str(asr_cloud_raw.get("env_key"), "TVX_MODEL_API_KEY")
+    return AsrProviderConfig(
+        name="openai_whisper_legacy",
+        protocol="openai_transcriptions",
+        base_url=_to_str(asr_cloud_raw.get("base_url"), "https://api.openai.com").rstrip("/"),
+        endpoint=_to_str(asr_cloud_raw.get("endpoint"), "/v1/audio/transcriptions"),
+        model=_to_str(asr_cloud_raw.get("model"), "whisper-1"),
+        env_key=env_key,
+        credential_id=_to_str(asr_cloud_raw.get("credential_id"), env_key),
+        timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 300),
+    )
+
+
 def resolve_providers_file(root_dir: Path, providers_file: Path | None = None) -> Path:
     if providers_file is not None:
         return providers_file
@@ -344,9 +404,33 @@ def load_app_config(
     asr_local_raw = asr_raw.get("local") or {}
     asr_cloud_raw = asr_raw.get("cloud") or {}
     asr_chunking_raw = asr_raw.get("chunking") or {}
+    asr_chunking_silence_raw = (
+        asr_chunking_raw.get("silence") if isinstance(asr_chunking_raw.get("silence"), dict) else {}
+    ) or {}
+    asr_execution_raw = asr_raw.get("execution") if isinstance(asr_raw.get("execution"), dict) else {}
+    asr_prompt_raw = asr_raw.get("prompt") if isinstance(asr_raw.get("prompt"), dict) else {}
+    asr_preprocessing_raw = asr_raw.get("preprocessing") or {}
+    cloud_trim_silence_raw = (
+        asr_preprocessing_raw.get("cloud_trim_silence") if isinstance(asr_preprocessing_raw, dict) else {}
+    ) or {}
     asr_mode = _to_str(asr_raw.get("mode"), "local")
     if asr_mode not in {"local", "cloud"}:
         raise ValueError(f"Unsupported asr.mode: {asr_mode}")
+    asr_provider_name = _to_str(asr_raw.get("provider"), "")
+    asr_provider_rows = pip_yaml.get("asr_providers")
+    asr_providers: dict[str, AsrProviderConfig] = {}
+    if isinstance(asr_provider_rows, list):
+        for row in asr_provider_rows:
+            if isinstance(row, dict):
+                provider_cfg = _parse_asr_provider(row)
+                asr_providers[provider_cfg.name] = provider_cfg
+    if not asr_providers:
+        legacy_provider = _legacy_asr_provider_from_cloud(asr_cloud_raw)
+        asr_providers[legacy_provider.name] = legacy_provider
+        if not asr_provider_name:
+            asr_provider_name = legacy_provider.name
+    elif not asr_provider_name:
+        asr_provider_name = next(iter(asr_providers))
     translation_raw = pip_yaml.get("translation") or {}
     legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 120)
     chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
@@ -504,6 +588,7 @@ def load_app_config(
         retry=_to_int(pip_yaml.get("retry"), 3),
         max_cps=_to_int(pip_yaml.get("max_cps"), 20),
         asr_mode=asr_mode,
+        asr_provider=asr_provider_name,
         asr_local=AsrLocalConfig(
             model_size=_to_str(asr_local_raw.get("model_size"), "small"),
             device=_to_str(asr_local_raw.get("device"), "auto"),
@@ -516,14 +601,49 @@ def load_app_config(
             model=_to_str(asr_cloud_raw.get("model"), "whisper-1"),
             env_key=_to_str(asr_cloud_raw.get("env_key"), "TVX_MODEL_API_KEY"),
             credential_id=_to_str(asr_cloud_raw.get("credential_id"), _to_str(asr_cloud_raw.get("env_key"), "TVX_MODEL_API_KEY")),
-            timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 120),
+            timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 300),
         ),
         asr_chunking=AsrChunkingConfig(
-            mode=_to_str(asr_chunking_raw.get("mode"), "auto"),
+            mode=_to_str(asr_chunking_raw.get("mode"), "silence"),
             window_seconds=_to_int(asr_chunking_raw.get("window_seconds"), 300),
-            overlap_seconds=_to_int(asr_chunking_raw.get("overlap_seconds"), 30),
+            max_window_seconds=_to_int(asr_chunking_raw.get("max_window_seconds"), 120),
+            min_window_seconds=_to_int(asr_chunking_raw.get("min_window_seconds"), 12),
+            overlap_seconds=_to_int(asr_chunking_raw.get("overlap_seconds"), 5),
             short_audio_seconds=_to_int(asr_chunking_raw.get("short_audio_seconds"), 300),
+            max_upload_mb=_to_float(asr_chunking_raw.get("max_upload_mb"), 24.0),
+            silence=AsrSilenceChunkingConfig(
+                noise_db=_to_float(asr_chunking_silence_raw.get("noise_db"), -35.0),
+                min_silence_seconds=_to_float(asr_chunking_silence_raw.get("min_silence_seconds"), 0.25),
+                cut_padding_seconds=_to_float(asr_chunking_silence_raw.get("cut_padding_seconds"), 0.15),
+                fallback_mode=_to_str(asr_chunking_silence_raw.get("fallback_mode"), "hard_cut"),
+            ),
             fuzzy_dedupe=_to_bool(asr_chunking_raw.get("fuzzy_dedupe"), True),
+        ),
+        asr_execution=AsrExecutionConfig(
+            cloud_concurrency=_to_int(asr_execution_raw.get("cloud_concurrency"), 8),
+            adaptive_concurrency=_to_bool(asr_execution_raw.get("adaptive_concurrency"), True),
+            min_cloud_concurrency=_to_int(asr_execution_raw.get("min_cloud_concurrency"), 1),
+            max_cloud_concurrency=_to_int(asr_execution_raw.get("max_cloud_concurrency"), 8),
+            max_inflight_upload_mb=_to_float(asr_execution_raw.get("max_inflight_upload_mb"), 128.0),
+        ),
+        asr_audio_track=_to_str(asr_raw.get("audio_track"), "auto"),
+        asr_preprocessing=AsrPreprocessingConfig(
+            cloud_trim_silence=AsrCloudTrimSilenceConfig(
+                enabled=_to_bool(cloud_trim_silence_raw.get("enabled"), True),
+                backend=_to_str(cloud_trim_silence_raw.get("backend"), "ffmpeg_silencedetect"),
+                noise_db=_to_float(cloud_trim_silence_raw.get("noise_db"), -35.0),
+                min_silence_seconds=_to_float(cloud_trim_silence_raw.get("min_silence_seconds"), 0.2),
+                keep_preroll_seconds=_to_float(cloud_trim_silence_raw.get("keep_preroll_seconds"), 0.25),
+                trim_trailing=_to_bool(cloud_trim_silence_raw.get("trim_trailing"), True),
+                keep_postroll_seconds=_to_float(cloud_trim_silence_raw.get("keep_postroll_seconds"), 0.1),
+                min_upload_seconds=_to_float(cloud_trim_silence_raw.get("min_upload_seconds"), 0.5),
+            )
+        ),
+        asr_prompt=AsrPromptConfig(
+            enabled=_to_bool(asr_prompt_raw.get("enabled"), True),
+            text=_to_str(asr_prompt_raw.get("text"), ""),
+            include_previous_text=_to_bool(asr_prompt_raw.get("include_previous_text"), False),
+            max_chars=_to_int(asr_prompt_raw.get("max_chars"), 800),
         ),
         source_mode=_to_str(pip_yaml.get("source_mode"), "auto"),
         subtitle_track=_to_str(pip_yaml.get("subtitle_track"), "auto"),
@@ -581,28 +701,53 @@ def load_app_config(
             pipeline.asr_local.compute_type = _to_str(value, pipeline.asr_local.compute_type)
         elif key == "asr_max_initial_timestamp":
             pipeline.asr_local.max_initial_timestamp = _to_float(value, pipeline.asr_local.max_initial_timestamp)
+        elif key == "asr_provider":
+            pipeline.asr_provider = _to_str(value, pipeline.asr_provider)
         elif key == "asr_cloud_base_url":
             pipeline.asr_cloud.base_url = _to_str(value, pipeline.asr_cloud.base_url)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].base_url = pipeline.asr_cloud.base_url.rstrip("/")
         elif key == "asr_cloud_endpoint":
             pipeline.asr_cloud.endpoint = _to_str(value, pipeline.asr_cloud.endpoint)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].endpoint = pipeline.asr_cloud.endpoint
         elif key == "asr_cloud_model":
             pipeline.asr_cloud.model = _to_str(value, pipeline.asr_cloud.model)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].model = pipeline.asr_cloud.model
         elif key == "asr_cloud_env_key":
             pipeline.asr_cloud.env_key = _to_str(value, pipeline.asr_cloud.env_key)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].env_key = pipeline.asr_cloud.env_key
         elif key == "asr_cloud_credential_id":
             pipeline.asr_cloud.credential_id = _to_str(value, pipeline.asr_cloud.credential_id)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].credential_id = pipeline.asr_cloud.credential_id
         elif key == "asr_cloud_timeout_seconds":
             pipeline.asr_cloud.timeout_seconds = _to_int(value, pipeline.asr_cloud.timeout_seconds)
+            if pipeline.asr_provider in asr_providers:
+                asr_providers[pipeline.asr_provider].timeout_seconds = pipeline.asr_cloud.timeout_seconds
         elif key == "asr_chunking_mode":
             pipeline.asr_chunking.mode = _to_str(value, pipeline.asr_chunking.mode)
         elif key == "asr_window_seconds":
             pipeline.asr_chunking.window_seconds = _to_int(value, pipeline.asr_chunking.window_seconds)
+            pipeline.asr_chunking.max_window_seconds = pipeline.asr_chunking.window_seconds
         elif key == "asr_overlap_seconds":
             pipeline.asr_chunking.overlap_seconds = _to_int(value, pipeline.asr_chunking.overlap_seconds)
+        elif key == "asr_max_upload_mb":
+            pipeline.asr_chunking.max_upload_mb = _to_float(value, pipeline.asr_chunking.max_upload_mb)
         elif key == "asr_short_audio_seconds":
             pipeline.asr_chunking.short_audio_seconds = _to_int(value, pipeline.asr_chunking.short_audio_seconds)
         elif key == "asr_fuzzy_dedupe":
             pipeline.asr_chunking.fuzzy_dedupe = _to_bool(value, pipeline.asr_chunking.fuzzy_dedupe)
+        elif key == "asr_audio_track":
+            pipeline.asr_audio_track = _to_str(value, pipeline.asr_audio_track)
+        elif key == "asr_cloud_concurrency":
+            pipeline.asr_execution.cloud_concurrency = _to_int(value, pipeline.asr_execution.cloud_concurrency)
+            pipeline.asr_execution.max_cloud_concurrency = max(
+                pipeline.asr_execution.cloud_concurrency,
+                pipeline.asr_execution.max_cloud_concurrency,
+            )
         elif key == "source_mode":
             pipeline.source_mode = _to_str(value, pipeline.source_mode)
         elif key == "subtitle_track":
@@ -732,6 +877,7 @@ def load_app_config(
         routing_profiles=routing_profiles,
         active_routing_profile=active_routing_profile,
         routing_profile_next_seq=routing_profile_next_seq,
+        asr_providers=asr_providers,
     )
 
 

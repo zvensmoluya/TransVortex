@@ -154,17 +154,17 @@ transvortex asr --input video.mp4 --src ja --json
 目标 artifact：
 
 ```text
-asr/segments.raw.jsonl
+source/segments.normalized.jsonl
 ```
 
-当前云端 ASR 更接近 OpenAI `whisper-1` / `/v1/audio/transcriptions` 兼容支持，不是完整多厂商 ASR 网关。后续云端 ASR provider、火山/腾讯/阿里/Google/Deepgram 等生态调研和适配路线见 `docs/ASR_PROVIDER_DIRECTION.md`。
+当前云端 ASR 是 OpenAI Transcriptions API 适配，不是完整多厂商 ASR 网关。后续云端 ASR provider、火山/腾讯/阿里/Google/Deepgram 等生态调研和适配路线见 `docs/ASR_PROVIDER_DIRECTION.md`。
 
 ### Translate
 
 输入 segments，输出 translated segments。
 
 ```powershell
-transvortex translate --segments segments.raw.jsonl --src ja --tgt zh-CN --json
+transvortex translate --segments source/segments.normalized.jsonl --src ja --tgt zh-CN --json
 ```
 
 目标 artifact：
@@ -407,7 +407,7 @@ pipeline.yaml
 
 ### V1.x / V2 可选：ASR Provider Gateway 与 Agent/MCP 接口
 
-- 将当前 OpenAI Whisper-style 云端 ASR 支持扩展为独立 ASR provider gateway。
+- 将当前 OpenAI Transcriptions 云端 ASR 支持扩展为独立 ASR provider gateway。
 - 支持 direct upload、submit/query async job、URL-based transcription、streaming transcription 等调用形态。
 - 抽象 `segments/utterances/words/speaker/confidence` 等响应结构。
 - 优先评估 `whisper-1` 稳定性，再考虑火山豆包语音、腾讯云、阿里云、Google Chirp、Deepgram、AssemblyAI 等 provider。

@@ -116,12 +116,33 @@ class AsrUncertaintyHintsConfig:
 
 
 @dataclass
+class AsrSilenceChunkingConfig:
+    noise_db: float = -35.0
+    min_silence_seconds: float = 0.25
+    cut_padding_seconds: float = 0.15
+    fallback_mode: str = "hard_cut"
+
+
+@dataclass
 class AsrChunkingConfig:
-    mode: str = "auto"  # auto | fixed | none
+    mode: str = "silence"  # auto | fixed | none | silence
     window_seconds: int = 300
-    overlap_seconds: int = 30
+    max_window_seconds: int = 120
+    min_window_seconds: int = 12
+    overlap_seconds: int = 5
     short_audio_seconds: int = 300
+    max_upload_mb: float = 24.0
+    silence: AsrSilenceChunkingConfig = field(default_factory=AsrSilenceChunkingConfig)
     fuzzy_dedupe: bool = True
+
+
+@dataclass
+class AsrExecutionConfig:
+    cloud_concurrency: int = 8
+    adaptive_concurrency: bool = True
+    min_cloud_concurrency: int = 1
+    max_cloud_concurrency: int = 8
+    max_inflight_upload_mb: float = 128.0
 
 
 @dataclass
@@ -139,7 +160,56 @@ class AsrCloudConfig:
     model: str = "whisper-1"
     env_key: str = "TVX_MODEL_API_KEY"
     credential_id: str = "TVX_MODEL_API_KEY"
-    timeout_seconds: int = 120
+    timeout_seconds: int = 300
+
+
+@dataclass
+class AsrProviderRequestConfig:
+    response_format: str = "verbose_json"
+    temperature: float = 0.0
+    timestamp_granularities: list[str] = field(default_factory=lambda: ["segment"])
+    include: list[str] = field(default_factory=list)
+    extra_form_fields: dict[str, Any] = field(default_factory=dict)
+    array_format: str = "brackets"  # repeat | brackets
+
+
+@dataclass
+class AsrPromptConfig:
+    enabled: bool = True
+    text: str = ""
+    include_previous_text: bool = False
+    max_chars: int = 800
+
+
+@dataclass
+class AsrProviderConfig:
+    name: str
+    protocol: str = "openai_transcriptions"
+    base_url: str = "https://api.openai.com"
+    endpoint: str = "/v1/audio/transcriptions"
+    model: str = "whisper-1"
+    env_key: str = "TVX_MODEL_API_KEY"
+    credential_id: str = "TVX_MODEL_API_KEY"
+    timeout_seconds: int = 300
+    retry: int = 2
+    request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
+
+
+@dataclass
+class AsrCloudTrimSilenceConfig:
+    enabled: bool = True
+    backend: str = "ffmpeg_silencedetect"
+    noise_db: float = -35.0
+    min_silence_seconds: float = 0.2
+    keep_preroll_seconds: float = 0.25
+    trim_trailing: bool = True
+    keep_postroll_seconds: float = 0.1
+    min_upload_seconds: float = 0.5
+
+
+@dataclass
+class AsrPreprocessingConfig:
+    cloud_trim_silence: AsrCloudTrimSilenceConfig = field(default_factory=AsrCloudTrimSilenceConfig)
 
 
 @dataclass
@@ -299,9 +369,14 @@ class PipelineConfig:
     retry: int = 3
     max_cps: int = 20
     asr_mode: str = "local"
+    asr_provider: str = ""
     asr_local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
     asr_cloud: AsrCloudConfig = field(default_factory=AsrCloudConfig)
+    asr_audio_track: str = "auto"
     asr_chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
+    asr_execution: AsrExecutionConfig = field(default_factory=AsrExecutionConfig)
+    asr_preprocessing: AsrPreprocessingConfig = field(default_factory=AsrPreprocessingConfig)
+    asr_prompt: AsrPromptConfig = field(default_factory=AsrPromptConfig)
     source_mode: str = "auto"
     subtitle_track: str = "auto"
 
@@ -314,6 +389,7 @@ class AppConfig:
     routing_profiles: list[RoutingProfile] = field(default_factory=list)
     active_routing_profile: str = ""
     routing_profile_next_seq: int = 1
+    asr_providers: dict[str, AsrProviderConfig] = field(default_factory=dict)
 
 
 @dataclass

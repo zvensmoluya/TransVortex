@@ -40,7 +40,7 @@ V1 先做 CLI 单机版和开发工作台，核心目标是：**低内存、可�
 
 ## 关键约束
 - 不整视频入内存：分片 + 流式 + 增量落盘
-- ASR：本地 `faster-whisper` 优先；OpenAI Whisper-style 云端 ASR 为窄适配
+- ASR：本地 `faster-whisper` 和 OpenAI Transcriptions 云端 ASR 双路径
 - 分片：`60s + 1s overlap`
 - 翻译并发：默认 8（可配置）
 - 恢复：按分片 checkpoint

@@ -85,6 +85,38 @@ def test_doctor_reports_missing_binary_and_asr_dependency(tmp_path: Path, monkey
     assert statuses["faster_whisper"] == "FAIL"
 
 
+def test_doctor_reports_cloud_asr_provider_and_key(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  mode: cloud
+  provider: openai_asr
+asr_providers:
+  - name: openai_asr
+    protocol: openai_transcriptions
+    base_url: https://api.openai.com
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: ASR_KEY
+    credential_id: openai_asr
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
+    monkeypatch.setenv("ASR_KEY", "asr-key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: None)
+
+    report = doctor_report(root_dir=tmp_path)
+    statuses = _status_by_name(report)
+
+    assert statuses["faster_whisper"] == "WARN"
+    assert statuses["asr_provider"] == "PASS"
+    assert statuses["asr_env_key"] == "PASS"
+
+
 def test_doctor_reports_config_load_failure(tmp_path: Path) -> None:
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
     (tmp_path / "providers.yaml").write_text("providers:\n  - name: broken\n", encoding="utf-8")

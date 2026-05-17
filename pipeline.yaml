@@ -61,21 +61,61 @@ memory:
     enabled: true
 asr:
   mode: local
+  provider: openai_whisper
   local:
     model_size: small
     device: auto
     compute_type: int8
     max_initial_timestamp: 30.0
+  prompt:
+    enabled: true
+    text: ""
+    include_previous_text: false
+    max_chars: 800
+  preprocessing:
+    cloud_trim_silence:
+      enabled: true
+      backend: ffmpeg_silencedetect
+      noise_db: -35
+      min_silence_seconds: 0.2
+      keep_preroll_seconds: 0.25
+      trim_trailing: true
+      keep_postroll_seconds: 0.1
+      min_upload_seconds: 0.5
+  execution:
+    cloud_concurrency: 8
+    adaptive_concurrency: true
+    min_cloud_concurrency: 1
+    max_cloud_concurrency: 8
+    max_inflight_upload_mb: 128
   chunking:
-    mode: auto
+    mode: silence
     window_seconds: 300
-    overlap_seconds: 30
+    max_window_seconds: 120
+    min_window_seconds: 12
+    overlap_seconds: 5
     short_audio_seconds: 300
+    max_upload_mb: 24
+    silence:
+      noise_db: -35
+      min_silence_seconds: 0.25
+      cut_padding_seconds: 0.15
+      fallback_mode: hard_cut
     fuzzy_dedupe: true
-  cloud:
+asr_providers:
+  - name: openai_whisper
+    protocol: openai_transcriptions
     base_url: https://api.vectorengine.ai/v1
     endpoint: /v1/audio/transcriptions
     model: whisper-1
     env_key: TVX_MODEL_API_KEY
     credential_id: TVX_MODEL_API_KEY
     timeout_seconds: 300
+    retry: 2
+    request:
+      response_format: verbose_json
+      temperature: 0
+      timestamp_granularities: [segment]
+      include: []
+      array_format: brackets
+      extra_form_fields: {}

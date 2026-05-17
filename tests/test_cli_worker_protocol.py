@@ -219,6 +219,8 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
             "int8",
             "--asr-model",
             "whisper-1",
+            "--asr-max-upload-mb",
+            "16",
             "--stream-events",
         ],
     )
@@ -229,6 +231,7 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
     assert captured["model"] == "m1"
     assert captured["cli_overrides"]["asr_mode"] == "cloud"
     assert captured["cli_overrides"]["asr_cloud_model"] == "whisper-1"
+    assert captured["cli_overrides"]["asr_max_upload_mb"] == 16.0
 
 
 def test_stream_events_and_json_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
@@ -272,6 +275,8 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["commands"]["run"]["supports_detach"] is True
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
+    assert "source/segments.normalized.jsonl" in payload["artifact_contract"]
+    assert "asr/segments.raw.jsonl" not in payload["artifact_contract"]
     assert "super-secret-value" not in raw
 
 
