@@ -12,6 +12,7 @@ from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, 
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
 from transvortex.memory.bootstrapper import bootstrap_memory
+from transvortex.memory.bootstrap_input import build_bootstrap_input_view, render_bootstrap_input_text
 
 
 def test_memory_store_reads_empty_and_preserves_locked(tmp_path: Path) -> None:
@@ -557,12 +558,21 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    segments = [Segment(id=1, start=0, end=1, text_src="Subaru arrives")]
+    segments = [
+        Segment(id=1, start=0, end=1, text_src="Subaru arrives"),
+        Segment(id=2, start=4, end=4.5, text_src="uh, yeah", confidence=-1.2),
+    ]
+    seen_prompt = ""
 
     class FakeClient:
         def translate_request(self, req):
+            nonlocal seen_prompt
             assert req.prompt_mode == "memory_patch"
             assert "FULL SOURCE SUBTITLES" in req.style_prompt
+            assert "flags=" in req.style_prompt
+            assert "raw: Subaru arrives" in req.style_prompt
+            assert "clean: yeah" in req.style_prompt
+            seen_prompt = req.style_prompt
             return type(
                 "Response",
                 (),
@@ -586,10 +596,40 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
     )
 
     assert payload["status"] == "completed"
+    assert "soft-cleaned ASR view" in seen_prompt
     assert (tmp_path / "memory" / "bootstrap.json").exists()
+    assert (tmp_path / "memory" / "bootstrap_input.json").exists()
+    assert (tmp_path / "memory" / "bootstrap_input.txt").exists()
+    input_text = (tmp_path / "memory" / "bootstrap_input.txt").read_text(encoding="utf-8")
+    assert "flags=possible_term" in input_text
+    assert "flags=scene_gap,filler,low_info,low_confidence,uncertain" in input_text
     assert (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
     doc = MemoryStore(tmp_path / "memory").load()
     assert any(entry.source == "Subaru" and entry.target == "斯巴鲁" for entry in doc.entries)
+
+
+def test_memory_bootstrap_input_view_soft_cleans_noise_and_keeps_evidence() -> None:
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, text_src="Subaru enters"),
+        Segment(id=2, start=1.2, end=1.6, text_src="um, Subaru"),
+        Segment(id=3, start=5.0, end=5.2, text_src="[music]"),
+        Segment(id=4, start=5.4, end=5.6, text_src="Subaru enters", confidence=-1.3),
+    ]
+
+    view = build_bootstrap_input_view(segments)
+    rendered = render_bootstrap_input_text(view)
+
+    assert view.stats["segments"] == 4
+    assert view.lines[0].raw == "Subaru enters"
+    assert view.lines[0].clean == "Subaru enters"
+    assert "possible_term" in view.lines[0].flags
+    assert view.lines[1].clean == "Subaru"
+    assert "filler" in view.lines[1].flags
+    assert view.lines[2].clean == ""
+    assert {"scene_gap", "sound_effect", "noise", "low_info"}.issubset(set(view.lines[2].flags))
+    assert {"low_confidence", "uncertain", "duplicate"}.issubset(set(view.lines[3].flags))
+    assert "raw: [music]" in rendered
+    assert "clean: " in rendered
 
 
 def test_memory_bootstrap_resume_skips_existing_artifact(tmp_path: Path, monkeypatch) -> None:
