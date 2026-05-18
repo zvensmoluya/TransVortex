@@ -11,7 +11,7 @@ from typing import Any, Callable
 from .aligner import apply_translations, merge_asr_window_segments, normalize_timeline, validate_segments
 from ..artifacts.task_store import TaskStore
 from .asr import AsrEngine, write_segment_asr_output
-from .chunking import number_and_chunk_segments
+from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
 from ..app.credentials import resolve_credential
 from ..formats.exporter import export_ass, export_srt
@@ -24,6 +24,7 @@ from .media import (
     split_audio_for_asr,
 )
 from ..memory.checker import check_consistency, write_consistency_issues
+from ..memory.bootstrapper import bootstrap_memory
 from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
 from ..app.models import AppConfig, Segment, TaskRecord
@@ -1152,6 +1153,10 @@ def _translation_route_providers(config: AppConfig) -> list:
     return out
 
 
+def _primary_translation_provider(config: AppConfig):
+    return config.providers.get(config.routing.primary.provider)
+
+
 def _effective_translation_chunk_lines(config: AppConfig) -> int:
     configured = max(1, config.pipeline.translation.chunk_lines)
     provider_limits = [
@@ -1304,6 +1309,15 @@ def _translate_all_chunks_accepts_progress_callback() -> bool:
         return False
 
 
+def _translate_all_chunks_accepts_memory_dir() -> bool:
+    try:
+        import inspect
+
+        return "memory_dir" in inspect.signature(translate_all_chunks).parameters
+    except Exception:
+        return False
+
+
 def _iter_translation_results(
     config: AppConfig,
     chunks,
@@ -1316,7 +1330,7 @@ def _iter_translation_results(
 ):
     if translate_all_chunks.__module__ != "transvortex.core.translate":
         extra = {"progress_callback": progress_callback} if _translate_all_chunks_accepts_progress_callback() else {}
-        if memory_dir is not None:
+        if memory_dir is not None and _translate_all_chunks_accepts_memory_dir():
             yield from translate_all_chunks(
                 config,
                 chunks,
@@ -1805,36 +1819,9 @@ def _execute_task(
                     )
                     return
 
-        _check_cancel(store, task_id)
-        _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
-        effective_chunk_lines, chunking_warnings = _effective_initial_chunk_lines(config, len(all_segments))
-        for warning in chunking_warnings:
-            store.append_event(
-                task_id,
-                "warning",
-                stage="SEGMENT",
-                level="warning",
-                message=str(warning.get("message", "")),
-                details=dict(warning.get("details") or {}),
-            )
-        chunks = number_and_chunk_segments(
-            all_segments,
-            effective_chunk_lines,
-            context_before_lines=config.pipeline.translation.context_before_lines,
-            context_after_lines=config.pipeline.translation.context_after_lines,
-        )
-        write_json(paths["chunks"] / "chunks.json", chunks)
-        checkpoint["status"] = "SEGMENT"
-        checkpoint["translate_total_chunks"] = len(chunks)
-        checkpoint["translate_done_count"] = _translation_done_count(
-            chunks,
-            {str(item) for item in checkpoint.get("translate_done_chunks", [])},
-        )
-        store.save_checkpoint(task_id, checkpoint)
-
-        _check_cancel(store, task_id)
-        _emit_stage(store, task_id, "TRANSLATE", "Translating chunks")
         if config.pipeline.memory.enabled:
+            _check_cancel(store, task_id)
+            _emit_stage(store, task_id, "MEMORY", "Preparing translation memory")
             memory_store = MemoryStore(paths["memory"])
             memory_store.ensure_runtime_document()
             if not memory_store.selected_presets_file.exists():
@@ -1850,7 +1837,7 @@ def _execute_task(
                     store.append_event(
                         task_id,
                         "artifact",
-                        stage="TRANSLATE",
+                        stage="MEMORY",
                         message="Memory presets snapshot ready",
                         details={
                             "path": str(memory_store.selected_presets_file),
@@ -1860,6 +1847,65 @@ def _execute_task(
                             "entries": int(report.get("entries") or 0),
                         },
                     )
+            if config.pipeline.memory.mode == "bootstrap_first":
+                bootstrap_payload = bootstrap_memory(
+                    config,
+                    all_segments,
+                    source_lang=task.source_lang,
+                    target_lang=task.target_lang,
+                    memory_dir=paths["memory"],
+                    progress_callback=_translation_progress_callback(store, task_id, checkpoint),
+                )
+                store.append_event(
+                    task_id,
+                    "artifact",
+                    stage="MEMORY",
+                    message="Memory bootstrap ready",
+                    level="warning" if bootstrap_payload.get("status") == "failed" else "info",
+                    details={
+                        "path": str(paths["memory"] / "bootstrap.json"),
+                        "status": bootstrap_payload.get("status"),
+                        "actions": len(bootstrap_payload.get("actions") or []),
+                        "errors": bootstrap_payload.get("errors") or [],
+                    },
+                )
+
+        _check_cancel(store, task_id)
+        _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
+        if config.pipeline.translation.chunking.mode == "capacity_aware":
+            chunks, chunking_warnings = plan_translation_chunks(
+                config,
+                all_segments,
+                _primary_translation_provider(config),
+            )
+        else:
+            effective_chunk_lines, chunking_warnings = _effective_initial_chunk_lines(config, len(all_segments))
+            chunks = number_and_chunk_segments(
+                all_segments,
+                effective_chunk_lines,
+                context_before_lines=config.pipeline.translation.context_before_lines,
+                context_after_lines=config.pipeline.translation.context_after_lines,
+            )
+        for warning in chunking_warnings:
+            store.append_event(
+                task_id,
+                "warning",
+                stage="SEGMENT",
+                level="warning",
+                message=str(warning.get("message", "")),
+                details=dict(warning.get("details") or {}),
+            )
+        write_json(paths["chunks"] / "chunks.json", chunks)
+        checkpoint["status"] = "SEGMENT"
+        checkpoint["translate_total_chunks"] = len(chunks)
+        checkpoint["translate_done_count"] = _translation_done_count(
+            chunks,
+            {str(item) for item in checkpoint.get("translate_done_chunks", [])},
+        )
+        store.save_checkpoint(task_id, checkpoint)
+
+        _check_cancel(store, task_id)
+        _emit_stage(store, task_id, "TRANSLATE", "Translating chunks")
         translated_file = paths["translate"] / "segments.translated.jsonl"
         validation_file = paths["translate"] / "validation.jsonl"
         repairs_file = paths["translate"] / "repairs.jsonl"

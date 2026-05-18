@@ -11,6 +11,7 @@ from transvortex.memory.merger import merge_patch, patch_from_payload
 from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, MemoryTargetVariant
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
+from transvortex.memory.bootstrapper import bootstrap_memory
 
 
 def test_memory_store_reads_empty_and_preserves_locked(tmp_path: Path) -> None:
@@ -540,6 +541,92 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
         raise AssertionError("expected translation failure")
     doc = MemoryStore(tmp_path / "memory").load()
     assert any(entry.source == "Alpha" for entry in doc.entries)
+
+
+def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+    segments = [Segment(id=1, start=0, end=1, text_src="Subaru arrives")]
+
+    class FakeClient:
+        def translate_request(self, req):
+            assert req.prompt_mode == "memory_patch"
+            assert "FULL SOURCE SUBTITLES" in req.style_prompt
+            return type(
+                "Response",
+                (),
+                {
+                    "raw_text": (
+                        '{"chunk_ids":["bootstrap"],"actions":[{"action":"upsert",'
+                        '"source":"Subaru","target":"斯巴鲁","category":"name",'
+                        '"status":"proposed","confidence":0.95,"evidence_ids":[1]}]}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+
+    payload = bootstrap_memory(
+        config,
+        segments,
+        source_lang="en",
+        target_lang="zh-CN",
+        memory_dir=tmp_path / "memory",
+    )
+
+    assert payload["status"] == "completed"
+    assert (tmp_path / "memory" / "bootstrap.json").exists()
+    assert (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
+    doc = MemoryStore(tmp_path / "memory").load()
+    assert any(entry.source == "Subaru" and entry.target == "斯巴鲁" for entry in doc.entries)
+
+
+def test_memory_bootstrap_resume_skips_existing_artifact(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "bootstrap.json").write_text('{"status":"completed","actions":[]}', encoding="utf-8")
+    called = False
+
+    def fake_build_provider_client(_provider):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", fake_build_provider_client)
+
+    payload = bootstrap_memory(
+        config,
+        [Segment(id=1, start=0, end=1, text_src="Subaru")],
+        source_lang="en",
+        target_lang="zh-CN",
+        memory_dir=memory_dir,
+    )
+
+    assert payload["status"] == "completed"
+    assert called is False
 
 
 def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> None:

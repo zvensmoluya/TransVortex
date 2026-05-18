@@ -54,9 +54,43 @@ routing:
 
     assert cfg.pipeline.translation_batch_size == 120
     assert cfg.pipeline.translation.chunk_lines == 120
-    assert cfg.pipeline.translation.context_before_lines == 40
-    assert cfg.pipeline.translation.context_after_lines == 20
+    assert cfg.pipeline.translation.context_before_lines == 80
+    assert cfg.pipeline.translation.context_after_lines == 40
+    assert cfg.pipeline.translation.chunking.mode == "capacity_aware"
+    assert cfg.pipeline.translation.chunking.target_chunk_lines == 400
     assert cfg.providers["p1"].capabilities.max_batch_lines == 200
+    assert cfg.providers["p1"].capabilities.max_output_tokens == 0
+
+
+def test_provider_capability_output_token_fields_load_from_yaml(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+    capabilities:
+      max_batch_lines: 500
+      max_context_tokens: 300000
+      max_output_tokens: 65536
+      recommended_output_tokens: 32768
+      output_token_param: max_completion_tokens
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+    capabilities = cfg.providers["p1"].capabilities
+    assert capabilities.max_batch_lines == 500
+    assert capabilities.max_context_tokens == 300000
+    assert capabilities.max_output_tokens == 65536
+    assert capabilities.recommended_output_tokens == 32768
+    assert capabilities.output_token_param == "max_completion_tokens"
 
 
 def test_cli_overrides_provider_limits_and_memory_patch(tmp_path: Path) -> None:

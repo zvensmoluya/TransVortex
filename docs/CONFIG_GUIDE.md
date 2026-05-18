@@ -84,7 +84,6 @@ providers:
       method: POST
     request_mapping:
       style: anthropic_messages
-      max_tokens: 4096
     response_mapping:
       text_paths:
         - content[].text
@@ -92,7 +91,11 @@ providers:
       supports_system_prompt: true
       supports_temperature: true
       supports_json_mode: false
-      max_batch_lines: 200
+      max_batch_lines: 1000
+      max_context_tokens: 0
+      max_output_tokens: 32768
+      recommended_output_tokens: 16384
+      output_token_param: ""
     limits:
       concurrency: 8
       timeout_seconds: 180
@@ -124,8 +127,17 @@ routing:
 ```yaml
 translation:
   chunk_lines: 120
-  context_before_lines: 40
-  context_after_lines: 20
+  context_before_lines: 80
+  context_after_lines: 40
+  chunking:
+    mode: capacity_aware
+    min_chunk_lines: 120
+    target_chunk_lines: 400
+    max_chunk_lines: 900
+    boundary_window_lines: 80
+    soft_boundary: true
+    target_output_tokens: 0
+    hard_output_tokens: 0
   batching:
     mode: adaptive
     min_chunk_lines: 20
@@ -143,18 +155,21 @@ translation:
 ```
 
 说明：
-- `chunk_lines` 是当前 chunk 的待翻译行数；运行时会自动受 provider `capabilities.max_batch_lines` 限制。
-- `batching.mode: adaptive` 会在 provider 超时或网关错误时对失败 chunk 二分重试，避免一开始就拆成大量小请求。
+- `translation.chunking.mode: capacity_aware` 会按 provider 输出预算和 `max_batch_lines` 规划初始大 chunk；`chunk_lines` 保留为旧 fixed 分片兼容项。
+- `batching.mode: adaptive` 只负责 provider 超时或网关错误后的失败 chunk 二分重试。
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
-- memory 开启时还会应用 `memory.chunking` 的初始切片保护，避免术语表滚动更新被大量短 chunk 污染；adaptive 二分只用于失败 chunk 的局部退避。
+- 默认 memory 流程是 `bootstrap_first`：先用全片 source subtitles 生成全局记忆，再翻译大 chunk；动态 patch 仍用于翻译后的增量补充。
 
 ```yaml
 memory:
-  chunking:
-    min_initial_chunk_lines: 80
-    max_initial_chunks: 24
+  enabled: true
+  mode: bootstrap_first
+  bootstrap:
+    enabled: true
+    mode: whole_document
+    max_candidates: 120
 ```
 
 ## 5. ASR 与视频字幕来源

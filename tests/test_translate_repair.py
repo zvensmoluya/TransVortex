@@ -16,6 +16,7 @@ from transvortex.core.translate import (
     _source_chunk_completed_count,
     translate_chunk,
     translate_chunk_adaptive,
+    iter_translate_all_chunks,
 )
 
 
@@ -333,3 +334,54 @@ def test_adaptive_serial_scheduler_shrinks_then_grows(monkeypatch, tmp_path) -> 
 
     assert seen == ["c00000", "c00000s0", "c00000s1", "c00001s0", "c00001s1", "c00002"]
     assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1", "c00001s0", "c00001s1", "c00002"]
+
+
+def test_bootstrap_first_memory_mode_allows_parallel_windows(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.memory.enabled = True
+    config.pipeline.memory.mode = "bootstrap_first"
+    config.pipeline.default_concurrency = 2
+    chunks = [
+        Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),
+        Chunk(chunk_id="c00001", segment_ids=[2], lines=["[2] B"]),
+    ]
+    seen: list[str] = []
+
+    def fake_submit(_pool, _config, chunk, _source_lang, _target_lang, _memory_prompt, _progress_callback, _already_done=None):
+        seen.append(chunk.chunk_id)
+
+        class Done:
+            def result(self):
+                return {"chunk_id": chunk.chunk_id, "rows": [{"id": chunk.segment_ids[0], "text_tgt": "ok"}]}
+
+        return Done()
+
+    monkeypatch.setattr("transvortex.core.translate._submit_translate_chunk", fake_submit)
+    monkeypatch.setattr("transvortex.core.translate.concurrent.futures.as_completed", lambda futures: list(futures))
+
+    list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
+
+    assert seen == ["c00000", "c00001"]
+
+
+def test_dynamic_patch_memory_mode_uses_serial_windows(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.memory.enabled = True
+    config.pipeline.memory.mode = "dynamic_patch"
+    config.pipeline.default_concurrency = 2
+    chunks = [
+        Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),
+        Chunk(chunk_id="c00001", segment_ids=[2], lines=["[2] B"]),
+    ]
+    window_sizes: list[int] = []
+
+    def fake_iter_window(_config, window, **_kwargs):
+        window_sizes.append(len(window))
+        for chunk in window:
+            yield {"chunk_id": chunk.chunk_id, "rows": [{"id": chunk.segment_ids[0], "text_tgt": "ok"}]}
+
+    monkeypatch.setattr("transvortex.core.translate._iter_translate_window", fake_iter_window)
+
+    list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
+
+    assert window_sizes == [1, 1]

@@ -26,7 +26,7 @@ def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any)
         pass
 
 
-def _json_from_text(text: str) -> dict[str, Any]:
+def json_from_memory_text(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
@@ -109,7 +109,7 @@ def generate_memory_patch(
                 system_prompt=config.pipeline.memory.patch.system_prompt or MEMORY_PATCH_SYSTEM_PROMPT,
             )
             response = client.translate_request(req)
-            payload = _json_from_text(response.raw_text)
+            payload = json_from_memory_text(response.raw_text)
             payload.setdefault("chunk_ids", [chunk.chunk_id for chunk in chunks])
             payload["provider"] = route.provider
             payload["model"] = route.model

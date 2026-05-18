@@ -4,6 +4,7 @@ TransVortex 是一个面向本地视频字幕生成的 CLI-first 流水线，支
 - 流式/分块处理，不需要一次把整片视频装入内存
 - 本地 faster-whisper 或云端 OpenAI Whisper ASR
 - 可配置的翻译 provider / model / base URL
+- 强模型优先的全片 memory bootstrap 与 capacity-aware 大 chunk 翻译
 - 可恢复任务与稳定工件目录
 - 可选的 Tauri 桌面工作台
 

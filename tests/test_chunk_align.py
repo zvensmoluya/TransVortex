@@ -7,8 +7,28 @@ from transvortex.core.aligner import (
     normalize_timeline,
     validate_segments,
 )
-from transvortex.core.chunking import number_and_chunk_segments
-from transvortex.app.models import Segment
+from transvortex.core.chunking import number_and_chunk_segments, plan_translation_chunks
+from transvortex.app.models import AppConfig, CapabilityConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig, Segment
+
+
+def _planner_config(tmp_path, *, max_batch_lines: int = 1000, recommended_output_tokens: int = 0, max_output_tokens: int = 0) -> AppConfig:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai-compatible",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        capabilities=CapabilityConfig(
+            max_batch_lines=max_batch_lines,
+            recommended_output_tokens=recommended_output_tokens,
+            max_output_tokens=max_output_tokens,
+        ),
+    )
+    return AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
 
 
 def test_chunk_and_align_mapping() -> None:
@@ -73,6 +93,75 @@ def test_chunk_marks_asr_uncertain_lines_from_confidence_and_density() -> None:
     chunks = number_and_chunk_segments(segments, batch_size=3)
 
     assert chunks[0].asr_uncertain_ids == [2, 3]
+
+
+def test_capacity_planner_keeps_short_input_in_single_chunk(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}") for i in range(1, 40)]
+
+    chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert warnings == []
+    assert len(chunks) == 1
+    assert chunks[0].segment_ids == list(range(1, 40))
+
+
+def test_capacity_planner_uses_large_target_chunks(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 1001)]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert [len(chunk.segment_ids) for chunk in chunks] == [400, 400, 200]
+
+
+def test_capacity_planner_respects_provider_max_batch_lines(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_batch_lines=180)
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 421)]
+
+    chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert all(len(chunk.segment_ids) <= 180 for chunk in chunks)
+    assert warnings[0]["details"]["effective_max_chunk_lines"] == 180
+
+
+def test_capacity_planner_prefers_pause_sentence_boundary(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    config.pipeline.translation.chunking.target_chunk_lines = 6
+    config.pipeline.translation.chunking.max_chunk_lines = 10
+    config.pipeline.translation.chunking.min_chunk_lines = 3
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, text_src="a"),
+        Segment(id=2, start=1.0, end=2.0, text_src="b"),
+        Segment(id=3, start=2.0, end=3.0, text_src="end."),
+        Segment(id=4, start=8.0, end=9.0, text_src="next"),
+        Segment(id=5, start=9.0, end=10.0, text_src="next"),
+        Segment(id=6, start=10.0, end=11.0, text_src="next"),
+        Segment(id=7, start=11.0, end=12.0, text_src="next"),
+    ]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert chunks[0].segment_ids == [1, 2, 3]
+
+
+def test_capacity_planner_avoids_uncertain_boundary_when_possible(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    config.pipeline.translation.chunking.target_chunk_lines = 4
+    config.pipeline.translation.chunking.max_chunk_lines = 8
+    config.pipeline.translation.chunking.min_chunk_lines = 3
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, text_src="a"),
+        Segment(id=2, start=1.0, end=2.0, text_src="uncertain", confidence=-1.5),
+        Segment(id=3, start=2.0, end=3.0, text_src="bad boundary."),
+        Segment(id=4, start=3.0, end=4.0, text_src="continue"),
+        Segment(id=5, start=8.0, end=9.0, text_src="better."),
+        Segment(id=6, start=9.0, end=10.0, text_src="next"),
+    ]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert chunks[0].segment_ids == [1, 2, 3, 4]
 
 
 def test_overlap_dedupe_reassigns_ids() -> None:

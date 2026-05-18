@@ -27,6 +27,10 @@ class CapabilityConfig:
     supports_temperature: bool = True
     supports_json_mode: bool = False
     max_batch_lines: int = 200
+    max_context_tokens: int = 0
+    max_output_tokens: int = 0
+    recommended_output_tokens: int = 0
+    output_token_param: str = ""
 
 
 @dataclass
@@ -220,16 +224,29 @@ class TranslationBatchingConfig:
 
 
 @dataclass
+class TranslationChunkingConfig:
+    mode: str = "capacity_aware"
+    min_chunk_lines: int = 120
+    target_chunk_lines: int = 400
+    max_chunk_lines: int = 900
+    boundary_window_lines: int = 80
+    soft_boundary: bool = True
+    target_output_tokens: int = 0
+    hard_output_tokens: int = 0
+
+
+@dataclass
 class TranslationConfig:
     chunk_lines: int = 120
-    context_before_lines: int = 40
-    context_after_lines: int = 20
+    context_before_lines: int = 80
+    context_after_lines: int = 40
     style_preset: str = "subtitle_natural"
     style_prompt: str = DEFAULT_TRANSLATION_STYLE_PROMPT
     system_prompt: str = ""
     refusal_detection: RefusalDetectionConfig = field(default_factory=RefusalDetectionConfig)
     repair: RepairConfig = field(default_factory=RepairConfig)
     asr_uncertainty_hints: AsrUncertaintyHintsConfig = field(default_factory=AsrUncertaintyHintsConfig)
+    chunking: TranslationChunkingConfig = field(default_factory=TranslationChunkingConfig)
     batching: TranslationBatchingConfig = field(default_factory=TranslationBatchingConfig)
 
 
@@ -296,8 +313,10 @@ class SubtitleConfig:
 
 @dataclass
 class MemoryBootstrapConfig:
-    enabled: bool = False
-    max_candidates: int = 80
+    enabled: bool = True
+    mode: str = "whole_document"
+    max_candidates: int = 120
+    system_prompt: str = ""
 
 
 @dataclass
@@ -342,8 +361,8 @@ class MemoryPresetRef:
 
 @dataclass
 class MemoryConfig:
-    enabled: bool = False
-    mode: str = "balanced"
+    enabled: bool = True
+    mode: str = "bootstrap_first"
     presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
     chunking: MemoryChunkingConfig = field(default_factory=MemoryChunkingConfig)

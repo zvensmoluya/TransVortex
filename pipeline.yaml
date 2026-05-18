@@ -7,6 +7,7 @@ max_cps: 20
 prompts:
   translation_system: prompts/translation/system.v1.md
   translation_style: prompts/translation/style.zh-CN.v1.md
+  memory_bootstrap_system: prompts/memory/bootstrap_system.v1.md
   memory_patch_system: prompts/memory/patch_system.v1.md
 subtitle:
   quality:
@@ -26,8 +27,17 @@ subtitle:
     max_attempts: 1
 translation:
   chunk_lines: 120
-  context_before_lines: 40
-  context_after_lines: 20
+  context_before_lines: 80
+  context_after_lines: 40
+  chunking:
+    mode: capacity_aware
+    min_chunk_lines: 120
+    target_chunk_lines: 400
+    max_chunk_lines: 900
+    boundary_window_lines: 80
+    soft_boundary: true
+    target_output_tokens: 0
+    hard_output_tokens: 0
   batching:
     mode: adaptive
     min_chunk_lines: 20
@@ -40,7 +50,11 @@ translation:
     max_attempts: 2
 memory:
   enabled: true
-  mode: consistency_first
+  mode: bootstrap_first
+  bootstrap:
+    enabled: true
+    mode: whole_document
+    max_candidates: 120
   chunking:
     min_initial_chunk_lines: 80
     max_initial_chunks: 24
@@ -48,7 +62,7 @@ memory:
     locked: true
     confirmed: true
     proposed: true
-    strategy: full
+    strategy: balanced
     max_entries_per_chunk: 30
   patch:
     enabled: true

@@ -15,7 +15,6 @@ providers:
       method: POST
     request_mapping:
       style: anthropic_messages
-      max_tokens: 4096
       # Optional advanced compatibility fields.
       # body_overrides is deep-merged into the generated provider payload.
       # body_remove_paths deletes generated fields before sending.
@@ -30,7 +29,11 @@ providers:
       supports_system_prompt: true
       supports_temperature: true
       supports_json_mode: false
-      max_batch_lines: 200
+      max_batch_lines: 1000
+      max_context_tokens: 0
+      max_output_tokens: 32768
+      recommended_output_tokens: 16384
+      output_token_param: ""
     limits:
       concurrency: 8
       timeout_seconds: 180
@@ -62,8 +65,10 @@ routing:
 #     body_overrides:
 #       generationConfig:
 #         topP: 0.95
-#         maxOutputTokens: 8192
 #       safetySettings: []
+#   capabilities:
+#     max_output_tokens: 32768
+#     recommended_output_tokens: 16384
 #
 # OpenAI-compatible APIs with vendor extensions:
 #   compat_mode: openai_chat

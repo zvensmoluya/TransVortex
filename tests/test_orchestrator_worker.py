@@ -1019,7 +1019,7 @@ def test_asr_upload_size_estimate_uses_duration_when_file_is_missing() -> None:
     assert round(_asr_item_upload_mb(item), 2) == 1.83
 
 
-def test_memory_mode_raises_initial_chunk_size_for_stability(tmp_path: Path, monkeypatch) -> None:
+def test_memory_bootstrap_first_uses_large_capacity_chunk(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
     input_file = root / "segments.jsonl"
@@ -1065,7 +1065,7 @@ def test_memory_mode_raises_initial_chunk_size_for_stability(tmp_path: Path, mon
     assert store.load_task(task_id).status == "DONE"
     assert observed_chunk_sizes == [30]
     events = store.read_events(task_id)
-    assert any(event["message"] == "Raised initial translation chunk size for memory stability" for event in events)
+    assert any(event["message"] == "Memory bootstrap ready" for event in events)
 
 
 def test_resume_backfills_missing_translation_validation_without_retranslation(tmp_path: Path, monkeypatch) -> None:

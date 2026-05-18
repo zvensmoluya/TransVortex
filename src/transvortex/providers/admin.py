@@ -54,7 +54,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "openai_responses": {
@@ -71,7 +75,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 65536,
+            "recommended_output_tokens": 32768,
+            "output_token_param": "",
         },
     },
     "openai_completions": {
@@ -81,14 +89,18 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         "base_url": "https://api.openai.com/v1",
         "endpoint": {"path_template": "/completions", "method": "POST"},
         "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
-        "request_mapping": {"style": "openai_completions", "max_tokens": 4096},
+        "request_mapping": {"style": "openai_completions"},
         "response_mapping": {"text_paths": ["choices[0].text"]},
         "model_list": {"path_template": "/models", "method": "GET", "response_paths": ["data[].id"]},
         "capabilities": {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "anthropic_messages": {
@@ -99,14 +111,18 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         "endpoint": {"path_template": "/messages", "method": "POST"},
         "auth": {"type": "header", "header_name": "x-api-key", "prefix": ""},
         "extra_headers": {"anthropic-version": "2023-06-01"},
-        "request_mapping": {"style": "anthropic_messages", "max_tokens": 4096},
+        "request_mapping": {"style": "anthropic_messages"},
         "response_mapping": {"text_paths": ["content[].text"]},
         "model_list": {"path_template": "/models", "method": "GET", "response_paths": ["data[].id"]},
         "capabilities": {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "gemini_generate_content": {
@@ -127,7 +143,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "gemini_ai_studio_native": {
@@ -140,7 +160,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         "request_mapping": {
             "style": "gemini_generate_content",
             "body_overrides": {
-                "generationConfig": {"topP": 0.95, "maxOutputTokens": 8192},
+                "generationConfig": {"topP": 0.95},
                 "safetySettings": [],
             },
         },
@@ -154,7 +174,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "gemini_openai_compatible": {
@@ -177,7 +201,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "vertex_native": {
@@ -189,7 +217,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         "auth": {"type": "bearer", "header_name": "Authorization", "prefix": "Bearer "},
         "request_mapping": {
             "style": "gemini_generate_content",
-            "body_overrides": {"generationConfig": {"topP": 0.95, "maxOutputTokens": 8192}},
+            "body_overrides": {"generationConfig": {"topP": 0.95}},
         },
         "response_mapping": {"text_paths": ["candidates[0].content.parts[].text"]},
         "model_list": {"path_template": "", "method": "GET", "response_paths": []},
@@ -197,7 +225,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": False,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "vertex_openai_compatible": {
@@ -214,7 +246,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 32768,
+            "recommended_output_tokens": 16384,
+            "output_token_param": "",
         },
     },
     "custom_json": {
@@ -237,7 +273,11 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "supports_system_prompt": True,
             "supports_temperature": True,
             "supports_json_mode": False,
-            "max_batch_lines": 200,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "recommended_output_tokens": 0,
+            "output_token_param": "",
         },
     },
 }
@@ -336,6 +376,13 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _to_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def providers_file_version(path: Path) -> dict[str, int] | None:
@@ -442,7 +489,14 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
             supports_system_prompt=bool(capabilities_raw.get("supports_system_prompt", capabilities_raw.get("supportsSystemPrompt", True))),
             supports_temperature=bool(capabilities_raw.get("supports_temperature", capabilities_raw.get("supportsTemperature", True))),
             supports_json_mode=bool(capabilities_raw.get("supports_json_mode", capabilities_raw.get("supportsJsonMode", False))),
-            max_batch_lines=int(capabilities_raw.get("max_batch_lines", capabilities_raw.get("maxBatchLines", 50))),
+            max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines", capabilities_raw.get("maxBatchLines")), 50),
+            max_context_tokens=_to_int(capabilities_raw.get("max_context_tokens", capabilities_raw.get("maxContextTokens")), 0),
+            max_output_tokens=_to_int(capabilities_raw.get("max_output_tokens", capabilities_raw.get("maxOutputTokens")), 0),
+            recommended_output_tokens=_to_int(
+                capabilities_raw.get("recommended_output_tokens", capabilities_raw.get("recommendedOutputTokens")),
+                0,
+            ),
+            output_token_param=str(capabilities_raw.get("output_token_param", capabilities_raw.get("outputTokenParam", "")) or ""),
         ),
         limits=ProviderLimits(
             concurrency=int(limits_raw.get("concurrency", 8)),

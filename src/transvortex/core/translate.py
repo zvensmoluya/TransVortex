@@ -775,7 +775,7 @@ def _iter_translate_window(
         selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
         chunk_memory_prompts[chunk.chunk_id] = build_memory_prompt(selected)
     max_workers = max(1, config.pipeline.default_concurrency)
-    if config.pipeline.memory.mode == "consistency_first":
+    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
         max_workers = 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -868,7 +868,7 @@ def _iter_translate_all_chunks_with_memory(
     already_done = already_done or set()
     memory_store.ensure_runtime_document()
     window_size = max(1, config.pipeline.default_concurrency)
-    if config.pipeline.memory.mode == "consistency_first":
+    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
         window_size = 1
     snapshot_index = 0
     patch_chunks: list[Chunk] = []

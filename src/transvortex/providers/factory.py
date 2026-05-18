@@ -49,17 +49,11 @@ def _extract_numbered_lines(text: str) -> list[str]:
 TRANSLATION_SYSTEM_PROMPT = FALLBACK_TRANSLATION_SYSTEM_PROMPT
 
 
-FIXED_TRANSLATION_CONSTRAINTS = (
-    "Fixed output constraints:\n"
-    "- Translate only the lines in TRANSLATE_ONLY.\n"
-    "- Use CONTEXT_BEFORE and CONTEXT_AFTER only to understand tone, references, pronouns, and jokes.\n"
-    "- Keep every requested [id] exactly unchanged.\n"
-    "- Do not add, remove, merge, split, or renumber ids.\n"
-    "- Output only numbered translated lines.\n"
-    "- Do not output Markdown, explanations, summaries, notes, or context lines.\n"
-    "- This is translation of user-provided subtitle text. Translate faithfully, including profanity, "
-    "offensive language, sexual references, or violent dialogue if present. Do not censor, moralize, refuse, "
-    "summarize, or add content."
+TRANSLATION_OUTPUT_REMINDER = (
+    "Output reminder:\n"
+    "- Translate only TRANSLATE_ONLY.\n"
+    "- Return exactly one numbered translated line for each requested [id], preferably in the same order.\n"
+    "- Do not output context lines, Markdown, explanations, summaries, or notes."
 )
 
 
@@ -164,7 +158,7 @@ def _translation_prompt(
         return "\n\n".join(parts)
     parts.extend(
         [
-            FIXED_TRANSLATION_CONSTRAINTS,
+            TRANSLATION_OUTPUT_REMINDER,
             f"Translate from {req.source_lang} to {req.target_lang}.",
         ]
     )
@@ -704,6 +698,72 @@ def _apply_request_mapping(
     return payload
 
 
+def _has_nested_payload_value(payload: dict[str, Any], path: list[str]) -> bool:
+    current: Any = payload
+    for token in path:
+        if not isinstance(current, dict) or token not in current:
+            return False
+        current = current[token]
+    return True
+
+
+def _set_nested_payload_value(payload: dict[str, Any], path: list[str], value: int) -> None:
+    current: dict[str, Any] = payload
+    for token in path[:-1]:
+        existing = current.get(token)
+        if not isinstance(existing, dict):
+            existing = {}
+            current[token] = existing
+        current = existing
+    current[path[-1]] = value
+
+
+def _output_token_param_path(config: ProviderConfig, style: str) -> list[str]:
+    explicit_param = str(config.capabilities.output_token_param or "").strip()
+    if explicit_param:
+        return [token for token in explicit_param.split(".") if token]
+    if style == "openai_responses":
+        return ["max_output_tokens"]
+    if style in {"openai_chat", "openai_completions", "anthropic_messages"}:
+        return ["max_tokens"]
+    if style == "gemini_generate_content":
+        return ["generationConfig", "maxOutputTokens"]
+    return []
+
+
+def _request_mapping_value_for_path(mapping: dict[str, Any], path: list[str]) -> Any:
+    if not path:
+        return None
+    if len(path) == 1:
+        return mapping.get(path[0])
+    current: Any = mapping
+    for token in path:
+        if not isinstance(current, dict) or token not in current:
+            return None
+        current = current[token]
+    return current
+
+
+def _apply_request_mapping_output_tokens(payload: dict[str, Any], config: ProviderConfig, style: str) -> dict[str, Any]:
+    path = _output_token_param_path(config, style)
+    explicit_value = _request_mapping_value_for_path(config.mapping.request, path)
+    if explicit_value is None:
+        return payload
+    _set_nested_payload_value(payload, path, int(explicit_value))
+    return payload
+
+
+def _apply_capability_output_tokens(payload: dict[str, Any], config: ProviderConfig, style: str) -> dict[str, Any]:
+    max_output_tokens = int(config.capabilities.max_output_tokens or 0)
+    if max_output_tokens <= 0:
+        return payload
+    path = _output_token_param_path(config, style)
+    if not path or _has_nested_payload_value(payload, path):
+        return payload
+    _set_nested_payload_value(payload, path, max_output_tokens)
+    return payload
+
+
 def _query_params_for_config(config: ProviderConfig, model: str) -> dict[str, object]:
     raw = config.mapping.request.get("query_params", {})
     if not isinstance(raw, dict):
@@ -800,6 +860,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         }
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
+        payload = _apply_request_mapping_output_tokens(payload, config, style)
+        payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "openai_responses":
         input_items: list[dict[str, str]] = []
@@ -812,6 +874,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         }
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
+        payload = _apply_request_mapping_output_tokens(payload, config, style)
+        payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "openai_completions":
         payload = {
@@ -823,17 +887,23 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         max_tokens = config.mapping.request.get("max_tokens")
         if max_tokens is not None:
             payload["max_tokens"] = int(max_tokens)
+        payload = _apply_request_mapping_output_tokens(payload, config, style)
+        payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "anthropic_messages":
         payload = {
             "model": req.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": int(config.mapping.request.get("max_tokens", 4096)),
         }
+        max_tokens = config.mapping.request.get("max_tokens")
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+        payload = _apply_request_mapping_output_tokens(payload, config, style)
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
         if config.capabilities.supports_system_prompt:
             payload["system"] = system_prompt
+        payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "gemini_generate_content":
         payload = {
@@ -841,6 +911,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         }
         if config.capabilities.supports_temperature:
             payload["generationConfig"] = {"temperature": req.temperature}
+        payload = _apply_request_mapping_output_tokens(payload, config, style)
+        payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "custom_json":
         template = config.mapping.request.get("body_template")

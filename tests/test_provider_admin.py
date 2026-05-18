@@ -80,6 +80,10 @@ def test_provider_templates_include_core_compat_modes() -> None:
     preset_ids = {row["id"] for row in provider_presets_payload()}
     assert {"openai_official", "google_ai_studio", "google_vertex_gemini"}.issubset(preset_ids)
     assert custom_adapter_template_payload()["id"] == "custom_json"
+    templates_by_id = {row["id"]: row for row in provider_templates_payload()}
+    assert templates_by_id["openai_responses"]["capabilities"]["max_output_tokens"] == 65536
+    assert "max_tokens" not in templates_by_id["anthropic_messages"]["request_mapping"]
+    assert "maxOutputTokens" not in templates_by_id["gemini_ai_studio_native"]["request_mapping"]["body_overrides"]["generationConfig"]
 
 
 def test_save_provider_config_writes_yaml_without_api_key(tmp_path: Path, monkeypatch) -> None:
@@ -299,6 +303,55 @@ def test_save_provider_config_preserves_advanced_request_mapping(tmp_path: Path)
     mapping = data["providers"][0]["request_mapping"]
     assert mapping["body_overrides"]["reasoning_effort"] == "low"
     assert mapping["query_params"]["api-version"] == "2024-01-01"
+
+
+def test_save_provider_config_preserves_output_token_capabilities(tmp_path: Path) -> None:
+    save_provider_config(
+        root_dir=tmp_path,
+        provider_draft={
+            "name": "advanced",
+            "compat_mode": "openai_chat",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["model-a"],
+            "capabilities": {
+                "max_batch_lines": 500,
+                "max_context_tokens": 300000,
+                "max_output_tokens": 65536,
+                "recommended_output_tokens": 32768,
+                "output_token_param": "max_completion_tokens",
+            },
+        },
+    )
+    data = yaml.safe_load((tmp_path / "providers.local.yaml").read_text(encoding="utf-8"))
+    capabilities = data["providers"][0]["capabilities"]
+    assert capabilities["max_batch_lines"] == 500
+    assert capabilities["max_context_tokens"] == 300000
+    assert capabilities["max_output_tokens"] == 65536
+    assert capabilities["recommended_output_tokens"] == 32768
+    assert capabilities["output_token_param"] == "max_completion_tokens"
+
+
+def test_draft_to_provider_config_preserves_camel_case_output_token_capabilities() -> None:
+    provider = draft_to_provider_config(
+        {
+            "name": "advanced",
+            "compat_mode": "openai_chat",
+            "models": ["model-a"],
+            "capabilities": {
+                "maxBatchLines": 500,
+                "maxContextTokens": 300000,
+                "maxOutputTokens": 65536,
+                "recommendedOutputTokens": 32768,
+                "outputTokenParam": "max_completion_tokens",
+            },
+        }
+    )
+    assert provider.capabilities.max_batch_lines == 500
+    assert provider.capabilities.max_context_tokens == 300000
+    assert provider.capabilities.max_output_tokens == 65536
+    assert provider.capabilities.recommended_output_tokens == 32768
+    assert provider.capabilities.output_token_param == "max_completion_tokens"
 
 
 def test_provider_connection_reports_response_shape_when_mapping_fails(monkeypatch) -> None:

@@ -48,6 +48,7 @@ from .models import (
     SubtitleQualityConfig,
     SubtitleReflowConfig,
     TranslationBatchingConfig,
+    TranslationChunkingConfig,
     TranslationConfig,
 )
 from ..prompts import load_prompt
@@ -449,11 +450,12 @@ def load_app_config(
     refusal_raw = translation_raw.get("refusal_detection") or {}
     repair_raw = translation_raw.get("repair") or {}
     asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
+    translation_chunking_raw = translation_raw.get("chunking") or {}
     batching_raw = translation_raw.get("batching") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
-        context_before_lines=_to_int(translation_raw.get("context_before_lines"), 40),
-        context_after_lines=_to_int(translation_raw.get("context_after_lines"), 20),
+        context_before_lines=_to_int(translation_raw.get("context_before_lines"), 80),
+        context_after_lines=_to_int(translation_raw.get("context_after_lines"), 40),
         style_preset=str(translation_raw.get("style_preset", "subtitle_natural")),
         style_prompt=style_prompt_default,
         system_prompt=translation_system_prompt,
@@ -466,6 +468,16 @@ def load_app_config(
         ),
         asr_uncertainty_hints=AsrUncertaintyHintsConfig(
             enabled=_to_bool(asr_uncertainty_raw.get("enabled"), False),
+        ),
+        chunking=TranslationChunkingConfig(
+            mode=_to_str(translation_chunking_raw.get("mode"), "capacity_aware"),
+            min_chunk_lines=_to_int(translation_chunking_raw.get("min_chunk_lines"), 120),
+            target_chunk_lines=_to_int(translation_chunking_raw.get("target_chunk_lines"), 400),
+            max_chunk_lines=_to_int(translation_chunking_raw.get("max_chunk_lines"), 900),
+            boundary_window_lines=_to_int(translation_chunking_raw.get("boundary_window_lines"), 80),
+            soft_boundary=_to_bool(translation_chunking_raw.get("soft_boundary"), True),
+            target_output_tokens=_to_int(translation_chunking_raw.get("target_output_tokens"), 0),
+            hard_output_tokens=_to_int(translation_chunking_raw.get("hard_output_tokens"), 0),
         ),
         batching=TranslationBatchingConfig(
             mode=_to_str(batching_raw.get("mode"), "adaptive"),
@@ -522,12 +534,18 @@ def load_app_config(
     memory_check_raw = memory_raw.get("consistency_check") or {}
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
     memory = MemoryConfig(
-        enabled=_to_bool(memory_raw.get("enabled"), False),
-        mode=_to_str(memory_raw.get("mode"), "balanced"),
+        enabled=_to_bool(memory_raw.get("enabled"), True),
+        mode=_to_str(memory_raw.get("mode"), "bootstrap_first"),
         presets=memory_presets,
         bootstrap=MemoryBootstrapConfig(
-            enabled=_to_bool(memory_bootstrap_raw.get("enabled"), False),
-            max_candidates=_to_int(memory_bootstrap_raw.get("max_candidates"), 80),
+            enabled=_to_bool(memory_bootstrap_raw.get("enabled"), True),
+            mode=_to_str(memory_bootstrap_raw.get("mode"), "whole_document"),
+            max_candidates=_to_int(memory_bootstrap_raw.get("max_candidates"), 120),
+            system_prompt=load_prompt(
+                "memory_bootstrap_system",
+                root_dir=root_dir,
+                override_path=_resolve_prompt_path(root_dir, prompts_raw.get("memory_bootstrap_system")),
+            ),
         ),
         chunking=MemoryChunkingConfig(
             min_initial_chunk_lines=_to_int(memory_chunking_raw.get("min_initial_chunk_lines"), 80),
@@ -845,10 +863,17 @@ def load_app_config(
         )
         capabilities_raw = row.get("capabilities", {})
         capabilities = CapabilityConfig(
-            supports_system_prompt=bool(capabilities_raw.get("supports_system_prompt", True)),
-            supports_temperature=bool(capabilities_raw.get("supports_temperature", True)),
-            supports_json_mode=bool(capabilities_raw.get("supports_json_mode", False)),
-            max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines"), 200),
+            supports_system_prompt=bool(capabilities_raw.get("supports_system_prompt", capabilities_raw.get("supportsSystemPrompt", True))),
+            supports_temperature=bool(capabilities_raw.get("supports_temperature", capabilities_raw.get("supportsTemperature", True))),
+            supports_json_mode=bool(capabilities_raw.get("supports_json_mode", capabilities_raw.get("supportsJsonMode", False))),
+            max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines", capabilities_raw.get("maxBatchLines")), 200),
+            max_context_tokens=_to_int(capabilities_raw.get("max_context_tokens", capabilities_raw.get("maxContextTokens")), 0),
+            max_output_tokens=_to_int(capabilities_raw.get("max_output_tokens", capabilities_raw.get("maxOutputTokens")), 0),
+            recommended_output_tokens=_to_int(
+                capabilities_raw.get("recommended_output_tokens", capabilities_raw.get("recommendedOutputTokens")),
+                0,
+            ),
+            output_token_param=_to_str(capabilities_raw.get("output_token_param", capabilities_raw.get("outputTokenParam")), ""),
         )
         cfg = ProviderConfig(
             name=row["name"],
