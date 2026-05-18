@@ -44,6 +44,8 @@ Short English title
 
 If there is no known follow-up risk, write `风险/后续：无已知风险。`
 
+- 如果涉及的修改特别简单，简单一句话即可，不需要遵守格式。
+
 ## Credentials
 
 - 默认凭据方案是用户级 `~/.transvortex/auth.json`；`.env` 只作为开发兼容 fallback。
@@ -56,7 +58,7 @@ If there is no known follow-up risk, write `风险/后续：无已知风险。`
 - 移动、删除、重命名文件时优先使用 `-LiteralPath`；非平凡命令后用 `git status`、`git log` 或文件检查确认结果。
 
 ## Validation
-
+- 不要求任何改动都跑完整测试。
 - Python 改动优先跑相关 pytest；较大改动跑全量 `pytest -q`。
 - 桌面 UI 或 worker protocol 改动至少跑 `npm run build`；Tauri/Rust 改动至少跑 `cargo check`。
-- 最终回复必须说明实际跑过的验证命令和结果。
+- 说明已验证的内容，以及未验证但存在风险的部分
