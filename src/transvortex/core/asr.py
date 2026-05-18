@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import posixpath
+import site
 import socket
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -29,6 +33,16 @@ ASR_EXTRA_FORM_RESERVED_FIELDS = {
     "include",
     "include[]",
 }
+
+_CUDA_WHEEL_DLL_SUBDIRS = (
+    ("cuda_runtime", "bin"),
+    ("cuda_nvrtc", "bin"),
+    ("cublas", "bin"),
+    ("cudnn", "bin"),
+)
+_CUDA_DLL_DIRECTORY_HANDLES: list[Any] = []
+_CUDA_DLL_DIRECTORY_PATHS: set[str] = set()
+_CUDA_DLL_DIRECTORIES_REGISTERED = False
 
 
 @dataclass
@@ -64,6 +78,7 @@ class AsrEngine:
 
     def _ensure_model(self) -> Any:
         if self._model is None:
+            _prepare_local_cuda_runtime(self.device)
             try:
                 from faster_whisper import WhisperModel
             except Exception as exc:  # pragma: no cover - runtime dependency
@@ -331,6 +346,75 @@ def build_asr_client(config: AsrProviderConfig | None) -> OpenAITranscriptionsAs
     if config.protocol == "openai_transcriptions":
         return OpenAITranscriptionsAsrClient(config)
     raise RuntimeError(f"unsupported_asr_protocol: {config.protocol}")
+
+
+def _prepare_local_cuda_runtime(device: str) -> None:
+    if os.name != "nt":
+        return
+    if str(device or "").strip().lower() not in {"auto", "cuda"}:
+        return
+    _register_nvidia_cuda_wheel_dll_dirs()
+
+
+def _candidate_nvidia_package_roots() -> list[Path]:
+    candidates: list[Path] = []
+    try:
+        spec = importlib.util.find_spec("nvidia")
+    except Exception:
+        spec = None
+    locations = getattr(spec, "submodule_search_locations", None) if spec is not None else None
+    if locations:
+        candidates.extend(Path(location) for location in locations)
+
+    site_paths: list[str] = []
+    try:
+        site_paths.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        site_paths.append(site.getusersitepackages())
+    except Exception:
+        pass
+    site_paths.extend(sys.path)
+    candidates.extend(Path(path) / "nvidia" for path in site_paths if path)
+
+    out: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except OSError:
+            key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            out.append(candidate)
+    return out
+
+
+def _register_nvidia_cuda_wheel_dll_dirs() -> None:
+    global _CUDA_DLL_DIRECTORIES_REGISTERED
+    if _CUDA_DLL_DIRECTORIES_REGISTERED:
+        return
+    _CUDA_DLL_DIRECTORIES_REGISTERED = True
+    for root in _candidate_nvidia_package_roots():
+        for parts in _CUDA_WHEEL_DLL_SUBDIRS:
+            path = root.joinpath(*parts)
+            if path.is_dir():
+                _add_dll_directory(path)
+
+
+def _add_dll_directory(path: Path) -> None:
+    raw = str(path)
+    normalized = os.path.normcase(os.path.abspath(raw))
+    if normalized in _CUDA_DLL_DIRECTORY_PATHS:
+        return
+    _CUDA_DLL_DIRECTORY_PATHS.add(normalized)
+    if hasattr(os, "add_dll_directory"):
+        handle = os.add_dll_directory(raw)
+        _CUDA_DLL_DIRECTORY_HANDLES.append(handle)
+    path_items = os.environ.get("PATH", "").split(os.pathsep)
+    if normalized not in {os.path.normcase(os.path.abspath(item)) for item in path_items if item}:
+        os.environ["PATH"] = raw + os.pathsep + os.environ.get("PATH", "")
 
 
 def _normalize_whisper_language(source_lang: str | None) -> str | None:

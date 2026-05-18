@@ -11,6 +11,7 @@ from transvortex.core.asr import (
     OpenAITranscriptionsAsrClient,
     _build_cloud_asr_url,
     _normalize_whisper_language,
+    _prepare_local_cuda_runtime,
 )
 
 
@@ -421,3 +422,40 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
             "meta": {"source": "asr", "provider": "local", "protocol": "faster_whisper"},
         }
     ]
+
+
+def test_prepare_local_cuda_runtime_registers_nvidia_wheel_dirs(tmp_path, monkeypatch) -> None:
+    package_root = tmp_path / "nvidia"
+    expected = []
+    for relative in (
+        ("cuda_runtime", "bin"),
+        ("cuda_nvrtc", "bin"),
+        ("cublas", "bin"),
+        ("cudnn", "bin"),
+    ):
+        path = package_root.joinpath(*relative)
+        path.mkdir(parents=True)
+        expected.append(path)
+
+    added = []
+    monkeypatch.setattr("transvortex.core.asr.os.name", "nt")
+    monkeypatch.setattr("transvortex.core.asr._CUDA_DLL_DIRECTORIES_REGISTERED", False)
+    monkeypatch.setattr("transvortex.core.asr._CUDA_DLL_DIRECTORY_PATHS", set())
+    monkeypatch.setattr("transvortex.core.asr._CUDA_DLL_DIRECTORY_HANDLES", [])
+    monkeypatch.setattr("transvortex.core.asr._candidate_nvidia_package_roots", lambda: [package_root])
+    monkeypatch.setattr("transvortex.core.asr._add_dll_directory", lambda path: added.append(path))
+
+    _prepare_local_cuda_runtime("cuda")
+
+    assert added == expected
+
+
+def test_prepare_local_cuda_runtime_skips_cpu(monkeypatch) -> None:
+    monkeypatch.setattr("transvortex.core.asr.os.name", "nt")
+    monkeypatch.setattr("transvortex.core.asr._CUDA_DLL_DIRECTORIES_REGISTERED", False)
+    monkeypatch.setattr(
+        "transvortex.core.asr._candidate_nvidia_package_roots",
+        lambda: (_ for _ in ()).throw(AssertionError("should not inspect CUDA roots")),
+    )
+
+    _prepare_local_cuda_runtime("cpu")
