@@ -433,6 +433,71 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
     assert task.status == "QUEUED"
 
 
+def test_status_json_missing_task_returns_structured_error(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "status", "--task-id", "missing", "--json"],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected failure exit")
+
+    raw = capsys.readouterr()
+    payload = json.loads(raw.out)
+    assert raw.err == ""
+    assert payload["ok"] is False
+    assert payload["task_id"] == "missing"
+    assert payload["error_info"]["code"] == "task_not_found"
+
+
+def test_run_detach_json_worker_spawn_failure_keeps_task_id(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+
+    def fail_spawn(*_args, **_kwargs):
+        raise OSError("spawn denied")
+
+    monkeypatch.setattr("transvortex.cli.entry.subprocess.Popen", fail_spawn)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--input",
+            str(tmp_path / "demo.mp4"),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--detach",
+            "--json",
+        ],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected failure exit")
+
+    raw = capsys.readouterr()
+    payload = json.loads(raw.out)
+    assert raw.err == ""
+    assert payload["ok"] is False
+    assert payload["task_id"]
+    assert payload["error_info"]["code"] == "runtime_error"
+    store = TaskStore(tmp_path / "artifacts")
+    task = store.load_task(payload["task_id"])
+    assert task.status == "FAILED"
+
+
 def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_config(tmp_path)
     spawned = {}

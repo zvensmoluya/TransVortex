@@ -495,12 +495,18 @@ def _print_task_json(root: Path, providers_file: Path | None, task_id: str, *, c
     _print_json(payload)
 
 
-def _handle_pipeline_error(exc: Exception, *, json_mode: bool, stream_events: bool) -> None:
+def _handle_pipeline_error(
+    exc: Exception,
+    *,
+    json_mode: bool,
+    stream_events: bool,
+    task_id_hint: str | None = None,
+) -> None:
     if isinstance(exc, PipelineTaskError):
-        task_id = exc.task_id
+        task_id = exc.task_id or task_id_hint
         err = exc.error_info
     else:
-        task_id = None
+        task_id = task_id_hint
         err = classify_exception(exc)
     if json_mode:
         _print_json(_error_payload(task_id, err))
@@ -511,11 +517,41 @@ def _handle_pipeline_error(exc: Exception, *, json_mode: bool, stream_events: bo
     raise SystemExit(1)
 
 
-def _run_or_exit(fn, *, json_mode: bool, stream_events: bool):
+def _run_or_exit(fn, *, json_mode: bool, stream_events: bool, task_id_hint: str | None = None):
     try:
         return fn()
     except Exception as exc:  # noqa: BLE001 - converted to stable CLI error contract
-        _handle_pipeline_error(exc, json_mode=json_mode, stream_events=stream_events)
+        _handle_pipeline_error(exc, json_mode=json_mode, stream_events=stream_events, task_id_hint=task_id_hint)
+
+
+def _mark_task_failed(root: Path, providers_file: Path | None, task_id: str, err: dict[str, Any]) -> None:
+    try:
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        store = TaskStore(config.pipeline.artifacts_dir)
+        store.update_task_status(task_id, "FAILED", error=err.get("message"), error_info=err)
+        store.append_event(
+            task_id,
+            "error",
+            stage=err.get("stage") or "QUEUED",
+            message=err.get("message", ""),
+            level="error",
+            details={"error_info": err},
+        )
+    except Exception:
+        pass
+
+
+def _handle_detached_worker_error(
+    exc: Exception,
+    *,
+    root: Path,
+    providers_file: Path | None,
+    task_id: str,
+    json_mode: bool,
+) -> None:
+    err = classify_exception(RuntimeError(f"Detached worker start failed: {exc}"))
+    _mark_task_failed(root, providers_file, task_id, err)
+    _handle_pipeline_error(PipelineTaskError(task_id, err), json_mode=json_mode, stream_events=False)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -776,7 +812,10 @@ def main() -> None:
             _append_optional(worker_args, "--provider", args.provider)
             _append_optional(worker_args, "--model", args.model)
             _append_common_overrides_to_args(worker_args, args)
-            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            try:
+                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
+                _handle_detached_worker_error(exc, root=root, providers_file=providers_file, task_id=task_id, json_mode=args.json)
             payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="run")
             if args.json:
                 _print_json(payload)
@@ -833,7 +872,16 @@ def main() -> None:
             _append_optional(worker_args, "--provider", args.provider)
             _append_optional(worker_args, "--model", args.model)
             _append_common_overrides_to_args(worker_args, args)
-            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / args.task_id, worker_args=worker_args)
+            try:
+                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / args.task_id, worker_args=worker_args)
+            except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
+                _handle_detached_worker_error(
+                    exc,
+                    root=root,
+                    providers_file=providers_file,
+                    task_id=args.task_id,
+                    json_mode=args.json,
+                )
             payload = _detach_response(task_id=args.task_id, artifacts_dir=artifacts_dir, worker=worker, command="resume")
             if args.json:
                 _print_json(payload)
@@ -863,10 +911,13 @@ def main() -> None:
         return
 
     if args.command == "status":
-        config = load_app_config(root_dir=root, providers_file=providers_file)
-        store = TaskStore(config.pipeline.artifacts_dir)
-        task = store.load_task(args.task_id)
-        payload = _task_payload(task, config.pipeline.artifacts_dir)
+        def do_status():
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+            store = TaskStore(config.pipeline.artifacts_dir)
+            task = store.load_task(args.task_id)
+            return _task_payload(task, config.pipeline.artifacts_dir)
+
+        payload = _run_or_exit(do_status, json_mode=args.json, stream_events=False, task_id_hint=args.task_id)
         if args.json:
             _print_json(payload)
         else:
@@ -898,14 +949,17 @@ def main() -> None:
         return
 
     if args.command == "cancel":
-        config = load_app_config(root_dir=root, providers_file=providers_file)
-        store = TaskStore(config.pipeline.artifacts_dir)
-        task = store.request_cancel(args.task_id)
-        payload = task_status_json(task, store=store)
+        def do_cancel():
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+            store = TaskStore(config.pipeline.artifacts_dir)
+            task = store.request_cancel(args.task_id)
+            return task_status_json(task, store=store)
+
+        payload = _run_or_exit(do_cancel, json_mode=args.json, stream_events=False, task_id_hint=args.task_id)
         if args.json:
             _print_json(payload)
         else:
-            print(f"{task.task_id} {task.status}")
+            print(f"{payload['task_id']} {payload['status']}")
         return
 
     if args.command == "tasks":
@@ -1032,15 +1086,24 @@ def main() -> None:
         return
 
     if args.command == "result" and args.result_command == "open":
-        _print_json(open_task_result(root_dir=root, task_id=args.task_id))
+        payload = _run_or_exit(
+            lambda: open_task_result(root_dir=root, task_id=args.task_id),
+            json_mode=True,
+            stream_events=False,
+            task_id_hint=args.task_id,
+        )
+        _print_json(payload)
         return
 
     if args.command == "result" and args.result_command == "save":
-        raw = _read_json_arg(args.json_payload)
-        segments = raw.get("segments", [])
-        if not isinstance(segments, list):
-            raise ValueError("segments must be a list")
-        _print_json(save_task_segments(root_dir=root, task_id=args.task_id, segments_payload=segments))
+        def do_result_save():
+            raw = _read_json_arg(args.json_payload)
+            segments = raw.get("segments", [])
+            if not isinstance(segments, list):
+                raise ValueError("segments must be a list")
+            return save_task_segments(root_dir=root, task_id=args.task_id, segments_payload=segments)
+
+        _print_json(_run_or_exit(do_result_save, json_mode=True, stream_events=False, task_id_hint=args.task_id))
         return
 
     if args.command == "memory" and args.memory_command == "export-preset":
@@ -1061,6 +1124,7 @@ def main() -> None:
             ),
             json_mode=args.json,
             stream_events=False,
+            task_id_hint=args.task_id,
         )
         if args.json:
             _print_json(payload)
@@ -1098,11 +1162,16 @@ def main() -> None:
 
     if args.command == "reexport":
         _print_json(
-            reexport_task(
-                root_dir=root,
-                task_id=args.task_id,
-                output_format=args.output_format,
-                bilingual=args.bilingual,
+            _run_or_exit(
+                lambda: reexport_task(
+                    root_dir=root,
+                    task_id=args.task_id,
+                    output_format=args.output_format,
+                    bilingual=args.bilingual,
+                ),
+                json_mode=True,
+                stream_events=False,
+                task_id_hint=args.task_id,
             )
         )
         return
@@ -1128,7 +1197,10 @@ def main() -> None:
             worker_args = ["_worker", "--task-id", task_id]
             _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
             _append_common_overrides_to_args(worker_args, args)
-            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            try:
+                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
+                _handle_detached_worker_error(exc, root=root, providers_file=providers_file, task_id=task_id, json_mode=args.json)
             payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="asr")
             if args.json:
                 _print_json(payload)
@@ -1182,7 +1254,10 @@ def main() -> None:
             _append_optional(worker_args, "--provider", args.provider)
             _append_optional(worker_args, "--model", args.model)
             _append_common_overrides_to_args(worker_args, args)
-            worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            try:
+                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
+            except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
+                _handle_detached_worker_error(exc, root=root, providers_file=providers_file, task_id=task_id, json_mode=args.json)
             payload = _detach_response(task_id=task_id, artifacts_dir=artifacts_dir, worker=worker, command="translate")
             if args.json:
                 _print_json(payload)

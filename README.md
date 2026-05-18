@@ -29,7 +29,8 @@ TransVortex 目标是成为一个可被脚本和 agent 调用的无界面核心�
 5. 先做零 token 预检：
    - `transvortex probe-provider --strict`
 6. 运行一次任务：
-   - `transvortex run --input demo.mp4 --src en --tgt zh-CN`
+   - 人工前台运行：`transvortex run --input demo.mp4 --src en --tgt zh-CN`
+   - Agent/脚本立即获取 `task_id`：`transvortex run --input demo.mp4 --src en --tgt zh-CN --detach --json`
 7. 一键 demo：
    - `.\scripts\run_demo.ps1 -ApiKey "<your-key>"`
 
@@ -124,8 +125,8 @@ transvortex auth set openai_asr
 
 ## 常用命令
 
-- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json] [--stream-events]`
-- `transvortex resume --task-id <id> [--json] [--stream-events]`
+- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json] [--stream-events] [--detach]`
+- `transvortex resume --task-id <id> [--json] [--stream-events] [--detach]`
 - `transvortex status --task-id <id> [--json]`
 - `transvortex events --task-id <id>`
 - `transvortex cancel --task-id <id> [--json]`
@@ -136,6 +137,8 @@ transvortex auth set openai_asr
 - `transvortex auth set/delete/list/status [--json]`
 
 运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-model`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、chunk 设置、batch size 和并发。
+
+`run`、`resume`、`asr`、`translate` 是长任务。`--json` 不带 `--detach` 时只会在任务结束后输出一个 JSON；如果需要立即拿到 `task_id`，使用 `--detach --json`，再用 `status --task-id <id> --json` 和 `events --task-id <id> --follow` 跟踪进度。
 
 ## 任务工件
 

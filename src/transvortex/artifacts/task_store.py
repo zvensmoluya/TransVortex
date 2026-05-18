@@ -38,7 +38,10 @@ class TaskStore:
         self.events_file(task.task_id).touch(exist_ok=True)
 
     def load_task(self, task_id: str) -> TaskRecord:
-        data = read_json(self.task_file(task_id))
+        task_file = self.task_file(task_id)
+        if not task_file.exists():
+            raise FileNotFoundError(f"Task not found: {task_id}")
+        data = read_json(task_file)
         return TaskRecord(**data)
 
     def update_task_status(

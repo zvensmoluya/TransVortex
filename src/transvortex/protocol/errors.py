@@ -43,6 +43,15 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             hint_zh="任务已取消。",
             retryable=False,
         )
+    if "task not found" in lowered:
+        return error_info(
+            code="task_not_found",
+            error_type="input_error",
+            stage=stage,
+            message=message,
+            hint_zh="找不到指定任务，请检查 task_id 或先用 tasks --json 查看任务列表。",
+            retryable=False,
+        )
     if "input file not found" in lowered or "input path is not a file" in lowered:
         return error_info(
             code="input_not_found",
