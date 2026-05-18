@@ -23,6 +23,7 @@ from ..app.credentials import (
 )
 from ..app.doctor import doctor_report, format_doctor_report
 from ..formats.exporter import export_ass, export_srt
+from ..formats.srt import parse_srt_file
 from ..app.models import Segment
 from ..core.orchestrator import (
     create_pipeline_task,
@@ -33,7 +34,12 @@ from ..core.orchestrator import (
     task_status_json,
 )
 from ..providers.probe import probe_exit_code, probe_provider
-from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
+from ..memory.exporter import (
+    MemoryPresetBootstrapOptions,
+    MemoryPresetExportOptions,
+    bootstrap_memory_preset,
+    export_runtime_memory_to_preset,
+)
 from ..providers.admin import (
     custom_adapter_template_payload,
     delete_provider_config,
@@ -50,6 +56,7 @@ from ..protocol.agent_protocol import agent_info_payload
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..protocol.redaction import redact
 from ..utils import read_json, to_plain, utc_now_iso
+from ..utils import read_jsonl
 
 
 def _common_overrides(args: argparse.Namespace) -> dict:
@@ -117,6 +124,22 @@ def _parse_memory_preset_arg(raw: str | None) -> list[dict[str, str]] | None:
         else:
             out.append({"id": token})
     return out
+
+
+def _load_cli_segments_input(path: Path) -> list[Segment]:
+    if path.suffix.lower() == ".srt":
+        return parse_srt_file(path)
+    rows = read_jsonl(path)
+    segments: list[Segment] = []
+    for idx, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        payload = dict(row)
+        payload.setdefault("id", idx)
+        if "text_src" not in payload and "text" in payload:
+            payload["text_src"] = payload.pop("text")
+        segments.append(Segment(**payload))
+    return sorted(segments, key=lambda item: item.id)
 
 
 def _add_providers_file_arg(subparser: argparse.ArgumentParser) -> None:
@@ -624,6 +647,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     memory_p = sub.add_parser("memory", help="Manage translation memory presets")
     memory_sub = memory_p.add_subparsers(dest="memory_command", required=True)
+    memory_bootstrap_p = memory_sub.add_parser("bootstrap", help="Generate a draft memory preset from segments or SRT")
+    _add_providers_file_arg(memory_bootstrap_p)
+    memory_bootstrap_p.add_argument("--segments", required=True)
+    memory_bootstrap_p.add_argument("--src", required=True)
+    memory_bootstrap_p.add_argument("--tgt", required=True)
+    memory_bootstrap_p.add_argument("--preset-id", required=True)
+    memory_bootstrap_p.add_argument("--name", default="")
+    memory_bootstrap_p.add_argument("--description", default="")
+    memory_bootstrap_p.add_argument("--default-status", choices=["proposed", "confirmed", "locked"], default="proposed")
+    memory_bootstrap_p.add_argument("--overwrite", action="store_true")
+    memory_bootstrap_p.add_argument("--dry-run", action="store_true")
+    memory_bootstrap_p.add_argument("--json", action="store_true")
     memory_export_p = memory_sub.add_parser("export-preset", help="Export runtime memory to a draft preset")
     memory_export_p.add_argument("--task-id", required=True)
     memory_export_p.add_argument("--preset-id", required=True)
@@ -1016,6 +1051,34 @@ def main() -> None:
                 artifacts_dir=config.pipeline.artifacts_dir,
                 options=MemoryPresetExportOptions(
                     task_id=args.task_id,
+                    preset_id=args.preset_id,
+                    name=args.name,
+                    description=args.description,
+                    default_status=args.default_status,
+                    overwrite=args.overwrite,
+                    dry_run=args.dry_run,
+                ),
+            ),
+            json_mode=args.json,
+            stream_events=False,
+        )
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload["path"])
+        return
+
+    if args.command == "memory" and args.memory_command == "bootstrap":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        payload = _run_or_exit(
+            lambda: bootstrap_memory_preset(
+                root_dir=root,
+                artifacts_dir=config.pipeline.artifacts_dir,
+                config=config,
+                options=MemoryPresetBootstrapOptions(
+                    segments=_load_cli_segments_input(Path(args.segments).resolve()),
+                    source_lang=args.src,
+                    target_lang=args.tgt,
                     preset_id=args.preset_id,
                     name=args.name,
                     description=args.description,

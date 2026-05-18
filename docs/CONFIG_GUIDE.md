@@ -160,7 +160,7 @@ translation:
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
-- 默认 memory 流程是 `bootstrap_first`：先用全片 source subtitles 生成全局记忆，再翻译大 chunk；动态 patch 仍用于翻译后的增量补充。
+- 默认 memory 流程是 `bootstrap_first`：先用全片 source subtitles 生成全局记忆，再翻译大 chunk；翻译过程中的动态 patch 默认关闭，可按需显式开启。
 
 ```yaml
 memory:
@@ -170,6 +170,9 @@ memory:
     enabled: true
     mode: whole_document
     max_candidates: 120
+  patch:
+    enabled: false
+    after_each_window: false
 ```
 
 ## 5. ASR 与视频字幕来源

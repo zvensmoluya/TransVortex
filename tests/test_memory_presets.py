@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 
 from transvortex.app.models import MemoryPresetRef
+from transvortex.app.models import AppConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig, Segment
 from transvortex.app.models import TaskRecord
 from transvortex.artifacts.task_store import TaskStore
 from transvortex.memory.exporter import (
+    MemoryPresetBootstrapOptions,
     MemoryPresetExportError,
     MemoryPresetExportOptions,
+    bootstrap_memory_preset,
     export_runtime_memory_to_preset,
 )
 from transvortex.memory.presets import (
@@ -216,6 +219,101 @@ def test_export_runtime_memory_requires_overwrite_for_existing_preset(tmp_path: 
     result = load_preset_bundle(tmp_path / "memory" / "presets" / "rezero.json")
     assert result.bundle is not None
     assert [entry.source for entry in result.bundle.entries] == ["Subaru"]
+
+
+def test_bootstrap_memory_preset_writes_draft_preset(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path / "artifacts"),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+
+    class FakeClient:
+        def translate_request(self, _req):
+            return type(
+                "Response",
+                (),
+                {
+                    "raw_text": (
+                        '{"chunk_ids":["bootstrap"],"actions":[{"action":"upsert",'
+                        '"source":"Subaru","target":"斯巴鲁","category":"name",'
+                        '"status":"confirmed","confidence":0.9,"evidence_ids":[1]}]}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+
+    payload = bootstrap_memory_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        config=config,
+        options=MemoryPresetBootstrapOptions(
+            segments=[Segment(id=1, start=0, end=1, text_src="Subaru arrives")],
+            source_lang="en",
+            target_lang="zh-CN",
+            preset_id="show",
+            name="Show",
+            default_status="locked",
+        ),
+    )
+
+    assert payload["ok"] is True
+    assert payload["report"]["exported"] == 1
+    result = load_preset_bundle(tmp_path / "memory" / "presets" / "show.json")
+    assert result.bundle is not None
+    assert result.bundle.default_status == "locked"
+    assert result.bundle.scope.language_pairs == ["en->zh-cn"]
+    assert result.bundle.entries[0].source == "Subaru"
+    assert result.bundle.entries[0].status == "locked"
+
+
+def test_bootstrap_memory_preset_dry_run_does_not_write(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path / "artifacts"),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+
+    class FakeClient:
+        def translate_request(self, _req):
+            return type("Response", (), {"raw_text": '{"chunk_ids":["bootstrap"],"actions":[]}'})()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+
+    payload = bootstrap_memory_preset(
+        root_dir=tmp_path,
+        artifacts_dir=tmp_path / "artifacts",
+        config=config,
+        options=MemoryPresetBootstrapOptions(
+            segments=[Segment(id=1, start=0, end=1, text_src="Nothing")],
+            source_lang="en",
+            target_lang="zh-CN",
+            preset_id="empty",
+            dry_run=True,
+        ),
+    )
+
+    assert payload["dry_run"] is True
+    assert payload["report"]["exported"] == 0
+    assert payload["preset"]["entries"] == []
+    assert not (tmp_path / "memory" / "presets" / "empty.json").exists()
 
 
 def test_scope_matches_accepts_pair_or_wildcards(tmp_path: Path) -> None:

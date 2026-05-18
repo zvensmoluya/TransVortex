@@ -533,6 +533,7 @@ def load_app_config(
     memory_merge_raw = memory_raw.get("merge") or {}
     memory_check_raw = memory_raw.get("consistency_check") or {}
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
+    memory_patch_enabled = _to_bool(memory_patch_raw.get("enabled"), False)
     memory = MemoryConfig(
         enabled=_to_bool(memory_raw.get("enabled"), True),
         mode=_to_str(memory_raw.get("mode"), "bootstrap_first"),
@@ -559,8 +560,8 @@ def load_app_config(
             max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
         ),
         patch=MemoryPatchConfig(
-            enabled=_to_bool(memory_patch_raw.get("enabled"), True),
-            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), True),
+            enabled=memory_patch_enabled,
+            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), memory_patch_enabled),
             window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 8),
             system_prompt=load_prompt(
                 "memory_patch_system",
@@ -780,7 +781,9 @@ def load_app_config(
         elif key == "memory_enabled":
             pipeline.memory.enabled = _to_bool(value, pipeline.memory.enabled)
         elif key == "memory_patch_enabled":
-            pipeline.memory.patch.enabled = _to_bool(value, pipeline.memory.patch.enabled)
+            patch_enabled = _to_bool(value, pipeline.memory.patch.enabled)
+            pipeline.memory.patch.enabled = patch_enabled
+            pipeline.memory.patch.after_each_window = patch_enabled
         elif key == "memory_patch_window_chunks":
             pipeline.memory.patch.window_chunks = _to_int(value, pipeline.memory.patch.window_chunks)
         elif key == "memory_presets":

@@ -65,8 +65,8 @@ memory:
     strategy: balanced
     max_entries_per_chunk: 30
   patch:
-    enabled: true
-    after_each_window: true
+    enabled: false
+    after_each_window: false
     window_chunks: 8
   merge:
     auto_confirm_high_confidence: false

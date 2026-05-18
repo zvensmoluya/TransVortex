@@ -17,6 +17,7 @@ def agent_info_payload() -> dict:
             "transvortex events --task-id <task_id> --follow",
             "transvortex status --task-id <task_id> --json",
             "transvortex result open --task-id <task_id> --json",
+            "transvortex memory bootstrap --segments <segments.jsonl> --src <lang> --tgt <lang> --preset-id <preset_id> --json",
             "transvortex memory export-preset --task-id <task_id> --preset-id <preset_id> --json",
         ],
         "commands": {
@@ -33,6 +34,7 @@ def agent_info_payload() -> dict:
             "probe-provider": {"supports_json": True, "strict_exit_code": True},
             "config show": {"supports_json": True},
             "result open": {"supports_json": True},
+            "memory bootstrap": {"supports_json": True, "supports_dry_run": True},
             "memory export-preset": {"supports_json": True, "supports_dry_run": True},
             "reexport": {"supports_json": True, "supports_bilingual_override": True},
         },

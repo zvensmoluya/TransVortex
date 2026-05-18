@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import copy
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from ..app.models import AppConfig, Segment
 from ..artifacts.task_store import TaskStore
 from ..utils import read_jsonl, to_plain, utc_now_iso, write_json
+from .bootstrapper import bootstrap_memory
 from .presets import load_preset_bundle, presets_dir
 from .schema import MEMORY_STATUS_ORDER, MemoryDocument, MemoryEntry, normalize_source_key, normalize_status
 from .store import MemoryStore
@@ -17,6 +21,19 @@ EXPORTABLE_STATUSES = {"locked", "confirmed", "proposed"}
 @dataclass
 class MemoryPresetExportOptions:
     task_id: str
+    preset_id: str
+    name: str = ""
+    description: str = ""
+    default_status: str = "proposed"
+    overwrite: bool = False
+    dry_run: bool = False
+
+
+@dataclass
+class MemoryPresetBootstrapOptions:
+    segments: list[Segment]
+    source_lang: str
+    target_lang: str
     preset_id: str
     name: str = ""
     description: str = ""
@@ -251,6 +268,106 @@ def export_runtime_memory_to_preset(
         "task_id": task_id,
         "preset_id": preset_id,
         "path": str(target_path),
+        "report": to_plain(report),
+        "preset": payload,
+    }
+    if options.dry_run:
+        return result
+
+    write_json(target_path, payload)
+    loaded = load_preset_bundle(target_path)
+    if loaded.bundle is None:
+        raise MemoryPresetExportError(loaded.error or f"exported preset failed to load: {target_path}")
+    result["preset"] = {
+        "id": loaded.bundle.id,
+        "version": loaded.bundle.version,
+        "name": loaded.bundle.name,
+        "entries": len(loaded.bundle.entries),
+    }
+    return result
+
+
+def bootstrap_memory_preset(
+    *,
+    root_dir: Path,
+    artifacts_dir: Path,
+    config: AppConfig,
+    options: MemoryPresetBootstrapOptions,
+) -> dict[str, Any]:
+    preset_id = options.preset_id.strip()
+    if not preset_id:
+        raise MemoryPresetExportError("preset_id is required")
+    if not options.segments:
+        raise MemoryPresetExportError("segments are required")
+
+    default_status = normalize_status(options.default_status)
+    if default_status not in EXPORTABLE_STATUSES:
+        raise MemoryPresetExportError(f"default_status must be one of: {', '.join(sorted(EXPORTABLE_STATUSES))}")
+
+    target_path = presets_dir(root_dir) / f"{preset_id}.json"
+    if target_path.exists() and not options.overwrite and not options.dry_run:
+        raise MemoryPresetExportError(f"memory preset already exists: {target_path}")
+
+    if options.dry_run:
+        temp_dir = tempfile.TemporaryDirectory(prefix="transvortex_memory_bootstrap_")
+        memory_dir = Path(temp_dir.name)
+    else:
+        temp_dir = None
+        memory_dir = artifacts_dir / "_memory_bootstrap" / preset_id
+        if memory_dir.exists():
+            stale_bootstrap = memory_dir / "bootstrap.json"
+            stale_memory = memory_dir / "translation_memory.json"
+            stale_bootstrap.unlink(missing_ok=True)
+            stale_memory.unlink(missing_ok=True)
+    bootstrap_config = copy.deepcopy(config)
+    bootstrap_config.pipeline.memory.enabled = True
+    bootstrap_config.pipeline.memory.bootstrap.enabled = True
+    bootstrap_config.pipeline.memory.bootstrap.mode = "whole_document"
+
+    temp_dir_cleanup = temp_dir
+    try:
+        bootstrap_payload = bootstrap_memory(
+            bootstrap_config,
+            options.segments,
+            source_lang=options.source_lang,
+            target_lang=options.target_lang,
+            memory_dir=memory_dir,
+        )
+        if bootstrap_payload.get("status") not in {"completed", "skipped"}:
+            raise MemoryPresetExportError(f"memory bootstrap failed: {bootstrap_payload}")
+
+        report = MemoryPresetExportReport()
+        runtime_doc = MemoryStore(memory_dir).load_runtime()
+        entries = _apply_default_status(_clean_runtime_entries(runtime_doc, report), default_status)
+    finally:
+        if temp_dir_cleanup is not None:
+            temp_dir_cleanup.cleanup()
+    report.exported = len(entries)
+    payload = _preset_payload(
+        options=MemoryPresetExportOptions(
+            task_id="memory_bootstrap",
+            preset_id=preset_id,
+            name=options.name,
+            description=options.description,
+            default_status=default_status,
+            overwrite=options.overwrite,
+            dry_run=options.dry_run,
+        ),
+        source_lang=options.source_lang,
+        target_lang=options.target_lang,
+        entries=entries,
+    )
+    payload["generated_from"] = {
+        "task_id": "",
+        "artifact": "memory_bootstrap",
+        "created_at": payload["generated_from"]["created_at"],
+    }
+    result = {
+        "ok": True,
+        "dry_run": options.dry_run,
+        "preset_id": preset_id,
+        "path": str(target_path),
+        "bootstrap": bootstrap_payload,
         "report": to_plain(report),
         "preset": payload,
     }

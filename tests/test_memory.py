@@ -505,6 +505,8 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
     )
     config.pipeline.memory.enabled = True
     config.pipeline.memory.mode = "balanced"
+    config.pipeline.memory.patch.enabled = True
+    config.pipeline.memory.patch.after_each_window = True
     chunks = [
         Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Alpha"]),
         Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] Beta"]),
@@ -684,6 +686,8 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
     config.pipeline.memory.enabled = True
+    config.pipeline.memory.patch.enabled = True
+    config.pipeline.memory.patch.after_each_window = True
     config.pipeline.memory.patch.window_chunks = 3
     chunks = [Chunk(chunk_id=f"c{i}", segment_ids=[i], lines=[f"[{i}] Term {i}"]) for i in range(5)]
     patch_windows: list[list[str]] = []
@@ -710,3 +714,50 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
     list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
 
     assert patch_windows == [["c0", "c1", "c2"], ["c3", "c4"]]
+
+
+def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path, default_concurrency=2),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+    config.pipeline.memory.enabled = True
+    config.pipeline.memory.patch.enabled = False
+    store = MemoryStore(tmp_path / "memory")
+    store.save(MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")]))
+    chunks = [
+        Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Subaru arrives"]),
+        Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] Nothing"]),
+    ]
+    seen: list[tuple[str, str]] = []
+
+    def fake_submit(_pool, _config, chunk, _source_lang, _target_lang, memory_prompt, _progress_callback, _already_done=None):
+        seen.append((chunk.chunk_id, memory_prompt))
+
+        class Done:
+            def result(self):
+                return {"chunk_id": chunk.chunk_id, "rows": [{"id": chunk.segment_ids[0], "text_tgt": "ok"}]}
+
+        return Done()
+
+    def fail_generate_memory_patch(*_args, **_kwargs):
+        raise AssertionError("dynamic memory patch should not run")
+
+    monkeypatch.setattr("transvortex.core.translate._submit_translate_chunk", fake_submit)
+    monkeypatch.setattr("transvortex.core.translate.concurrent.futures.as_completed", lambda futures: list(futures))
+    monkeypatch.setattr("transvortex.core.translate.generate_memory_patch", fail_generate_memory_patch)
+
+    list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
+
+    assert [item[0] for item in seen] == ["c1", "c2"]
+    assert "Subaru => 斯巴鲁" in seen[0][1]
+    assert not (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()

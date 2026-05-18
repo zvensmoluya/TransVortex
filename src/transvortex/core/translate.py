@@ -803,6 +803,54 @@ def _iter_translate_window(
                 yield result
 
 
+def _iter_translate_all_chunks_with_static_memory(
+    config: AppConfig,
+    chunks: list[Chunk],
+    *,
+    source_lang: str,
+    target_lang: str,
+    memory_store: MemoryStore,
+    progress_callback: ProgressCallback | None = None,
+    already_done: set[str] | None = None,
+):
+    document = memory_store.load_effective()
+    chunk_memory_prompts = {
+        chunk.chunk_id: build_memory_prompt(select_memory_entries(document, chunk, config.pipeline.memory.inject))
+        for chunk in chunks
+    }
+    max_workers = max(1, config.pipeline.default_concurrency)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            _submit_translate_chunk(
+                pool,
+                config,
+                chunk,
+                source_lang,
+                target_lang,
+                chunk_memory_prompts.get(chunk.chunk_id, ""),
+                progress_callback,
+                already_done,
+            ): chunk
+            for chunk in chunks
+        }
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                future_result = future.result()
+            except AdaptiveTranslationError as exc:
+                for item in exc.partial_results:
+                    yield item
+                raise RuntimeError(str(exc)) from exc
+            result_items = future_result if isinstance(future_result, list) else [future_result]
+            for result in result_items:
+                yield result
+
+
+def _uses_dynamic_memory_updates(config: AppConfig) -> bool:
+    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
+        return True
+    return bool(config.pipeline.memory.patch.enabled and config.pipeline.memory.patch.after_each_window)
+
+
 def _update_memory_after_window(
     config: AppConfig,
     window: list[Chunk],
@@ -867,6 +915,17 @@ def _iter_translate_all_chunks_with_memory(
     memory_store = MemoryStore(memory_dir)
     already_done = already_done or set()
     memory_store.ensure_runtime_document()
+    if not _uses_dynamic_memory_updates(config):
+        yield from _iter_translate_all_chunks_with_static_memory(
+            config,
+            chunks,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            memory_store=memory_store,
+            progress_callback=progress_callback,
+            already_done=already_done,
+        )
+        return
     window_size = max(1, config.pipeline.default_concurrency)
     if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
         window_size = 1

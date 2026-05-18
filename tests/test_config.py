@@ -147,7 +147,59 @@ memory:
     assert cfg.pipeline.translation.batching.mode == "fixed"
     assert cfg.pipeline.translation.batching.min_chunk_lines == 12
     assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.patch.after_each_window is False
     assert cfg.pipeline.memory.patch.window_chunks == 4
+
+
+def test_memory_patch_enabled_implies_after_each_window(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  patch:
+    enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.memory.patch.enabled is True
+    assert cfg.pipeline.memory.patch.after_each_window is True
+
+
+def test_memory_patch_defaults_disabled(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.patch.after_each_window is False
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
@@ -855,6 +907,7 @@ memory:
     assert cfg.pipeline.memory.inject.proposed is False
     assert cfg.pipeline.memory.inject.max_entries_per_chunk == 12
     assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.patch.after_each_window is False
     assert cfg.pipeline.memory.merge.auto_confirm_high_confidence is True
     assert cfg.pipeline.memory.consistency_check.enabled is False
 

@@ -157,6 +157,101 @@ def test_memory_export_preset_cli_json_writes_preset(tmp_path: Path, monkeypatch
     assert exported["entries"][0]["status"] == "proposed"
 
 
+def test_memory_bootstrap_cli_json_writes_preset_from_srt(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    srt_file = tmp_path / "demo.srt"
+    srt_file.write_text(
+        """
+1
+00:00:01,000 --> 00:00:02,000
+Subaru arrives
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        def translate_request(self, _req):
+            return type(
+                "Response",
+                (),
+                {
+                    "raw_text": (
+                        '{"chunk_ids":["bootstrap"],"actions":[{"action":"upsert",'
+                        '"source":"Subaru","target":"斯巴鲁","category":"name",'
+                        '"status":"confirmed","confidence":0.9,"evidence_ids":[1]}]}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "memory",
+            "bootstrap",
+            "--segments",
+            str(srt_file),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--preset-id",
+            "show",
+            "--json",
+        ],
+    )
+    main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert payload["preset_id"] == "show"
+    assert payload["report"]["exported"] == 1
+    exported = json.loads((tmp_path / "memory" / "presets" / "show.json").read_text(encoding="utf-8"))
+    assert exported["entries"][0]["source"] == "Subaru"
+    assert exported["entries"][0]["status"] == "proposed"
+
+
+def test_memory_bootstrap_cli_dry_run_accepts_jsonl_without_writing(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    segments_file = tmp_path / "segments.jsonl"
+    segments_file.write_text('{"id":1,"start":0,"end":1,"text_src":"hello"}\n', encoding="utf-8")
+
+    class FakeClient:
+        def translate_request(self, _req):
+            return type("Response", (), {"raw_text": '{"chunk_ids":["bootstrap"],"actions":[]}'})()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "memory",
+            "bootstrap",
+            "--segments",
+            str(segments_file),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--preset-id",
+            "empty",
+            "--dry-run",
+            "--json",
+        ],
+    )
+    main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["dry_run"] is True
+    assert payload["preset"]["entries"] == []
+    assert not (tmp_path / "memory" / "presets" / "empty.json").exists()
+
+
 def test_config_show_json_masks_secret_values(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("PROVIDER_KEY", "super-secret-value")
@@ -273,6 +368,7 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["protocol_version"]
     assert payload["machine_readable"] is True
     assert payload["commands"]["run"]["supports_detach"] is True
+    assert payload["commands"]["memory bootstrap"]["supports_dry_run"] is True
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
     assert "source/segments.normalized.jsonl" in payload["artifact_contract"]

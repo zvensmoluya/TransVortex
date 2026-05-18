@@ -257,6 +257,7 @@ memory:
     max_entries_per_chunk: 5
   patch:
     enabled: true
+    after_each_window: true
   consistency_check:
     enabled: true
         """,

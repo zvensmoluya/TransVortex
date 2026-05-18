@@ -330,8 +330,8 @@ class MemoryInjectConfig:
 
 @dataclass
 class MemoryPatchConfig:
-    enabled: bool = True
-    after_each_window: bool = True
+    enabled: bool = False
+    after_each_window: bool = False
     window_chunks: int = 8
     system_prompt: str = ""
 
