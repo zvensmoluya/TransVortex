@@ -690,6 +690,100 @@ asr_providers:
     assert cfg.pipeline.asr_prompt.max_chars == 120
 
 
+def test_asr_prompt_profile_overrides_legacy_text(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    prompt_dir = tmp_path / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "anime.v1.md").write_text("Names: Subaru, Emilia", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  prompt:
+    enabled: true
+    active_profile: anime
+    text: "legacy text"
+    profiles:
+      - id: anime
+        name: Anime names
+        scope: project
+        version: 1
+        path: prompts/asr/anime.v1.md
+        include_previous_text: true
+        max_chars: 224
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.asr_prompt.active_profile == "anime"
+    assert cfg.pipeline.asr_prompt.text == "Names: Subaru, Emilia"
+    assert cfg.pipeline.asr_prompt.include_previous_text is True
+    assert cfg.pipeline.asr_prompt.max_chars == 224
+    assert cfg.pipeline.asr_prompt.profiles[0].text == "Names: Subaru, Emilia"
+
+
+def test_asr_prompt_cli_overrides_profile(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    prompt_dir = tmp_path / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "anime.v1.md").write_text("Profile prompt", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  prompt:
+    active_profile: anime
+    profiles:
+      - id: anime
+        name: Anime
+        path: prompts/asr/anime.v1.md
+        include_previous_text: false
+        max_chars: 100
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "asr_prompt_text": "Task prompt",
+            "asr_prompt_enabled": "false",
+            "asr_prompt_include_previous_text": "true",
+            "asr_prompt_max_chars": 80,
+        },
+    )
+
+    assert cfg.pipeline.asr_prompt.active_profile == ""
+    assert cfg.pipeline.asr_prompt.text == "Task prompt"
+    assert cfg.pipeline.asr_prompt.enabled is False
+    assert cfg.pipeline.asr_prompt.include_previous_text is True
+    assert cfg.pipeline.asr_prompt.max_chars == 80
+
+
 def test_asr_preprocessing_config_parse(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

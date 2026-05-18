@@ -52,6 +52,11 @@ from ..providers.admin import (
     save_provider_config,
     save_provider_routing,
 )
+from ..prompts.asr_admin import (
+    delete_asr_prompt_profile,
+    list_asr_prompt_profiles,
+    save_asr_prompt_profile,
+)
 from ..protocol.agent_protocol import agent_info_payload
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..protocol.redaction import redact
@@ -83,6 +88,11 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_max_upload_mb": getattr(args, "asr_max_upload_mb", None),
         "asr_audio_track": getattr(args, "asr_audio_track", None),
         "asr_cloud_concurrency": getattr(args, "asr_cloud_concurrency", None),
+        "asr_prompt_profile": getattr(args, "asr_prompt_profile", None),
+        "asr_prompt_text": getattr(args, "asr_prompt_text", None),
+        "asr_prompt_enabled": getattr(args, "asr_prompt_enabled", None),
+        "asr_prompt_include_previous_text": getattr(args, "asr_prompt_include_previous_text", None),
+        "asr_prompt_max_chars": getattr(args, "asr_prompt_max_chars", None),
         "source_mode": getattr(args, "source_mode", None),
         "subtitle_track": getattr(args, "subtitle_track", None),
         "output_format": getattr(args, "output_format", None),
@@ -211,6 +221,11 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-max-upload-mb", type=float, default=None)
     subparser.add_argument("--asr-audio-track", default=None)
     subparser.add_argument("--asr-cloud-concurrency", type=int, default=None)
+    subparser.add_argument("--asr-prompt-profile", default=None)
+    subparser.add_argument("--asr-prompt-text", default=None)
+    subparser.add_argument("--asr-prompt-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--asr-prompt-include-previous-text", choices=["true", "false"], default=None)
+    subparser.add_argument("--asr-prompt-max-chars", type=int, default=None)
     subparser.add_argument("--source-mode", choices=["auto", "asr", "embedded_subtitle"], default=None)
     subparser.add_argument("--subtitle-track", default=None)
     subparser.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
@@ -371,6 +386,11 @@ def _append_optional(args: list[str], flag: str, value: Any) -> None:
 
 
 def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) -> None:
+    def bool_text(value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return value
+
     mapping = [
         ("--chunk-seconds", getattr(ns, "chunk_seconds", None)),
         ("--chunk-overlap-seconds", getattr(ns, "chunk_overlap_seconds", None)),
@@ -394,6 +414,11 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-max-upload-mb", getattr(ns, "asr_max_upload_mb", None)),
         ("--asr-audio-track", getattr(ns, "asr_audio_track", None)),
         ("--asr-cloud-concurrency", getattr(ns, "asr_cloud_concurrency", None)),
+        ("--asr-prompt-profile", getattr(ns, "asr_prompt_profile", None)),
+        ("--asr-prompt-text", getattr(ns, "asr_prompt_text", None)),
+        ("--asr-prompt-enabled", bool_text(getattr(ns, "asr_prompt_enabled", None))),
+        ("--asr-prompt-include-previous-text", bool_text(getattr(ns, "asr_prompt_include_previous_text", None))),
+        ("--asr-prompt-max-chars", getattr(ns, "asr_prompt_max_chars", None)),
         ("--source-mode", getattr(ns, "source_mode", None)),
         ("--subtitle-track", getattr(ns, "subtitle_track", None)),
         ("--output-format", getattr(ns, "output_format", None)),
@@ -654,6 +679,19 @@ def _build_parser() -> argparse.ArgumentParser:
     provider_routing_p = provider_sub.add_parser("routing", help="Save primary/fallback provider routing")
     provider_routing_p.add_argument("--json-payload", required=True)
     provider_routing_p.add_argument("--json", action="store_true")
+
+    prompt_p = sub.add_parser("prompt", help="Manage prompt profiles")
+    prompt_sub = prompt_p.add_subparsers(dest="prompt_command", required=True)
+    asr_prompt_p = prompt_sub.add_parser("asr", help="Manage ASR prompt profiles")
+    asr_prompt_sub = asr_prompt_p.add_subparsers(dest="asr_prompt_command", required=True)
+    asr_prompt_list_p = asr_prompt_sub.add_parser("list", help="List ASR prompt profiles")
+    asr_prompt_list_p.add_argument("--json", action="store_true")
+    asr_prompt_save_p = asr_prompt_sub.add_parser("save", help="Save an ASR prompt profile")
+    asr_prompt_save_p.add_argument("--json-payload", required=True)
+    asr_prompt_save_p.add_argument("--json", action="store_true")
+    asr_prompt_delete_p = asr_prompt_sub.add_parser("delete", help="Delete an ASR prompt profile")
+    asr_prompt_delete_p.add_argument("--id", required=True)
+    asr_prompt_delete_p.add_argument("--json", action="store_true")
 
     auth_p = sub.add_parser("auth", help="Manage saved API credentials")
     auth_sub = auth_p.add_subparsers(dest="auth_command", required=True)
@@ -1041,6 +1079,21 @@ def main() -> None:
 
     if args.command == "provider" and args.provider_command == "routing":
         payload = save_provider_routing(root_dir=root, routing=_read_json_arg(args.json_payload))
+        _print_json(payload)
+        return
+
+    if args.command == "prompt" and args.prompt_command == "asr" and args.asr_prompt_command == "list":
+        payload = list_asr_prompt_profiles(root_dir=root)
+        _print_json(payload)
+        return
+
+    if args.command == "prompt" and args.prompt_command == "asr" and args.asr_prompt_command == "save":
+        payload = save_asr_prompt_profile(root_dir=root, profile=_read_json_arg(args.json_payload))
+        _print_json(payload)
+        return
+
+    if args.command == "prompt" and args.prompt_command == "asr" and args.asr_prompt_command == "delete":
+        payload = delete_asr_prompt_profile(root_dir=root, profile_id=args.id)
         _print_json(payload)
         return
 

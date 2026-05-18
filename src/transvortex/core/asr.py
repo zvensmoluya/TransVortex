@@ -80,7 +80,13 @@ class AsrEngine:
     def transcribe_segment(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
         return self.transcribe_segment_result(audio_path, segment_start_offset).rows
 
-    def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float) -> AsrTranscriptionResult:
+    def transcribe_segment_result(
+        self,
+        audio_path: Path,
+        segment_start_offset: float,
+        *,
+        prompt: str | None = None,
+    ) -> AsrTranscriptionResult:
         if self.mode == "local":
             return AsrTranscriptionResult(rows=self._transcribe_segment_local(audio_path, segment_start_offset))
         if self.mode == "cloud":
@@ -89,7 +95,7 @@ class AsrEngine:
                 audio_path,
                 segment_start_offset,
                 source_lang=self.source_lang,
-                prompt=self.prompt,
+                prompt=self.prompt if prompt is None else prompt,
                 root_dir=self.root_dir,
             )
         raise RuntimeError(f"Unsupported ASR mode: {self.mode}")

@@ -276,6 +276,35 @@ def test_config_show_json_masks_secret_values(tmp_path: Path, monkeypatch, capsy
     assert payload["custom_adapter_template"]["id"] == "custom_json"
 
 
+def test_prompt_asr_cli_save_and_list(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "prompt",
+            "asr",
+            "save",
+            "--json-payload",
+            json.dumps({"id": "anime", "name": "Anime", "text": "Names: Subaru", "active": True}),
+            "--json",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    assert saved["active_profile"] == "anime"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "prompt", "asr", "list", "--json"],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["profiles"][0]["text"] == "Names: Subaru"
+
+
 def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_config(tmp_path)
     captured = {}

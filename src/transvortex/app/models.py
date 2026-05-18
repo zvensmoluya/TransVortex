@@ -178,11 +178,25 @@ class AsrProviderRequestConfig:
 
 
 @dataclass
+class AsrPromptProfile:
+    id: str = ""
+    name: str = ""
+    scope: str = "project"
+    version: int = 1
+    path: str = ""
+    include_previous_text: bool = False
+    max_chars: int = 800
+    text: str = ""
+
+
+@dataclass
 class AsrPromptConfig:
     enabled: bool = True
     text: str = ""
     include_previous_text: bool = False
     max_chars: int = 800
+    active_profile: str = ""
+    profiles: list[AsrPromptProfile] = field(default_factory=list)
 
 
 @dataclass

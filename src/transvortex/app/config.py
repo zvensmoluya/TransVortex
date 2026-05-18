@@ -17,6 +17,7 @@ from .models import (
     AsrLocalConfig,
     AsrPreprocessingConfig,
     AsrPromptConfig,
+    AsrPromptProfile,
     AsrProviderConfig,
     AsrProviderRequestConfig,
     AsrSilenceChunkingConfig,
@@ -146,6 +147,65 @@ def _resolve_prompt_path(root_dir: Path, raw_path: Any) -> Path | None:
         return None
     path = Path(text)
     return path if path.is_absolute() else root_dir / path
+
+
+def _safe_read_text(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def _parse_asr_prompt_profiles(root_dir: Path, raw_profiles: Any) -> list[AsrPromptProfile]:
+    if not isinstance(raw_profiles, list):
+        return []
+    profiles: list[AsrPromptProfile] = []
+    seen: set[str] = set()
+    for item in raw_profiles:
+        if not isinstance(item, dict):
+            continue
+        profile_id = _to_str(item.get("id"), "").strip()
+        if not profile_id or profile_id in seen:
+            continue
+        seen.add(profile_id)
+        raw_path = _to_str(item.get("path"), "").strip()
+        prompt_path = _resolve_prompt_path(root_dir, raw_path)
+        prompt_root = (root_dir / "prompts" / "asr").resolve()
+        if prompt_path is not None and prompt_root not in prompt_path.resolve().parents:
+            prompt_path = None
+        profiles.append(
+            AsrPromptProfile(
+                id=profile_id,
+                name=_to_str(item.get("name"), profile_id),
+                scope=_to_str(item.get("scope"), "project"),
+                version=_to_int(item.get("version"), 1),
+                path=raw_path,
+                include_previous_text=_to_bool(item.get("include_previous_text"), False),
+                max_chars=_to_int(item.get("max_chars"), 800),
+                text=_safe_read_text(prompt_path) if prompt_path is not None else _to_str(item.get("text"), ""),
+            )
+        )
+    return profiles
+
+
+def _resolve_asr_prompt_config(root_dir: Path, asr_prompt_raw: dict[str, Any]) -> AsrPromptConfig:
+    profiles = _parse_asr_prompt_profiles(root_dir, asr_prompt_raw.get("profiles"))
+    active_profile = _to_str(asr_prompt_raw.get("active_profile"), "")
+    selected = next((item for item in profiles if item.id == active_profile), None)
+    text = _to_str(asr_prompt_raw.get("text"), "")
+    include_previous = _to_bool(asr_prompt_raw.get("include_previous_text"), False)
+    max_chars = _to_int(asr_prompt_raw.get("max_chars"), 800)
+    if selected is not None:
+        text = selected.text
+        include_previous = selected.include_previous_text
+        max_chars = selected.max_chars
+    return AsrPromptConfig(
+        enabled=_to_bool(asr_prompt_raw.get("enabled"), True),
+        text=text,
+        include_previous_text=include_previous,
+        max_chars=max_chars,
+        active_profile=active_profile,
+        profiles=profiles,
+    )
 
 
 def _infer_compat_mode(api_type: str) -> str:
@@ -658,12 +718,7 @@ def load_app_config(
                 min_upload_seconds=_to_float(cloud_trim_silence_raw.get("min_upload_seconds"), 0.5),
             )
         ),
-        asr_prompt=AsrPromptConfig(
-            enabled=_to_bool(asr_prompt_raw.get("enabled"), True),
-            text=_to_str(asr_prompt_raw.get("text"), ""),
-            include_previous_text=_to_bool(asr_prompt_raw.get("include_previous_text"), False),
-            max_chars=_to_int(asr_prompt_raw.get("max_chars"), 800),
-        ),
+        asr_prompt=_resolve_asr_prompt_config(root_dir, asr_prompt_raw),
         source_mode=_to_str(pip_yaml.get("source_mode"), "auto"),
         subtitle_track=_to_str(pip_yaml.get("subtitle_track"), "auto"),
     )
@@ -767,6 +822,24 @@ def load_app_config(
                 pipeline.asr_execution.cloud_concurrency,
                 pipeline.asr_execution.max_cloud_concurrency,
             )
+        elif key == "asr_prompt_profile":
+            profile_id = _to_str(value, pipeline.asr_prompt.active_profile)
+            pipeline.asr_prompt.active_profile = profile_id
+            selected_profile = next((item for item in pipeline.asr_prompt.profiles if item.id == profile_id), None)
+            if selected_profile is not None:
+                pipeline.asr_prompt.text = selected_profile.text
+                pipeline.asr_prompt.include_previous_text = selected_profile.include_previous_text
+                pipeline.asr_prompt.max_chars = selected_profile.max_chars
+        elif key == "asr_prompt_text":
+            pipeline.asr_prompt.text = _to_str(value, pipeline.asr_prompt.text)
+            if not cli_overrides.get("asr_prompt_profile"):
+                pipeline.asr_prompt.active_profile = ""
+        elif key == "asr_prompt_enabled":
+            pipeline.asr_prompt.enabled = _to_bool(value, pipeline.asr_prompt.enabled)
+        elif key == "asr_prompt_include_previous_text":
+            pipeline.asr_prompt.include_previous_text = _to_bool(value, pipeline.asr_prompt.include_previous_text)
+        elif key == "asr_prompt_max_chars":
+            pipeline.asr_prompt.max_chars = _to_int(value, pipeline.asr_prompt.max_chars)
         elif key == "source_mode":
             pipeline.source_mode = _to_str(value, pipeline.source_mode)
         elif key == "subtitle_track":

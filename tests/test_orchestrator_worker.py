@@ -435,6 +435,112 @@ providers:
     assert json.loads(source_lines[0])["start"] == 22.75
 
 
+def test_cloud_asr_previous_text_is_added_to_next_segment_prompt(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  prompt:
+    enabled: true
+    text: "Names: Subaru"
+    include_previous_text: true
+    max_chars: 400
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: fixed
+    window_seconds: 10
+    overlap_seconds: 0
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 20.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        second = segments_dir / "part_00001.wav"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+        return [
+            {"segment_index": 0, "start": 0.0, "duration": 10.0, "trusted_start": 0.0, "trusted_end": 10.0, "path": str(first)},
+            {"segment_index": 1, "start": 10.0, "duration": 10.0, "trusted_start": 10.0, "trusted_end": 20.0, "path": str(second)},
+        ]
+
+    def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(audio_path.read_bytes())
+        return {"enabled": False, "reason": "disabled", "upload_path": str(upload_path), "trim_start_seconds": 0.0, "skipped": False}
+
+    prompts: list[str | None] = []
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float, *, prompt: str | None = None):
+            prompts.append(prompt)
+            text = "Subaru arrives" if audio_path.name == "segment_00000.wav" else "Emilia answers"
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": text,
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"text": text},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.prepare_cloud_asr_audio_upload", fake_prepare)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="en",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    assert prompts[0] == "Names: Subaru"
+    assert "Names: Subaru" in str(prompts[1])
+    assert "Previous transcript:" in str(prompts[1])
+    assert "Subaru arrives" in str(prompts[1])
+
+
 def test_cloud_asr_retries_original_audio_when_trimmed_result_is_nonspeech(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)

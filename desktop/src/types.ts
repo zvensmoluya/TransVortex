@@ -64,6 +64,17 @@ export type ProviderPreset = ProviderTemplate & {
   protocol_template_id?: string;
 };
 
+export type AsrPromptProfile = {
+  id: string;
+  name: string;
+  scope: string;
+  version: number;
+  path: string;
+  include_previous_text: boolean;
+  max_chars: number;
+  text?: string;
+};
+
 export type FileVersion = { mtime_ns: number; size: number } | null;
 
 export type ConfigPayload = {
@@ -236,6 +247,12 @@ export type FormState = {
   asrCloudEnvKey: string;
   asrCloudCredentialId: string;
   asrCloudTimeoutSeconds: number;
+  asrPromptEnabled: boolean;
+  asrPromptProfile: string;
+  asrPromptName: string;
+  asrPromptText: string;
+  asrPromptIncludePreviousText: boolean;
+  asrPromptMaxChars: number;
   asrChunkingMode: "auto" | "fixed" | "none";
   chunkSeconds: number;
   chunkOverlapSeconds: number;
@@ -278,6 +295,12 @@ export const emptyForm: FormState = {
   asrCloudEnvKey: "TVX_MODEL_API_KEY",
   asrCloudCredentialId: "TVX_MODEL_API_KEY",
   asrCloudTimeoutSeconds: 120,
+  asrPromptEnabled: true,
+  asrPromptProfile: "",
+  asrPromptName: "",
+  asrPromptText: "",
+  asrPromptIncludePreviousText: false,
+  asrPromptMaxChars: 800,
   asrChunkingMode: "auto",
   chunkSeconds: 300,
   chunkOverlapSeconds: 30,

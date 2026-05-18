@@ -65,6 +65,7 @@ import type {
   DoctorPayload,
   DroppedFile,
   FormState,
+  AsrPromptProfile,
   ProviderConfig,
   ProviderDiagnostic,
   ProviderDraft,
@@ -145,6 +146,33 @@ function buildTranslationStylePrompt(projectPrompt: string, stylePrompt: string)
   return style;
 }
 
+function asrPromptProfiles(payload: ConfigPayload | null): AsrPromptProfile[] {
+  const prompt = objectValue(payload?.pipeline?.asr_prompt);
+  const rows = Array.isArray(prompt.profiles) ? prompt.profiles : [];
+  return rows
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({
+      id: String(item.id || ""),
+      name: String(item.name || item.id || ""),
+      scope: String(item.scope || "project"),
+      version: numberValue(item.version, 1),
+      path: String(item.path || ""),
+      include_previous_text: Boolean(item.include_previous_text),
+      max_chars: numberValue(item.max_chars, 800),
+      text: typeof item.text === "string" ? item.text : "",
+    }))
+    .filter((item) => item.id);
+}
+
+function nextAsrPromptId(profiles: AsrPromptProfile[]) {
+  const used = new Set(profiles.map((item) => item.id));
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `asr_prompt_${index}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `asr_prompt_${Date.now()}`;
+}
+
 function compactCountMap(value?: Record<string, number>) {
   return Object.entries(value || {})
     .filter(([, count]) => count > 0)
@@ -186,6 +214,8 @@ function App() {
     () => protocolTemplates(config).find((template) => template.id === providerTemplateId) || protocolTemplates(config).find((template) => template.compat_mode === providerDraft?.compat_mode),
     [config, providerDraft?.compat_mode, providerTemplateId],
   );
+
+  const asrProfiles = useMemo(() => asrPromptProfiles(config), [config]);
 
   const progress = useMemo(() => {
     const latest = [...events].reverse().find((event) => typeof event.progress === "number");
@@ -247,6 +277,10 @@ function App() {
       const asrLocal = objectValue(payload.pipeline.asr_local);
       const asrCloud = objectValue(payload.pipeline.asr_cloud);
       const asrChunking = objectValue(payload.pipeline.asr_chunking);
+      const asrPrompt = objectValue(payload.pipeline.asr_prompt);
+      const promptProfiles = asrPromptProfiles(payload);
+      const activeAsrPrompt = typeof asrPrompt.active_profile === "string" ? asrPrompt.active_profile : current.asrPromptProfile;
+      const activePromptProfile = promptProfiles.find((item) => item.id === activeAsrPrompt);
       const reflow = objectValue(subtitle.reflow);
       return {
         ...current,
@@ -262,6 +296,15 @@ function App() {
         asrCloudEnvKey: textValue(asrCloud.env_key, current.asrCloudEnvKey),
         asrCloudCredentialId: textValue(asrCloud.credential_id, current.asrCloudCredentialId),
         asrCloudTimeoutSeconds: numberValue(asrCloud.timeout_seconds, current.asrCloudTimeoutSeconds),
+        asrPromptEnabled: (asrPrompt.enabled as boolean | undefined) ?? current.asrPromptEnabled,
+        asrPromptProfile: activeAsrPrompt,
+        asrPromptName: activePromptProfile?.name || current.asrPromptName,
+        asrPromptText:
+          activePromptProfile?.text ?? (typeof asrPrompt.text === "string" ? asrPrompt.text : current.asrPromptText),
+        asrPromptIncludePreviousText:
+          activePromptProfile?.include_previous_text ??
+          ((asrPrompt.include_previous_text as boolean | undefined) ?? current.asrPromptIncludePreviousText),
+        asrPromptMaxChars: activePromptProfile?.max_chars ?? numberValue(asrPrompt.max_chars, current.asrPromptMaxChars),
         sourceMode: textValue(payload.pipeline.source_mode, current.sourceMode) as FormState["sourceMode"],
         subtitleTrack: textValue(payload.pipeline.subtitle_track, current.subtitleTrack),
         asrChunkingMode: textValue(asrChunking?.mode, current.asrChunkingMode) as FormState["asrChunkingMode"],
@@ -704,6 +747,82 @@ function App() {
     }
   }
 
+  function selectAsrPromptProfile(profileId: string) {
+    const profile = asrProfiles.find((item) => item.id === profileId);
+    update("asrPromptProfile", profileId);
+    if (profile) {
+      update("asrPromptName", profile.name);
+      update("asrPromptText", profile.text || "");
+      update("asrPromptIncludePreviousText", profile.include_previous_text);
+      update("asrPromptMaxChars", profile.max_chars);
+    }
+  }
+
+  function newAsrPromptProfile() {
+    const id = nextAsrPromptId(asrProfiles);
+    update("asrPromptProfile", id);
+    update("asrPromptName", `ASR Prompt ${asrProfiles.length + 1}`);
+    update("asrPromptText", "");
+    update("asrPromptIncludePreviousText", false);
+    update("asrPromptMaxChars", 800);
+  }
+
+  function duplicateAsrPromptProfile() {
+    const id = nextAsrPromptId(asrProfiles);
+    update("asrPromptProfile", id);
+    update("asrPromptName", `${form.asrPromptName || "ASR Prompt"} Copy`);
+  }
+
+  async function saveAsrPromptProfile() {
+    if (!form.asrPromptProfile.trim()) {
+      setError("ASR prompt profile id 不能为空。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await invoke("save_asr_prompt_profile", {
+        profile: {
+          id: form.asrPromptProfile.trim(),
+          name: form.asrPromptName.trim() || form.asrPromptProfile.trim(),
+          scope: "project",
+          version: asrProfiles.find((item) => item.id === form.asrPromptProfile)?.version || 1,
+          text: form.asrPromptText,
+          include_previous_text: form.asrPromptIncludePreviousText,
+          max_chars: form.asrPromptMaxChars,
+          enabled: form.asrPromptEnabled,
+          active: true,
+        },
+      });
+      setNotice("ASR prompt profile 已保存");
+      await refreshConfig();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAsrPromptProfile() {
+    if (!form.asrPromptProfile.trim()) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await invoke("delete_asr_prompt_profile", { profileId: form.asrPromptProfile.trim() });
+      setNotice("ASR prompt profile 已删除");
+      update("asrPromptProfile", "");
+      update("asrPromptName", "");
+      update("asrPromptText", "");
+      await refreshConfig();
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function fetchModels() {
     if (!providerDraft) return;
     setBusy(true);
@@ -777,6 +896,11 @@ function App() {
       asrCloudEnvKey: form.asrCloudEnvKey || null,
       asrCloudCredentialId: form.asrCloudCredentialId || null,
       asrCloudTimeoutSeconds: form.asrCloudTimeoutSeconds,
+      asrPromptProfile: form.asrPromptProfile || null,
+      asrPromptText: form.asrPromptText || null,
+      asrPromptEnabled: form.asrPromptEnabled,
+      asrPromptIncludePreviousText: form.asrPromptIncludePreviousText,
+      asrPromptMaxChars: form.asrPromptMaxChars,
       asrChunkingMode: form.asrChunkingMode || null,
       asrWindowSeconds: form.chunkSeconds,
       asrOverlapSeconds: form.chunkOverlapSeconds,
@@ -1031,6 +1155,12 @@ function App() {
           deleteRoutingProfile={deleteRoutingProfile}
           saveRouting={saveRouting}
           activateRoutingProfile={activateRoutingProfile}
+          asrProfiles={asrProfiles}
+          selectAsrPromptProfile={selectAsrPromptProfile}
+          newAsrPromptProfile={newAsrPromptProfile}
+          duplicateAsrPromptProfile={duplicateAsrPromptProfile}
+          saveAsrPromptProfile={saveAsrPromptProfile}
+          deleteAsrPromptProfile={deleteAsrPromptProfile}
           probe={probe}
           busy={busy}
         />
@@ -1547,6 +1677,12 @@ function ConfigPanel({
   deleteRoutingProfile,
   saveRouting,
   activateRoutingProfile,
+  asrProfiles,
+  selectAsrPromptProfile,
+  newAsrPromptProfile,
+  duplicateAsrPromptProfile,
+  saveAsrPromptProfile,
+  deleteAsrPromptProfile,
   probe,
   busy,
 }: {
@@ -1583,6 +1719,12 @@ function ConfigPanel({
   deleteRoutingProfile: (profileId: string) => void;
   saveRouting: () => void;
   activateRoutingProfile: (profileId: string) => void;
+  asrProfiles: AsrPromptProfile[];
+  selectAsrPromptProfile: (profileId: string) => void;
+  newAsrPromptProfile: () => void;
+  duplicateAsrPromptProfile: () => void;
+  saveAsrPromptProfile: () => void;
+  deleteAsrPromptProfile: () => void;
   probe: () => void;
   busy: boolean;
 }) {
@@ -2106,6 +2248,72 @@ function ConfigPanel({
             <input className="tvx-input" value={form.asrCloudCredentialId} onChange={(event) => update("asrCloudCredentialId", event.target.value)} />
           </label>
         </div>
+        <section className="mt-4 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <aside className="space-y-2">
+            <button className="tvx-btn w-full justify-start" onClick={newAsrPromptProfile} disabled={busy}>
+              <Plus size={16} /> 新建 ASR Prompt
+            </button>
+            <div className="grid max-h-[240px] gap-2 overflow-auto pr-1">
+              {asrProfiles.map((profile) => (
+                <button
+                  key={profile.id}
+                  className={`rounded-lg border p-3 text-left text-sm transition ${
+                    profile.id === form.asrPromptProfile ? "border-brand bg-emerald-50" : "border-line bg-white hover:bg-slate-50"
+                  }`}
+                  onClick={() => selectAsrPromptProfile(profile.id)}
+                  disabled={busy}
+                >
+                  <span className="block truncate font-semibold">{profile.name || profile.id}</span>
+                  <span className="mt-1 block truncate text-xs text-muted">{profile.id}</span>
+                  <span className="mt-2 block text-[11px] text-muted">
+                    {profile.include_previous_text ? "previous text" : "static"} · {profile.max_chars}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <div className="space-y-3">
+            <div className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_120px] gap-3">
+              <label className="tvx-label">
+                profile id
+                <input className="tvx-input" value={form.asrPromptProfile} onChange={(event) => update("asrPromptProfile", event.target.value)} />
+              </label>
+              <label className="tvx-label">
+                名称
+                <input className="tvx-input" value={form.asrPromptName} onChange={(event) => update("asrPromptName", event.target.value)} />
+              </label>
+              <label className="tvx-label">
+                max chars
+                <input className="tvx-input" type="number" min="0" value={form.asrPromptMaxChars} onChange={(event) => update("asrPromptMaxChars", Number(event.target.value))} />
+              </label>
+            </div>
+            <textarea
+              className="tvx-textarea min-h-32"
+              value={form.asrPromptText}
+              placeholder="角色名、专有名词、转写风格或上下文提示。"
+              onChange={(event) => update("asrPromptText", event.target.value)}
+            />
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input className="h-4 w-4" type="checkbox" checked={form.asrPromptEnabled} onChange={(event) => update("asrPromptEnabled", event.target.checked)} />
+                启用 ASR prompt
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input className="h-4 w-4" type="checkbox" checked={form.asrPromptIncludePreviousText} onChange={(event) => update("asrPromptIncludePreviousText", event.target.checked)} />
+                拼接上一段 transcript
+              </label>
+              <button className="tvx-btn" onClick={duplicateAsrPromptProfile} disabled={busy || !form.asrPromptProfile}>
+                <ClipboardList size={16} /> 复制
+              </button>
+              <button className="tvx-btn tvx-btn-primary" onClick={saveAsrPromptProfile} disabled={busy || !form.asrPromptProfile}>
+                <Save size={16} /> 保存
+              </button>
+              <button className="tvx-btn tvx-btn-danger" onClick={deleteAsrPromptProfile} disabled={busy || !form.asrPromptProfile}>
+                <Trash2 size={16} /> 删除
+              </button>
+            </div>
+          </div>
+        </section>
       </Panel>
     </div>
   );

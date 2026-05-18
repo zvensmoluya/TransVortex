@@ -69,9 +69,18 @@ def _parse_asr_rows(rows: list[dict], start_id: int) -> list[Segment]:
     return out
 
 
-def _transcribe_asr_segment(asr: Any, audio_path: Path, segment_start_offset: float) -> tuple[list[dict], dict | None]:
+def _transcribe_asr_segment(
+    asr: Any,
+    audio_path: Path,
+    segment_start_offset: float,
+    *,
+    prompt: str | None = None,
+) -> tuple[list[dict], dict | None]:
     if hasattr(asr, "transcribe_segment_result"):
-        result = asr.transcribe_segment_result(audio_path, segment_start_offset)
+        try:
+            result = asr.transcribe_segment_result(audio_path, segment_start_offset, prompt=prompt)
+        except TypeError:
+            result = asr.transcribe_segment_result(audio_path, segment_start_offset)
         return list(result.rows), result.raw_response
     return list(asr.transcribe_segment(audio_path, segment_start_offset)), None
 
@@ -248,6 +257,57 @@ def _write_asr_segment_artifacts(
     write_segment_asr_output(artifact_paths["rows"], filtered_rows)
 
 
+def _asr_previous_text(rows: list[dict]) -> str:
+    return " ".join(str(row.get("text") or "").strip() for row in rows if str(row.get("text") or "").strip()).strip()
+
+
+def _trim_asr_prompt(text: str, max_chars: int) -> str:
+    text = str(text or "").strip()
+    max_chars = max(int(max_chars), 0)
+    if max_chars and len(text) > max_chars:
+        return text[-max_chars:]
+    return text
+
+
+def _asr_segment_prompt(config: AppConfig, previous_text: str = "") -> str:
+    prompt = config.pipeline.asr_prompt
+    if not prompt.enabled:
+        return ""
+    max_chars = max(int(prompt.max_chars), 0)
+    base_text = str(prompt.text or "").strip()
+    if prompt.include_previous_text and previous_text.strip():
+        previous_section = "Previous transcript:\n" + previous_text.strip()
+        if base_text:
+            text = base_text + "\n\n" + previous_section
+            if max_chars and len(text) > max_chars:
+                remaining = max(max_chars - len(base_text) - 2, 0)
+                text = base_text
+                if remaining:
+                    text += "\n\n" + previous_section[-remaining:]
+            return _trim_asr_prompt(text, max_chars)
+        return _trim_asr_prompt(previous_section, max_chars)
+    return _trim_asr_prompt(base_text, max_chars)
+
+
+def _asr_uses_previous_text(config: AppConfig) -> bool:
+    prompt = config.pipeline.asr_prompt
+    return bool(prompt.enabled and prompt.include_previous_text)
+
+
+def _previous_asr_text_from_completed(items: list[dict], paths: dict[str, Path]) -> str:
+    if not items:
+        return ""
+    first_idx = min(int(item["segment_index"]) for item in items)
+    for idx in range(first_idx - 1, -1, -1):
+        rows_path = _asr_artifact_paths(paths, idx)["rows"]
+        if not _is_valid_json_list(rows_path):
+            continue
+        text = _asr_previous_text(read_json(rows_path))
+        if text:
+            return text
+    return ""
+
+
 def _process_asr_manifest_item(
     *,
     item: dict,
@@ -257,6 +317,7 @@ def _process_asr_manifest_item(
     task: TaskRecord | None = None,
     root_dir: Path | None = None,
     allow_split_retry: bool = True,
+    previous_text: str = "",
 ) -> dict[str, Any]:
     idx = int(item["segment_index"])
     artifact_paths = _asr_artifact_paths(paths, idx)
@@ -291,7 +352,8 @@ def _process_asr_manifest_item(
         transcribe_path = Path(preprocess_meta.get("upload_path") or audio_path)
         transcribe_offset += float(preprocess_meta.get("trim_start_seconds") or 0.0)
     try:
-        rows, raw_response = _transcribe_asr_segment(asr, transcribe_path, transcribe_offset)
+        segment_prompt = _asr_segment_prompt(config, previous_text)
+        rows, raw_response = _transcribe_asr_segment(asr, transcribe_path, transcribe_offset, prompt=segment_prompt)
     except Exception as exc:
         if (
             allow_split_retry
@@ -312,7 +374,12 @@ def _process_asr_manifest_item(
         raise
     if preprocess_meta is not None:
         if preprocess_meta.get("reason") == "trimmed" and _should_retry_cloud_asr_without_preprocess(rows):
-            fallback_rows, fallback_raw_response = _transcribe_asr_segment(asr, audio_path, float(item["start"]))
+            fallback_rows, fallback_raw_response = _transcribe_asr_segment(
+                asr,
+                audio_path,
+                float(item["start"]),
+                prompt=segment_prompt,
+            )
             if not _should_retry_cloud_asr_without_preprocess(fallback_rows):
                 preprocess_meta["fallback_used"] = True
                 preprocess_meta["fallback_reason"] = "preprocessed_asr_looked_empty_or_nonspeech"
@@ -379,6 +446,7 @@ def _retry_asr_manifest_item_with_subsegments(
     rows: list[dict] = []
     raw_children: list[dict] = []
     preprocess_children: list[dict] = []
+    child_previous_text = ""
     for child_idx, child in enumerate(child_manifest):
         child_item = dict(child)
         child_item["segment_index"] = child_idx
@@ -391,10 +459,16 @@ def _retry_asr_manifest_item_with_subsegments(
             task=task,
             root_dir=root_dir,
             allow_split_retry=False,
+            previous_text=child_previous_text,
         )
         child_rows_path = _asr_artifact_paths(retry_artifact_paths, int(child_item["segment_index"]))["rows"]
         if child_rows_path.exists():
-            rows.extend(read_json(child_rows_path))
+            child_rows = read_json(child_rows_path)
+            rows.extend(child_rows)
+            if _asr_uses_previous_text(config):
+                text = _asr_previous_text(child_rows)
+                if text:
+                    child_previous_text = text
         if child_result.get("raw_response") is not None:
             raw_children.append(child_result["raw_response"])
         if child_result.get("preprocess_meta") is not None:
@@ -464,6 +538,7 @@ def _run_asr_segments_serial(
     task: TaskRecord | None = None,
     root_dir: Path | None = None,
 ) -> None:
+    previous_text = _previous_asr_text_from_completed(items, paths) if _asr_uses_previous_text(config) else ""
     for item in items:
         _check_cancel(store, task_id)
         result = _process_asr_manifest_item(
@@ -473,6 +548,7 @@ def _run_asr_segments_serial(
             config=config,
             task=task,
             root_dir=root_dir,
+            previous_text=previous_text,
         )
         preprocess_meta = result.get("preprocess_meta")
         if isinstance(preprocess_meta, dict) and preprocess_meta.get("fallback_used"):
@@ -493,6 +569,10 @@ def _run_asr_segments_serial(
             total_segments=total_segments,
             skipped=bool(result.get("skipped")),
         )
+        if _asr_uses_previous_text(config) and not result.get("skipped"):
+            text = _asr_previous_text(list(result.get("rows") or []))
+            if text:
+                previous_text = text
 
 
 def _asr_item_upload_mb(item: dict) -> float:
@@ -621,16 +701,7 @@ def _run_asr_segments_concurrent(
 
 
 def _asr_prompt_text(config: AppConfig) -> str:
-    prompt = config.pipeline.asr_prompt
-    if not prompt.enabled:
-        return ""
-    text = str(prompt.text or "").strip()
-    if not text:
-        return ""
-    max_chars = max(int(prompt.max_chars), 0)
-    if max_chars and len(text) > max_chars:
-        return text[-max_chars:]
-    return text
+    return _asr_segment_prompt(config)
 
 
 def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
@@ -1709,7 +1780,7 @@ def _execute_task(
                     if idx in asr_done and _is_valid_json_list(artifact_paths["rows"]):
                         continue
                     pending_asr_items.append(item)
-                if config.pipeline.asr_mode == "cloud":
+                if config.pipeline.asr_mode == "cloud" and not _asr_uses_previous_text(config):
                     _run_asr_segments_concurrent(
                         items=pending_asr_items,
                         asr=asr,

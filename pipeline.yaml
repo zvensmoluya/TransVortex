@@ -83,6 +83,8 @@ asr:
     max_initial_timestamp: 30.0
   prompt:
     enabled: true
+    active_profile: ""
+    profiles: []
     text: ""
     include_previous_text: false
     max_chars: 800

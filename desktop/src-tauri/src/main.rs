@@ -37,6 +37,11 @@ struct StartTaskRequest {
     asr_cloud_env_key: Option<String>,
     asr_cloud_credential_id: Option<String>,
     asr_cloud_timeout_seconds: Option<u32>,
+    asr_prompt_profile: Option<String>,
+    asr_prompt_text: Option<String>,
+    asr_prompt_enabled: Option<bool>,
+    asr_prompt_include_previous_text: Option<bool>,
+    asr_prompt_max_chars: Option<u32>,
     asr_chunking_mode: Option<String>,
     asr_window_seconds: Option<u32>,
     asr_overlap_seconds: Option<u32>,
@@ -76,6 +81,11 @@ struct ResumeTaskRequest {
     asr_cloud_env_key: Option<String>,
     asr_cloud_credential_id: Option<String>,
     asr_cloud_timeout_seconds: Option<u32>,
+    asr_prompt_profile: Option<String>,
+    asr_prompt_text: Option<String>,
+    asr_prompt_enabled: Option<bool>,
+    asr_prompt_include_previous_text: Option<bool>,
+    asr_prompt_max_chars: Option<u32>,
     asr_chunking_mode: Option<String>,
     asr_window_seconds: Option<u32>,
     asr_overlap_seconds: Option<u32>,
@@ -249,6 +259,15 @@ fn push_asr_source_args(args: &mut Vec<String>, request: &StartTaskRequest) {
     push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
     push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
     push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
+    push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
+    push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
+    push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
+    push_bool_arg(
+        args,
+        "--asr-prompt-include-previous-text",
+        request.asr_prompt_include_previous_text,
+    );
+    push_num_arg(args, "--asr-prompt-max-chars", request.asr_prompt_max_chars);
     push_arg(args, "--source-mode", &request.source_mode);
     push_arg(args, "--subtitle-track", &request.subtitle_track);
 }
@@ -257,6 +276,15 @@ fn push_resume_asr_source_args(args: &mut Vec<String>, request: &ResumeTaskReque
     push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
     push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
     push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
+    push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
+    push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
+    push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
+    push_bool_arg(
+        args,
+        "--asr-prompt-include-previous-text",
+        request.asr_prompt_include_previous_text,
+    );
+    push_num_arg(args, "--asr-prompt-max-chars", request.asr_prompt_max_chars);
     push_arg(args, "--source-mode", &request.source_mode);
     push_arg(args, "--subtitle-track", &request.subtitle_track);
 }
@@ -414,6 +442,34 @@ fn delete_provider_config(app: AppHandle, name: String, expected_version: Option
         args.push("--expected-version".into());
         args.push(value_arg(&version)?);
     }
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
+fn save_asr_prompt_profile(app: AppHandle, profile: Value) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let args = vec![
+        "prompt".into(),
+        "asr".into(),
+        "save".into(),
+        "--json-payload".into(),
+        value_arg(&profile)?,
+        "--json".into(),
+    ];
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
+fn delete_asr_prompt_profile(app: AppHandle, profile_id: String) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let args = vec![
+        "prompt".into(),
+        "asr".into(),
+        "delete".into(),
+        "--id".into(),
+        profile_id,
+        "--json".into(),
+    ];
     run_worker_json(&root, &args)
 }
 
@@ -738,6 +794,8 @@ fn main() {
             probe_provider,
             save_provider_config,
             delete_provider_config,
+            save_asr_prompt_profile,
+            delete_asr_prompt_profile,
             fetch_provider_models,
             test_provider_connection,
             save_provider_routing,
