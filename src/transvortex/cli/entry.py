@@ -104,6 +104,9 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "translation_repair_enabled": getattr(args, "translation_repair_enabled", None),
         "translation_batching_mode": getattr(args, "translation_batching_mode", None),
         "translation_min_chunk_lines": getattr(args, "translation_min_chunk_lines", None),
+        "translation_chunking_mode": getattr(args, "translation_chunking_mode", None),
+        "translation_experiment_logging_enabled": getattr(args, "translation_experiment_logging_enabled", None),
+        "translation_experiment_label": getattr(args, "translation_experiment_label", None),
         "provider_timeout_seconds": getattr(args, "provider_timeout_seconds", None),
         "provider_retry": getattr(args, "provider_retry", None),
         "provider_http2": getattr(args, "provider_http2", None),
@@ -237,6 +240,9 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--translation-repair-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--translation-batching-mode", choices=["fixed", "adaptive"], default=None)
     subparser.add_argument("--translation-min-chunk-lines", type=int, default=None)
+    subparser.add_argument("--translation-chunking-mode", choices=["capacity_aware", "fixed"], default=None)
+    subparser.add_argument("--translation-experiment-logging-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--translation-experiment-label", default=None)
     subparser.add_argument("--provider-timeout-seconds", type=int, default=None)
     subparser.add_argument("--provider-retry", type=int, default=None)
     subparser.add_argument("--provider-http2", choices=["true", "false"], default=None)
@@ -430,6 +436,9 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--translation-repair-enabled", getattr(ns, "translation_repair_enabled", None)),
         ("--translation-batching-mode", getattr(ns, "translation_batching_mode", None)),
         ("--translation-min-chunk-lines", getattr(ns, "translation_min_chunk_lines", None)),
+        ("--translation-chunking-mode", getattr(ns, "translation_chunking_mode", None)),
+        ("--translation-experiment-logging-enabled", getattr(ns, "translation_experiment_logging_enabled", None)),
+        ("--translation-experiment-label", getattr(ns, "translation_experiment_label", None)),
         ("--provider-timeout-seconds", getattr(ns, "provider_timeout_seconds", None)),
         ("--provider-retry", getattr(ns, "provider_retry", None)),
         ("--provider-http2", getattr(ns, "provider_http2", None)),

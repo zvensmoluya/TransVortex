@@ -11,7 +11,14 @@ from transvortex.core.chunking import number_and_chunk_segments, plan_translatio
 from transvortex.app.models import AppConfig, CapabilityConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig, Segment
 
 
-def _planner_config(tmp_path, *, max_batch_lines: int = 1000, recommended_output_tokens: int = 0, max_output_tokens: int = 0) -> AppConfig:
+def _planner_config(
+    tmp_path,
+    *,
+    max_batch_lines: int = 1000,
+    recommended_output_tokens: int = 0,
+    max_output_tokens: int = 0,
+    max_context_tokens: int = 0,
+) -> AppConfig:
     provider = ProviderConfig(
         name="p1",
         api_type="openai-compatible",
@@ -20,6 +27,7 @@ def _planner_config(tmp_path, *, max_batch_lines: int = 1000, recommended_output
         models=["m1"],
         capabilities=CapabilityConfig(
             max_batch_lines=max_batch_lines,
+            max_context_tokens=max_context_tokens,
             recommended_output_tokens=recommended_output_tokens,
             max_output_tokens=max_output_tokens,
         ),
@@ -101,7 +109,9 @@ def test_capacity_planner_keeps_short_input_in_single_chunk(tmp_path) -> None:
 
     chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 
-    assert warnings == []
+    assert [warning["message"] for warning in warnings] == [
+        "Input token budget disabled for providers without max_context_tokens"
+    ]
     assert len(chunks) == 1
     assert chunks[0].segment_ids == list(range(1, 40))
 
@@ -123,6 +133,101 @@ def test_capacity_planner_respects_provider_max_batch_lines(tmp_path) -> None:
 
     assert all(len(chunk.segment_ids) <= 180 for chunk in chunks)
     assert warnings[0]["details"]["effective_max_chunk_lines"] == 180
+
+
+def test_capacity_planner_uses_route_minimum_batch_lines(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_batch_lines=1000)
+    fallback = ProviderConfig(
+        name="p2",
+        api_type="openai-compatible",
+        base_url="https://fallback.example/v1",
+        env_key="KEY2",
+        models=["m2"],
+        capabilities=CapabilityConfig(max_batch_lines=90),
+    )
+    config.providers["p2"] = fallback
+    config.routing.fallback = [RouteTarget(provider="p2", model="m2")]
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 241)]
+
+    chunks, warnings = plan_translation_chunks(config, segments, [config.providers["p1"], fallback])
+
+    assert all(len(chunk.segment_ids) <= 90 for chunk in chunks)
+    assert any(warning["details"]["effective_max_chunk_lines"] == 90 for warning in warnings)
+
+
+def test_capacity_planner_disables_input_budget_when_route_context_unknown(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_batch_lines=1000, max_context_tokens=120)
+    fallback = ProviderConfig(
+        name="p2",
+        api_type="openai-compatible",
+        base_url="https://fallback.example/v1",
+        env_key="KEY2",
+        models=["m2"],
+        capabilities=CapabilityConfig(max_batch_lines=1000, max_context_tokens=0),
+    )
+    config.providers["p2"] = fallback
+    config.routing.fallback = [RouteTarget(provider="p2", model="m2")]
+    config.pipeline.memory.enabled = False
+    config.pipeline.translation.context_after_lines = 1
+    config.pipeline.translation.chunking.min_chunk_lines = 1
+    config.pipeline.translation.chunking.target_chunk_lines = 1
+    config.pipeline.translation.chunking.max_chunk_lines = 1
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src="line") for i in range(1, 4)]
+
+    chunks, warnings = plan_translation_chunks(config, segments, [config.providers["p1"], fallback])
+
+    assert chunks[0].meta["max_input_tokens"] == 0
+    assert chunks[0].context_after == ["[2] line"]
+    assert any("p2" in warning["details"]["providers"] for warning in warnings)
+
+
+def test_capacity_planner_trims_context_to_input_budget(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_context_tokens=180)
+    config.pipeline.memory.enabled = False
+    config.pipeline.translation.style_prompt = ""
+    config.pipeline.translation.system_prompt = ""
+    config.pipeline.translation.chunking.input_safety_ratio = 1.0
+    config.pipeline.translation.chunking.prompt_overhead_tokens = 80
+    config.pipeline.translation.chunking.min_chunk_lines = 2
+    config.pipeline.translation.chunking.target_chunk_lines = 2
+    config.pipeline.translation.chunking.max_chunk_lines = 2
+    config.pipeline.translation.context_before_lines = 4
+    config.pipeline.translation.context_after_lines = 4
+    segments = [
+        Segment(id=i, start=float(i), end=float(i + 1), text_src=("上下文" * 8 if i != 5 else "target"))
+        for i in range(1, 10)
+    ]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    middle = chunks[2]
+    assert middle.lines == ["[5] target", "[6] 上下文上下文上下文上下文上下文上下文上下文上下文"]
+    assert len(middle.context_before) < 4 or len(middle.context_after) < 3
+    assert middle.meta["dropped_context_before_lines"] + middle.meta["dropped_context_after_lines"] > 0
+
+
+def test_capacity_planner_reserves_memory_budget(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_context_tokens=260)
+    config.pipeline.translation.chunking.input_safety_ratio = 1.0
+    config.pipeline.translation.chunking.prompt_overhead_tokens = 80
+    config.pipeline.translation.chunking.memory_entry_tokens = 40
+    config.pipeline.translation.chunking.min_chunk_lines = 1
+    config.pipeline.translation.chunking.target_chunk_lines = 1
+    config.pipeline.translation.chunking.max_chunk_lines = 1
+    config.pipeline.translation.context_before_lines = 3
+    config.pipeline.translation.context_after_lines = 3
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src="context line words") for i in range(1, 5)]
+
+    config.pipeline.memory.enabled = False
+    no_memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+    config.pipeline.memory.enabled = True
+    config.pipeline.memory.inject.max_entries_per_chunk = 3
+    memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert memory_chunks[1].meta["memory_reserved_tokens"] > 0
+    assert len(memory_chunks[1].context_before) + len(memory_chunks[1].context_after) < (
+        len(no_memory_chunks[1].context_before) + len(no_memory_chunks[1].context_after)
+    )
 
 
 def test_capacity_planner_prefers_pause_sentence_boundary(tmp_path) -> None:

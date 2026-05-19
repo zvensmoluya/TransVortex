@@ -167,6 +167,79 @@ def test_adaptive_translation_splits_retryable_chunk(monkeypatch, tmp_path) -> N
     assert any(event["mode"] == "adaptive_split" for event in events)
 
 
+def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.batching.mode = "adaptive"
+    config.pipeline.translation.batching.min_chunk_lines = 1
+    config.pipeline.translation.chunking.input_safety_ratio = 1.0
+    config.pipeline.translation.chunking.prompt_overhead_tokens = 40
+    config.providers["p1"].capabilities.max_context_tokens = 90
+    chunk = Chunk(
+        chunk_id="c00000",
+        segment_ids=[1, 2, 3, 4],
+        lines=["[1] A", "[2] B", "[3] C", "[4] D"],
+        context_before=["[0] " + "before " * 30],
+        context_after=["[5] " + "after " * 30],
+    )
+    seen_context_lengths: dict[str, int] = {}
+
+    class BatchLimitClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            first_id = int(req.lines[0].split("]", 1)[0].strip("["))
+            chunk_key = "c00000" if len(req.lines) == 4 else ("c00000s0" if first_id == 1 else "c00000s1")
+            seen_context_lengths[chunk_key] = len(req.context_before) + len(req.context_after)
+            if len(req.lines) == 4:
+                raise RuntimeError("batch too large: 4 > 2")
+            return NormalizedResponse(
+                numbered_lines=[line.split("]", 1)[0] + "] ok" for line in req.lines],
+                raw_text="\n".join(line.split("]", 1)[0] + "] ok" for line in req.lines),
+            )
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: BatchLimitClient(provider))
+
+    results = translate_chunk_adaptive(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1"]
+    assert seen_context_lengths["c00000s0"] < 2
+    assert seen_context_lengths["c00000s1"] < 2
+
+
+def test_translate_chunk_treats_many_missing_rows_as_capacity_failure(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.repair.enabled = True
+    chunk = Chunk(
+        chunk_id="c00000",
+        segment_ids=list(range(1, 31)),
+        lines=[f"[{idx}] line {idx}" for idx in range(1, 31)],
+    )
+
+    class MissingRowsClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            return NormalizedResponse(
+                numbered_lines=[f"[{idx}] ok {idx}" for idx in range(1, 25)],
+                raw_text="\n".join(f"[{idx}] ok {idx}" for idx in range(1, 25)),
+            )
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: MissingRowsClient(provider))
+
+    try:
+        translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
+    except RuntimeError as exc:
+        assert "response truncated" in str(exc)
+    else:
+        raise AssertionError("expected capacity-style missing-row failure")
+
+
 def test_adaptive_translation_respects_min_chunk_lines(monkeypatch, tmp_path) -> None:
     provider = ProviderConfig(
         name="p1",

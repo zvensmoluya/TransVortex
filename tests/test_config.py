@@ -93,6 +93,87 @@ routing:
     assert capabilities.output_token_param == "max_completion_tokens"
 
 
+def test_translation_chunking_budget_fields_load_from_yaml(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation:
+  chunking:
+    input_safety_ratio: 0.75
+    prompt_overhead_tokens: 900
+    memory_entry_tokens: 55
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(root_dir=tmp_path)
+    chunking = cfg.pipeline.translation.chunking
+
+    assert chunking.input_safety_ratio == 0.75
+    assert chunking.prompt_overhead_tokens == 900
+    assert chunking.memory_entry_tokens == 55
+
+
+def test_translation_experiment_logging_loads_from_yaml(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation:
+  experiment_logging:
+    enabled: true
+    save_raw_text: false
+    save_metrics: true
+    label: pilot
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(root_dir=tmp_path)
+    logging = cfg.pipeline.translation.experiment_logging
+
+    assert logging.enabled is True
+    assert logging.save_raw_text is False
+    assert logging.save_metrics is True
+    assert logging.label == "pilot"
+
+    cfg2 = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "translation_chunking_mode": "fixed",
+            "translation_experiment_logging_enabled": "false",
+            "translation_experiment_label": "override",
+        },
+    )
+
+    assert cfg2.pipeline.translation.chunking.mode == "fixed"
+    assert cfg2.pipeline.translation.experiment_logging.enabled is False
+    assert cfg2.pipeline.translation.experiment_logging.label == "override"
+
+
 def test_cli_overrides_provider_limits_and_memory_patch(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

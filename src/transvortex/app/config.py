@@ -51,6 +51,7 @@ from .models import (
     TranslationBatchingConfig,
     TranslationChunkingConfig,
     TranslationConfig,
+    TranslationExperimentLoggingConfig,
 )
 from ..prompts import load_prompt
 from .credentials import read_dotenv_values
@@ -512,6 +513,7 @@ def load_app_config(
     asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
     translation_chunking_raw = translation_raw.get("chunking") or {}
     batching_raw = translation_raw.get("batching") or {}
+    experiment_logging_raw = translation_raw.get("experiment_logging") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
         context_before_lines=_to_int(translation_raw.get("context_before_lines"), 80),
@@ -538,11 +540,20 @@ def load_app_config(
             soft_boundary=_to_bool(translation_chunking_raw.get("soft_boundary"), True),
             target_output_tokens=_to_int(translation_chunking_raw.get("target_output_tokens"), 0),
             hard_output_tokens=_to_int(translation_chunking_raw.get("hard_output_tokens"), 0),
+            input_safety_ratio=_to_float(translation_chunking_raw.get("input_safety_ratio"), 0.85),
+            prompt_overhead_tokens=_to_int(translation_chunking_raw.get("prompt_overhead_tokens"), 1200),
+            memory_entry_tokens=_to_int(translation_chunking_raw.get("memory_entry_tokens"), 80),
         ),
         batching=TranslationBatchingConfig(
             mode=_to_str(batching_raw.get("mode"), "adaptive"),
             min_chunk_lines=_to_int(batching_raw.get("min_chunk_lines"), 20),
             grow_after_successes=_to_int(batching_raw.get("grow_after_successes"), 3),
+        ),
+        experiment_logging=TranslationExperimentLoggingConfig(
+            enabled=_to_bool(experiment_logging_raw.get("enabled"), False),
+            save_raw_text=_to_bool(experiment_logging_raw.get("save_raw_text"), True),
+            save_metrics=_to_bool(experiment_logging_raw.get("save_metrics"), True),
+            label=_to_str(experiment_logging_raw.get("label"), ""),
         ),
     )
     subtitle_raw = pip_yaml.get("subtitle") or {}
@@ -758,11 +769,20 @@ def load_app_config(
             pipeline.translation.batching.mode = _to_str(value, pipeline.translation.batching.mode)
         elif key == "translation_min_chunk_lines":
             pipeline.translation.batching.min_chunk_lines = _to_int(value, pipeline.translation.batching.min_chunk_lines)
+        elif key == "translation_chunking_mode":
+            pipeline.translation.chunking.mode = _to_str(value, pipeline.translation.chunking.mode)
         elif key == "translation_asr_uncertainty_hints_enabled":
             pipeline.translation.asr_uncertainty_hints.enabled = _to_bool(
                 value,
                 pipeline.translation.asr_uncertainty_hints.enabled,
             )
+        elif key == "translation_experiment_logging_enabled":
+            pipeline.translation.experiment_logging.enabled = _to_bool(
+                value,
+                pipeline.translation.experiment_logging.enabled,
+            )
+        elif key == "translation_experiment_label":
+            pipeline.translation.experiment_logging.label = _to_str(value, pipeline.translation.experiment_logging.label)
         elif key == "provider_timeout_seconds":
             pipeline.timeout_seconds = _to_int(value, pipeline.timeout_seconds)
         elif key == "provider_retry":

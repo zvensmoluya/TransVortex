@@ -1367,8 +1367,68 @@ def _translation_row_for_artifact(row: dict) -> dict:
     return {
         key: value
         for key, value in row.items()
-        if key not in {"validation", "repairs"}
+        if key not in {"validation", "repairs", "raw_text", "usage", "raw_text_chars", "request"}
     }
+
+
+def _write_translation_experiment_artifacts(config: AppConfig, paths: dict[str, Path], row: dict[str, Any]) -> None:
+    logging_config = config.pipeline.translation.experiment_logging
+    if not logging_config.enabled:
+        return
+    chunk_id = str(row.get("chunk_id") or "unknown")
+    raw_rel = ""
+    if logging_config.save_raw_text and isinstance(row.get("raw_text"), str):
+        raw_dir = paths["translate"] / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / f"{chunk_id}.raw.txt"
+        raw_path.write_text(row.get("raw_text") or "", encoding="utf-8")
+        raw_rel = str(raw_path.relative_to(paths["base"]))
+    if not logging_config.save_metrics:
+        return
+    provider_meta = row.get("provider_meta") if isinstance(row.get("provider_meta"), dict) else {}
+    request_meta = row.get("request") if isinstance(row.get("request"), dict) else {}
+    chunk_meta = request_meta.get("chunk_meta") if isinstance(request_meta.get("chunk_meta"), dict) else {}
+    validation = row.get("validation") if isinstance(row.get("validation"), dict) else {}
+    metrics = {
+        "chunk_id": chunk_id,
+        "experiment_label": logging_config.label,
+        "provider": row.get("provider", ""),
+        "model": row.get("model", ""),
+        "compat_mode": row.get("compat_mode", ""),
+        "line_count": request_meta.get("line_count", len(row.get("rows") or [])),
+        "context_before_lines": request_meta.get("context_before_lines"),
+        "context_after_lines": request_meta.get("context_after_lines"),
+        "memory_entries": request_meta.get("memory_entries"),
+        "memory_prompt_chars": request_meta.get("memory_prompt_chars"),
+        "raw_text_chars": row.get("raw_text_chars", len(str(row.get("raw_text") or ""))),
+        "raw_text_path": raw_rel,
+        "usage": row.get("usage") if isinstance(row.get("usage"), dict) else {},
+        "provider_meta": {
+            key: provider_meta.get(key)
+            for key in [
+                "transport",
+                "http_version",
+                "streaming",
+                "request_started_at",
+                "first_byte_at",
+                "last_chunk_at",
+                "elapsed_ms",
+                "bytes_received",
+                "compat_mode",
+                "base_url",
+            ]
+            if provider_meta.get(key) is not None
+        },
+        "chunk_meta": chunk_meta,
+        "validation": {
+            "issue_count": len(validation.get("issues") or []),
+            "issues": validation.get("issues") or [],
+        },
+        "repairs": len(row.get("repairs") or []),
+        "errors": row.get("errors") or [],
+        "adaptive_parent_chunk": row.get("adaptive_parent_chunk", ""),
+    }
+    append_jsonl(paths["translate"] / "metrics.jsonl", metrics)
 
 
 def _translate_all_chunks_accepts_progress_callback() -> bool:
@@ -1947,7 +2007,7 @@ def _execute_task(
             chunks, chunking_warnings = plan_translation_chunks(
                 config,
                 all_segments,
-                _primary_translation_provider(config),
+                _translation_route_providers(config),
             )
         else:
             effective_chunk_lines, chunking_warnings = _effective_initial_chunk_lines(config, len(all_segments))
@@ -2008,6 +2068,7 @@ def _execute_task(
             progress_callback=translation_progress,
         ):
             _check_cancel(store, task_id)
+            _write_translation_experiment_artifacts(config, paths, row)
             append_jsonl(translated_file, _translation_row_for_artifact(row))
             append_jsonl(validation_file, row.get("validation", {"chunk_id": row.get("chunk_id"), "issues": []}))
             for repair in row.get("repairs", []):

@@ -247,6 +247,17 @@ class TranslationChunkingConfig:
     soft_boundary: bool = True
     target_output_tokens: int = 0
     hard_output_tokens: int = 0
+    input_safety_ratio: float = 0.85
+    prompt_overhead_tokens: int = 1200
+    memory_entry_tokens: int = 80
+
+
+@dataclass
+class TranslationExperimentLoggingConfig:
+    enabled: bool = False
+    save_raw_text: bool = True
+    save_metrics: bool = True
+    label: str = ""
 
 
 @dataclass
@@ -262,6 +273,7 @@ class TranslationConfig:
     asr_uncertainty_hints: AsrUncertaintyHintsConfig = field(default_factory=AsrUncertaintyHintsConfig)
     chunking: TranslationChunkingConfig = field(default_factory=TranslationChunkingConfig)
     batching: TranslationBatchingConfig = field(default_factory=TranslationBatchingConfig)
+    experiment_logging: TranslationExperimentLoggingConfig = field(default_factory=TranslationExperimentLoggingConfig)
 
 
 @dataclass
@@ -444,6 +456,7 @@ class Chunk:
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)
     asr_uncertain_ids: list[int] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

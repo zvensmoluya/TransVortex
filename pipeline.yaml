@@ -38,10 +38,18 @@ translation:
     soft_boundary: true
     target_output_tokens: 0
     hard_output_tokens: 0
+    input_safety_ratio: 0.85
+    prompt_overhead_tokens: 1200
+    memory_entry_tokens: 80
   batching:
     mode: adaptive
     min_chunk_lines: 20
     grow_after_successes: 3
+  experiment_logging:
+    enabled: false
+    save_raw_text: true
+    save_metrics: true
+    label: ""
   style_preset: subtitle_natural
   refusal_detection:
     enabled: true

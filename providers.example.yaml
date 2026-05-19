@@ -30,7 +30,11 @@ providers:
       supports_temperature: true
       supports_json_mode: false
       max_batch_lines: 1000
+      # max_context_tokens is used by translation chunk planning to reserve
+      # enough input window for prompts, memory, context, and source lines.
       max_context_tokens: 0
+      # max_output_tokens is sent to the provider when supported; recommended_output_tokens
+      # is a softer planning target for normal chunk size.
       max_output_tokens: 32768
       recommended_output_tokens: 16384
       output_token_param: ""

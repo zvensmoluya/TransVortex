@@ -4,7 +4,14 @@ import json
 import shutil
 from pathlib import Path
 
-from transvortex.core.orchestrator import create_pipeline_task, resume_pipeline, run_pipeline, task_status_json
+from transvortex.core.orchestrator import (
+    _write_translation_experiment_artifacts,
+    create_pipeline_task,
+    resume_pipeline,
+    run_pipeline,
+    task_status_json,
+)
+from transvortex.app.config import load_app_config
 from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
 
@@ -191,6 +198,68 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
     assert len(FakeAsrEngine.calls) == 2
     checkpoint = json.loads((task_dir / "checkpoint.json").read_text(encoding="utf-8"))
     assert "error" not in checkpoint
+
+
+def test_translation_experiment_artifacts_write_raw_and_metrics(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        (root / "pipeline.yaml").read_text(encoding="utf-8")
+        + """
+translation:
+  experiment_logging:
+    enabled: true
+    save_raw_text: true
+    save_metrics: true
+    label: unit-pilot
+        """,
+        encoding="utf-8",
+    )
+    config = load_app_config(root_dir=root)
+    store = TaskStore(root / "artifacts")
+    task_id, _ = create_pipeline_task(
+        root_dir=root,
+        input_file=root / "segments.jsonl",
+        source_lang="en",
+        target_lang="zh-CN",
+        status="INIT",
+    )
+    paths = {
+        "base": store.task_dir(task_id),
+        "translate": store.task_dir(task_id) / "translate",
+    }
+    row = {
+        "chunk_id": "c00000",
+        "provider": "p1",
+        "model": "m1",
+        "compat_mode": "openai_chat",
+        "raw_text": "[1] 你好",
+        "raw_text_chars": 6,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "provider_meta": {"elapsed_ms": 123, "bytes_received": 456, "streaming": True},
+        "request": {
+            "line_count": 1,
+            "context_before_lines": 2,
+            "context_after_lines": 3,
+            "memory_entries": 0,
+            "memory_prompt_chars": 0,
+            "chunk_meta": {"estimated_input_tokens": 30},
+        },
+        "validation": {"chunk_id": "c00000", "issues": []},
+        "repairs": [],
+        "errors": [],
+    }
+
+    _write_translation_experiment_artifacts(config, paths, row)
+
+    raw_file = store.task_dir(task_id) / "translate" / "raw" / "c00000.raw.txt"
+    metrics_file = store.task_dir(task_id) / "translate" / "metrics.jsonl"
+    assert raw_file.read_text(encoding="utf-8") == "[1] 你好"
+    metrics = [json.loads(line) for line in metrics_file.read_text(encoding="utf-8").splitlines()]
+    assert metrics[0]["experiment_label"] == "unit-pilot"
+    assert metrics[0]["raw_text_path"] == "translate\\raw\\c00000.raw.txt" or metrics[0]["raw_text_path"] == "translate/raw/c00000.raw.txt"
+    assert metrics[0]["usage"]["output_tokens"] == 20
+    assert metrics[0]["provider_meta"]["elapsed_ms"] == 123
 
 
 def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_path: Path, monkeypatch) -> None:

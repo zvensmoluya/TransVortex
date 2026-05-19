@@ -1,4 +1,49 @@
 providers:
+  - name: deepseek
+    api_type: openai-compatible
+    compat_mode: openai_chat
+    base_url: https://api.deepseek.com
+    env_key: DEEPSEEK_API_KEY
+    credential_id: deepseek
+    models:
+      - deepseek-v4-pro
+    auth:
+      type: bearer
+      header_name: Authorization
+      prefix: "Bearer "
+    endpoint:
+      path_template: /chat/completions
+      method: POST
+    request_mapping:
+      style: openai_chat
+      body_overrides:
+        thinking:
+          type: enabled
+        reasoning_effort: high
+    response_mapping:
+      text_paths:
+        - choices[0].message.content
+    capabilities:
+      supports_system_prompt: true
+      supports_temperature: false
+      supports_json_mode: true
+      max_batch_lines: 1000
+      max_context_tokens: 1000000
+      max_output_tokens: 384000
+      recommended_output_tokens: 32768
+    limits:
+      concurrency: 4
+      timeout_seconds: 300
+      retry: 3
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 300
+      write_timeout_seconds: 60
+      pool_timeout_seconds: 5
+      max_connections: 10
+      max_keepalive_connections: 5
+      http2: true
+      streaming_enabled: true
+
   - name: zven_openai_responses
     api_type: openai-compatible
     compat_mode: openai_responses
@@ -43,6 +88,6 @@ providers:
 
 routing:
   primary:
-    provider: zven_openai_responses
-    model: gpt-5.5
+    provider: deepseek
+    model: deepseek-v4-pro
   fallback: []

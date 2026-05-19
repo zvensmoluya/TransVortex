@@ -15,6 +15,7 @@ from ..memory.patcher import generate_memory_patch
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
 from ..providers import build_provider_client, classify_error
+from .chunking import translation_prompt_overhead_tokens, trim_context_for_budget
 from .translation_validation import (
     ParsedTranslationRow,
     TranslationValidationIssue,
@@ -77,6 +78,18 @@ _RETRYABLE_SPLIT_ERRORS = {
     "bad_gateway",
     "service_unavailable",
     "provider_server_error",
+}
+
+_CAPACITY_SPLIT_MARKERS = {
+    "batch too large",
+    "context length",
+    "maximum context",
+    "max context",
+    "too many tokens",
+    "token limit",
+    "maximum tokens",
+    "response truncated",
+    "truncated",
 }
 
 
@@ -182,18 +195,72 @@ def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
         chunk_id=f"{chunk.chunk_id}s0",
         segment_ids=left_ids,
         lines=left_lines,
-        context_after=right_lines + chunk.context_after,
+        context_after=chunk.context_after,
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in left_ids],
+        meta={**dict(chunk.meta or {}), "adaptive_split": "left", "adaptive_sibling_lines": len(right_lines)},
     )
     right = replace(
         chunk,
         chunk_id=f"{chunk.chunk_id}s1",
         segment_ids=right_ids,
         lines=right_lines,
-        context_before=chunk.context_before + left_lines,
+        context_before=chunk.context_before,
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in right_ids],
+        meta={**dict(chunk.meta or {}), "adaptive_split": "right", "adaptive_sibling_lines": len(left_lines)},
     )
     return left, right
+
+
+def _route_providers(config: AppConfig) -> list:
+    providers = []
+    for route in [config.routing.primary] + list(config.routing.fallback):
+        provider = config.providers.get(route.provider)
+        if provider is not None:
+            providers.append(provider)
+    return providers
+
+
+def _max_input_tokens_for_routes(config: AppConfig) -> int:
+    providers = _route_providers(config)
+    if providers and any(int(provider.capabilities.max_context_tokens or 0) <= 0 for provider in providers):
+        return 0
+    limits = [
+        int(provider.capabilities.max_context_tokens)
+        for provider in providers
+        if int(provider.capabilities.max_context_tokens or 0) > 0
+    ]
+    if not limits:
+        return 0
+    safety = float(config.pipeline.translation.chunking.input_safety_ratio)
+    safety = max(0.1, min(1.0, safety))
+    return max(1, int(min(limits) * safety))
+
+
+def _runtime_chunk_for_request(config: AppConfig, chunk: Chunk, memory_prompt: str) -> Chunk:
+    max_input_tokens = _max_input_tokens_for_routes(config)
+    prompt_overhead = translation_prompt_overhead_tokens(config)
+    before, after, budget_meta = trim_context_for_budget(
+        lines=chunk.lines,
+        context_before=chunk.context_before,
+        context_after=chunk.context_after,
+        max_input_tokens=max_input_tokens,
+        prompt_overhead_tokens=prompt_overhead,
+        memory_prompt=memory_prompt,
+    )
+    if before == chunk.context_before and after == chunk.context_after and not chunk.meta:
+        return chunk
+    meta = dict(chunk.meta or {})
+    meta.update(
+        {
+            "runtime_estimated_input_tokens": budget_meta["estimated_input_tokens"],
+            "runtime_max_input_tokens": max_input_tokens,
+            "runtime_context_before_lines": len(before),
+            "runtime_context_after_lines": len(after),
+            "runtime_dropped_context_before_lines": len(chunk.context_before) - len(before),
+            "runtime_dropped_context_after_lines": len(chunk.context_after) - len(after),
+        }
+    )
+    return replace(chunk, context_before=before, context_after=after, meta=meta)
 
 
 def _partition_chunk_to_target_lines(chunk: Chunk, target_lines: int) -> list[Chunk]:
@@ -220,6 +287,9 @@ def _build_adaptive_batch_state(config: AppConfig) -> AdaptiveBatchState:
 
 def _retryable_split_failure(exc: Exception) -> bool:
     text = str(exc)
+    lowered = text.lower()
+    if any(marker in lowered for marker in _CAPACITY_SPLIT_MARKERS):
+        return True
     return any(f"'error_type': '{item}'" in text or f'"error_type": "{item}"' in text or item in text for item in _RETRYABLE_SPLIT_ERRORS)
 
 
@@ -461,6 +531,14 @@ def _repair_rows(
     return repaired_validation, repair_artifacts, repair_errors
 
 
+def _too_many_capacity_validation_errors(chunk: Chunk, validation: TranslationValidationResult) -> bool:
+    capacity_codes = {"missing_id", "empty_translation"}
+    count = sum(1 for issue in validation.errors if issue.code in capacity_codes)
+    if count < 5:
+        return False
+    return count / max(len(chunk.segment_ids), 1) >= 0.2
+
+
 def translate_chunk(
     config: AppConfig,
     chunk: Chunk,
@@ -487,11 +565,12 @@ def translate_chunk(
         retries = max(1, provider.limits.retry)
         for attempt in range(retries):
             try:
+                request_chunk = _runtime_chunk_for_request(config, chunk, memory_prompt)
                 _notify_progress(
                     progress_callback,
                     mode="translate",
-                    chunk_id=chunk.chunk_id,
-                    segment_ids=chunk.segment_ids,
+                    chunk_id=request_chunk.chunk_id,
+                    segment_ids=request_chunk.segment_ids,
                     provider=route.provider,
                     model=route.model,
                     attempt=attempt + 1,
@@ -500,7 +579,7 @@ def translate_chunk(
                 )
                 req = _base_request(
                     config=config,
-                    chunk=chunk,
+                    chunk=request_chunk,
                     source_lang=source_lang,
                     target_lang=target_lang,
                     model=route.model,
@@ -509,15 +588,20 @@ def translate_chunk(
                 response = client.translate_request(req)
                 validation = _validate(
                     config,
-                    chunk,
+                    request_chunk,
                     numbered_lines=response.numbered_lines,
                     raw_text=response.raw_text,
                 )
                 if validation.has_chunk_errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
+                if _too_many_capacity_validation_errors(request_chunk, validation):
+                    raise RuntimeError(
+                        "response truncated: too many missing or empty translation rows "
+                        f"({len(validation.errors)}/{len(request_chunk.segment_ids)})"
+                    )
                 validation, repairs, repair_errors = _repair_rows(
                     config=config,
-                    chunk=chunk,
+                    chunk=request_chunk,
                     source_lang=source_lang,
                     target_lang=target_lang,
                     provider_name=route.provider,
@@ -533,8 +617,8 @@ def translate_chunk(
                 _notify_progress(
                     progress_callback,
                     mode="translate",
-                    chunk_id=chunk.chunk_id,
-                    segment_ids=chunk.segment_ids,
+                    chunk_id=request_chunk.chunk_id,
+                    segment_ids=request_chunk.segment_ids,
                     provider=route.provider,
                     model=route.model,
                     attempt=attempt + 1,
@@ -543,7 +627,7 @@ def translate_chunk(
                     provider_meta=provider_meta,
                 )
                 return {
-                    "chunk_id": chunk.chunk_id,
+                    "chunk_id": request_chunk.chunk_id,
                     "provider": route.provider,
                     "model": route.model,
                     "compat_mode": provider.compat_mode,
@@ -552,6 +636,19 @@ def translate_chunk(
                     "http_version": provider_meta.get("http_version", ""),
                     "streaming": bool(provider_meta.get("streaming", False)),
                     "provider_meta": provider_meta,
+                    "usage": dict(response.usage or {}),
+                    "raw_text": response.raw_text,
+                    "raw_text_chars": len(response.raw_text or ""),
+                    "request": {
+                        "source_lang": source_lang,
+                        "target_lang": target_lang,
+                        "line_count": len(request_chunk.lines),
+                        "context_before_lines": len(request_chunk.context_before),
+                        "context_after_lines": len(request_chunk.context_after),
+                        "memory_entries": memory_prompt.count(" => "),
+                        "memory_prompt_chars": len(memory_prompt or ""),
+                        "chunk_meta": dict(request_chunk.meta or {}),
+                    },
                     "rows": _rows_to_dicts(validation.rows),
                     "validation": validation_to_json(validation),
                     "repairs": repairs,
