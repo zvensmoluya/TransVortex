@@ -123,6 +123,8 @@ def bootstrap_memory(
             payload["provider"] = route.provider
             payload["model"] = route.model
             payload["raw_text"] = response.raw_text
+            payload["usage"] = dict(getattr(response, "usage", {}) or {})
+            payload["provider_meta"] = dict(getattr(response, "provider_meta", {}) or {})
             payload["status"] = "completed"
             patch = patch_from_payload(payload)
             store.append_patch({"bootstrap": True, **payload})
