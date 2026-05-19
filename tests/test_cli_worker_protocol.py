@@ -446,6 +446,8 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["status"] == "QUEUED"
+    assert payload["detached"] is True
+    assert payload["terminal"] is False
     assert payload["command"] == "run"
     assert Path(payload["task_dir"]).parts[-2:] == ("artifacts", payload["task_id"])
     assert payload["worker"]["pid"] == 4321
@@ -692,6 +694,46 @@ def test_run_json_failure_outputs_single_structured_error(tmp_path: Path, monkey
     payload = json.loads(capsys.readouterr().out)
     assert payload["task_id"] == "t_error"
     assert payload["error_info"]["code"] == "missing_env"
+
+
+def test_asr_json_status_print_failure_keeps_structured_task_error(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    task = TaskRecord(
+        task_id="asr_done",
+        input_file="demo.mp4",
+        source_lang="en",
+        target_lang="en",
+        bilingual=False,
+        status="DONE",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:00+00:00",
+    )
+    store.save_task(task)
+
+    def fail_task_load(*_args, **_kwargs):
+        raise OSError("stdout unavailable")
+
+    monkeypatch.setattr("transvortex.cli.entry.run_pipeline", lambda **_kwargs: task.task_id)
+    monkeypatch.setattr("transvortex.cli.entry._task_and_artifacts", fail_task_load)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "asr", "--input", "demo.mp4", "--src", "en", "--json"],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected failure exit")
+
+    raw = capsys.readouterr()
+    payload = json.loads(raw.out)
+    assert raw.err == ""
+    assert payload["ok"] is False
+    assert payload["task_id"] == "asr_done"
+    assert payload["error_info"]["code"] == "runtime_error"
 
 
 def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, capsys) -> None:

@@ -26,7 +26,9 @@ transvortex run --input video.mp4 --src en --tgt zh-CN --detach --json
 ```
 
 The response contains `task_id`, `task_dir`, worker `pid`, worker log paths, and
-recommended follow-up commands. Then stream task events:
+recommended follow-up commands. It is a queued receipt, not a terminal task
+result; `terminal: false` means the agent must stream events or poll status.
+Then stream task events:
 
 ```powershell
 transvortex events --task-id <task_id> --follow

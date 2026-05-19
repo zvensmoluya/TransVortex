@@ -1384,6 +1384,53 @@ def test_resume_rebuilds_missing_asr_artifact_even_if_checkpoint_says_done(tmp_p
     assert FakeAsrEngine.calls.count("part_00000.wav") == 2
 
 
+def test_asr_task_keeps_done_status_if_done_event_sink_fails(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr("transvortex.core.orchestrator.importlib.util.find_spec", lambda name: object())
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 1.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        first.write_bytes(b"one")
+        return [{"segment_index": 0, "start": 0.0, "duration": 1.0, "trusted_start": 0.0, "trusted_end": 1.0, "path": str(first)}]
+
+    FakeAsrEngine.calls = []
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeAsrEngine)
+    original_append_event = TaskStore.append_event
+
+    def flaky_append_event(self, task_id: str, event_type: str, *args, **kwargs):
+        if event_type == "done":
+            raise RuntimeError("stdout closed")
+        return original_append_event(self, task_id, event_type, *args, **kwargs)
+
+    monkeypatch.setattr(TaskStore, "append_event", flaky_append_event)
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="zh-CN",
+        input_type="video_asr",
+    )
+
+    store = TaskStore(root / "artifacts")
+    task = store.load_task(task_id)
+    assert task.status == "DONE"
+    assert task.output_paths["segments"].endswith("segments.normalized.jsonl")
+
+
 def test_resume_migrates_legacy_asr_segments_to_source_artifact(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)

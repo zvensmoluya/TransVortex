@@ -497,6 +497,9 @@ def _detach_response(
         "ok": True,
         "task_id": task_id,
         "status": "QUEUED",
+        "detached": True,
+        "terminal": False,
+        "message": "Task queued; follow events or status for the terminal result.",
         "task_dir": str(task_dir),
         "worker": worker,
         "next_commands": {
@@ -518,6 +521,15 @@ def _print_task_json(root: Path, providers_file: Path | None, task_id: str, *, c
     task, artifacts_dir = _task_and_artifacts(root, providers_file, task_id)
     payload = _task_payload(task, artifacts_dir) if capability is None else _capability_payload(capability, task, artifacts_dir)
     _print_json(payload)
+
+
+def _print_task_json_or_exit(root: Path, providers_file: Path | None, task_id: str, *, capability: str | None = None) -> None:
+    _run_or_exit(
+        lambda: _print_task_json(root, providers_file, task_id, capability=capability),
+        json_mode=True,
+        stream_events=False,
+        task_id_hint=task_id,
+    )
 
 
 def _handle_pipeline_error(
@@ -879,7 +891,7 @@ def main() -> None:
 
         task_id = _run_or_exit(do_run, json_mode=args.json, stream_events=args.stream_events)
         if args.json:
-            _print_task_json(root, providers_file, task_id)
+            _print_task_json_or_exit(root, providers_file, task_id)
         elif not args.stream_events:
             print(task_id)
         else:
@@ -941,7 +953,7 @@ def main() -> None:
 
         task_id = _run_or_exit(do_resume, json_mode=args.json, stream_events=args.stream_events)
         if args.json:
-            _print_task_json(root, providers_file, task_id)
+            _print_task_json_or_exit(root, providers_file, task_id)
         elif not args.stream_events:
             print(task_id)
         else:
@@ -1276,7 +1288,7 @@ def main() -> None:
             stream_events=False,
         )
         if args.json:
-            _print_task_json(root, providers_file, task_id, capability="asr")
+            _print_task_json_or_exit(root, providers_file, task_id, capability="asr")
         else:
             print(task_id)
         return
@@ -1336,7 +1348,7 @@ def main() -> None:
             stream_events=False,
         )
         if args.json:
-            _print_task_json(root, providers_file, task_id, capability="translate")
+            _print_task_json_or_exit(root, providers_file, task_id, capability="translate")
         else:
             print(task_id)
         return

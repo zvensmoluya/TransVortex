@@ -2206,6 +2206,11 @@ def _execute_task(
         )
         raise PipelineTaskError(task_id, err) from exc
     except Exception as exc:
+        try:
+            if store.load_task(task_id).status == "DONE":
+                return
+        except Exception:
+            pass
         err = classify_exception(exc, stage=str(checkpoint.get("status", task.status)))
         store.update_task_status(task_id, "FAILED", error=str(exc), error_info=err)
         checkpoint["status"] = "FAILED"

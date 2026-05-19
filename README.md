@@ -138,7 +138,7 @@ transvortex auth set openai_asr
 
 运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-model`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、chunk 设置、batch size 和并发。
 
-`run`、`resume`、`asr`、`translate` 是长任务。`--json` 不带 `--detach` 时只会在任务结束后输出一个 JSON；如果需要立即拿到 `task_id`，使用 `--detach --json`，再用 `status --task-id <id> --json` 和 `events --task-id <id> --follow` 跟踪进度。
+`run`、`resume`、`asr`、`translate` 是长任务。`--json` 不带 `--detach` 时只会在任务结束后输出一个 JSON；如果需要立即拿到 `task_id`，使用 `--detach --json`。detached JSON 只是排队回执，不是最终结果；再用 `status --task-id <id> --json` 和 `events --task-id <id> --follow` 跟踪进度。
 
 ## 任务工件
 

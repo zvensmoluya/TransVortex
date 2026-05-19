@@ -27,6 +27,7 @@ def agent_info_payload() -> dict:
                 "supports_stream_events": True,
                 "supports_detach": True,
                 "immediate_task_id": "use --detach --json",
+                "detach_response": "queued receipt only; terminal=false; follow events or status for final result",
                 "json_timing": "without --detach, JSON is printed only after the task reaches a terminal state",
             },
             "resume": {
@@ -35,6 +36,7 @@ def agent_info_payload() -> dict:
                 "supports_stream_events": True,
                 "supports_detach": True,
                 "immediate_task_id": "use --detach --json",
+                "detach_response": "queued receipt only; terminal=false; follow events or status for final result",
                 "json_timing": "without --detach, JSON is printed only after the task reaches a terminal state",
             },
             "asr": {
@@ -42,6 +44,7 @@ def agent_info_payload() -> dict:
                 "supports_json": True,
                 "supports_detach": True,
                 "immediate_task_id": "use --detach --json",
+                "detach_response": "queued receipt only; terminal=false; follow events or status for final result",
                 "json_timing": "without --detach, JSON is printed only after the task reaches a terminal state",
             },
             "translate": {
@@ -49,6 +52,7 @@ def agent_info_payload() -> dict:
                 "supports_json": True,
                 "supports_detach": True,
                 "immediate_task_id": "use --detach --json",
+                "detach_response": "queued receipt only; terminal=false; follow events or status for final result",
                 "json_timing": "without --detach, JSON is printed only after the task reaches a terminal state",
             },
             "export": {"long_running": False, "supports_json": True},
@@ -149,6 +153,7 @@ def agent_info_payload() -> dict:
             "Do not parse human-formatted output.",
             "Use --json for single-response commands.",
             "For long-running commands, --json without --detach returns only after terminal status; use --detach --json to get task_id immediately.",
+            "A detached JSON response is a queued receipt, not a terminal task result; treat terminal=false as a requirement to follow events or poll status.",
             "Use --stream-events or events --follow for long-running task progress.",
             "Read artifacts only from task_dir returned by JSON status or detach response.",
             "Never expect secret values in config or agent-info output.",
