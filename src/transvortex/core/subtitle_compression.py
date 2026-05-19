@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
-from ..app.models import AppConfig, NormalizedRequest, Segment, SubtitleQualityConfig
+from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQualityConfig
+from ..memory.injector import build_memory_prompt
+from ..memory.selector import select_memory_entries
+from ..memory.store import MemoryStore
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import subtitle_cps
 from .translation_validation import strip_numbered_text
@@ -40,6 +44,7 @@ def _compress_segment(
     provider_name: str,
     model: str,
     quality: SubtitleQualityConfig,
+    memory_prompt: str = "",
 ) -> tuple[Segment | None, list[dict[str, Any]]]:
     provider = config.providers[provider_name]
     client = build_provider_client(provider)
@@ -56,6 +61,7 @@ def _compress_segment(
                 context_before=[f"Source: {seg.text_src}", f"Max target characters: {budget}"],
                 context_after=[],
                 style_prompt=COMPRESSION_STYLE_PROMPT,
+                memory_prompt=memory_prompt,
                 prompt_mode="compress",
                 repair_reason=f"subtitle cps {subtitle_cps(seg):.1f} exceeds hard maximum {quality.hard_max_cps}",
                 bad_translation=seg.text_tgt or "",
@@ -99,6 +105,7 @@ def compress_overlong_subtitles(
     segments: list[Segment],
     source_lang: str,
     target_lang: str,
+    memory_dir: Path | None = None,
 ) -> tuple[list[Segment], list[dict[str, Any]]]:
     if not config.pipeline.subtitle.compression.enabled:
         return segments, []
@@ -106,9 +113,23 @@ def compress_overlong_subtitles(
     route_candidates = [config.routing.primary] + list(config.routing.fallback)
     output = list(segments)
     artifacts: list[dict[str, Any]] = []
+    memory_document = None
+    if memory_dir and config.pipeline.memory.enabled:
+        memory_document = MemoryStore(memory_dir).load_effective()
     for idx, seg in enumerate(output):
         if subtitle_cps(seg) <= quality.hard_max_cps:
             continue
+        memory_prompt = ""
+        if memory_document is not None:
+            chunk = Chunk(
+                chunk_id=f"compress_{seg.id}",
+                segment_ids=[seg.id],
+                lines=[f"[{seg.id}] {seg.text_src}"],
+                context_before=[],
+                context_after=[],
+            )
+            selected = select_memory_entries(memory_document, chunk, config.pipeline.memory.inject)
+            memory_prompt = build_memory_prompt(selected, config.pipeline.memory.inject)
         row_errors: list[dict[str, Any]] = []
         compressed: Segment | None = None
         for route in route_candidates:
@@ -132,6 +153,7 @@ def compress_overlong_subtitles(
                 provider_name=route.provider,
                 model=route.model,
                 quality=quality,
+                memory_prompt=memory_prompt,
             )
             row_errors.extend(errors)
             if compressed is not None:

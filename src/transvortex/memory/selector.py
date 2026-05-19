@@ -6,15 +6,61 @@ from ..app.models import Chunk, MemoryInjectConfig
 from .schema import MEMORY_STATUS_ORDER, MemoryDocument, MemoryEntry, entry_alias_details
 
 
-def _entry_terms(entry: MemoryEntry) -> list[str]:
-    variant_sources = [variant.source for variant in entry.target_variants]
-    alias_sources = [alias.source for alias in entry_alias_details(entry)]
-    return [term for term in [entry.source, *alias_sources, *variant_sources] if term.strip()]
+GENERIC_FORMS = {
+    "ここ",
+    "そこ",
+    "あそこ",
+    "これ",
+    "それ",
+    "あれ",
+    "この塔",
+    "その塔",
+    "あの塔",
+    "この場所",
+    "その場所",
+    "彼",
+    "彼女",
+    "this place",
+    "that place",
+    "this tower",
+    "that tower",
+    "here",
+    "there",
+}
+
+STATUS_SCORE = {"locked": 1000, "confirmed": 700, "proposed": 120}
+CONSTRAINT_SCORE = {"must_use": 400, "preferred": 180, "hint": 30}
+ZONE_SCORE = {"lines": 1.0, "context_before": 0.45, "context_after": 0.35}
+KIND_SCORE = {
+    "source": 320,
+    "nickname": 340,
+    "honorific": 340,
+    "asr_error": 280,
+    "spelling": 240,
+    "full_name": 240,
+    "phrase_fragment": 60,
+    "broad_hint": 40,
+}
+
+
+def _entry_terms(entry: MemoryEntry) -> list[tuple[str, str, bool]]:
+    terms: list[tuple[str, str, bool]] = []
+    if entry.source.strip():
+        terms.append((entry.source, "source", False))
+    for alias in entry_alias_details(entry):
+        terms.append((alias.source, alias.kind, False))
+    for variant in entry.target_variants:
+        terms.append((variant.source, variant.kind, True))
+    return [term for term in terms if term[0].strip()]
+
+
+def is_generic_form(term: str) -> bool:
+    return " ".join(str(term or "").strip().casefold().split()) in GENERIC_FORMS
 
 
 def term_matches_text(term: str, text: str) -> bool:
     term = term.strip()
-    if not term:
+    if not term or is_generic_form(term):
         return False
     if len(term) <= 2 and term.isascii() and term.isalnum():
         return False
@@ -27,7 +73,7 @@ def term_matches_text(term: str, text: str) -> bool:
 
 
 def entry_matches_text(entry: MemoryEntry, text: str) -> bool:
-    return any(term_matches_text(term, text) for term in _entry_terms(entry))
+    return any(term_matches_text(term, text) for term, _kind, _has_variant in _entry_terms(entry))
 
 
 def _normalized_strategy(value: str) -> str:
@@ -44,6 +90,41 @@ def _allowed_statuses(inject_config: MemoryInjectConfig) -> set[str]:
     if inject_config.proposed:
         allowed.add("proposed")
     return allowed
+
+
+def _chunk_zones(chunk: Chunk) -> dict[str, str]:
+    return {
+        "lines": "\n".join(chunk.lines),
+        "context_before": "\n".join(chunk.context_before),
+        "context_after": "\n".join(chunk.context_after),
+    }
+
+
+def _entry_match_score(entry: MemoryEntry, chunk: Chunk) -> int:
+    score = STATUS_SCORE.get(entry.status, 0)
+    score += CONSTRAINT_SCORE.get(entry.constraint, 0)
+    score += int(entry.priority)
+    score += int(float(entry.confidence or 0.0) * 100)
+    for zone, text in _chunk_zones(chunk).items():
+        if not text:
+            continue
+        zone_weight = ZONE_SCORE.get(zone, 0.0)
+        for term, kind, has_variant in _entry_terms(entry):
+            if is_generic_form(term):
+                score -= 260
+                continue
+            if not term_matches_text(term, text):
+                continue
+            score += int(KIND_SCORE.get(kind, KIND_SCORE["source"]) * zone_weight)
+            if has_variant:
+                score += int(120 * zone_weight)
+            if kind == "asr_error":
+                score += int(60 * zone_weight)
+            if kind in {"broad_hint", "phrase_fragment"}:
+                score -= int(60 * (1.0 - zone_weight))
+    if entry.memory_type == "concept_hint":
+        score -= 40
+    return score
 
 
 def _should_include_entry(
@@ -93,6 +174,7 @@ def select_memory_entries(
     ]
     matches.sort(
         key=lambda entry: (
+            -_entry_match_score(entry, chunk),
             MEMORY_STATUS_ORDER.get(entry.status, 99),
             -int(entry.priority),
             -float(entry.confidence),

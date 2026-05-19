@@ -9,6 +9,7 @@ from transvortex.memory.checker import check_consistency
 from transvortex.memory.injector import build_memory_prompt
 from transvortex.memory.merger import merge_patch, patch_from_payload
 from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, MemoryTargetVariant
+from transvortex.memory.schema import entry_from_dict
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
 from transvortex.memory.bootstrapper import bootstrap_memory
@@ -79,6 +80,41 @@ def test_memory_store_load_effective_combines_presets_and_runtime_with_preset_pr
     assert [entry.source for entry in store.load_runtime().entries] == ["subaru", "Alpha"]
 
 
+def test_memory_schema_v11_roundtrip_optional_fields() -> None:
+    entry = entry_from_dict(
+        {
+            "id": "mem_beatrice",
+            "source": "ベアトリス",
+            "target": "碧翠丝",
+            "status": "proposed",
+            "confidence_breakdown": {"source": 0.9, "target": "0.7", "bad": "x"},
+            "provenance": [{"kind": "bootstrap", "source_evidence": "source_only"}],
+            "scope": {"source_lang": "ja", "target_lang": "zh-CN"},
+            "variant_of": "",
+            "variant_of_entry_id": "mem_parent",
+            "enforcement_policy": {"translation": "preferred", "qa": "warning"},
+            "target_variants": [
+                {
+                    "source": "ベア子",
+                    "target": "贝子",
+                    "kind": "nickname",
+                    "confidence": 0.86,
+                    "speaker_scope": {"speaker": "スバル"},
+                    "notes": "affectionate",
+                }
+            ],
+        }
+    )
+
+    assert entry.confidence_breakdown == {"source": 0.9, "target": 0.7}
+    assert entry.provenance[0]["kind"] == "bootstrap"
+    assert entry.scope["target_lang"] == "zh-CN"
+    assert entry.variant_of_entry_id == "mem_parent"
+    assert entry.enforcement_policy["translation"] == "preferred"
+    assert entry.target_variants[0].speaker_scope == {"speaker": "スバル"}
+    assert entry.target_variants[0].notes == "affectionate"
+
+
 def test_selector_and_injector_group_relevant_entries() -> None:
     doc = MemoryDocument(
         entries=[
@@ -98,10 +134,10 @@ def test_selector_and_injector_group_relevant_entries() -> None:
     selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=3))
     assert [entry.source for entry in selected] == ["Subaru", "The Order", "Mercury"]
     prompt = build_memory_prompt(selected)
-    assert "LOCKED TERMS" in prompt
-    assert "Subaru => 斯巴鲁" in prompt
-    assert "CONFIRMED MEMORY" in prompt
-    assert "PROPOSED HINTS" in prompt
+    assert "MUST_USE" in prompt
+    assert "Subaru -> 斯巴鲁" in prompt
+    assert "PREFERRED" in prompt
+    assert "Mercury -> 墨丘利" in prompt
 
 
 def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
@@ -151,13 +187,13 @@ def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
     prompt = build_memory_prompt(selected)
 
     assert [entry.source for entry in selected] == ["エミリア", "スバル", "死者の書"]
-    assert "LOCKED TERMS" in prompt
-    assert "ADDRESS VARIANTS" in prompt
-    assert "エミリアタン => 爱蜜莉雅碳; canonical: エミリア => 爱蜜莉雅; kind: nickname" in prompt
-    assert "ASR CORRECTION HINTS" in prompt
-    assert "スヴァル => 昴; canonical: スバル; kind: asr_error" in prompt
-    assert "CONCEPT HINTS" in prompt
-    assert "死者の過去を追体験する本 => 死者之书; canonical: 死者の書; kind: broad_hint" in prompt
+    assert "MUST_USE" in prompt
+    assert "ADDRESS_VARIANTS" in prompt
+    assert "variant: エミリアタン -> 爱蜜莉雅碳" in prompt
+    assert "ASR_CORRECTIONS" in prompt
+    assert "observed: スヴァル | intended: スバル | target: 昴" in prompt
+    assert "WEAK_HINTS" in prompt
+    assert "hint: 死者の過去を追体験する本 | canonical: 死者の書" in prompt
 
 
 def test_selector_avoids_short_or_embedded_false_matches() -> None:
@@ -177,6 +213,27 @@ def test_selector_avoids_short_or_embedded_false_matches() -> None:
     assert [entry.source for entry in selected] == ["The Order"]
 
 
+def test_selector_demotes_generic_aliases() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="1",
+                source="大図書館プレイアデス",
+                target="普雷阿得斯大图书馆",
+                status="proposed",
+                alias_details=[MemoryAlias(source="この塔", kind="broad_hint")],
+                constraint="hint",
+            ),
+            MemoryEntry(id="2", source="スバル", target="昴", status="locked"),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] この塔でスバルを待つ"])
+
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+
+    assert [entry.source for entry in selected] == ["スバル"]
+
+
 def test_selector_matches_cjk_terms_without_word_boundaries() -> None:
     doc = MemoryDocument(
         entries=[
@@ -193,7 +250,7 @@ def test_selector_matches_cjk_terms_without_word_boundaries() -> None:
 
     selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
 
-    assert [entry.source for entry in selected] == ["スバル", "エミリア"]
+    assert {entry.source for entry in selected} == {"スバル", "エミリア"}
 
 
 def test_selector_balanced_injects_strong_memory_without_match() -> None:
@@ -327,6 +384,10 @@ def test_merger_preserves_v2_alias_details_and_target_variants() -> None:
                     "constraint": "preferred",
                     "alias_details": [{"source": "エミリアたん", "kind": "nickname"}],
                     "target_variants": [{"source": "エミリアたん", "target": "爱蜜莉雅碳", "kind": "nickname"}],
+                    "confidence_breakdown": {"source": 0.9},
+                    "provenance": [{"kind": "patch"}],
+                    "scope": {"episode_id": "s04e05"},
+                    "enforcement_policy": {"translation": "preferred", "qa": "warning"},
                     "evidence_ids": [1],
                 }
             ],
@@ -346,6 +407,10 @@ def test_merger_preserves_v2_alias_details_and_target_variants() -> None:
     ]
     assert entry.memory_type == "entity"
     assert entry.constraint == "preferred"
+    assert entry.confidence_breakdown == {"source": 0.9}
+    assert entry.provenance == [{"kind": "patch"}]
+    assert entry.scope == {"episode_id": "s04e05"}
+    assert entry.enforcement_policy == {"translation": "preferred", "qa": "warning"}
 
 
 def test_consistency_check_reports_missing_locked_translation() -> None:
@@ -465,7 +530,7 @@ def test_consistency_check_asr_alias_accepts_known_entity_variants() -> None:
     assert issues == []
 
 
-def test_consistency_check_concept_hint_is_suggestion_only() -> None:
+def test_consistency_check_concept_hint_is_not_exact_enforced() -> None:
     doc = MemoryDocument(
         entries=[
             MemoryEntry(
@@ -484,9 +549,7 @@ def test_consistency_check_concept_hint_is_suggestion_only() -> None:
         [Segment(id=1, start=0, end=1, text_src="死者の書を読んだ", text_tgt="读了那本书")],
     )
 
-    assert len(issues) == 1
-    assert issues[0].issue_type == "hint_miss"
-    assert issues[0].level == "suggestion"
+    assert issues == []
 
 
 def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_path: Path, monkeypatch) -> None:
@@ -565,16 +628,27 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
         Segment(id=2, start=4, end=4.5, text_src="uh, yeah", confidence=-1.2),
     ]
     seen_prompt = ""
+    prompts: list[str] = []
 
     class FakeClient:
         def translate_request(self, req):
             nonlocal seen_prompt
             assert req.prompt_mode == "memory_patch"
-            assert "FULL SOURCE SUBTITLES" in req.style_prompt
-            assert "flags=" in req.style_prompt
-            assert "raw: Subaru arrives" in req.style_prompt
-            assert "clean: yeah" in req.style_prompt
+            prompts.append(req.style_prompt)
             seen_prompt = req.style_prompt
+            if len(prompts) == 1:
+                assert "FULL SOURCE SUBTITLES" in req.style_prompt
+                assert "flags=" in req.style_prompt
+                assert "raw: Subaru arrives" in req.style_prompt
+                assert "clean: yeah" in req.style_prompt
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "raw_text": '{"candidates":[{"surface":"Subaru","occurrence_ids":[1],"candidate_kind":"name","asr_risk":0.0,"recurrence":1}]}'
+                    },
+                )()
+            assert "SOURCE-SIDE CANDIDATE EVIDENCE" in req.style_prompt
             return type(
                 "Response",
                 (),
@@ -598,7 +672,10 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
     )
 
     assert payload["status"] == "completed"
-    assert "soft-cleaned ASR view" in seen_prompt
+    assert payload["bootstrap_pipeline"] == "staged"
+    assert payload["extract_candidates"] == 1
+    assert len(prompts) == 2
+    assert "SOURCE-SIDE CANDIDATE EVIDENCE" in seen_prompt
     assert (tmp_path / "memory" / "bootstrap.json").exists()
     assert (tmp_path / "memory" / "bootstrap_input.json").exists()
     assert (tmp_path / "memory" / "bootstrap_input.txt").exists()
@@ -608,6 +685,73 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
     assert (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
     doc = MemoryStore(tmp_path / "memory").load()
     assert any(entry.source == "Subaru" and entry.target == "斯巴鲁" for entry in doc.entries)
+
+
+def test_memory_bootstrap_validator_filters_generic_and_downgrades_hard_targets(tmp_path: Path, monkeypatch) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def translate_request(self, _req):
+            self.calls += 1
+            if self.calls == 1:
+                return type(
+                    "Response",
+                    (),
+                    {
+                        "raw_text": (
+                            '{"candidates":['
+                            '{"surface":"この塔","occurrence_ids":[1],"candidate_kind":"unknown","asr_risk":0.0,"recurrence":1},'
+                            '{"surface":"ベア子","occurrence_ids":[2],"candidate_kind":"address_form","asr_risk":0.0,"recurrence":1}'
+                            ']}'
+                        )
+                    },
+                )()
+            return type(
+                "Response",
+                (),
+                {
+                    "raw_text": (
+                        '{"chunk_ids":["bootstrap"],"actions":['
+                        '{"action":"upsert","source":"この塔","target":"普雷阿得斯监视塔","status":"confirmed","constraint":"must_use","evidence_ids":[1]},'
+                        '{"action":"upsert","source":"ベアトリス","target":"","status":"locked","constraint":"must_use",'
+                        '"alias_details":[{"source":"ベア子","kind":"nickname"}],"evidence_ids":[2]}'
+                        ']}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.memory.bootstrapper.build_provider_client", lambda _provider: FakeClient())
+
+    payload = bootstrap_memory(
+        config,
+        [Segment(id=1, start=0, end=1, text_src="この塔"), Segment(id=2, start=1, end=2, text_src="ベア子")],
+        source_lang="ja",
+        target_lang="zh-CN",
+        memory_dir=tmp_path / "memory",
+    )
+
+    assert [row["source"] for row in payload["actions"]] == ["ベアトリス"]
+    assert payload["actions"][0]["status"] == "proposed"
+    assert payload["actions"][0]["constraint"] == "hint"
+    doc = MemoryStore(tmp_path / "memory").load()
+    assert doc.entries[0].source == "ベアトリス"
+    assert doc.entries[0].target == ""
+    assert doc.entries[0].alias_details[0].source == "ベア子"
 
 
 def test_memory_bootstrap_input_view_soft_cleans_noise_and_keeps_evidence() -> None:
@@ -759,5 +903,5 @@ def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path
     list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
 
     assert [item[0] for item in seen] == ["c1", "c2"]
-    assert "Subaru => 斯巴鲁" in seen[0][1]
+    assert "Subaru -> 斯巴鲁" in seen[0][1]
     assert not (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()

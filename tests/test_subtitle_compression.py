@@ -10,13 +10,18 @@ from transvortex.app.models import (
     Segment,
 )
 from transvortex.core.subtitle_compression import compress_overlong_subtitles
+from transvortex.memory.schema import MemoryDocument, MemoryEntry
+from transvortex.memory.store import MemoryStore
 
 
 class FakeCompressionClient:
+    calls = []
+
     def __init__(self, _provider: ProviderConfig) -> None:
         pass
 
     def translate_request(self, req):
+        self.calls.append(req)
         assert req.prompt_mode == "compress"
         return NormalizedResponse(numbered_lines=["[1] 太长了"], raw_text="[1] 太长了")
 
@@ -58,6 +63,7 @@ def _config(tmp_path, *, enabled: bool = True) -> AppConfig:
 
 
 def test_compression_shortens_overlong_subtitle(monkeypatch, tmp_path) -> None:
+    FakeCompressionClient.calls = []
     monkeypatch.setattr(
         "transvortex.core.subtitle_compression.build_provider_client",
         lambda provider: FakeCompressionClient(provider),
@@ -72,6 +78,29 @@ def test_compression_shortens_overlong_subtitle(monkeypatch, tmp_path) -> None:
     assert out[0].text_tgt == "太长了"
     assert out[0].meta["compressed"] is True
     assert artifacts[0]["status"] == "compressed"
+
+
+def test_compression_receives_memory_prompt(monkeypatch, tmp_path) -> None:
+    FakeCompressionClient.calls = []
+    monkeypatch.setattr(
+        "transvortex.core.subtitle_compression.build_provider_client",
+        lambda provider: FakeCompressionClient(provider),
+    )
+    memory_dir = tmp_path / "memory"
+    MemoryStore(memory_dir).save(
+        MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")])
+    )
+    segments = [Segment(id=1, start=0.0, end=1.0, text_src="Subaru", text_tgt="这是一条非常非常长的字幕")]
+
+    compress_overlong_subtitles(
+        config=_config(tmp_path),
+        segments=segments,
+        source_lang="en",
+        target_lang="zh-CN",
+        memory_dir=memory_dir,
+    )
+
+    assert "Subaru -> 斯巴鲁" in FakeCompressionClient.calls[0].memory_prompt
 
 
 def test_compression_failure_keeps_original_text(monkeypatch, tmp_path) -> None:

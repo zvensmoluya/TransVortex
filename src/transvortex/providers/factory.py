@@ -99,6 +99,8 @@ def _translation_prompt(
         )
         if req.style_prompt:
             parts.append("Compression instructions:\n" + req.style_prompt.strip())
+        if req.memory_prompt:
+            parts.append(req.memory_prompt.strip())
         parts.extend(
             [
                 f"Reason: {req.repair_reason or 'subtitle is too long for its display duration'}.",

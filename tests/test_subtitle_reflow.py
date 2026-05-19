@@ -212,9 +212,10 @@ def test_reflow_batches_multiple_windows_and_injects_memory(monkeypatch, tmp_pat
 
     assert len(BatchReflowClient.calls) == 1
     req = BatchReflowClient.calls[0]
-    assert "LOCKED TERMS" in req.memory_prompt
-    assert "Subaru => 斯巴鲁" in req.memory_prompt
-    assert "Emilia => 爱蜜莉雅" in req.memory_prompt
+    assert "MUST_USE" in req.memory_prompt
+    assert "Subaru -> 斯巴鲁" in req.memory_prompt
+    assert "Emilia -> 爱蜜莉雅" in req.memory_prompt
+    assert "Output contract" not in req.system_prompt
     assert len(artifacts) == 2
     assert all(row["batch_index"] == 1 for row in artifacts)
     assert all(row["batch_size"] == 2 for row in artifacts)

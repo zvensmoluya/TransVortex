@@ -39,6 +39,9 @@ class MemoryTargetVariant:
     source: str
     target: str
     kind: str = "nickname"
+    confidence: float = 0.0
+    speaker_scope: dict[str, Any] = field(default_factory=dict)
+    notes: str = ""
 
 
 @dataclass
@@ -58,6 +61,12 @@ class MemoryEntry:
     source_preset: str = ""
     notes: str = ""
     confidence: float = 0.0
+    confidence_breakdown: dict[str, float] = field(default_factory=dict)
+    provenance: list[dict[str, Any]] = field(default_factory=list)
+    scope: dict[str, Any] = field(default_factory=dict)
+    variant_of: str = ""
+    variant_of_entry_id: str = ""
+    enforcement_policy: dict[str, Any] = field(default_factory=dict)
     evidence_ids: list[int] = field(default_factory=list)
     created_by: str = "system"
     updated_at: str = ""
@@ -85,6 +94,12 @@ class MemoryPatchAction:
     memory_type: str = ""
     notes: str = ""
     origin: str = "model_patch"
+    confidence_breakdown: dict[str, float] = field(default_factory=dict)
+    provenance: list[dict[str, Any]] = field(default_factory=list)
+    scope: dict[str, Any] = field(default_factory=dict)
+    variant_of: str = ""
+    variant_of_entry_id: str = ""
+    enforcement_policy: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -169,6 +184,28 @@ def _string_list(value: Any) -> list[str]:
     return out
 
 
+def _dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _float_dict(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, float] = {}
+    for key, item in value.items():
+        try:
+            out[str(key)] = float(item)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _alias_from_dict(row: Any) -> MemoryAlias | None:
     if isinstance(row, str):
         source = row.strip()
@@ -205,10 +242,17 @@ def _variant_from_dict(row: Any) -> MemoryTargetVariant | None:
     target = str(row.get("target") or "").strip()
     if not source or not target:
         return None
+    try:
+        confidence = float(row.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
     return MemoryTargetVariant(
         source=source,
         target=target,
         kind=normalize_alias_kind(str(row.get("kind") or "nickname")),
+        confidence=confidence,
+        speaker_scope=_dict_value(row.get("speaker_scope")),
+        notes=str(row.get("notes") or ""),
     )
 
 
@@ -265,6 +309,12 @@ def entry_from_dict(row: dict[str, Any]) -> MemoryEntry:
         source_preset=str(row.get("source_preset") or ""),
         notes=str(row.get("notes") or ""),
         confidence=float(row.get("confidence") or 0.0),
+        confidence_breakdown=_float_dict(row.get("confidence_breakdown")),
+        provenance=_dict_list(row.get("provenance")),
+        scope=_dict_value(row.get("scope")),
+        variant_of=str(row.get("variant_of") or ""),
+        variant_of_entry_id=str(row.get("variant_of_entry_id") or ""),
+        enforcement_policy=_dict_value(row.get("enforcement_policy")),
         evidence_ids=[int(item) for item in row.get("evidence_ids", []) or [] if str(item).isdigit()],
         created_by=str(row.get("created_by") or "system"),
         updated_at=str(row.get("updated_at") or ""),
@@ -290,5 +340,11 @@ def patch_action_from_dict(row: dict[str, Any]) -> MemoryPatchAction:
         memory_type=normalize_memory_type(str(row.get("memory_type") or ""), category=category),
         notes=str(row.get("notes") or ""),
         origin=str(row.get("origin") or "model_patch"),
+        confidence_breakdown=_float_dict(row.get("confidence_breakdown")),
+        provenance=_dict_list(row.get("provenance")),
+        scope=_dict_value(row.get("scope")),
+        variant_of=str(row.get("variant_of") or ""),
+        variant_of_entry_id=str(row.get("variant_of_entry_id") or ""),
+        enforcement_policy=_dict_value(row.get("enforcement_policy")),
     )
 

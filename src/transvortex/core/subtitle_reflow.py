@@ -239,7 +239,7 @@ def _memory_prompt_for_batch(
         context_after=context_after,
     )
     entries = select_memory_entries(document, chunk, config.pipeline.memory.inject)
-    return build_memory_prompt(entries), len(entries)
+    return build_memory_prompt(entries, config.pipeline.memory.inject), len(entries)
 
 
 def _request_for_batch(
@@ -281,10 +281,13 @@ def _request_for_batch(
 
 
 def _reflow_system_prompt(config: AppConfig) -> str:
-    project_prompt = str(config.pipeline.translation.system_prompt or "").strip()
-    if not project_prompt:
-        return REFLOW_SYSTEM_PROMPT
-    return REFLOW_SYSTEM_PROMPT + "\n\nProject instructions:\n" + project_prompt
+    return (
+        REFLOW_SYSTEM_PROMPT
+        + "\n\nProject instructions:\n"
+        + "- Preserve faithful meaning, tone, names, terms, nicknames, and address flavor.\n"
+        + "- Translation memory and style instructions guide wording, but JSON output contract wins.\n"
+        + "- Never output numbered subtitle lines unless they are inside the requested JSON field values."
+    )
 
 
 def _request_size(req: NormalizedRequest) -> int:

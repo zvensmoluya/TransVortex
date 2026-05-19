@@ -26,7 +26,7 @@ def test_memory_patch_prompt_emphasizes_conservative_deduplication() -> None:
     assert "Prefer precision over recall" in prompt
     assert "ASR error" in prompt
     assert "aliases" in prompt
-    assert "Do not create separate entries for the same entity" in prompt
+    assert "Do not create duplicate canonical entries" in prompt
     assert "empty actions array" in prompt
 
 

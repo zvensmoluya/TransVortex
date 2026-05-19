@@ -33,12 +33,40 @@ def _entry_targets(entry: MemoryEntry) -> list[str]:
     return out
 
 
+def _qa_policy(entry: MemoryEntry, *, variant: bool = False, alias_kind: str = "") -> str:
+    explicit = entry.enforcement_policy.get("qa") if isinstance(entry.enforcement_policy, dict) else ""
+    if explicit:
+        return str(explicit)
+    constraint = entry.constraint or normalize_constraint("", status=entry.status)
+    if entry.memory_type == "concept_hint":
+        return "off"
+    if constraint == "hint":
+        return "off"
+    if variant or alias_kind in VARIANT_ALIAS_KINDS:
+        return "warning"
+    if alias_kind in SUGGESTION_ALIAS_KINDS:
+        return "info"
+    if entry.status == "locked" or constraint == "must_use":
+        return "error"
+    return "warning"
+
+
+def _issue_level(policy: str) -> str:
+    if policy == "error":
+        return "warning"
+    if policy == "warning":
+        return "suggestion"
+    return "suggestion"
+
+
 def _accepted_targets_for_alias(entry: MemoryEntry, alias_source: str, alias_kind: str) -> list[str]:
     if alias_kind in {"nickname", "honorific"}:
-        targets = [entry.target]
+        targets: list[str] = []
         for variant in entry.target_variants:
             if variant.source == alias_source or variant.kind == alias_kind:
                 targets.append(variant.target)
+        if not targets:
+            targets.append(entry.target)
         out: list[str] = []
         for target in targets:
             if target and target not in out:
@@ -111,8 +139,11 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
             address_alias_sources = _matched_address_alias_sources(entry, source_text)
             matched_specific_address = bool(variant_sources or address_alias_sources)
             if not matched_specific_address and term_matches_text(entry.source, source_text) and entry.target not in target_text:
-                level = "suggestion" if constraint == "hint" or entry.memory_type == "concept_hint" else "warning"
-                issue_type = "hint_miss" if level == "suggestion" else "hard_miss"
+                policy = _qa_policy(entry)
+                if policy == "off":
+                    continue
+                level = _issue_level(policy)
+                issue_type = "hint_miss" if policy == "info" else "hard_miss"
                 issues.append(
                     _issue(
                         seg=seg,
@@ -131,6 +162,9 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                     continue
                 accepted_targets = _accepted_targets_for_alias(entry, alias.source, alias.kind)
                 if _contains_any_target(target_text, accepted_targets):
+                    continue
+                policy = _qa_policy(entry, alias_kind=alias.kind)
+                if policy == "off":
                     continue
                 if alias.kind in HARD_ALIAS_KINDS and constraint == "must_use":
                     issues.append(
@@ -151,9 +185,9 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                         _issue(
                             seg=seg,
                             entry=entry,
-                            expected=entry.target,
+                            expected=accepted_targets[0] if accepted_targets else entry.target,
                             target_text=target_text,
-                            level="suggestion",
+                            level=_issue_level(policy),
                             issue_type="variant_miss",
                             matched_source=alias.source,
                             matched_kind=alias.kind,
@@ -161,6 +195,8 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                         )
                     )
                 elif alias.kind in SUGGESTION_ALIAS_KINDS or constraint == "hint" or entry.memory_type == "concept_hint":
+                    if policy == "off":
+                        continue
                     issues.append(
                         _issue(
                             seg=seg,
@@ -180,13 +216,16 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                 accepted = [entry.target, variant.target]
                 if _contains_any_target(target_text, accepted):
                     continue
+                policy = _qa_policy(entry, variant=True)
+                if policy == "off":
+                    continue
                 issues.append(
                     _issue(
                         seg=seg,
                         entry=entry,
                         expected=variant.target,
                         target_text=target_text,
-                        level="suggestion",
+                        level=_issue_level(policy),
                         issue_type="variant_miss",
                         matched_source=variant.source,
                         matched_kind=variant.kind,

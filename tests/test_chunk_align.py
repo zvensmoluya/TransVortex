@@ -207,7 +207,7 @@ def test_capacity_planner_trims_context_to_input_budget(tmp_path) -> None:
 
 
 def test_capacity_planner_reserves_memory_budget(tmp_path) -> None:
-    config = _planner_config(tmp_path, max_context_tokens=260)
+    config = _planner_config(tmp_path, max_context_tokens=1000)
     config.pipeline.translation.chunking.input_safety_ratio = 1.0
     config.pipeline.translation.chunking.prompt_overhead_tokens = 80
     config.pipeline.translation.chunking.memory_entry_tokens = 40

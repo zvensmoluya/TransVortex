@@ -2126,6 +2126,7 @@ def _execute_task(
                 segments=final_segments,
                 source_lang=task.source_lang,
                 target_lang=task.target_lang,
+                memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
             )
             for row in compression_rows:
                 append_jsonl(paths["quality"] / "compression.jsonl", row)

@@ -57,6 +57,36 @@ def _merge_target_variants(a: list[MemoryTargetVariant], b: list[MemoryTargetVar
     return out
 
 
+def _merge_dict(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    return {**b, **a}
+
+
+def _merge_dict_lists(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*a, *b]:
+        key = repr(sorted(item.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _action_has_memory_value(action: MemoryPatchAction) -> bool:
+    return bool(
+        action.source.strip()
+        and (
+            action.target.strip()
+            or action.alias_details
+            or action.target_variants
+            or action.memory_type in {"asr_correction", "concept_hint"}
+            or action.constraint == "hint"
+            or action.notes.strip()
+        )
+    )
+
+
 def patch_from_payload(payload: dict[str, Any]) -> MemoryPatch:
     return MemoryPatch(
         chunk_ids=[str(item) for item in payload.get("chunk_ids", []) or []],
@@ -90,7 +120,7 @@ def merge_patch(
     for action in patch.actions:
         if action.action not in {"upsert", "add", "update"}:
             continue
-        if not action.source.strip() or not action.target.strip():
+        if not _action_has_memory_value(action):
             continue
         status = action.status
         if auto_confirm_high_confidence and status == "proposed" and action.confidence >= 0.9:
@@ -98,7 +128,7 @@ def merge_patch(
         key = normalize_source_key(action.source)
         protected = protected_by_key.get(key)
         if protected is not None:
-            if protected.target == action.target:
+            if not action.target or protected.target == action.target:
                 continue
             conflict = MemoryConflict(
                 source=action.source,
@@ -124,7 +154,7 @@ def merge_patch(
             entries.append(entry)
             by_key[key] = entry
             continue
-        if existing.target and existing.target != action.target:
+        if action.target and existing.target and existing.target != action.target:
             conflict = MemoryConflict(
                 source=action.source,
                 existing_target=existing.target,
@@ -154,6 +184,12 @@ def merge_patch(
             memory_type=existing.memory_type or action.memory_type,
             evidence_ids=_merge_lists(existing.evidence_ids, action.evidence_ids),
             confidence=max(float(existing.confidence), float(action.confidence)),
+            confidence_breakdown=_merge_dict(existing.confidence_breakdown, action.confidence_breakdown),
+            provenance=_merge_dict_lists(existing.provenance, action.provenance),
+            scope=_merge_dict(existing.scope, action.scope),
+            variant_of=existing.variant_of or action.variant_of,
+            variant_of_entry_id=existing.variant_of_entry_id or action.variant_of_entry_id,
+            enforcement_policy=_merge_dict(existing.enforcement_policy, action.enforcement_policy),
             notes=existing.notes or action.notes,
             updated_at=utc_now_iso(),
         )
@@ -181,6 +217,12 @@ def action_to_entry(action: MemoryPatchAction):
         memory_type=action.memory_type,
         notes=action.notes,
         confidence=action.confidence,
+        confidence_breakdown=action.confidence_breakdown,
+        provenance=action.provenance,
+        scope=action.scope,
+        variant_of=action.variant_of,
+        variant_of_entry_id=action.variant_of_entry_id,
+        enforcement_policy=action.enforcement_policy,
         evidence_ids=action.evidence_ids,
         created_by="model",
     )

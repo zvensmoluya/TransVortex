@@ -618,6 +618,8 @@ def load_app_config(
                 root_dir=root_dir,
                 override_path=_resolve_prompt_path(root_dir, prompts_raw.get("memory_bootstrap_system")),
             ),
+            pipeline=_to_str(memory_bootstrap_raw.get("pipeline"), "staged"),
+            critic_enabled=_to_bool(memory_bootstrap_raw.get("critic_enabled"), False),
         ),
         chunking=MemoryChunkingConfig(
             min_initial_chunk_lines=_to_int(memory_chunking_raw.get("min_initial_chunk_lines"), 80),
@@ -629,6 +631,11 @@ def load_app_config(
             proposed=_to_bool(memory_inject_raw.get("proposed"), True),
             strategy=_to_str(memory_inject_raw.get("strategy"), "balanced"),
             max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
+            format=_to_str(memory_inject_raw.get("format"), "v2"),
+            max_prompt_tokens=_to_int(memory_inject_raw.get("max_prompt_tokens"), 1200),
+            max_proposed_entries=_to_int(memory_inject_raw.get("max_proposed_entries"), 12),
+            max_context_only_entries=_to_int(memory_inject_raw.get("max_context_only_entries"), 10),
+            max_notes_chars_per_entry=_to_int(memory_inject_raw.get("max_notes_chars_per_entry"), 60),
         ),
         patch=MemoryPatchConfig(
             enabled=memory_patch_enabled,
@@ -646,6 +653,7 @@ def load_app_config(
         ),
         consistency_check=MemoryConsistencyCheckConfig(
             enabled=_to_bool(memory_check_raw.get("enabled"), True),
+            enforcement_policy=_to_bool(memory_check_raw.get("enforcement_policy"), True),
         ),
     )
     ass_raw = pip_yaml.get("subtitle_ass_style") or {}

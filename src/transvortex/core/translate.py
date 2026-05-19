@@ -870,7 +870,7 @@ def _iter_translate_window(
     chunk_memory_prompts = {}
     for chunk in window:
         selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
-        chunk_memory_prompts[chunk.chunk_id] = build_memory_prompt(selected)
+        chunk_memory_prompts[chunk.chunk_id] = build_memory_prompt(selected, config.pipeline.memory.inject)
     max_workers = max(1, config.pipeline.default_concurrency)
     if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
         max_workers = 1
@@ -912,7 +912,7 @@ def _iter_translate_all_chunks_with_static_memory(
 ):
     document = memory_store.load_effective()
     chunk_memory_prompts = {
-        chunk.chunk_id: build_memory_prompt(select_memory_entries(document, chunk, config.pipeline.memory.inject))
+        chunk.chunk_id: build_memory_prompt(select_memory_entries(document, chunk, config.pipeline.memory.inject), config.pipeline.memory.inject)
         for chunk in chunks
     }
     max_workers = max(1, config.pipeline.default_concurrency)
