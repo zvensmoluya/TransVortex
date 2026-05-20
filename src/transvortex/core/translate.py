@@ -3,8 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import inspect
 import time
-from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,30 +28,6 @@ from .translation_validation import (
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
-@dataclass
-class AdaptiveBatchState:
-    target_lines: int
-    original_lines: int
-    min_lines: int
-    grow_after_successes: int
-    successes: int = 0
-
-    def split(self) -> None:
-        next_target = max(self.min_lines, max(1, self.target_lines // 2))
-        if next_target == self.target_lines and self.target_lines > self.min_lines:
-            next_target = self.min_lines
-        self.target_lines = next_target
-        self.successes = 0
-
-    def success(self) -> None:
-        if self.target_lines >= self.original_lines:
-            return
-        self.successes += 1
-        if self.successes >= self.grow_after_successes:
-            self.target_lines = min(self.original_lines, max(self.target_lines + 1, self.target_lines * 2))
-            self.successes = 0
-
-
 class AdaptiveTranslationError(RuntimeError):
     def __init__(self, message: str, partial_results: list[dict] | None = None) -> None:
         super().__init__(message)
@@ -72,7 +47,7 @@ def _memory_prompt_entry_count(memory_prompt: str) -> int:
     return sum(1 for line in str(memory_prompt or "").splitlines() if line.strip().startswith("- "))
 
 
-_CAPACITY_SPLIT_MARKERS = {
+_HARD_CAPACITY_SPLIT_MARKERS = {
     "batch too large",
     "context length",
     "maximum context",
@@ -80,8 +55,17 @@ _CAPACITY_SPLIT_MARKERS = {
     "too many tokens",
     "token limit",
     "maximum tokens",
-    "response truncated",
-    "truncated",
+    "request too large",
+    "payload too large",
+    "413",
+}
+
+_PROTOCOL_RECOVERY_CODES = {
+    "bad_line_format",
+    "explanatory_output",
+    "duplicate_id",
+    "context_id_output",
+    "extra_id",
 }
 
 
@@ -191,7 +175,12 @@ def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
         lines=left_lines,
         context_after=[*right_lines, *chunk.context_after],
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in left_ids],
-        meta={**dict(chunk.meta or {}), "adaptive_split": "left", "adaptive_sibling_lines": len(right_lines)},
+        meta={
+            **dict(chunk.meta or {}),
+            "adaptive_split": "left",
+            "adaptive_sibling_lines": len(right_lines),
+            "adaptive_context_hint": "capacity_split",
+        },
     )
     right = replace(
         chunk,
@@ -200,7 +189,12 @@ def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
         lines=right_lines,
         context_before=[*chunk.context_before, *left_lines],
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in right_ids],
-        meta={**dict(chunk.meta or {}), "adaptive_split": "right", "adaptive_sibling_lines": len(left_lines)},
+        meta={
+            **dict(chunk.meta or {}),
+            "adaptive_split": "right",
+            "adaptive_sibling_lines": len(left_lines),
+            "adaptive_context_hint": "capacity_split",
+        },
     )
     return left, right
 
@@ -257,32 +251,10 @@ def _runtime_chunk_for_request(config: AppConfig, chunk: Chunk, memory_prompt: s
     return replace(chunk, context_before=before, context_after=after, meta=meta)
 
 
-def _partition_chunk_to_target_lines(chunk: Chunk, target_lines: int) -> list[Chunk]:
-    target_lines = max(1, target_lines)
-    if len(chunk.segment_ids) <= target_lines:
-        return [chunk]
-    left, right = _split_chunk(chunk)
-    return [
-        *_partition_chunk_to_target_lines(left, target_lines),
-        *_partition_chunk_to_target_lines(right, target_lines),
-    ]
-
-
-def _build_adaptive_batch_state(config: AppConfig) -> AdaptiveBatchState:
-    configured_lines = max(1, int(config.pipeline.translation.chunk_lines))
-    min_lines = max(1, int(config.pipeline.translation.batching.min_chunk_lines))
-    return AdaptiveBatchState(
-        target_lines=configured_lines,
-        original_lines=configured_lines,
-        min_lines=min_lines,
-        grow_after_successes=max(1, int(config.pipeline.translation.batching.grow_after_successes)),
-    )
-
-
 def _retryable_split_failure(exc: Exception) -> bool:
     text = str(exc)
     lowered = text.lower()
-    return any(marker in lowered for marker in _CAPACITY_SPLIT_MARKERS)
+    return any(marker in lowered for marker in _HARD_CAPACITY_SPLIT_MARKERS)
 
 
 def _chunk_completed(chunk: Chunk, done: set[str]) -> bool:
@@ -353,6 +325,8 @@ def _base_request(
     target_lang: str,
     model: str,
     memory_prompt: str = "",
+    protocol_recovery_hint: str = "",
+    adaptive_context_hint: str = "",
 ) -> NormalizedRequest:
     return NormalizedRequest(
         model=model,
@@ -366,6 +340,19 @@ def _base_request(
         style_prompt=config.pipeline.translation.style_prompt,
         memory_prompt=memory_prompt,
         system_prompt=config.pipeline.translation.system_prompt,
+        protocol_recovery_hint=protocol_recovery_hint,
+        adaptive_context_hint=adaptive_context_hint,
+    )
+
+
+def _adaptive_context_hint(chunk: Chunk) -> str:
+    if dict(chunk.meta or {}).get("adaptive_context_hint") != "capacity_split":
+        return ""
+    sibling_lines = int(dict(chunk.meta or {}).get("adaptive_sibling_lines") or 0)
+    return (
+        "This is a capacity retry for one part of a larger subtitle chunk. "
+        f"The adjacent {sibling_lines} sibling line(s) in CONTEXT_BEFORE or CONTEXT_AFTER are context only; "
+        "translate only TRANSLATE_ONLY ids and do not output context ids."
     )
 
 
@@ -523,12 +510,39 @@ def _repair_rows(
     return repaired_validation, repair_artifacts, repair_errors
 
 
-def _too_many_capacity_validation_errors(chunk: Chunk, validation: TranslationValidationResult) -> bool:
-    capacity_codes = {"missing_id", "empty_translation"}
-    count = sum(1 for issue in validation.errors if issue.code in capacity_codes)
+def _too_many_protocol_completion_errors(chunk: Chunk, validation: TranslationValidationResult) -> bool:
+    completion_codes = {"missing_id", "empty_translation"}
+    count = sum(1 for issue in validation.errors if issue.code in completion_codes)
     if count < 5:
         return False
     return count / max(len(chunk.segment_ids), 1) >= 0.2
+
+
+def _should_protocol_recover(chunk: Chunk, validation: TranslationValidationResult) -> bool:
+    if any(issue.code == "refusal_output" for issue in validation.errors):
+        return False
+    if any(issue.code in _PROTOCOL_RECOVERY_CODES for issue in validation.errors):
+        return True
+    return _too_many_protocol_completion_errors(chunk, validation)
+
+
+def _protocol_recovery_hint(validation: TranslationValidationResult) -> str:
+    issue_codes = ", ".join(sorted({issue.code for issue in validation.errors})) or "validation_failed"
+    missing_ids = [str(issue.segment_id) for issue in validation.errors if issue.code == "missing_id" and issue.segment_id]
+    empty_ids = [str(issue.segment_id) for issue in validation.errors if issue.code == "empty_translation" and issue.segment_id]
+    details: list[str] = [
+        "Previous output failed subtitle protocol validation.",
+        f"Issue codes: {issue_codes}.",
+        "Retry the same translation task using the same source, context, memory, and style.",
+        "Return every TRANSLATE_ONLY id exactly once, in numeric order.",
+        "Do not output CONTEXT_BEFORE or CONTEXT_AFTER ids.",
+        "Do not output Markdown, explanations, summaries, headings, blank translations, or extra text.",
+    ]
+    if missing_ids:
+        details.append("Missing ids from previous output: " + ", ".join(missing_ids[:40]) + ".")
+    if empty_ids:
+        details.append("Empty ids from previous output: " + ", ".join(empty_ids[:40]) + ".")
+    return "\n".join(f"- {item}" for item in details)
 
 
 def translate_chunk(
@@ -555,40 +569,56 @@ def translate_chunk(
             continue
         client = build_provider_client(provider)
         retries = max(1, provider.limits.retry)
+        protocol_recovery_used = False
         for attempt in range(retries):
             try:
                 request_chunk = _runtime_chunk_for_request(config, chunk, memory_prompt)
-                _notify_progress(
-                    progress_callback,
-                    mode="translate",
-                    chunk_id=request_chunk.chunk_id,
-                    segment_ids=request_chunk.segment_ids,
-                    provider=route.provider,
-                    model=route.model,
-                    attempt=attempt + 1,
-                    max_attempts=retries,
-                    memory_entries=_memory_prompt_entry_count(memory_prompt),
-                )
-                req = _base_request(
-                    config=config,
-                    chunk=request_chunk,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                    model=route.model,
-                    memory_prompt=memory_prompt,
-                )
-                response = client.translate_request(req)
-                validation = _validate(
-                    config,
-                    request_chunk,
-                    numbered_lines=response.numbered_lines,
-                    raw_text=response.raw_text,
-                )
+                response = None
+                validation = None
+                protocol_recovered = False
+                protocol_hint = ""
+                for protocol_attempt in range(2):
+                    _notify_progress(
+                        progress_callback,
+                        mode="protocol_recovery" if protocol_attempt else "translate",
+                        chunk_id=request_chunk.chunk_id,
+                        segment_ids=request_chunk.segment_ids,
+                        provider=route.provider,
+                        model=route.model,
+                        attempt=attempt + 1,
+                        max_attempts=retries,
+                        memory_entries=_memory_prompt_entry_count(memory_prompt),
+                    )
+                    req = _base_request(
+                        config=config,
+                        chunk=request_chunk,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        model=route.model,
+                        memory_prompt=memory_prompt,
+                        protocol_recovery_hint=protocol_hint,
+                        adaptive_context_hint=_adaptive_context_hint(request_chunk),
+                    )
+                    response = client.translate_request(req)
+                    validation = _validate(
+                        config,
+                        request_chunk,
+                        numbered_lines=response.numbered_lines,
+                        raw_text=response.raw_text,
+                    )
+                    if protocol_attempt == 0 and not protocol_recovery_used and _should_protocol_recover(request_chunk, validation):
+                        protocol_hint = _protocol_recovery_hint(validation)
+                        protocol_recovery_used = True
+                        protocol_recovered = True
+                        continue
+                    break
+                if validation is None or response is None:
+                    raise RuntimeError("translation did not return a response")
                 if validation.has_chunk_errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
-                if _too_many_capacity_validation_errors(request_chunk, validation):
+                if _too_many_protocol_completion_errors(request_chunk, validation):
                     raise RuntimeError(
-                        "response truncated: too many missing or empty translation rows "
+                        "translation protocol incomplete: too many missing or empty translation rows "
                         f"({len(validation.errors)}/{len(request_chunk.segment_ids)})"
                     )
                 validation, repairs, repair_errors = _repair_rows(
@@ -639,6 +669,7 @@ def translate_chunk(
                         "context_after_lines": len(request_chunk.context_after),
                         "memory_entries": _memory_prompt_entry_count(memory_prompt),
                         "memory_prompt_chars": len(memory_prompt or ""),
+                        "protocol_recovered": protocol_recovered,
                         "chunk_meta": dict(request_chunk.meta or {}),
                     },
                     "rows": _rows_to_dicts(validation.rows),
@@ -815,15 +846,8 @@ def _iter_translate_all_chunks_adaptive_serial(
     already_done: set[str],
     progress_callback: ProgressCallback | None = None,
 ):
-    state = _build_adaptive_batch_state(config)
-    queue: deque[Chunk] = deque(chunks)
-    while queue:
-        chunk = queue.popleft()
+    for chunk in chunks:
         if _chunk_completed(chunk, already_done):
-            continue
-        partitions = _partition_chunk_to_target_lines(chunk, state.target_lines)
-        if len(partitions) > 1:
-            queue.extendleft(reversed(partitions))
             continue
         try:
             results = translate_chunk_adaptive(
@@ -837,18 +861,10 @@ def _iter_translate_all_chunks_adaptive_serial(
         except AdaptiveTranslationError as exc:
             for item in exc.partial_results:
                 already_done.add(str(item.get("chunk_id")))
-                state.success()
                 yield item
-            state.split()
             raise RuntimeError(str(exc)) from exc
-        except Exception:
-            state.split()
-            raise
-        if len(results) > 1 or any(result.get("adaptive_parent_chunk") for result in results):
-            state.split()
         for result in results:
             already_done.add(str(result.get("chunk_id")))
-            state.success()
             yield result
 
 

@@ -170,6 +170,10 @@ def _translation_prompt(
         parts.append(req.memory_prompt.strip())
     if include_asr_uncertainty_hints and (asr_uncertainty := _asr_uncertainty_section(req.asr_uncertain_ids)):
         parts.append(asr_uncertainty)
+    if req.adaptive_context_hint:
+        parts.append("Adaptive capacity retry context:\n" + req.adaptive_context_hint.strip())
+    if req.protocol_recovery_hint:
+        parts.append("Protocol recovery retry:\n" + req.protocol_recovery_hint.strip())
     if req.prompt_mode == "repair":
         parts.append(
             "Repair mode:\n"

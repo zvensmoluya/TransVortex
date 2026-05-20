@@ -43,7 +43,6 @@ translation:
   batching:
     mode: adaptive
     min_chunk_lines: 20
-    grow_after_successes: 3
   experiment_logging:
     enabled: false
     save_raw_text: true

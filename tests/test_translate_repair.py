@@ -12,9 +12,7 @@ from transvortex.app.models import (
 )
 from transvortex.core.translate import (
     _adaptive_chunk_by_id,
-    _build_adaptive_batch_state,
     _iter_translate_all_chunks_adaptive_serial,
-    _partition_chunk_to_target_lines,
     _source_chunk_completed_count,
     translate_chunk,
     translate_chunk_adaptive,
@@ -163,6 +161,131 @@ def test_translate_chunk_reports_v2_memory_prompt_entries(monkeypatch, tmp_path)
     assert [event["memory_entries"] for event in events if event.get("mode") == "translate"] == [2, 2]
 
 
+def test_translate_chunk_protocol_recovery_retries_same_chunk(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    chunk = Chunk(chunk_id="c00000", segment_ids=[1, 2], lines=["[1] hello", "[2] world"])
+    seen_hints: list[str] = []
+    seen_lines: list[list[str]] = []
+
+    class ProtocolRecoveryClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            seen_hints.append(req.protocol_recovery_hint)
+            seen_lines.append(list(req.lines))
+            if not req.protocol_recovery_hint:
+                return NormalizedResponse(
+                    numbered_lines=[],
+                    raw_text="Here is the translation:\n[1] 你好\n[2] 世界",
+                )
+            return NormalizedResponse(
+                numbered_lines=["[1] 你好", "[2] 世界"],
+                raw_text="[1] 你好\n[2] 世界",
+            )
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: ProtocolRecoveryClient(provider))
+
+    result = translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert result["rows"] == [{"id": 1, "text_tgt": "你好"}, {"id": 2, "text_tgt": "世界"}]
+    assert seen_lines == [chunk.lines, chunk.lines]
+    assert seen_hints[0] == ""
+    assert "Previous output failed subtitle protocol validation" in seen_hints[1]
+    assert result["request"]["protocol_recovered"] is True
+
+
+def test_translate_chunk_protocol_recovery_runs_once_per_route(monkeypatch, tmp_path) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+    chunk = Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] hello"])
+    calls = 0
+
+    class AlwaysBadFormatClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, _req):
+            nonlocal calls
+            from transvortex.app.models import NormalizedResponse
+
+            calls += 1
+            return NormalizedResponse(numbered_lines=[], raw_text="Here is the translation")
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: AlwaysBadFormatClient(provider))
+
+    with pytest.raises(RuntimeError, match="explanatory text|missing translation"):
+        translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert calls == provider.limits.retry + 1
+
+
+def test_translate_chunk_refusal_does_not_protocol_recover(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    chunk = Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] hello"])
+    calls = 0
+
+    class RefusalClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, _req):
+            nonlocal calls
+            from transvortex.app.models import NormalizedResponse
+
+            calls += 1
+            return NormalizedResponse(numbered_lines=[], raw_text="I cannot translate this.")
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: RefusalClient(provider))
+
+    with pytest.raises(RuntimeError, match="refusal"):
+        translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert calls == config.providers["p1"].limits.retry
+
+
+def test_translate_chunk_protocol_recovery_can_fall_through_to_row_repair(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.repair.enabled = True
+    chunk = Chunk(chunk_id="c00000", segment_ids=[1, 2], lines=["[1] hello", "[2] world"])
+    calls: list[str] = []
+
+    class RecoveryThenRepairClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            calls.append(req.prompt_mode if req.prompt_mode == "repair" else ("recovery" if req.protocol_recovery_hint else "translate"))
+            if req.prompt_mode == "repair":
+                return NormalizedResponse(numbered_lines=["[2] 世界"], raw_text="[2] 世界")
+            if not req.protocol_recovery_hint:
+                return NormalizedResponse(numbered_lines=[], raw_text="Here is the translation")
+            return NormalizedResponse(numbered_lines=["[1] 你好"], raw_text="[1] 你好")
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: RecoveryThenRepairClient(provider))
+
+    result = translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert calls == ["translate", "recovery", "repair"]
+    assert result["rows"] == [{"id": 1, "text_tgt": "你好"}, {"id": 2, "text_tgt": "世界"}]
+    assert result["repairs"][0]["id"] == 2
+
+
 def test_adaptive_translation_does_not_split_gateway_timeout(monkeypatch, tmp_path) -> None:
     provider = ProviderConfig(
         name="p1",
@@ -266,7 +389,39 @@ def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(mon
     assert seen_memory_prompts["c00000s1"] == "memory for c00000s1"
 
 
-def test_translate_chunk_treats_many_missing_rows_as_capacity_failure(monkeypatch, tmp_path) -> None:
+def test_adaptive_translation_adds_capacity_retry_context_hint(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.batching.mode = "adaptive"
+    config.pipeline.translation.batching.min_chunk_lines = 1
+    chunk = Chunk(
+        chunk_id="c00000",
+        segment_ids=[1, 2],
+        lines=["[1] A", "[2] B"],
+    )
+    seen_hints: dict[str, str] = {}
+
+    class BatchLimitClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            seen_hints[req.lines[0]] = req.adaptive_context_hint
+            if len(req.lines) == 2:
+                raise RuntimeError("request too large")
+            return NormalizedResponse(numbered_lines=[req.lines[0].split("]", 1)[0] + "] ok"], raw_text=req.lines[0].split("]", 1)[0] + "] ok")
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: BatchLimitClient(provider))
+
+    results = translate_chunk_adaptive(config, chunk, source_lang="en", target_lang="zh-CN")
+
+    assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1"]
+    assert "capacity retry" in seen_hints["[1] A"]
+    assert "translate only TRANSLATE_ONLY ids" in seen_hints["[2] B"]
+
+
+def test_translate_chunk_treats_many_missing_rows_as_protocol_failure(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
     config.pipeline.translation.repair.enabled = True
     chunk = Chunk(
@@ -289,12 +444,50 @@ def test_translate_chunk_treats_many_missing_rows_as_capacity_failure(monkeypatc
 
     monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: MissingRowsClient(provider))
 
-    try:
+    with pytest.raises(RuntimeError) as exc_info:
         translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
-    except RuntimeError as exc:
-        assert "response truncated" in str(exc)
-    else:
-        raise AssertionError("expected capacity-style missing-row failure")
+
+    message = str(exc_info.value)
+    assert "translation protocol incomplete" in message
+    assert "truncated" not in message
+
+
+def test_adaptive_translation_does_not_split_protocol_completion_failure(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.batching.mode = "adaptive"
+    config.pipeline.translation.batching.min_chunk_lines = 1
+    config.pipeline.translation.repair.enabled = False
+    chunk = Chunk(
+        chunk_id="c00000",
+        segment_ids=list(range(1, 31)),
+        lines=[f"[{idx}] line {idx}" for idx in range(1, 31)],
+    )
+    events: list[dict] = []
+
+    class MissingRowsClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, _req):
+            from transvortex.app.models import NormalizedResponse
+
+            return NormalizedResponse(
+                numbered_lines=[f"[{idx}] ok {idx}" for idx in range(1, 25)],
+                raw_text="\n".join(f"[{idx}] ok {idx}" for idx in range(1, 25)),
+            )
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: MissingRowsClient(provider))
+
+    with pytest.raises(RuntimeError, match="translation protocol incomplete"):
+        translate_chunk_adaptive(
+            config,
+            chunk,
+            source_lang="en",
+            target_lang="zh-CN",
+            progress_callback=events.append,
+        )
+
+    assert not any(event.get("mode") == "adaptive_split" for event in events)
 
 
 def test_adaptive_translation_respects_min_chunk_lines(monkeypatch, tmp_path) -> None:
@@ -391,46 +584,12 @@ def test_adaptive_child_lookup_and_source_completion_count() -> None:
     assert _source_chunk_completed_count([chunk], {"c00000s0"}) == 0
 
 
-def test_adaptive_batch_state_splits_and_grows(tmp_path) -> None:
-    config = _test_config(tmp_path)
-    config.pipeline.translation.chunk_lines = 8
-    config.pipeline.translation.batching.min_chunk_lines = 2
-    config.pipeline.translation.batching.grow_after_successes = 2
-    state = _build_adaptive_batch_state(config)
-
-    state.split()
-    assert state.target_lines == 4
-    state.split()
-    assert state.target_lines == 2
-    state.success()
-    assert state.target_lines == 2
-    state.success()
-    assert state.target_lines == 4
-    state.success()
-    state.success()
-    assert state.target_lines == 8
-
-
-def test_partition_chunk_to_target_lines_uses_stable_adaptive_children() -> None:
-    chunk = Chunk(
-        chunk_id="c00000",
-        segment_ids=[1, 2, 3, 4, 5],
-        lines=["[1] A", "[2] B", "[3] C", "[4] D", "[5] E"],
-    )
-
-    parts = _partition_chunk_to_target_lines(chunk, 2)
-
-    assert [part.chunk_id for part in parts] == ["c00000s0", "c00000s1s0", "c00000s1s1"]
-    assert [part.segment_ids for part in parts] == [[1, 2], [3], [4, 5]]
-
-
-def test_adaptive_serial_scheduler_shrinks_then_grows(monkeypatch, tmp_path) -> None:
+def test_adaptive_serial_scheduler_does_not_shrink_following_chunks(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
     config.pipeline.default_concurrency = 1
     config.pipeline.translation.chunk_lines = 4
     config.pipeline.translation.batching.mode = "adaptive"
     config.pipeline.translation.batching.min_chunk_lines = 1
-    config.pipeline.translation.batching.grow_after_successes = 3
     chunks = [
         Chunk(chunk_id="c00000", segment_ids=[1, 2, 3, 4], lines=["[1] A", "[2] B", "[3] C", "[4] D"]),
         Chunk(chunk_id="c00001", segment_ids=[5, 6, 7, 8], lines=["[5] E", "[6] F", "[7] G", "[8] H"]),
@@ -462,8 +621,8 @@ def test_adaptive_serial_scheduler_shrinks_then_grows(monkeypatch, tmp_path) -> 
         )
     )
 
-    assert seen == ["c00000", "c00000s0", "c00000s1", "c00001s0", "c00001s1", "c00002"]
-    assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1", "c00001s0", "c00001s1", "c00002"]
+    assert seen == ["c00000", "c00000s0", "c00000s1", "c00001", "c00002"]
+    assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1", "c00001", "c00002"]
 
 
 def test_auto_bootstrap_memory_workflow_allows_parallel_windows(monkeypatch, tmp_path) -> None:

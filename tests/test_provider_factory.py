@@ -58,6 +58,34 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
     assert response.numbered_lines == ["[1] pong"]
 
 
+def test_translation_prompt_includes_recovery_and_adaptive_hints() -> None:
+    cfg = ProviderConfig(
+        name="openai_like",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["model-a"],
+        mapping=MappingConfig(request={"style": "openai_chat"}, response={"text_paths": ["choices[0].message.content"]}),
+    )
+    req = NormalizedRequest(
+        model="model-a",
+        lines=["[1] hello"],
+        source_lang="en",
+        target_lang="zh-CN",
+        protocol_recovery_hint="- Previous output failed subtitle protocol validation.",
+        adaptive_context_hint="This is a capacity retry for one part of a larger subtitle chunk.",
+    )
+
+    payload = _build_payload(cfg, req)
+    content = payload["messages"][-1]["content"]
+
+    assert "Protocol recovery retry" in content
+    assert "Previous output failed subtitle protocol validation" in content
+    assert "Adaptive capacity retry context" in content
+    assert "capacity retry for one part" in content
+
+
 def test_request_json_adds_product_headers(monkeypatch) -> None:
     captured = {}
 

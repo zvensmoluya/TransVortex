@@ -141,7 +141,6 @@ translation:
   batching:
     mode: adaptive
     min_chunk_lines: 20
-    grow_after_successes: 3
   style_preset: subtitle_natural
   style_prompt: |
     Translate as natural subtitles.
@@ -156,7 +155,8 @@ translation:
 
 说明：
 - `translation.chunking.mode: capacity_aware` 会按 provider 输出预算和 `max_batch_lines` 规划初始大 chunk；`chunk_lines` 保留为旧 fixed 分片兼容项。
-- `batching.mode: adaptive` 只在明确容量/上下文/输出截断类错误后拆分失败 chunk；timeout、限流和 5xx 走 retry/fallback。
+- `batching.mode: adaptive` 只在当前 chunk 遇到明确硬容量错误时局部拆分；timeout、限流、5xx 和输出协议失败走 retry/fallback/repair，仍失败则暴露错误。
+- 输出协议失败会对同一 chunk 做一次轻量格式恢复重试，仍然保持原上下文和 memory；这不是无限自救，也不会把后续 chunk 自动缩小。
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。

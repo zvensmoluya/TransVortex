@@ -234,7 +234,6 @@ class AsrPreprocessingConfig:
 class TranslationBatchingConfig:
     mode: str = "adaptive"  # fixed | adaptive
     min_chunk_lines: int = 20
-    grow_after_successes: int = 3
 
 
 @dataclass
@@ -475,6 +474,8 @@ class NormalizedRequest:
     prompt_mode: str = "translate"
     repair_reason: str = ""
     bad_translation: str = ""
+    protocol_recovery_hint: str = ""
+    adaptive_context_hint: str = ""
     temperature: float = 0.1
     system_prompt: str = ""
 

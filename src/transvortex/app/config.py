@@ -564,6 +564,11 @@ def load_app_config(
             "use memory.inject.max_prompt_tokens"
         )
     batching_raw = translation_raw.get("batching") or {}
+    if "grow_after_successes" in batching_raw:
+        raise ValueError(
+            "translation.batching.grow_after_successes is no longer supported; "
+            "adaptive batching now only splits the current chunk on hard capacity errors"
+        )
     experiment_logging_raw = translation_raw.get("experiment_logging") or {}
     translation = TranslationConfig(
         chunk_lines=chunk_lines,
@@ -597,7 +602,6 @@ def load_app_config(
         batching=TranslationBatchingConfig(
             mode=_to_str(batching_raw.get("mode"), "adaptive"),
             min_chunk_lines=_to_int(batching_raw.get("min_chunk_lines"), 20),
-            grow_after_successes=_to_int(batching_raw.get("grow_after_successes"), 3),
         ),
         experiment_logging=TranslationExperimentLoggingConfig(
             enabled=_to_bool(experiment_logging_raw.get("enabled"), False),

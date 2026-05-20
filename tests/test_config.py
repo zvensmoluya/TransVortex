@@ -1221,6 +1221,33 @@ translation:
         load_app_config(root_dir=tmp_path)
 
 
+def test_translation_batching_rejects_legacy_grow_after_successes(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation:
+  batching:
+    grow_after_successes: 3
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="translation.batching.grow_after_successes is no longer supported"):
+        load_app_config(root_dir=tmp_path)
+
+
 def test_memory_consistency_check_rejects_disabled_policy_switch(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
