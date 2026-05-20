@@ -113,7 +113,6 @@ translation:
   chunking:
     input_safety_ratio: 0.75
     prompt_overhead_tokens: 900
-    memory_entry_tokens: 55
         """.strip(),
         encoding="utf-8",
     )
@@ -123,7 +122,6 @@ translation:
 
     assert chunking.input_safety_ratio == 0.75
     assert chunking.prompt_overhead_tokens == 900
-    assert chunking.memory_entry_tokens == 55
 
 
 def test_translation_experiment_logging_loads_from_yaml(tmp_path: Path) -> None:
@@ -304,7 +302,8 @@ routing:
     assert cfg.pipeline.memory.inject.locked is True
     assert cfg.pipeline.memory.inject.confirmed is True
     assert cfg.pipeline.memory.inject.proposed is True
-    assert cfg.pipeline.memory.inject.max_entries_per_chunk == 30
+    assert cfg.pipeline.memory.inject.intensity == "high"
+    assert cfg.pipeline.memory.inject.max_prompt_tokens == 2400
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
@@ -1084,9 +1083,9 @@ memory:
     min_initial_chunk_lines: 96
     max_initial_chunks: 12
   inject:
-    strategy: full
+    intensity: max
     proposed: false
-    max_entries_per_chunk: 12
+    max_prompt_tokens: 3600
     format: v2
   patch:
     enabled: false
@@ -1102,9 +1101,9 @@ memory:
     assert cfg.pipeline.memory.workflow == "experimental_dynamic"
     assert cfg.pipeline.memory.chunking.min_initial_chunk_lines == 96
     assert cfg.pipeline.memory.chunking.max_initial_chunks == 12
-    assert cfg.pipeline.memory.inject.strategy == "full"
+    assert cfg.pipeline.memory.inject.intensity == "max"
     assert cfg.pipeline.memory.inject.proposed is False
-    assert cfg.pipeline.memory.inject.max_entries_per_chunk == 12
+    assert cfg.pipeline.memory.inject.max_prompt_tokens == 3600
     assert cfg.pipeline.memory.patch.enabled is False
     assert cfg.pipeline.memory.patch.after_each_window is False
     assert cfg.pipeline.memory.merge.auto_confirm_high_confidence is True
@@ -1137,6 +1136,88 @@ memory:
     )
 
     with pytest.raises(ValueError, match="Unsupported memory.inject.format: v1; only v2 is supported"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_memory_inject_rejects_legacy_limit_fields(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    strategy: full
+    max_entries_per_chunk: 12
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported legacy memory.inject fields"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_memory_inject_rejects_unknown_intensity(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    intensity: extreme
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported memory.inject.intensity"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_translation_chunking_rejects_legacy_memory_entry_tokens(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+translation:
+  chunking:
+    memory_entry_tokens: 55
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="translation.chunking.memory_entry_tokens is no longer supported"):
         load_app_config(root_dir=tmp_path)
 
 

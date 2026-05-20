@@ -18,26 +18,56 @@ UNRESOLVED_ADDRESS_HINT = (
 
 @dataclass
 class _RenderLimits:
+    intensity: str
     max_prompt_chars: int
-    max_proposed_entries: int
-    max_context_only_entries: int
+    max_context_rows: int | None
+    max_background_rows: int | None
+    max_weak_rows: int | None
     max_notes_chars: int
+
+
+def _normalized_intensity(value: str) -> str:
+    value = str(value or "high").strip().lower()
+    return value if value in {"none", "low", "auto", "high", "max"} else "high"
+
+
+def _section_caps(intensity: str) -> tuple[int | None, int | None, int | None]:
+    if intensity == "none":
+        return 0, 0, 0
+    if intensity == "low":
+        return 0, 0, 0
+    if intensity == "auto":
+        return 16, 16, 8
+    if intensity == "max":
+        return None, None, None
+    return 48, 48, 24
 
 
 def _limits(inject_config: MemoryInjectConfig | None) -> _RenderLimits:
     if inject_config is None:
+        context_rows, background_rows, weak_rows = _section_caps("high")
         return _RenderLimits(
-            max_prompt_chars=1200 * 4,
-            max_proposed_entries=12,
-            max_context_only_entries=10,
+            intensity="high",
+            max_prompt_chars=2400 * 4,
+            max_context_rows=context_rows,
+            max_background_rows=background_rows,
+            max_weak_rows=weak_rows,
             max_notes_chars=60,
         )
+    intensity = _normalized_intensity(inject_config.intensity)
+    context_rows, background_rows, weak_rows = _section_caps(intensity)
     return _RenderLimits(
-        max_prompt_chars=max(1, int(inject_config.max_prompt_tokens or 1200)) * 4,
-        max_proposed_entries=max(0, int(inject_config.max_proposed_entries or 0)),
-        max_context_only_entries=max(0, int(inject_config.max_context_only_entries or 0)),
+        intensity=intensity,
+        max_prompt_chars=max(1, int(inject_config.max_prompt_tokens or 2400)) * 4,
+        max_context_rows=context_rows,
+        max_background_rows=background_rows,
+        max_weak_rows=weak_rows,
         max_notes_chars=max(0, int(inject_config.max_notes_chars_per_entry or 0)),
     )
+
+
+def _can_add_limited(current_count: int, limit: int | None) -> bool:
+    return limit is None or current_count < limit
 
 
 def _note(entry: MemoryEntry, max_chars: int) -> str:
@@ -138,12 +168,15 @@ def build_memory_prompt(selected_entries: list[SelectedMemoryEntry], inject_conf
     if not selected_entries:
         return ""
     limits = _limits(inject_config)
+    if limits.intensity == "none":
+        return ""
     translate_rows: list[str] = []
     context_rows: list[str] = []
     background_rows: list[str] = []
     weak_rows: list[str] = []
-    proposed_background_count = 0
+    background_count = 0
     weak_count = 0
+    context_count = 0
 
     for selected in selected_entries:
         for match in selected.matches:
@@ -151,18 +184,21 @@ def build_memory_prompt(selected_entries: list[SelectedMemoryEntry], inject_conf
             if match.zone == TRANSLATE_ZONE and match.policy not in {"context_only"}:
                 translate_rows.append(row)
             elif match.policy in WEAK_POLICIES or match.kind in {"phrase_fragment", "broad_hint"}:
-                if weak_count < limits.max_context_only_entries:
+                if _can_add_limited(weak_count, limits.max_weak_rows):
                     weak_rows.append(row + " | do not force exact wording")
                     weak_count += 1
             elif match.zone in CONTEXT_ZONES:
-                context_rows.append(row)
+                if _can_add_limited(context_count, limits.max_context_rows):
+                    context_rows.append(row)
+                    context_count += 1
             else:
-                context_rows.append(row)
+                if _can_add_limited(context_count, limits.max_context_rows):
+                    context_rows.append(row)
+                    context_count += 1
         if _is_background(selected):
-            background_rows.append(_background_row(selected, limits))
-        elif not selected.matches and selected.entry.status == "proposed" and proposed_background_count < limits.max_proposed_entries:
-            background_rows.append(_background_row(selected, limits))
-            proposed_background_count += 1
+            if _can_add_limited(background_count, limits.max_background_rows):
+                background_rows.append(_background_row(selected, limits))
+                background_count += 1
 
     parts = [
         "TRANSLATION MEMORY\n"

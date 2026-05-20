@@ -282,7 +282,7 @@ def _preload_memory(memory_dir: Path, memory_path: Path) -> None:
     shutil.copy2(memory_path, memory_dir / "translation_memory.json")
 
 
-def _configure_for_case(config: Any, case: InjectionTranslationCase, max_entries_per_chunk: int) -> None:
+def _configure_for_case(config: Any, case: InjectionTranslationCase, memory_intensity: str) -> None:
     config.pipeline.translation.chunk_lines = case.chunk_lines
     config.pipeline.translation.context_before_lines = 40
     config.pipeline.translation.context_after_lines = 20
@@ -302,7 +302,7 @@ def _configure_for_case(config: Any, case: InjectionTranslationCase, max_entries
     config.pipeline.memory.inject.locked = True
     config.pipeline.memory.inject.confirmed = True
     config.pipeline.memory.inject.proposed = True
-    config.pipeline.memory.inject.max_entries_per_chunk = max(1, int(max_entries_per_chunk))
+    config.pipeline.memory.inject.intensity = str(memory_intensity or "high")
 
 
 def _run_case(
@@ -315,7 +315,7 @@ def _run_case(
     timeout_seconds: int,
     provider_timeout_seconds: int,
     provider_read_timeout_seconds: int,
-    max_entries_per_chunk: int,
+    memory_intensity: str,
 ) -> dict[str, Any]:
     providers_file = _build_case_providers(
         root,
@@ -350,7 +350,7 @@ def _run_case(
     if case.memory_path is not None:
         _preload_memory(paths["memory"], case.memory_path)
     config = load_app_config(root_dir=root, providers_file=providers_file, cli_overrides=cli_overrides)
-    _configure_for_case(config, case, max_entries_per_chunk)
+    _configure_for_case(config, case, memory_intensity)
     case_run_dir = output_dir / "runs" / case.case_id
     if case_run_dir.exists():
         shutil.rmtree(case_run_dir)
@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reasoning", default="low")
     parser.add_argument("--memory-cases", default="off,medium", help="Comma-separated: off,none,medium,high")
     parser.add_argument("--chunk-lines", type=int, default=120)
-    parser.add_argument("--max-entries-per-chunk", type=int, default=30)
+    parser.add_argument("--memory-intensity", default="high", choices=["none", "low", "auto", "high", "max"])
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--provider-timeout-seconds", type=int, default=900)
     parser.add_argument("--provider-read-timeout-seconds", type=int, default=900)
@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
             "base_provider": args.base_provider,
             "reasoning": args.reasoning,
             "chunk_lines": int(args.chunk_lines),
-            "max_entries_per_chunk": int(args.max_entries_per_chunk),
+            "memory_intensity": str(args.memory_intensity),
             "resume": bool(args.resume),
             "provider_timeout_seconds": int(args.provider_timeout_seconds),
             "provider_read_timeout_seconds": int(args.provider_read_timeout_seconds),
@@ -469,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout_seconds,
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 provider_read_timeout_seconds=args.provider_read_timeout_seconds,
-                max_entries_per_chunk=args.max_entries_per_chunk,
+                memory_intensity=args.memory_intensity,
             )
         )
         completed_case_ids.add(case.case_id)

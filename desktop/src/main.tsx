@@ -321,6 +321,7 @@ function App() {
         translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
         translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
         memoryWorkflow: textValue(memory.workflow, current.memoryWorkflow) as FormState["memoryWorkflow"],
+        memoryIntensity: textValue(objectValue(memory.inject).intensity, current.memoryIntensity) as FormState["memoryIntensity"],
         memoryPreset: current.memoryPreset || memoryPresetString(memory.presets),
         subtitleQualityMode: textValue(
           objectValue(subtitle.quality).mode,
@@ -917,6 +918,7 @@ function App() {
       subtitleCompressionEnabled: form.subtitleCompressionEnabled,
       subtitleReflowEnabled: form.subtitleReflowEnabled,
       memoryWorkflow: form.memoryWorkflow,
+      memoryIntensity: form.memoryIntensity,
       memoryPreset: memoryPresets.length ? memoryPresets.join(",") : null,
       outputFormat: form.outputFormat,
       concurrency: form.concurrency,
@@ -1431,7 +1433,7 @@ function TaskWorkspace({
             />
           </label>
         </div>
-        <div className="mt-4 grid grid-cols-[220px_minmax(0,1fr)_120px] items-end gap-4">
+        <div className="mt-4 grid grid-cols-[220px_160px_minmax(0,1fr)_120px] items-end gap-4">
           <label className="tvx-label">
             {t("memoryWorkflow")}
             <select className="tvx-input" value={form.memoryWorkflow} onChange={(event) => update("memoryWorkflow", event.target.value as FormState["memoryWorkflow"])}>
@@ -1440,6 +1442,16 @@ function TaskWorkspace({
               <option value="draft_only">{t("memoryWorkflowDraftOnly")}</option>
               <option value="experimental_dynamic">{t("memoryWorkflowDynamic")}</option>
               <option value="off">{t("memoryWorkflowOff")}</option>
+            </select>
+          </label>
+          <label className="tvx-label">
+            {t("memoryIntensity")}
+            <select className="tvx-input" value={form.memoryIntensity} onChange={(event) => update("memoryIntensity", event.target.value as FormState["memoryIntensity"])}>
+              <option value="high">{t("memoryIntensityHigh")}</option>
+              <option value="auto">{t("memoryIntensityAuto")}</option>
+              <option value="low">{t("memoryIntensityLow")}</option>
+              <option value="max">{t("memoryIntensityMax")}</option>
+              <option value="none">{t("memoryIntensityNone")}</option>
             </select>
           </label>
           <label className="tvx-label">

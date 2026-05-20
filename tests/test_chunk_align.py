@@ -210,7 +210,6 @@ def test_capacity_planner_reserves_memory_budget(tmp_path) -> None:
     config = _planner_config(tmp_path, max_context_tokens=1000)
     config.pipeline.translation.chunking.input_safety_ratio = 1.0
     config.pipeline.translation.chunking.prompt_overhead_tokens = 80
-    config.pipeline.translation.chunking.memory_entry_tokens = 40
     config.pipeline.translation.chunking.min_chunk_lines = 1
     config.pipeline.translation.chunking.target_chunk_lines = 1
     config.pipeline.translation.chunking.max_chunk_lines = 1
@@ -221,13 +220,31 @@ def test_capacity_planner_reserves_memory_budget(tmp_path) -> None:
     config.pipeline.memory.workflow = "off"
     no_memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
     config.pipeline.memory.workflow = "auto_bootstrap"
-    config.pipeline.memory.inject.max_entries_per_chunk = 3
+    config.pipeline.memory.inject.intensity = "high"
+    config.pipeline.memory.inject.max_prompt_tokens = 120
     memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 
-    assert memory_chunks[1].meta["memory_reserved_tokens"] > 0
+    assert memory_chunks[1].meta["memory_reserved_tokens"] == 184
     assert len(memory_chunks[1].context_before) + len(memory_chunks[1].context_after) < (
         len(no_memory_chunks[1].context_before) + len(no_memory_chunks[1].context_after)
     )
+
+
+def test_capacity_planner_skips_memory_budget_for_none_intensity(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_context_tokens=1000)
+    config.pipeline.translation.chunking.input_safety_ratio = 1.0
+    config.pipeline.translation.chunking.prompt_overhead_tokens = 80
+    config.pipeline.translation.chunking.min_chunk_lines = 1
+    config.pipeline.translation.chunking.target_chunk_lines = 1
+    config.pipeline.translation.chunking.max_chunk_lines = 1
+    config.pipeline.memory.workflow = "auto_bootstrap"
+    config.pipeline.memory.inject.intensity = "none"
+    config.pipeline.memory.inject.max_prompt_tokens = 120
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src="context line words") for i in range(1, 5)]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert chunks[1].meta["memory_reserved_tokens"] == 0
 
 
 def test_capacity_planner_prefers_pause_sentence_boundary(tmp_path) -> None:

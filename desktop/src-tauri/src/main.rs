@@ -62,6 +62,7 @@ struct StartTaskRequest {
     subtitle_compression_enabled: Option<bool>,
     subtitle_reflow_enabled: Option<bool>,
     memory_workflow: Option<String>,
+    memory_intensity: Option<String>,
     memory_preset: Option<String>,
 }
 
@@ -106,6 +107,7 @@ struct ResumeTaskRequest {
     subtitle_compression_enabled: Option<bool>,
     subtitle_reflow_enabled: Option<bool>,
     memory_workflow: Option<String>,
+    memory_intensity: Option<String>,
     memory_preset: Option<String>,
 }
 
@@ -668,6 +670,7 @@ fn start_task(
         request.subtitle_reflow_enabled,
     );
     push_arg(&mut args, "--memory-workflow", &request.memory_workflow);
+    push_arg(&mut args, "--memory-intensity", &request.memory_intensity);
     push_arg(&mut args, "--memory-preset", &request.memory_preset);
 
     spawn_streaming_worker(app, state, root, args)
@@ -738,6 +741,7 @@ fn resume_task(
         request.subtitle_reflow_enabled,
     );
     push_arg(&mut args, "--memory-workflow", &request.memory_workflow);
+    push_arg(&mut args, "--memory-intensity", &request.memory_intensity);
     push_arg(&mut args, "--memory-preset", &request.memory_preset);
     spawn_streaming_worker(app, state, root, args)
 }

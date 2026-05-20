@@ -194,11 +194,9 @@ def _provider_list(provider: ProviderConfig | list[ProviderConfig] | tuple[Provi
 def _memory_reserved_tokens(config: AppConfig) -> int:
     if not translates_with_memory(config.pipeline.memory):
         return 0
-    max_entries = max(0, int(config.pipeline.memory.inject.max_entries_per_chunk))
-    if max_entries <= 0:
+    if str(config.pipeline.memory.inject.intensity or "high").strip().lower() == "none":
         return 0
-    per_entry = max(1, int(config.pipeline.translation.chunking.memory_entry_tokens))
-    return MEMORY_SECTION_OVERHEAD + max_entries * per_entry
+    return MEMORY_SECTION_OVERHEAD + max(0, int(config.pipeline.memory.inject.max_prompt_tokens))
 
 
 def translation_prompt_overhead_tokens(config: AppConfig) -> int:

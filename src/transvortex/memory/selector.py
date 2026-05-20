@@ -150,11 +150,6 @@ def entry_matches_text(entry: MemoryEntry, text: str) -> bool:
     return any(term_matches_text(term, text) for term, _kind, _has_variant in _entry_terms(entry))
 
 
-def _normalized_strategy(value: str) -> str:
-    value = str(value or "balanced").strip().lower()
-    return value if value in {"balanced", "full", "matched"} else "balanced"
-
-
 def _allowed_statuses(inject_config: MemoryInjectConfig) -> set[str]:
     allowed = set()
     if inject_config.locked:
@@ -164,6 +159,19 @@ def _allowed_statuses(inject_config: MemoryInjectConfig) -> set[str]:
     if inject_config.proposed:
         allowed.add("proposed")
     return allowed
+
+
+def _normalized_intensity(value: str) -> str:
+    value = str(value or "high").strip().lower()
+    return value if value in {"none", "low", "auto", "high", "max"} else "high"
+
+
+def _is_weak_match(match: MemoryFormMatch) -> bool:
+    return match.policy == "context_only" or match.kind in {"phrase_fragment", "broad_hint"}
+
+
+def _is_strong_background(entry: MemoryEntry) -> bool:
+    return entry.status in {"locked", "confirmed"} or entry.constraint in {"must_use", "preferred"}
 
 
 def _chunk_zones(chunk: Chunk) -> dict[str, str]:
@@ -240,21 +248,18 @@ def _entry_match_score(entry: MemoryEntry, chunk: Chunk) -> int:
 def _should_include_entry(
     entry: MemoryEntry,
     *,
-    text: str,
-    strategy: str,
-    confirmed_count: int,
-    max_entries: int,
+    matches: list[MemoryFormMatch],
+    intensity: str,
 ) -> bool:
-    if strategy == "matched":
-        return entry_matches_text(entry, text)
-    if entry.status == "locked" and strategy in {"balanced", "full"}:
+    if intensity == "none":
+        return False
+    if intensity == "low":
+        return any(match.zone == "lines" and not _is_weak_match(match) for match in matches)
+    if matches:
         return True
-    if entry.status == "confirmed":
-        if strategy == "full":
-            return True
-        if strategy == "balanced" and confirmed_count <= max_entries:
-            return True
-    return entry_matches_text(entry, text)
+    if intensity in {"auto", "high", "max"} and _is_strong_background(entry):
+        return True
+    return False
 
 
 def select_memory_entries(
@@ -262,26 +267,21 @@ def select_memory_entries(
     chunk: Chunk,
     inject_config: MemoryInjectConfig,
 ) -> list[SelectedMemoryEntry]:
-    text = "\n".join([*chunk.context_before, *chunk.lines, *chunk.context_after])
-    max_entries = max(0, inject_config.max_entries_per_chunk)
-    if max_entries <= 0:
+    intensity = _normalized_intensity(inject_config.intensity)
+    if intensity == "none":
         return []
-    strategy = _normalized_strategy(inject_config.strategy)
     allowed = _allowed_statuses(inject_config)
-    confirmed_count = sum(1 for entry in document.entries if entry.status == "confirmed" and entry.source.strip())
     selected: list[SelectedMemoryEntry] = []
     for entry in document.entries:
         if entry.status not in allowed or not entry.source.strip():
             continue
+        entry_matches = _entry_matches(entry, chunk)
         if not _should_include_entry(
             entry,
-            text=text,
-            strategy=strategy,
-            confirmed_count=confirmed_count,
-            max_entries=max_entries,
+            matches=entry_matches,
+            intensity=intensity,
         ):
             continue
-        entry_matches = _entry_matches(entry, chunk)
         selected.append(SelectedMemoryEntry(entry=entry, matches=entry_matches, score=_entry_match_score(entry, chunk)))
     selected.sort(
         key=lambda selected_entry: (
@@ -292,4 +292,4 @@ def select_memory_entries(
             selected_entry.entry.source.casefold(),
         )
     )
-    return selected[:max_entries]
+    return selected

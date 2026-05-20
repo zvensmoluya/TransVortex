@@ -40,7 +40,6 @@ translation:
     hard_output_tokens: 0
     input_safety_ratio: 0.85
     prompt_overhead_tokens: 1200
-    memory_entry_tokens: 80
   batching:
     mode: adaptive
     min_chunk_lines: 20
@@ -69,8 +68,9 @@ memory:
     locked: true
     confirmed: true
     proposed: true
-    strategy: balanced
-    max_entries_per_chunk: 30
+    intensity: high
+    max_prompt_tokens: 2400
+    max_notes_chars_per_entry: 60
   patch:
     enabled: false
     after_each_window: false

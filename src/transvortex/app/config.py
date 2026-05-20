@@ -59,6 +59,13 @@ from .credentials import read_dotenv_values
 
 MEMORY_WORKFLOWS = {"off", "preset_only", "auto_bootstrap", "draft_only", "experimental_dynamic"}
 LEGACY_MEMORY_MODES = {"bootstrap_first", "consistency_first", "dynamic_patch", "static", "balanced"}
+MEMORY_INJECT_INTENSITIES = {"none", "low", "auto", "high", "max"}
+LEGACY_MEMORY_INJECT_FIELDS = {
+    "strategy",
+    "max_entries_per_chunk",
+    "max_proposed_entries",
+    "max_context_only_entries",
+}
 
 ENV_MAP = {
     "chunk_seconds": "TVX_CHUNK_SECONDS",
@@ -160,6 +167,23 @@ def _memory_workflow(memory_raw: dict[str, Any]) -> str:
     if workflow not in MEMORY_WORKFLOWS:
         raise ValueError(f"Unsupported memory.workflow: {workflow}; expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}")
     return workflow
+
+
+def _memory_inject_intensity(memory_inject_raw: dict[str, Any]) -> str:
+    legacy_fields = sorted(field for field in LEGACY_MEMORY_INJECT_FIELDS if field in memory_inject_raw)
+    if legacy_fields:
+        raise ValueError(
+            "Unsupported legacy memory.inject fields: "
+            + ", ".join(legacy_fields)
+            + "; use memory.inject.intensity and memory.inject.max_prompt_tokens"
+        )
+    intensity = _to_str(memory_inject_raw.get("intensity"), "high").strip().lower()
+    if intensity not in MEMORY_INJECT_INTENSITIES:
+        raise ValueError(
+            "Unsupported memory.inject.intensity: "
+            f"{intensity}; expected one of: {', '.join(sorted(MEMORY_INJECT_INTENSITIES))}"
+        )
+    return intensity
 
 
 def _resolve_prompt_path(root_dir: Path, raw_path: Any) -> Path | None:
@@ -534,6 +558,11 @@ def load_app_config(
     repair_raw = translation_raw.get("repair") or {}
     asr_uncertainty_raw = translation_raw.get("asr_uncertainty_hints") or {}
     translation_chunking_raw = translation_raw.get("chunking") or {}
+    if "memory_entry_tokens" in translation_chunking_raw:
+        raise ValueError(
+            "translation.chunking.memory_entry_tokens is no longer supported; "
+            "use memory.inject.max_prompt_tokens"
+        )
     batching_raw = translation_raw.get("batching") or {}
     experiment_logging_raw = translation_raw.get("experiment_logging") or {}
     translation = TranslationConfig(
@@ -564,7 +593,6 @@ def load_app_config(
             hard_output_tokens=_to_int(translation_chunking_raw.get("hard_output_tokens"), 0),
             input_safety_ratio=_to_float(translation_chunking_raw.get("input_safety_ratio"), 0.85),
             prompt_overhead_tokens=_to_int(translation_chunking_raw.get("prompt_overhead_tokens"), 1200),
-            memory_entry_tokens=_to_int(translation_chunking_raw.get("memory_entry_tokens"), 80),
         ),
         batching=TranslationBatchingConfig(
             mode=_to_str(batching_raw.get("mode"), "adaptive"),
@@ -658,11 +686,8 @@ def load_app_config(
             locked=_to_bool(memory_inject_raw.get("locked"), True),
             confirmed=_to_bool(memory_inject_raw.get("confirmed"), True),
             proposed=_to_bool(memory_inject_raw.get("proposed"), True),
-            strategy=_to_str(memory_inject_raw.get("strategy"), "balanced"),
-            max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
-            max_prompt_tokens=_to_int(memory_inject_raw.get("max_prompt_tokens"), 1200),
-            max_proposed_entries=_to_int(memory_inject_raw.get("max_proposed_entries"), 12),
-            max_context_only_entries=_to_int(memory_inject_raw.get("max_context_only_entries"), 10),
+            intensity=_memory_inject_intensity(memory_inject_raw),
+            max_prompt_tokens=_to_int(memory_inject_raw.get("max_prompt_tokens"), 2400),
             max_notes_chars_per_entry=_to_int(memory_inject_raw.get("max_notes_chars_per_entry"), 60),
         ),
         patch=MemoryPatchConfig(
@@ -914,6 +939,14 @@ def load_app_config(
                     f"expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}"
                 )
             pipeline.memory.workflow = workflow
+        elif key == "memory_intensity":
+            intensity = _to_str(value, pipeline.memory.inject.intensity).strip().lower()
+            if intensity not in MEMORY_INJECT_INTENSITIES:
+                raise ValueError(
+                    f"Unsupported memory_intensity override: {intensity}; "
+                    f"expected one of: {', '.join(sorted(MEMORY_INJECT_INTENSITIES))}"
+                )
+            pipeline.memory.inject.intensity = intensity
         elif key == "memory_patch_window_chunks":
             pipeline.memory.patch.window_chunks = _to_int(value, pipeline.memory.patch.window_chunks)
         elif key == "memory_presets":

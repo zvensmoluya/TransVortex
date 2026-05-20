@@ -249,7 +249,6 @@ class TranslationChunkingConfig:
     hard_output_tokens: int = 0
     input_safety_ratio: float = 0.85
     prompt_overhead_tokens: int = 1200
-    memory_entry_tokens: int = 80
 
 
 @dataclass
@@ -352,11 +351,8 @@ class MemoryInjectConfig:
     locked: bool = True
     confirmed: bool = True
     proposed: bool = True
-    strategy: str = "balanced"
-    max_entries_per_chunk: int = 30
-    max_prompt_tokens: int = 1200
-    max_proposed_entries: int = 12
-    max_context_only_entries: int = 10
+    intensity: str = "high"
+    max_prompt_tokens: int = 2400
     max_notes_chars_per_entry: int = 60
 
 

@@ -161,14 +161,15 @@ def test_selector_and_injector_group_relevant_entries() -> None:
         context_before=[],
         context_after=["[2] The Order appears"],
     )
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=3))
-    assert [entry.source for entry in selected] == ["Subaru", "The Order", "Mercury"]
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
+    assert [entry.source for entry in selected] == ["Subaru", "Mercury"]
     prompt = build_memory_prompt(selected)
     assert "MATCHED_IN_TRANSLATE_ONLY" in prompt
     assert "matched: Subaru" in prompt
     assert "target: 斯巴鲁" in prompt
     assert "matched: Mercury" in prompt
     assert "target: 墨丘利" in prompt
+    assert "The Order" not in prompt
 
 
 def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
@@ -214,17 +215,17 @@ def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
         lines=["[1] エミリアタンとスヴァルは死者の過去を追体験する本を見た"],
     )
 
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
     prompt = build_memory_prompt(selected)
 
-    assert [entry.source for entry in selected] == ["エミリア", "スバル", "死者の書"]
+    assert [entry.source for entry in selected] == ["エミリア", "スバル"]
     assert "MATCHED_IN_TRANSLATE_ONLY" in prompt
     assert "matched: エミリアタン" in prompt
     assert "target: 爱蜜莉雅碳" in prompt
     assert "matched: スヴァル" in prompt
     assert "target: 昴" in prompt
-    assert "WEAK_HINTS" in prompt
-    assert "matched: 死者の過去を追体験する本" in prompt
+    assert "WEAK_HINTS" not in prompt
+    assert "matched: 死者の過去を追体験する本" not in prompt
 
 
 def test_selector_does_not_reuse_same_kind_variant_target_for_alias() -> None:
@@ -252,7 +253,7 @@ def test_selector_does_not_reuse_same_kind_variant_target_for_alias() -> None:
 
     alias_chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] エミリア様が来た"])
     alias_prompt = build_memory_prompt(
-        select_memory_entries(doc, alias_chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+        select_memory_entries(doc, alias_chunk, MemoryInjectConfig(intensity="low"))
     )
 
     assert "matched: エミリア様" in alias_prompt
@@ -266,7 +267,7 @@ def test_selector_does_not_reuse_same_kind_variant_target_for_alias() -> None:
 
     variant_chunk = Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] エミリア殿が来た"])
     variant_prompt = build_memory_prompt(
-        select_memory_entries(doc, variant_chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+        select_memory_entries(doc, variant_chunk, MemoryInjectConfig(intensity="low"))
     )
 
     assert "matched: エミリア殿" in variant_prompt
@@ -288,7 +289,7 @@ def test_selector_avoids_short_or_embedded_false_matches() -> None:
         segment_ids=[1],
         lines=["[1] The mayor joined The Order"],
     )
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
     assert [entry.source for entry in selected] == ["The Order"]
 
 
@@ -308,7 +309,7 @@ def test_selector_demotes_generic_aliases() -> None:
     )
     chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] この塔でスバルを待つ"])
 
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
 
     assert [entry.source for entry in selected] == ["スバル"]
 
@@ -327,12 +328,12 @@ def test_selector_matches_cjk_terms_without_word_boundaries() -> None:
         lines=["[1] スバルはエミリア様を見た"],
     )
 
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
 
     assert {entry.source for entry in selected} == {"スバル", "エミリア"}
 
 
-def test_selector_balanced_injects_strong_memory_without_match() -> None:
+def test_selector_high_injects_strong_memory_without_match() -> None:
     doc = MemoryDocument(
         entries=[
             MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
@@ -342,11 +343,11 @@ def test_selector_balanced_injects_strong_memory_without_match() -> None:
         ]
     )
     chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="balanced", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="high"))
     assert [entry.source for entry in selected] == ["Unseen Locked", "Unseen Confirmed", "Mercury"]
 
 
-def test_selector_matched_requires_match_for_strong_memory() -> None:
+def test_selector_low_requires_direct_translate_match_for_strong_memory() -> None:
     doc = MemoryDocument(
         entries=[
             MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
@@ -355,11 +356,33 @@ def test_selector_matched_requires_match_for_strong_memory() -> None:
         ]
     )
     chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
     assert [entry.source for entry in selected] == ["Mercury"]
 
 
-def test_selector_full_keeps_proposed_matched_only() -> None:
+def test_selector_low_skips_weak_direct_hints() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="1",
+                source="WeakTerm",
+                target="弱提示",
+                status="proposed",
+                constraint="hint",
+                priority=100,
+                enforcement_policy={"translation": "context_only"},
+            ),
+            MemoryEntry(id="2", source="StrongTerm", target="强术语", status="confirmed", priority=90),
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] WeakTerm and StrongTerm appear"])
+
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="low"))
+
+    assert [entry.source for entry in selected] == ["StrongTerm"]
+
+
+def test_selector_max_keeps_strong_background_and_matched_proposed_only() -> None:
     doc = MemoryDocument(
         entries=[
             MemoryEntry(id="1", source="Unseen Locked", target="锁定", status="locked", priority=100),
@@ -369,34 +392,94 @@ def test_selector_full_keeps_proposed_matched_only() -> None:
         ]
     )
     chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Mercury arrives"])
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="full", max_entries_per_chunk=10))
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="max"))
     assert [entry.source for entry in selected] == ["Unseen Locked", "Unseen Confirmed", "Mercury"]
 
 
-def test_selector_balanced_filters_confirmed_when_over_limit() -> None:
+def test_selector_max_keeps_preferred_and_must_use_background() -> None:
     doc = MemoryDocument(
         entries=[
-            MemoryEntry(id="1", source="Alpha", target="阿尔法", status="confirmed", priority=100),
-            MemoryEntry(id="2", source="Beta", target="贝塔", status="confirmed", priority=90),
-            MemoryEntry(id="3", source="Gamma", target="伽马", status="confirmed", priority=80),
+            MemoryEntry(id="1", source="Preferred Background", target="优先背景", status="proposed", constraint="preferred", priority=100),
+            MemoryEntry(id="2", source="Must Background", target="必须背景", status="proposed", constraint="must_use", priority=90),
+            MemoryEntry(id="3", source="Hint Background", target="提示背景", status="proposed", constraint="hint", priority=80),
         ]
     )
-    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Alpha arrives"])
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="balanced", max_entries_per_chunk=2))
-    assert [entry.source for entry in selected] == ["Alpha"]
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] no direct term"])
+
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="max"))
+
+    assert [entry.source for entry in selected] == ["Must Background", "Preferred Background"]
 
 
-def test_selector_strategy_fallback_and_limit() -> None:
+def test_selector_keeps_all_direct_matches_without_entry_cap() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id=str(i), source=f"Term{i}", target=f"术语{i}", status="proposed", priority=100 - i)
+            for i in range(1, 35)
+        ]
+    )
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] " + " ".join(f"Term{i}" for i in range(1, 35))])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="high"))
+    assert len(selected) == 34
+    assert {entry.source for entry in selected} == {f"Term{i}" for i in range(1, 35)}
+
+
+def test_selector_and_injector_none_intensity_disable_memory() -> None:
     doc = MemoryDocument(
         entries=[
             MemoryEntry(id="1", source="Locked A", target="A", status="locked", priority=100),
             MemoryEntry(id="2", source="Locked B", target="B", status="locked", priority=90),
         ]
     )
-    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Nothing relevant"])
-    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="unknown", max_entries_per_chunk=1))
-    assert [entry.source for entry in selected] == ["Locked A"]
-    assert select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="full", max_entries_per_chunk=0)) == []
+    chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Locked A"])
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="none"))
+    assert selected == []
+    assert build_memory_prompt(select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="none")), MemoryInjectConfig(intensity="none")) == ""
+
+
+def test_injector_intensity_controls_context_row_budget() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id=str(i), source=f"CtxTerm{i}", target=f"上下文{i}", status="confirmed", priority=100 - i)
+            for i in range(1, 61)
+        ]
+    )
+    chunk = Chunk(
+        chunk_id="c1",
+        segment_ids=[1],
+        lines=["[1] no direct term"],
+        context_before=["[0] " + " ".join(f"CtxTerm{i}" for i in range(1, 61))],
+    )
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="max", max_prompt_tokens=20000))
+
+    auto_prompt = build_memory_prompt(selected, MemoryInjectConfig(intensity="auto", max_prompt_tokens=20000))
+    high_prompt = build_memory_prompt(selected, MemoryInjectConfig(intensity="high", max_prompt_tokens=20000))
+    max_prompt = build_memory_prompt(selected, MemoryInjectConfig(intensity="max", max_prompt_tokens=20000))
+
+    assert auto_prompt.count("- matched: CtxTerm") == 16
+    assert high_prompt.count("- matched: CtxTerm") == 48
+    assert max_prompt.count("- matched: CtxTerm") == 60
+
+
+def test_injector_max_intensity_still_respects_prompt_budget() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(id=str(i), source=f"BudgetTerm{i}", target=f"预算{i}", status="confirmed", priority=100 - i)
+            for i in range(1, 30)
+        ]
+    )
+    chunk = Chunk(
+        chunk_id="c1",
+        segment_ids=[1],
+        lines=["[1] no direct term"],
+        context_before=["[0] " + " ".join(f"BudgetTerm{i}" for i in range(1, 30))],
+    )
+    selected = select_memory_entries(doc, chunk, MemoryInjectConfig(intensity="max", max_prompt_tokens=20000))
+    full_prompt = build_memory_prompt(selected, MemoryInjectConfig(intensity="max", max_prompt_tokens=20000))
+    budgeted_prompt = build_memory_prompt(selected, MemoryInjectConfig(intensity="max", max_prompt_tokens=160))
+
+    assert full_prompt.count("- matched: BudgetTerm") == 29
+    assert 0 < budgeted_prompt.count("- matched: BudgetTerm") < 29
 
 
 def test_merger_protects_locked_and_records_conflict(tmp_path: Path) -> None:

@@ -162,7 +162,7 @@ memory:
   presets:
     - reflow_hello
   inject:
-    max_entries_per_chunk: 5
+    intensity: high
         """,
         encoding="utf-8",
     )
@@ -254,7 +254,7 @@ memory:
   presets:
     - subaru
   inject:
-    max_entries_per_chunk: 5
+    intensity: high
   patch:
     enabled: true
     after_each_window: true

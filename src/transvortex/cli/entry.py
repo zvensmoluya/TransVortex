@@ -117,6 +117,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
         "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
         "memory_workflow": getattr(args, "memory_workflow", None),
+        "memory_intensity": getattr(args, "memory_intensity", None),
         "memory_patch_window_chunks": getattr(args, "memory_patch_window_chunks", None),
         "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
@@ -256,6 +257,7 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
         choices=["off", "preset_only", "auto_bootstrap", "draft_only", "experimental_dynamic"],
         default=None,
     )
+    subparser.add_argument("--memory-intensity", choices=["none", "low", "auto", "high", "max"], default=None)
     subparser.add_argument("--memory-patch-window-chunks", type=int, default=None)
     subparser.add_argument(
         "--memory-preset",
@@ -451,6 +453,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
         ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
         ("--memory-workflow", getattr(ns, "memory_workflow", None)),
+        ("--memory-intensity", getattr(ns, "memory_intensity", None)),
         ("--memory-patch-window-chunks", getattr(ns, "memory_patch_window_chunks", None)),
         ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]

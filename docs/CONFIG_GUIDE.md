@@ -160,7 +160,7 @@ translation:
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
-- 默认 memory 流程是 `auto_bootstrap`：先用全片 source subtitles 生成运行时术语记忆，再由 selector 只挑选当前 chunk 命中的条目注入翻译。人工术语表可用 `preset_only`，只生成草稿不参与翻译可用 `draft_only`，运行时自维护使用实验性 `experimental_dynamic`。
+- 默认 memory 流程是 `auto_bootstrap`：先用全片 source subtitles 生成运行时术语记忆，再按 `memory.inject.intensity` 选择当前 chunk 命中条目和必要的强背景记忆注入翻译。人工术语表可用 `preset_only`，只生成草稿不参与翻译可用 `draft_only`，运行时自维护使用实验性 `experimental_dynamic`。
 
 ```yaml
 memory:
@@ -173,15 +173,17 @@ memory:
     locked: true
     confirmed: true
     proposed: true
-    strategy: balanced
-    max_entries_per_chunk: 30
+    intensity: high
+    max_prompt_tokens: 2400
+    max_notes_chars_per_entry: 60
   patch:
     enabled: false
     after_each_window: false
 ```
 
 说明：
-- `auto_bootstrap` 会把 bootstrap 生成的 proposed 术语作为弱记忆注入；这些条目仍会经过证据校验、按当前 chunk 命中选择，并按 `hint` / `recognize_only` 等策略使用，不会自动升级为人工确认术语。
+- `auto_bootstrap` 会把 bootstrap 生成的 proposed 术语作为运行时术语候选；这些条目仍会经过证据校验、再按当前 chunk 命中和注入强度选择，并按 `hint` / `recognize_only` 等策略使用，不会自动升级为人工确认术语。
+- `memory.inject.intensity` 决定翻译时 memory 介入强度：`none` 不注入，`low` 只注入当前翻译行直接命中的强相关条目，`auto` 适中，`high` 是默认的积极注入，`max` 尽量注入并主要依赖 `max_prompt_tokens` 兜底。
 - `preset_only` 只注入用户选择的预设术语表，适合已有人工术语时使用。
 - `draft_only` 会生成运行时术语库文件，便于人工查看或后续导出，但不会参与翻译注入。
 - `experimental_dynamic` 会在翻译过程中追加 memory patch，属于实验性动态维护流程。

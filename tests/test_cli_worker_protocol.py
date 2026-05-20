@@ -572,6 +572,8 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
             "12",
             "--memory-workflow",
             "preset_only",
+            "--memory-intensity",
+            "low",
             "--memory-patch-window-chunks",
             "4",
             "--detach",
@@ -596,6 +598,8 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
     assert "--translation-min-chunk-lines" in spawned["cmd"]
     assert "--memory-workflow" in spawned["cmd"]
     assert "preset_only" in spawned["cmd"]
+    assert "--memory-intensity" in spawned["cmd"]
+    assert "low" in spawned["cmd"]
     assert "--memory-patch-window-chunks" in spawned["cmd"]
     assert "4" in spawned["cmd"]
 
