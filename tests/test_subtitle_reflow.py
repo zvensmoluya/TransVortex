@@ -212,9 +212,12 @@ def test_reflow_batches_multiple_windows_and_injects_memory(monkeypatch, tmp_pat
 
     assert len(BatchReflowClient.calls) == 1
     req = BatchReflowClient.calls[0]
-    assert "MUST_USE" in req.memory_prompt
-    assert "Subaru -> 斯巴鲁" in req.memory_prompt
-    assert "Emilia -> 爱蜜莉雅" in req.memory_prompt
+    assert "MATCHED_IN_TRANSLATE_ONLY" in req.memory_prompt
+    assert "MATCHED_IN_CONTEXT" in req.memory_prompt
+    assert "matched: Subaru" in req.memory_prompt
+    assert "target: 斯巴鲁" in req.memory_prompt
+    assert "matched: Emilia" in req.memory_prompt
+    assert "target: 爱蜜莉雅" in req.memory_prompt
     assert "Output contract" not in req.system_prompt
     assert len(artifacts) == 2
     assert all(row["batch_index"] == 1 for row in artifacts)

@@ -123,8 +123,6 @@ def merge_patch(
         if not _action_has_memory_value(action):
             continue
         status = action.status
-        if auto_confirm_high_confidence and status == "proposed" and action.confidence >= 0.9:
-            status = "confirmed"
         key = normalize_source_key(action.source)
         protected = protected_by_key.get(key)
         if protected is not None:

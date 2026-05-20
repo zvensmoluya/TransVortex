@@ -219,7 +219,8 @@ World
 
         def translate_request(self, req):
             assert req.prompt_mode == "reflow"
-            assert "Hello -> 你好" in req.memory_prompt
+            assert "matched: Hello" in req.memory_prompt
+            assert "target: 你好" in req.memory_prompt
             return NormalizedResponse(
                 numbered_lines=[],
                 raw_text='{"windows":[{"window_id":1,"replacements":[{"source_ids":[1,2],"text_tgt":"短句合并","reason":"merge"}]}]}',
@@ -290,7 +291,8 @@ Subaru arrives
     )
 
     def fake_translate_chunk(_config, chunk, source_lang: str, target_lang: str, memory_prompt: str = ""):
-        assert "Subaru -> 斯巴鲁" in memory_prompt
+        assert "matched: Subaru" in memory_prompt
+        assert "target: 斯巴鲁" in memory_prompt
         return {
             "chunk_id": chunk.chunk_id,
             "provider": "p1",

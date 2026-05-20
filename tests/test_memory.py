@@ -7,11 +7,13 @@ from transvortex.app.models import AppConfig, PipelineConfig, ProviderConfig, Ro
 from transvortex.core.translate import _memory_prompt_entry_count, iter_translate_all_chunks
 from transvortex.memory.checker import check_consistency
 from transvortex.memory.injector import build_memory_prompt
+from transvortex.memory.json_utils import json_object_from_model_text
 from transvortex.memory.merger import merge_patch, patch_from_payload
 from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, MemoryTargetVariant
 from transvortex.memory.schema import entry_from_dict
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
+from transvortex.memory.validator import MemoryEvidence, validate_memory_payload
 from transvortex.memory.bootstrapper import bootstrap_memory
 from transvortex.memory.bootstrap_input import build_bootstrap_input_view, render_bootstrap_input_text
 
@@ -137,6 +139,12 @@ def test_memory_prompt_entry_count_supports_v1_and_v2_rows() -> None:
     assert _memory_prompt_entry_count(v1_prompt) == 3
 
 
+def test_json_object_from_model_text_accepts_fence_and_wrapped_json() -> None:
+    assert json_object_from_model_text('{"actions":[]}') == {"actions": []}
+    assert json_object_from_model_text('```json\n{"actions":[]}\n```') == {"actions": []}
+    assert json_object_from_model_text('Here:\n{"actions":[]}\nDone') == {"actions": []}
+
+
 def test_selector_and_injector_group_relevant_entries() -> None:
     doc = MemoryDocument(
         entries=[
@@ -156,10 +164,11 @@ def test_selector_and_injector_group_relevant_entries() -> None:
     selected = select_memory_entries(doc, chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=3))
     assert [entry.source for entry in selected] == ["Subaru", "The Order", "Mercury"]
     prompt = build_memory_prompt(selected)
-    assert "MUST_USE" in prompt
-    assert "Subaru -> 斯巴鲁" in prompt
-    assert "PREFERRED" in prompt
-    assert "Mercury -> 墨丘利" in prompt
+    assert "MATCHED_IN_TRANSLATE_ONLY" in prompt
+    assert "matched: Subaru" in prompt
+    assert "target: 斯巴鲁" in prompt
+    assert "matched: Mercury" in prompt
+    assert "target: 墨丘利" in prompt
 
 
 def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
@@ -209,13 +218,61 @@ def test_memory_v2_selector_and_injector_group_variants_by_use() -> None:
     prompt = build_memory_prompt(selected)
 
     assert [entry.source for entry in selected] == ["エミリア", "スバル", "死者の書"]
-    assert "MUST_USE" in prompt
-    assert "ADDRESS_VARIANTS" in prompt
-    assert "variant: エミリアタン -> 爱蜜莉雅碳" in prompt
-    assert "ASR_CORRECTIONS" in prompt
-    assert "observed: スヴァル | intended: スバル | target: 昴" in prompt
+    assert "MATCHED_IN_TRANSLATE_ONLY" in prompt
+    assert "matched: エミリアタン" in prompt
+    assert "target: 爱蜜莉雅碳" in prompt
+    assert "matched: スヴァル" in prompt
+    assert "target: 昴" in prompt
     assert "WEAK_HINTS" in prompt
-    assert "hint: 死者の過去を追体験する本 | canonical: 死者の書" in prompt
+    assert "matched: 死者の過去を追体験する本" in prompt
+
+
+def test_selector_does_not_reuse_same_kind_variant_target_for_alias() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="1",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="locked",
+                alias_details=[MemoryAlias(source="エミリア様", kind="honorific")],
+                target_variants=[
+                    MemoryTargetVariant(
+                        source="エミリア殿",
+                        target="爱蜜莉雅大人",
+                        kind="honorific",
+                        notes="respectful address",
+                    )
+                ],
+                constraint="must_use",
+                notes="main heroine",
+            )
+        ]
+    )
+
+    alias_chunk = Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] エミリア様が来た"])
+    alias_prompt = build_memory_prompt(
+        select_memory_entries(doc, alias_chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    )
+
+    assert "matched: エミリア様" in alias_prompt
+    assert "canonical_target: 爱蜜莉雅" in alias_prompt
+    assert "policy: style_sensitive_unresolved" in alias_prompt
+    assert "target_variant: missing" in alias_prompt
+    assert "infer natural Chinese address flavor from source/context" in alias_prompt
+    assert "note: main heroine" in alias_prompt
+    assert "爱蜜莉雅大人" not in alias_prompt
+    assert "target_variant: true" not in alias_prompt
+
+    variant_chunk = Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] エミリア殿が来た"])
+    variant_prompt = build_memory_prompt(
+        select_memory_entries(doc, variant_chunk, MemoryInjectConfig(strategy="matched", max_entries_per_chunk=10))
+    )
+
+    assert "matched: エミリア殿" in variant_prompt
+    assert "target: 爱蜜莉雅大人" in variant_prompt
+    assert "target_variant: true" in variant_prompt
+    assert "variant_note: respectful address" in variant_prompt
 
 
 def test_selector_avoids_short_or_embedded_false_matches() -> None:
@@ -435,6 +492,59 @@ def test_merger_preserves_v2_alias_details_and_target_variants() -> None:
     assert entry.enforcement_policy == {"translation": "preferred", "qa": "warning"}
 
 
+def test_merger_does_not_auto_confirm_from_llm_confidence() -> None:
+    doc = MemoryDocument()
+    patch = patch_from_payload(
+        {
+            "chunk_ids": ["c1"],
+            "actions": [{"action": "upsert", "source": "Alpha", "target": "阿尔法", "status": "proposed", "confidence": 0.99}],
+        }
+    )
+
+    merged, conflicts = merge_patch(doc, patch, auto_confirm_high_confidence=True)
+
+    assert conflicts == []
+    assert merged.entries[0].status == "proposed"
+
+
+def test_memory_validator_filters_patch_without_matching_evidence() -> None:
+    payload = {
+        "actions": [
+            {"source": "Alpha", "target": "阿尔法", "status": "confirmed", "constraint": "must_use", "evidence_ids": [1]},
+            {"source": "Beta", "target": "贝塔", "evidence_ids": [2]},
+            {"source": "Gamma", "target": "伽马", "evidence_ids": [9]},
+        ]
+    }
+    evidence = MemoryEvidence(source_by_id={1: "Alpha appears", 2: "Beta appears"}, target_by_id={1: "阿尔法出现", 2: "错误译文"})
+
+    out = validate_memory_payload(payload, mode="patch", evidence=evidence)
+
+    assert [row["source"] for row in out["actions"]] == ["Alpha"]
+    assert out["actions"][0]["status"] == "proposed"
+    assert out["actions"][0]["constraint"] == "hint"
+
+
+def test_memory_validator_scopes_patch_evidence_to_cited_ids() -> None:
+    payload = {
+        "actions": [
+            {"source": "Alpha", "target": "阿尔法", "evidence_ids": [1]},
+            {"source": "Alpha", "target": "合并译文", "evidence_ids": [1]},
+            {"source": "Alpha", "target": "合并译文", "evidence_ids": [1, 2]},
+        ]
+    }
+    evidence = MemoryEvidence(
+        source_by_id={1: "Alpha appears", 2: "continued line"},
+        target_by_id={1: "阿尔法出现", 2: "合并译文"},
+    )
+
+    out = validate_memory_payload(payload, mode="patch", evidence=evidence)
+
+    assert [(row["target"], row["evidence_ids"]) for row in out["actions"]] == [
+        ("阿尔法", [1]),
+        ("合并译文", [1, 2]),
+    ]
+
+
 def test_consistency_check_reports_missing_locked_translation() -> None:
     doc = MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")])
     issues = check_consistency(
@@ -469,6 +579,41 @@ def test_consistency_check_matches_cjk_terms_without_word_boundaries() -> None:
     assert issues[0].expected_target == "昴"
 
 
+def test_consistency_check_does_not_reuse_same_kind_variant_for_alias() -> None:
+    doc = MemoryDocument(
+        entries=[
+            MemoryEntry(
+                id="mem_emilia",
+                source="エミリア",
+                target="爱蜜莉雅",
+                status="locked",
+                alias_details=[MemoryAlias(source="エミリア様", kind="honorific")],
+                target_variants=[MemoryTargetVariant(source="エミリア殿", target="爱蜜莉雅大人", kind="honorific")],
+                constraint="must_use",
+            )
+        ]
+    )
+
+    ok = check_consistency(
+        doc,
+        [Segment(id=1, start=0, end=1, text_src="エミリア様が来た", text_tgt="爱蜜莉雅来了")],
+    )
+    missing = check_consistency(
+        doc,
+        [Segment(id=2, start=1, end=2, text_src="エミリア様が来た", text_tgt="艾米莉娅来了")],
+    )
+
+    assert len(ok) == 1
+    assert ok[0].issue_type == "unresolved_address_form"
+    assert ok[0].severity == "info"
+    assert ok[0].blocking is False
+    assert ok[0].expected_variants == ["爱蜜莉雅"]
+    assert len(missing) == 1
+    assert missing[0].issue_type == "variant_miss"
+    assert missing[0].expected_target == "爱蜜莉雅"
+    assert missing[0].expected_variants == ["爱蜜莉雅"]
+
+
 def test_consistency_check_accepts_target_variants_for_address_forms() -> None:
     doc = MemoryDocument(
         entries=[
@@ -492,11 +637,13 @@ def test_consistency_check_accepts_target_variants_for_address_forms() -> None:
         ],
     )
 
-    assert len(issues) == 1
-    assert issues[0].issue_type == "variant_miss"
-    assert issues[0].level == "suggestion"
+    assert len(issues) == 2
+    assert issues[0].issue_type == "address_variant_flattened"
+    assert issues[0].severity == "warning"
+    assert issues[0].blocking is False
     assert issues[0].matched_source == "エミリアタン"
     assert issues[0].expected_variants == ["爱蜜莉雅", "爱蜜莉雅碳"]
+    assert issues[1].issue_type == "variant_miss"
 
 
 def test_consistency_check_asr_alias_uses_canonical_target_without_literal_alias_pressure() -> None:
@@ -925,5 +1072,6 @@ def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path
     list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
 
     assert [item[0] for item in seen] == ["c1", "c2"]
-    assert "Subaru -> 斯巴鲁" in seen[0][1]
+    assert "matched: Subaru" in seen[0][1]
+    assert "target: 斯巴鲁" in seen[0][1]
     assert not (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()

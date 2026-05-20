@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass, replace
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQualityConfig
+from ..memory.json_utils import json_object_from_model_text
 from ..memory.injector import build_memory_prompt
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
@@ -40,17 +40,10 @@ class ReflowWindow:
 
 
 def _extract_json_object(raw_text: str) -> dict[str, Any]:
-    text = raw_text.strip()
     try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            raise RuntimeError("reflow response is not JSON")
-        value = json.loads(match.group(0))
-    if not isinstance(value, dict):
-        raise RuntimeError("reflow response must be a JSON object")
-    return value
+        return json_object_from_model_text(raw_text)
+    except Exception as exc:
+        raise RuntimeError("reflow response is not JSON") from exc
 
 
 def _quality_rows_by_id(report: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -238,8 +231,8 @@ def _memory_prompt_for_batch(
         context_before=context_before,
         context_after=context_after,
     )
-    entries = select_memory_entries(document, chunk, config.pipeline.memory.inject)
-    return build_memory_prompt(entries, config.pipeline.memory.inject), len(entries)
+    selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
+    return build_memory_prompt(selected, config.pipeline.memory.inject), len(selected)
 
 
 def _request_for_batch(

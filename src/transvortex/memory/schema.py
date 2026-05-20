@@ -132,6 +132,9 @@ class MemoryConsistencyIssue:
     category: str
     message: str
     level: str = "warning"
+    severity: str = "warning"
+    blocking: bool = False
+    repairable: bool = True
     issue_type: str = "missing_target"
     constraint: str = ""
     matched_source: str = ""

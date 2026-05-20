@@ -100,7 +100,9 @@ def test_compression_receives_memory_prompt(monkeypatch, tmp_path) -> None:
         memory_dir=memory_dir,
     )
 
-    assert "Subaru -> 斯巴鲁" in FakeCompressionClient.calls[0].memory_prompt
+    assert "MATCHED_IN_TRANSLATE_ONLY" in FakeCompressionClient.calls[0].memory_prompt
+    assert "matched: Subaru" in FakeCompressionClient.calls[0].memory_prompt
+    assert "target: 斯巴鲁" in FakeCompressionClient.calls[0].memory_prompt
 
 
 def test_compression_failure_keeps_original_text(monkeypatch, tmp_path) -> None:

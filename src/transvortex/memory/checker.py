@@ -59,11 +59,31 @@ def _issue_level(policy: str) -> str:
     return "suggestion"
 
 
+def _severity(policy: str, issue_type: str) -> str:
+    if issue_type in {"address_variant_flattened", "unresolved_address_form"}:
+        return "warning" if policy == "error" else "info"
+    if policy == "error":
+        return "error"
+    if policy == "warning":
+        return "warning"
+    return "info"
+
+
+def _blocking(policy: str, issue_type: str) -> bool:
+    return policy == "error" and issue_type not in {"address_variant_flattened", "hint_miss", "unresolved_address_form"}
+
+
+def _flatten_policy(entry: MemoryEntry, constraint: str, policy: str) -> str:
+    if entry.status == "locked" or constraint == "must_use":
+        return "error"
+    return policy
+
+
 def _accepted_targets_for_alias(entry: MemoryEntry, alias_source: str, alias_kind: str) -> list[str]:
     if alias_kind in {"nickname", "honorific"}:
         targets: list[str] = []
         for variant in entry.target_variants:
-            if variant.source == alias_source or variant.kind == alias_kind:
+            if variant.source == alias_source:
                 targets.append(variant.target)
         if not targets:
             targets.append(entry.target)
@@ -75,6 +95,22 @@ def _accepted_targets_for_alias(entry: MemoryEntry, alias_source: str, alias_kin
     if alias_kind == "asr_error":
         return _entry_targets(entry)
     return [entry.target] if entry.target else []
+
+
+def _variant_targets_for_alias(entry: MemoryEntry, alias_source: str) -> list[str]:
+    targets: list[str] = []
+    for variant in entry.target_variants:
+        if variant.source == alias_source:
+            targets.append(variant.target)
+    out: list[str] = []
+    for target in targets:
+        if target and target not in out:
+            out.append(target)
+    return out
+
+
+def _has_variant_for_alias(entry: MemoryEntry, alias_source: str) -> bool:
+    return any(variant.source == alias_source and variant.target for variant in entry.target_variants)
 
 
 def _matched_variant_sources(entry: MemoryEntry, source_text: str) -> list[str]:
@@ -99,12 +135,14 @@ def _issue(
     entry: MemoryEntry,
     expected: str,
     target_text: str,
-    level: str,
+    policy: str,
     issue_type: str,
     matched_source: str,
     matched_kind: str,
     expected_variants: list[str],
 ) -> MemoryConsistencyIssue:
+    level = _issue_level(policy)
+    severity = _severity(policy, issue_type)
     return MemoryConsistencyIssue(
         id=seg.id,
         source=entry.source,
@@ -114,6 +152,9 @@ def _issue(
         category=entry.category,
         message=f"Expected {matched_source or entry.source} to use {expected}",
         level=level,
+        severity=severity,
+        blocking=_blocking(policy, issue_type),
+        repairable=True,
         issue_type=issue_type,
         constraint=entry.constraint or normalize_constraint("", status=entry.status),
         matched_source=matched_source,
@@ -150,7 +191,7 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                         entry=entry,
                         expected=entry.target,
                         target_text=target_text,
-                        level=level,
+                        policy=policy,
                         issue_type=issue_type,
                         matched_source=entry.source,
                         matched_kind="canonical",
@@ -161,6 +202,26 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                 if not term_matches_text(alias.source, source_text):
                     continue
                 accepted_targets = _accepted_targets_for_alias(entry, alias.source, alias.kind)
+                if (
+                    alias.kind in VARIANT_ALIAS_KINDS
+                    and not _has_variant_for_alias(entry, alias.source)
+                    and entry.target
+                    and entry.target in target_text
+                ):
+                    issues.append(
+                        _issue(
+                            seg=seg,
+                            entry=entry,
+                            expected=entry.target,
+                            target_text=target_text,
+                            policy="info",
+                            issue_type="unresolved_address_form",
+                            matched_source=alias.source,
+                            matched_kind=alias.kind,
+                            expected_variants=[entry.target],
+                        )
+                    )
+                    continue
                 if _contains_any_target(target_text, accepted_targets):
                     continue
                 policy = _qa_policy(entry, alias_kind=alias.kind)
@@ -173,7 +234,7 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                             entry=entry,
                             expected=entry.target,
                             target_text=target_text,
-                            level="warning",
+                            policy="error",
                             issue_type="hard_miss",
                             matched_source=alias.source,
                             matched_kind=alias.kind,
@@ -181,13 +242,29 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                         )
                     )
                 elif alias.kind in VARIANT_ALIAS_KINDS:
+                    variant_targets = _variant_targets_for_alias(entry, alias.source)
+                    if variant_targets and entry.target and entry.target in target_text:
+                        issues.append(
+                            _issue(
+                                seg=seg,
+                                entry=entry,
+                                expected=variant_targets[0],
+                                target_text=target_text,
+                                policy=_flatten_policy(entry, constraint, policy),
+                                issue_type="address_variant_flattened",
+                                matched_source=alias.source,
+                                matched_kind=alias.kind,
+                                expected_variants=[entry.target, *variant_targets],
+                            )
+                        )
+                        continue
                     issues.append(
                         _issue(
                             seg=seg,
                             entry=entry,
                             expected=accepted_targets[0] if accepted_targets else entry.target,
                             target_text=target_text,
-                            level=_issue_level(policy),
+                            policy=policy,
                             issue_type="variant_miss",
                             matched_source=alias.source,
                             matched_kind=alias.kind,
@@ -203,7 +280,7 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                             entry=entry,
                             expected=entry.target,
                             target_text=target_text,
-                            level="suggestion",
+                            policy="info",
                             issue_type="hint_miss",
                             matched_source=alias.source,
                             matched_kind=alias.kind,
@@ -213,11 +290,26 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
             for variant in entry.target_variants:
                 if not term_matches_text(variant.source, source_text):
                     continue
-                accepted = [entry.target, variant.target]
+                accepted = [variant.target]
                 if _contains_any_target(target_text, accepted):
                     continue
                 policy = _qa_policy(entry, variant=True)
                 if policy == "off":
+                    continue
+                if entry.target and entry.target in target_text:
+                    issues.append(
+                        _issue(
+                            seg=seg,
+                            entry=entry,
+                            expected=variant.target,
+                            target_text=target_text,
+                            policy=_flatten_policy(entry, constraint, policy),
+                            issue_type="address_variant_flattened",
+                            matched_source=variant.source,
+                            matched_kind=variant.kind,
+                            expected_variants=[entry.target, variant.target],
+                        )
+                    )
                     continue
                 issues.append(
                     _issue(
@@ -225,7 +317,7 @@ def check_consistency(document: MemoryDocument, segments: list[Segment]) -> list
                         entry=entry,
                         expected=variant.target,
                         target_text=target_text,
-                        level=_issue_level(policy),
+                        policy=policy,
                         issue_type="variant_miss",
                         matched_source=variant.source,
                         matched_kind=variant.kind,

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
-import re
 from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest
 from ..prompts import FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
 from ..providers import build_provider_client, classify_error
+from .json_utils import json_object_from_model_text
 from .schema import MemoryPatch
 from .merger import patch_from_payload
+from .validator import MemoryEvidence, validate_memory_payload
 
 
 MEMORY_PATCH_SYSTEM_PROMPT = FALLBACK_MEMORY_PATCH_SYSTEM_PROMPT
@@ -27,21 +27,7 @@ def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any)
 
 
 def json_from_memory_text(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        data = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        data = json.loads(stripped[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("memory patch response must be a JSON object")
-    return data
+    return json_object_from_model_text(text)
 
 
 def _window_prompt(chunks: list[Chunk], translated_rows: list[dict], source_lang: str, target_lang: str) -> str:
@@ -68,6 +54,30 @@ def _window_prompt(chunks: list[Chunk], translated_rows: list[dict], source_lang
         '"notes":""}]}\n'
         "When no useful candidate exists, return the same shape with an empty actions array."
     )
+
+
+def _patch_evidence(chunks: list[Chunk], translated_rows: list[dict]) -> MemoryEvidence:
+    source_by_id: dict[int, str] = {}
+    for chunk in chunks:
+        for line in chunk.lines:
+            if not line.startswith("[") or "]" not in line:
+                continue
+            id_text, source = line[1:].split("]", 1)
+            try:
+                source_by_id[int(id_text)] = source.strip()
+            except ValueError:
+                continue
+    target_by_id: dict[int, str] = {}
+    for row in translated_rows:
+        for item in row.get("rows", []) or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                seg_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            target_by_id[seg_id] = str(item.get("text_tgt") or "")
+    return MemoryEvidence(source_by_id=source_by_id, target_by_id=target_by_id)
 
 
 def generate_memory_patch(
@@ -109,7 +119,11 @@ def generate_memory_patch(
                 system_prompt=config.pipeline.memory.patch.system_prompt or MEMORY_PATCH_SYSTEM_PROMPT,
             )
             response = client.translate_request(req)
-            payload = json_from_memory_text(response.raw_text)
+            payload = validate_memory_payload(
+                json_from_memory_text(response.raw_text),
+                mode="patch",
+                evidence=_patch_evidence(chunks, translated_rows),
+            )
             payload.setdefault("chunk_ids", [chunk.chunk_id for chunk in chunks])
             payload["provider"] = route.provider
             payload["model"] = route.model
