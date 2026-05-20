@@ -87,9 +87,10 @@ class MemoryStore:
             if isinstance(row, dict)
         ]
 
-    def load_effective(self) -> MemoryDocument:
-        runtime = self.load_runtime()
-        preset_entries = self.load_selected_entries()
+    def load_effective(self, sources: tuple[str, ...] = ()) -> MemoryDocument:
+        source_set = set(sources)
+        runtime = self.load_runtime() if "runtime" in source_set else MemoryDocument()
+        preset_entries = self.load_selected_entries() if "presets" in source_set else []
         entries: list[MemoryEntry] = []
         seen: set[str] = set()
         for entry in [*preset_entries, *runtime.entries]:

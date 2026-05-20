@@ -12,6 +12,7 @@ from .merger import merge_patch, patch_from_payload
 from .patcher import json_from_memory_text
 from .store import MemoryStore
 from .validator import MemoryEvidence, validate_memory_payload
+from .workflow import runs_bootstrap
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -218,7 +219,7 @@ def bootstrap_memory(
             _write_bootstrap_input(memory_dir, segments)
         payload = read_json(bootstrap_file)
         return payload if isinstance(payload, dict) else {"status": "skipped", "reason": "invalid_existing_bootstrap"}
-    if not config.pipeline.memory.enabled or not config.pipeline.memory.bootstrap.enabled:
+    if not runs_bootstrap(config.pipeline.memory):
         payload = {"status": "skipped", "reason": "memory_bootstrap_disabled"}
         write_json(bootstrap_file, payload)
         return payload

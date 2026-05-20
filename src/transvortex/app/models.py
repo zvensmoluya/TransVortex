@@ -393,8 +393,7 @@ class MemoryPresetRef:
 
 @dataclass
 class MemoryConfig:
-    enabled: bool = True
-    mode: str = "bootstrap_first"
+    workflow: str = "auto_bootstrap"
     presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
     chunking: MemoryChunkingConfig = field(default_factory=MemoryChunkingConfig)

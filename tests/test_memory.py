@@ -73,7 +73,7 @@ def test_memory_store_load_effective_combines_presets_and_runtime_with_preset_pr
         )
     )
 
-    effective = store.load_effective()
+    effective = store.load_effective(("presets", "runtime"))
     assert [(entry.source, entry.target) for entry in effective.entries] == [
         ("Subaru", "斯巴鲁"),
         ("The Order", "教团"),
@@ -735,10 +735,7 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.enabled = True
-    config.pipeline.memory.mode = "balanced"
-    config.pipeline.memory.patch.enabled = True
-    config.pipeline.memory.patch.after_each_window = True
+    config.pipeline.memory.workflow = "experimental_dynamic"
     chunks = [
         Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Alpha"]),
         Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] Beta"]),
@@ -998,9 +995,7 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.enabled = True
-    config.pipeline.memory.patch.enabled = True
-    config.pipeline.memory.patch.after_each_window = True
+    config.pipeline.memory.workflow = "experimental_dynamic"
     config.pipeline.memory.patch.window_chunks = 3
     chunks = [Chunk(chunk_id=f"c{i}", segment_ids=[i], lines=[f"[{i}] Term {i}"]) for i in range(5)]
     patch_windows: list[list[str]] = []
@@ -1029,7 +1024,7 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
     assert patch_windows == [["c0", "c1", "c2"], ["c3", "c4"]]
 
 
-def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path, monkeypatch) -> None:
+def test_memory_preset_only_workflow_translates_concurrently_without_patch(tmp_path: Path, monkeypatch) -> None:
     provider = ProviderConfig(
         name="p1",
         api_type="openai",
@@ -1043,8 +1038,7 @@ def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.enabled = True
-    config.pipeline.memory.patch.enabled = False
+    config.pipeline.memory.workflow = "auto_bootstrap"
     store = MemoryStore(tmp_path / "memory")
     store.save(MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")]))
     chunks = [
@@ -1053,7 +1047,17 @@ def test_memory_static_mode_translates_concurrently_without_patch(tmp_path: Path
     ]
     seen: list[tuple[str, str]] = []
 
-    def fake_submit(_pool, _config, chunk, _source_lang, _target_lang, memory_prompt, _progress_callback, _already_done=None):
+    def fake_submit(
+        _pool,
+        _config,
+        chunk,
+        _source_lang,
+        _target_lang,
+        memory_prompt,
+        _progress_callback,
+        _already_done=None,
+        _memory_prompt_builder=None,
+    ):
         seen.append((chunk.chunk_id, memory_prompt))
 
         class Done:

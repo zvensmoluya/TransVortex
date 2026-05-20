@@ -14,6 +14,7 @@ from ..memory.merger import merge_patch
 from ..memory.patcher import generate_memory_patch
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
+from ..memory.workflow import dynamic_updates_enabled, effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .chunking import translation_prompt_overhead_tokens, trim_context_for_budget
 from .translation_validation import (
@@ -71,19 +72,6 @@ def _memory_prompt_entry_count(memory_prompt: str) -> int:
     return sum(1 for line in str(memory_prompt or "").splitlines() if line.strip().startswith("- "))
 
 
-_RETRYABLE_SPLIT_ERRORS = {
-    "provider_timeout",
-    "connect_timeout",
-    "read_timeout",
-    "write_timeout",
-    "pool_timeout",
-    "timeout",
-    "gateway_timeout",
-    "bad_gateway",
-    "service_unavailable",
-    "provider_server_error",
-}
-
 _CAPACITY_SPLIT_MARKERS = {
     "batch too large",
     "context length",
@@ -120,6 +108,7 @@ def _submit_translate_chunk(
     memory_prompt: str,
     progress_callback: ProgressCallback | None,
     already_done: set[str] | None = None,
+    memory_prompt_builder: Callable[[Chunk], str] | None = None,
 ):
     if config.pipeline.translation.batching.mode == "adaptive":
         if _translate_chunk_adaptive_accepts_progress_callback():
@@ -132,6 +121,7 @@ def _submit_translate_chunk(
                 memory_prompt=memory_prompt,
                 progress_callback=progress_callback,
                 already_done=already_done,
+                memory_prompt_builder=memory_prompt_builder,
             )
         return pool.submit(translate_chunk_adaptive, config, chunk, source_lang, target_lang, memory_prompt)
     if _translate_chunk_accepts_progress_callback():
@@ -199,7 +189,7 @@ def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
         chunk_id=f"{chunk.chunk_id}s0",
         segment_ids=left_ids,
         lines=left_lines,
-        context_after=chunk.context_after,
+        context_after=[*right_lines, *chunk.context_after],
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in left_ids],
         meta={**dict(chunk.meta or {}), "adaptive_split": "left", "adaptive_sibling_lines": len(right_lines)},
     )
@@ -208,7 +198,7 @@ def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
         chunk_id=f"{chunk.chunk_id}s1",
         segment_ids=right_ids,
         lines=right_lines,
-        context_before=chunk.context_before,
+        context_before=[*chunk.context_before, *left_lines],
         asr_uncertain_ids=[item for item in chunk.asr_uncertain_ids if item in right_ids],
         meta={**dict(chunk.meta or {}), "adaptive_split": "right", "adaptive_sibling_lines": len(left_lines)},
     )
@@ -292,9 +282,7 @@ def _build_adaptive_batch_state(config: AppConfig) -> AdaptiveBatchState:
 def _retryable_split_failure(exc: Exception) -> bool:
     text = str(exc)
     lowered = text.lower()
-    if any(marker in lowered for marker in _CAPACITY_SPLIT_MARKERS):
-        return True
-    return any(f"'error_type': '{item}'" in text or f'"error_type": "{item}"' in text or item in text for item in _RETRYABLE_SPLIT_ERRORS)
+    return any(marker in lowered for marker in _CAPACITY_SPLIT_MARKERS)
 
 
 def _chunk_completed(chunk: Chunk, done: set[str]) -> bool:
@@ -683,6 +671,7 @@ def translate_chunk_adaptive(
     already_done: set[str] | None = None,
     *,
     parent_chunk_id: str | None = None,
+    memory_prompt_builder: Callable[[Chunk], str] | None = None,
 ) -> list[dict]:
     already_done = already_done or set()
     if _chunk_completed(chunk, already_done):
@@ -704,6 +693,7 @@ def translate_chunk_adaptive(
                         progress_callback=progress_callback,
                         already_done=already_done,
                         parent_chunk_id=parent_id,
+                        memory_prompt_builder=memory_prompt_builder,
                     )
                 )
             except AdaptiveTranslationError as exc:
@@ -711,12 +701,13 @@ def translate_chunk_adaptive(
                 raise AdaptiveTranslationError(str(exc), results) from exc
         return results
     try:
+        chunk_memory_prompt = memory_prompt_builder(chunk) if memory_prompt_builder is not None else memory_prompt
         result = _call_translate_chunk(
             config,
             chunk,
             source_lang,
             target_lang,
-            memory_prompt,
+            chunk_memory_prompt,
             progress_callback,
         )
         if parent_id != chunk.chunk_id:
@@ -751,6 +742,7 @@ def translate_chunk_adaptive(
                         progress_callback=progress_callback,
                         already_done=already_done,
                         parent_chunk_id=parent_id,
+                        memory_prompt_builder=memory_prompt_builder,
                     )
                 )
             except Exception as child_exc:
@@ -773,7 +765,7 @@ def iter_translate_all_chunks(
     todo = [chunk for chunk in chunks if not _chunk_completed(chunk, already_done)]
     if not todo:
         return
-    if config.pipeline.memory.enabled and memory_dir is not None:
+    if translates_with_memory(config.pipeline.memory) and memory_dir is not None:
         yield from _iter_translate_all_chunks_with_memory(
             config,
             todo,
@@ -870,13 +862,14 @@ def _iter_translate_window(
     progress_callback: ProgressCallback | None = None,
     already_done: set[str] | None = None,
 ):
-    document = memory_store.load_effective()
-    chunk_memory_prompts = {}
-    for chunk in window:
+    document = memory_store.load_effective(effective_memory_sources(config.pipeline.memory))
+
+    def memory_prompt_for(chunk: Chunk) -> str:
         selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
-        chunk_memory_prompts[chunk.chunk_id] = build_memory_prompt(selected, config.pipeline.memory.inject)
+        return build_memory_prompt(selected, config.pipeline.memory.inject)
+
     max_workers = max(1, config.pipeline.default_concurrency)
-    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
+    if dynamic_updates_enabled(config.pipeline.memory):
         max_workers = 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -886,9 +879,10 @@ def _iter_translate_window(
                 chunk,
                 source_lang,
                 target_lang,
-                chunk_memory_prompts.get(chunk.chunk_id, ""),
+                memory_prompt_for(chunk),
                 progress_callback,
                 already_done,
+                memory_prompt_for,
             ): chunk
             for chunk in window
         }
@@ -914,11 +908,12 @@ def _iter_translate_all_chunks_with_static_memory(
     progress_callback: ProgressCallback | None = None,
     already_done: set[str] | None = None,
 ):
-    document = memory_store.load_effective()
-    chunk_memory_prompts = {
-        chunk.chunk_id: build_memory_prompt(select_memory_entries(document, chunk, config.pipeline.memory.inject), config.pipeline.memory.inject)
-        for chunk in chunks
-    }
+    document = memory_store.load_effective(effective_memory_sources(config.pipeline.memory))
+
+    def memory_prompt_for(chunk: Chunk) -> str:
+        selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
+        return build_memory_prompt(selected, config.pipeline.memory.inject)
+
     max_workers = max(1, config.pipeline.default_concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -928,9 +923,10 @@ def _iter_translate_all_chunks_with_static_memory(
                 chunk,
                 source_lang,
                 target_lang,
-                chunk_memory_prompts.get(chunk.chunk_id, ""),
+                memory_prompt_for(chunk),
                 progress_callback,
                 already_done,
+                memory_prompt_for,
             ): chunk
             for chunk in chunks
         }
@@ -947,9 +943,7 @@ def _iter_translate_all_chunks_with_static_memory(
 
 
 def _uses_dynamic_memory_updates(config: AppConfig) -> bool:
-    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
-        return True
-    return bool(config.pipeline.memory.patch.enabled and config.pipeline.memory.patch.after_each_window)
+    return dynamic_updates_enabled(config.pipeline.memory)
 
 
 def _update_memory_after_window(
@@ -964,7 +958,7 @@ def _update_memory_after_window(
 ) -> None:
     if not results:
         return
-    if config.pipeline.memory.patch.enabled and config.pipeline.memory.patch.after_each_window:
+    if dynamic_updates_enabled(config.pipeline.memory):
         chunks_by_id = {chunk.chunk_id: chunk for chunk in window}
         successful_window: list[Chunk] = []
         for result in results:
@@ -1028,7 +1022,7 @@ def _iter_translate_all_chunks_with_memory(
         )
         return
     window_size = max(1, config.pipeline.default_concurrency)
-    if config.pipeline.memory.mode in {"consistency_first", "dynamic_patch"}:
+    if dynamic_updates_enabled(config.pipeline.memory):
         window_size = 1
     snapshot_index = 0
     patch_chunks: list[Chunk] = []

@@ -9,6 +9,7 @@ from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQ
 from ..memory.injector import build_memory_prompt
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
+from ..memory.workflow import effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import subtitle_cps
 from .translation_validation import strip_numbered_text
@@ -114,8 +115,8 @@ def compress_overlong_subtitles(
     output = list(segments)
     artifacts: list[dict[str, Any]] = []
     memory_document = None
-    if memory_dir and config.pipeline.memory.enabled:
-        memory_document = MemoryStore(memory_dir).load_effective()
+    if memory_dir and translates_with_memory(config.pipeline.memory):
+        memory_document = MemoryStore(memory_dir).load_effective(effective_memory_sources(config.pipeline.memory))
     for idx, seg in enumerate(output):
         if subtitle_cps(seg) <= quality.hard_max_cps:
             continue

@@ -116,8 +116,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "subtitle_quality_mode": getattr(args, "subtitle_quality_mode", None),
         "subtitle_compression_enabled": getattr(args, "subtitle_compression_enabled", None),
         "subtitle_reflow_enabled": getattr(args, "subtitle_reflow_enabled", None),
-        "memory_enabled": getattr(args, "memory_enabled", None),
-        "memory_patch_enabled": getattr(args, "memory_patch_enabled", None),
+        "memory_workflow": getattr(args, "memory_workflow", None),
         "memory_patch_window_chunks": getattr(args, "memory_patch_window_chunks", None),
         "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
@@ -252,8 +251,11 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
-    subparser.add_argument("--memory-enabled", choices=["true", "false"], default=None)
-    subparser.add_argument("--memory-patch-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument(
+        "--memory-workflow",
+        choices=["off", "preset_only", "auto_bootstrap", "draft_only", "experimental_dynamic"],
+        default=None,
+    )
     subparser.add_argument("--memory-patch-window-chunks", type=int, default=None)
     subparser.add_argument(
         "--memory-preset",
@@ -448,8 +450,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--subtitle-quality-mode", getattr(ns, "subtitle_quality_mode", None)),
         ("--subtitle-compression-enabled", getattr(ns, "subtitle_compression_enabled", None)),
         ("--subtitle-reflow-enabled", getattr(ns, "subtitle_reflow_enabled", None)),
-        ("--memory-enabled", getattr(ns, "memory_enabled", None)),
-        ("--memory-patch-enabled", getattr(ns, "memory_patch_enabled", None)),
+        ("--memory-workflow", getattr(ns, "memory_workflow", None)),
         ("--memory-patch-window-chunks", getattr(ns, "memory_patch_window_chunks", None)),
         ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]

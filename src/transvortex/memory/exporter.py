@@ -326,7 +326,7 @@ def bootstrap_memory_preset(
             stale_bootstrap.unlink(missing_ok=True)
             stale_memory.unlink(missing_ok=True)
     bootstrap_config = copy.deepcopy(config)
-    bootstrap_config.pipeline.memory.enabled = True
+    bootstrap_config.pipeline.memory.workflow = "auto_bootstrap"
     bootstrap_config.pipeline.memory.bootstrap.enabled = True
     bootstrap_config.pipeline.memory.bootstrap.mode = "whole_document"
 

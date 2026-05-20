@@ -11,6 +11,7 @@ from ..memory.json_utils import json_object_from_model_text
 from ..memory.injector import build_memory_prompt
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
+from ..memory.workflow import effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_quality import clean_subtitle_text
@@ -220,10 +221,10 @@ def _memory_prompt_for_batch(
     context_before: list[str],
     context_after: list[str],
 ) -> tuple[str, int]:
-    if not memory_dir or not config.pipeline.memory.enabled or not config.pipeline.subtitle.reflow.memory:
+    if not memory_dir or not translates_with_memory(config.pipeline.memory) or not config.pipeline.subtitle.reflow.memory:
         return "", 0
     store = MemoryStore(memory_dir)
-    document = store.load_effective()
+    document = store.load_effective(effective_memory_sources(config.pipeline.memory))
     chunk = Chunk(
         chunk_id="reflow_" + "_".join(str(window.window_index) for window in windows),
         segment_ids=[seg.id for window in windows for seg in window.editable],

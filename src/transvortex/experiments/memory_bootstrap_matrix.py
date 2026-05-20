@@ -221,7 +221,7 @@ def _run_case(
 ) -> dict[str, Any]:
     providers_file = _build_case_providers(root, base_provider, case, output_dir, timeout_seconds, read_timeout_seconds)
     config = load_app_config(root_dir=root, providers_file=providers_file)
-    config.pipeline.memory.enabled = True
+    config.pipeline.memory.workflow = "auto_bootstrap"
     config.pipeline.memory.bootstrap.enabled = True
     config.pipeline.memory.bootstrap.mode = "whole_document"
     config.pipeline.memory.bootstrap.max_candidates = max(1, int(max_candidates))

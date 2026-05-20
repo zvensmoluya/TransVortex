@@ -57,8 +57,7 @@ translation:
     enabled: true
     max_attempts: 2
 memory:
-  enabled: true
-  mode: bootstrap_first
+  workflow: auto_bootstrap
   bootstrap:
     enabled: true
     mode: whole_document

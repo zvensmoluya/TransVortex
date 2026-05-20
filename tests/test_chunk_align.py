@@ -167,7 +167,7 @@ def test_capacity_planner_disables_input_budget_when_route_context_unknown(tmp_p
     )
     config.providers["p2"] = fallback
     config.routing.fallback = [RouteTarget(provider="p2", model="m2")]
-    config.pipeline.memory.enabled = False
+    config.pipeline.memory.workflow = "off"
     config.pipeline.translation.context_after_lines = 1
     config.pipeline.translation.chunking.min_chunk_lines = 1
     config.pipeline.translation.chunking.target_chunk_lines = 1
@@ -183,7 +183,7 @@ def test_capacity_planner_disables_input_budget_when_route_context_unknown(tmp_p
 
 def test_capacity_planner_trims_context_to_input_budget(tmp_path) -> None:
     config = _planner_config(tmp_path, max_context_tokens=180)
-    config.pipeline.memory.enabled = False
+    config.pipeline.memory.workflow = "off"
     config.pipeline.translation.style_prompt = ""
     config.pipeline.translation.system_prompt = ""
     config.pipeline.translation.chunking.input_safety_ratio = 1.0
@@ -218,9 +218,9 @@ def test_capacity_planner_reserves_memory_budget(tmp_path) -> None:
     config.pipeline.translation.context_after_lines = 3
     segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src="context line words") for i in range(1, 5)]
 
-    config.pipeline.memory.enabled = False
+    config.pipeline.memory.workflow = "off"
     no_memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
-    config.pipeline.memory.enabled = True
+    config.pipeline.memory.workflow = "auto_bootstrap"
     config.pipeline.memory.inject.max_entries_per_chunk = 3
     memory_chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 

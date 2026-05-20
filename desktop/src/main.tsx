@@ -320,7 +320,7 @@ function App() {
         ),
         translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
         translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
-        memoryEnabled: (memory.enabled as boolean | undefined) ?? current.memoryEnabled,
+        memoryWorkflow: textValue(memory.workflow, current.memoryWorkflow) as FormState["memoryWorkflow"],
         memoryPreset: current.memoryPreset || memoryPresetString(memory.presets),
         subtitleQualityMode: textValue(
           objectValue(subtitle.quality).mode,
@@ -916,7 +916,7 @@ function App() {
       subtitleQualityMode: form.subtitleQualityMode,
       subtitleCompressionEnabled: form.subtitleCompressionEnabled,
       subtitleReflowEnabled: form.subtitleReflowEnabled,
-      memoryEnabled: form.memoryEnabled,
+      memoryWorkflow: form.memoryWorkflow,
       memoryPreset: memoryPresets.length ? memoryPresets.join(",") : null,
       outputFormat: form.outputFormat,
       concurrency: form.concurrency,
@@ -1431,10 +1431,16 @@ function TaskWorkspace({
             />
           </label>
         </div>
-        <div className="mt-4 grid grid-cols-[180px_minmax(0,1fr)_120px] items-end gap-4">
-          <label className="inline-flex min-h-10 items-center gap-2 text-sm text-ink">
-            <input className="h-4 w-4" type="checkbox" checked={form.memoryEnabled} onChange={(event) => update("memoryEnabled", event.target.checked)} />
-            {t("memoryEnabled")}
+        <div className="mt-4 grid grid-cols-[220px_minmax(0,1fr)_120px] items-end gap-4">
+          <label className="tvx-label">
+            {t("memoryWorkflow")}
+            <select className="tvx-input" value={form.memoryWorkflow} onChange={(event) => update("memoryWorkflow", event.target.value as FormState["memoryWorkflow"])}>
+              <option value="auto_bootstrap">{t("memoryWorkflowAutoBootstrap")}</option>
+              <option value="preset_only">{t("memoryWorkflowPresetOnly")}</option>
+              <option value="draft_only">{t("memoryWorkflowDraftOnly")}</option>
+              <option value="experimental_dynamic">{t("memoryWorkflowDynamic")}</option>
+              <option value="off">{t("memoryWorkflowOff")}</option>
+            </select>
           </label>
           <label className="tvx-label">
             {t("memoryPreset")}
@@ -1444,7 +1450,6 @@ function TaskWorkspace({
               value={form.memoryPreset}
               onChange={(event) => {
                 update("memoryPreset", event.target.value);
-                if (event.target.value.trim()) update("memoryEnabled", true);
               }}
             />
           </label>

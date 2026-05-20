@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from ..app.models import AppConfig, Chunk, ProviderConfig, Segment
+from ..memory.workflow import translates_with_memory
 
 
 LINE_TOKEN_OVERHEAD = 4
@@ -191,7 +192,7 @@ def _provider_list(provider: ProviderConfig | list[ProviderConfig] | tuple[Provi
 
 
 def _memory_reserved_tokens(config: AppConfig) -> int:
-    if not config.pipeline.memory.enabled:
+    if not translates_with_memory(config.pipeline.memory):
         return 0
     max_entries = max(0, int(config.pipeline.memory.inject.max_entries_per_chunk))
     if max_entries <= 0:

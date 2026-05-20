@@ -57,6 +57,9 @@ from ..prompts import load_prompt
 from .credentials import read_dotenv_values
 
 
+MEMORY_WORKFLOWS = {"off", "preset_only", "auto_bootstrap", "draft_only", "experimental_dynamic"}
+LEGACY_MEMORY_MODES = {"bootstrap_first", "consistency_first", "dynamic_patch", "static", "balanced"}
+
 ENV_MAP = {
     "chunk_seconds": "TVX_CHUNK_SECONDS",
     "chunk_overlap_seconds": "TVX_CHUNK_OVERLAP_SECONDS",
@@ -138,6 +141,25 @@ def _parse_memory_presets(raw: Any) -> list[MemoryPresetRef]:
         seen.add(ref_id)
         out.append(MemoryPresetRef(id=ref_id, override_status=override))
     return out
+
+
+def _memory_workflow(memory_raw: dict[str, Any]) -> str:
+    if "mode" in memory_raw:
+        raise ValueError(
+            "memory.mode is no longer supported; use memory.workflow "
+            "(off, preset_only, auto_bootstrap, draft_only, experimental_dynamic)"
+        )
+    if "enabled" in memory_raw:
+        raise ValueError(
+            "memory.enabled is no longer supported; use memory.workflow "
+            "(off, preset_only, auto_bootstrap, draft_only, experimental_dynamic)"
+        )
+    workflow = _to_str(memory_raw.get("workflow"), "auto_bootstrap").strip()
+    if workflow in LEGACY_MEMORY_MODES:
+        raise ValueError(f"Unsupported legacy memory workflow: {workflow}; use memory.workflow with the new values")
+    if workflow not in MEMORY_WORKFLOWS:
+        raise ValueError(f"Unsupported memory.workflow: {workflow}; expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}")
+    return workflow
 
 
 def _resolve_prompt_path(root_dir: Path, raw_path: Any) -> Path | None:
@@ -604,7 +626,7 @@ def load_app_config(
     memory_merge_raw = memory_raw.get("merge") or {}
     memory_check_raw = memory_raw.get("consistency_check") or {}
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
-    memory_patch_enabled = _to_bool(memory_patch_raw.get("enabled"), False)
+    memory_workflow = _memory_workflow(memory_raw)
     memory_inject_format = _to_str(memory_inject_raw.get("format"), "v2").strip().lower()
     if memory_inject_format != "v2":
         raise ValueError(f"Unsupported memory.inject.format: {memory_inject_format}; only v2 is supported")
@@ -614,8 +636,7 @@ def load_app_config(
             "set memory.consistency_check.enabled=false to disable consistency checks"
         )
     memory = MemoryConfig(
-        enabled=_to_bool(memory_raw.get("enabled"), True),
-        mode=_to_str(memory_raw.get("mode"), "bootstrap_first"),
+        workflow=memory_workflow,
         presets=memory_presets,
         bootstrap=MemoryBootstrapConfig(
             enabled=_to_bool(memory_bootstrap_raw.get("enabled"), True),
@@ -645,8 +666,8 @@ def load_app_config(
             max_notes_chars_per_entry=_to_int(memory_inject_raw.get("max_notes_chars_per_entry"), 60),
         ),
         patch=MemoryPatchConfig(
-            enabled=memory_patch_enabled,
-            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), memory_patch_enabled),
+            enabled=_to_bool(memory_patch_raw.get("enabled"), False),
+            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), False),
             window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 8),
             system_prompt=load_prompt(
                 "memory_patch_system",
@@ -885,12 +906,14 @@ def load_app_config(
             pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
         elif key == "subtitle_reflow_enabled":
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
-        elif key == "memory_enabled":
-            pipeline.memory.enabled = _to_bool(value, pipeline.memory.enabled)
-        elif key == "memory_patch_enabled":
-            patch_enabled = _to_bool(value, pipeline.memory.patch.enabled)
-            pipeline.memory.patch.enabled = patch_enabled
-            pipeline.memory.patch.after_each_window = patch_enabled
+        elif key == "memory_workflow":
+            workflow = _to_str(value, pipeline.memory.workflow).strip()
+            if workflow in LEGACY_MEMORY_MODES or workflow not in MEMORY_WORKFLOWS:
+                raise ValueError(
+                    f"Unsupported memory_workflow override: {workflow}; "
+                    f"expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}"
+                )
+            pipeline.memory.workflow = workflow
         elif key == "memory_patch_window_chunks":
             pipeline.memory.patch.window_chunks = _to_int(value, pipeline.memory.patch.window_chunks)
         elif key == "memory_presets":

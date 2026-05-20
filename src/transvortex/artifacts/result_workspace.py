@@ -127,6 +127,8 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     if memory_issues_file.exists():
         memory_issues = read_jsonl(memory_issues_file)
     issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
+    memory_settings = task.settings.get("memory", {}) if isinstance(task.settings.get("memory"), dict) else {}
+    memory_workflow = str(memory_settings.get("workflow") or "off")
     return {
         "task": {
             **to_plain(task),
@@ -147,7 +149,8 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
         "quality": quality_summary,
         "reflow": reflow_summary,
         "memory": {
-            "enabled": bool(task.settings.get("memory", {}).get("enabled", False)),
+            "enabled": memory_workflow != "off",
+            "workflow": memory_workflow,
             "entries": len(memory_entries) + len(preset_entries),
             "runtime_entries": len(memory_entries),
             "preset_entries": len(preset_entries),

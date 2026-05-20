@@ -27,6 +27,14 @@ from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.bootstrapper import bootstrap_memory
 from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
+from ..memory.workflow import (
+    draft_only,
+    effective_memory_sources,
+    memory_enabled,
+    runs_bootstrap,
+    translates_with_memory,
+    uses_presets,
+)
 from ..app.models import AppConfig, Segment, TaskRecord
 from ..providers.probe import probe_provider
 from ..protocol.errors import PipelineTaskError, classify_exception
@@ -1253,7 +1261,7 @@ def _effective_initial_chunk_lines(config: AppConfig, segment_count: int) -> tup
                 },
             }
         )
-    if not config.pipeline.memory.enabled:
+    if not memory_enabled(config.pipeline.memory):
         return effective, warnings
     memory_min = max(1, int(config.pipeline.memory.chunking.min_initial_chunk_lines))
     memory_max_chunks = max(1, int(config.pipeline.memory.chunking.max_initial_chunks))
@@ -1950,12 +1958,12 @@ def _execute_task(
                     )
                     return
 
-        if config.pipeline.memory.enabled:
+        if memory_enabled(config.pipeline.memory):
             _check_cancel(store, task_id)
             _emit_stage(store, task_id, "MEMORY", "Preparing translation memory")
             memory_store = MemoryStore(paths["memory"])
             memory_store.ensure_runtime_document()
-            if not memory_store.selected_presets_file.exists():
+            if uses_presets(config.pipeline.memory) and not memory_store.selected_presets_file.exists():
                 snapshot = build_selected_presets_snapshot(
                     presets=config.pipeline.memory.presets,
                     root_dir=root_dir,
@@ -1978,7 +1986,7 @@ def _execute_task(
                             "entries": int(report.get("entries") or 0),
                         },
                     )
-            if config.pipeline.memory.mode == "bootstrap_first":
+            if runs_bootstrap(config.pipeline.memory):
                 bootstrap_payload = bootstrap_memory(
                     config,
                     all_segments,
@@ -2000,6 +2008,32 @@ def _execute_task(
                         "errors": bootstrap_payload.get("errors") or [],
                     },
                 )
+            if draft_only(config.pipeline.memory):
+                checkpoint["status"] = "DONE"
+                checkpoint.pop("error", None)
+                checkpoint.pop("error_info", None)
+                store.save_checkpoint(task_id, checkpoint)
+                output_path = paths["memory"] / "translation_memory.json"
+                output_paths = {
+                    "memory": str(output_path),
+                    "bootstrap": str(paths["memory"] / "bootstrap.json"),
+                }
+                store.update_task_status(
+                    task_id,
+                    "DONE",
+                    output_path=str(output_path),
+                    output_paths=output_paths,
+                    clear_error=True,
+                )
+                store.append_event(
+                    task_id,
+                    "done",
+                    stage="DONE",
+                    message="Memory draft task completed",
+                    progress=1.0,
+                    details={"output_path": str(output_path), "output_paths": output_paths},
+                )
+                return
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
@@ -2064,7 +2098,7 @@ def _execute_task(
             source_lang=task.source_lang,
             target_lang=task.target_lang,
             already_done=translated_done,
-            memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
+            memory_dir=paths["memory"] if translates_with_memory(config.pipeline.memory) else None,
             progress_callback=translation_progress,
         ):
             _check_cancel(store, task_id)
@@ -2126,7 +2160,7 @@ def _execute_task(
                 segments=final_segments,
                 source_lang=task.source_lang,
                 target_lang=task.target_lang,
-                memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
+                memory_dir=paths["memory"] if translates_with_memory(config.pipeline.memory) else None,
             )
             for row in compression_rows:
                 append_jsonl(paths["quality"] / "compression.jsonl", row)
@@ -2140,7 +2174,7 @@ def _execute_task(
                 quality_report=quality_result.report,
                 source_lang=task.source_lang,
                 target_lang=task.target_lang,
-                memory_dir=paths["memory"] if config.pipeline.memory.enabled else None,
+                memory_dir=paths["memory"] if translates_with_memory(config.pipeline.memory) else None,
             )
             for row in reflow_rows:
                 append_jsonl(paths["quality"] / "reflow.jsonl", row)
@@ -2196,9 +2230,9 @@ def _execute_task(
             },
         )
         write_json(paths["final"] / "segments.final.json", final_segments)
-        if config.pipeline.memory.enabled and config.pipeline.memory.consistency_check.enabled:
+        if translates_with_memory(config.pipeline.memory) and config.pipeline.memory.consistency_check.enabled:
             memory_store = MemoryStore(paths["memory"])
-            memory_document = memory_store.load_effective()
+            memory_document = memory_store.load_effective(effective_memory_sources(config.pipeline.memory))
             memory_issues = check_consistency(memory_document, final_segments)
             write_consistency_issues(memory_store, memory_issues)
             store.append_event(

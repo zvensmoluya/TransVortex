@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from transvortex.app.models import (
     AppConfig,
     Chunk,
@@ -161,7 +163,7 @@ def test_translate_chunk_reports_v2_memory_prompt_entries(monkeypatch, tmp_path)
     assert [event["memory_entries"] for event in events if event.get("mode") == "translate"] == [2, 2]
 
 
-def test_adaptive_translation_splits_retryable_chunk(monkeypatch, tmp_path) -> None:
+def test_adaptive_translation_does_not_split_gateway_timeout(monkeypatch, tmp_path) -> None:
     provider = ProviderConfig(
         name="p1",
         api_type="openai",
@@ -199,27 +201,26 @@ def test_adaptive_translation_splits_retryable_chunk(monkeypatch, tmp_path) -> N
 
     monkeypatch.setattr("transvortex.core.translate.translate_chunk", fake_translate_chunk)
 
-    results = translate_chunk_adaptive(
-        config,
-        chunk,
-        source_lang="en",
-        target_lang="zh-CN",
-        progress_callback=events.append,
-    )
+    with pytest.raises(RuntimeError, match="gateway_timeout"):
+        translate_chunk_adaptive(
+            config,
+            chunk,
+            source_lang="en",
+            target_lang="zh-CN",
+            progress_callback=events.append,
+        )
 
-    assert seen_chunks == ["c00000", "c00000s0", "c00000s1"]
-    assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1"]
-    assert all(result["adaptive_parent_chunk"] == "c00000" for result in results)
-    assert any(event["mode"] == "adaptive_split" for event in events)
+    assert seen_chunks == ["c00000"]
+    assert not any(event.get("mode") == "adaptive_split" for event in events)
 
 
 def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
     config.pipeline.translation.batching.mode = "adaptive"
     config.pipeline.translation.batching.min_chunk_lines = 1
-    config.pipeline.translation.chunking.input_safety_ratio = 1.0
+    config.pipeline.translation.chunking.input_safety_ratio = 2.0
     config.pipeline.translation.chunking.prompt_overhead_tokens = 40
-    config.providers["p1"].capabilities.max_context_tokens = 90
+    config.providers["p1"].capabilities.max_context_tokens = 1000
     chunk = Chunk(
         chunk_id="c00000",
         segment_ids=[1, 2, 3, 4],
@@ -227,7 +228,8 @@ def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(mon
         context_before=["[0] " + "before " * 30],
         context_after=["[5] " + "after " * 30],
     )
-    seen_context_lengths: dict[str, int] = {}
+    seen_contexts: dict[str, tuple[list[str], list[str]]] = {}
+    seen_memory_prompts: dict[str, str] = {}
 
     class BatchLimitClient:
         def __init__(self, _provider: ProviderConfig) -> None:
@@ -238,7 +240,8 @@ def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(mon
 
             first_id = int(req.lines[0].split("]", 1)[0].strip("["))
             chunk_key = "c00000" if len(req.lines) == 4 else ("c00000s0" if first_id == 1 else "c00000s1")
-            seen_context_lengths[chunk_key] = len(req.context_before) + len(req.context_after)
+            seen_contexts[chunk_key] = (list(req.context_before), list(req.context_after))
+            seen_memory_prompts[chunk_key] = req.memory_prompt
             if len(req.lines) == 4:
                 raise RuntimeError("batch too large: 4 > 2")
             return NormalizedResponse(
@@ -248,11 +251,19 @@ def test_adaptive_translation_splits_batch_too_large_and_trims_child_context(mon
 
     monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: BatchLimitClient(provider))
 
-    results = translate_chunk_adaptive(config, chunk, source_lang="en", target_lang="zh-CN")
+    results = translate_chunk_adaptive(
+        config,
+        chunk,
+        source_lang="en",
+        target_lang="zh-CN",
+        memory_prompt_builder=lambda item: f"memory for {item.chunk_id}",
+    )
 
     assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1"]
-    assert seen_context_lengths["c00000s0"] < 2
-    assert seen_context_lengths["c00000s1"] < 2
+    assert "[3] C" in seen_contexts["c00000s0"][1]
+    assert "[2] B" in seen_contexts["c00000s1"][0]
+    assert seen_memory_prompts["c00000s0"] == "memory for c00000s0"
+    assert seen_memory_prompts["c00000s1"] == "memory for c00000s1"
 
 
 def test_translate_chunk_treats_many_missing_rows_as_capacity_failure(monkeypatch, tmp_path) -> None:
@@ -430,7 +441,7 @@ def test_adaptive_serial_scheduler_shrinks_then_grows(monkeypatch, tmp_path) -> 
     def fake_translate_chunk(_config, item, source_lang: str, target_lang: str, memory_prompt: str = "", progress_callback=None):
         seen.append(item.chunk_id)
         if item.chunk_id == "c00000":
-            raise RuntimeError("All translation routes failed: [{'error_type': 'gateway_timeout'}]")
+            raise RuntimeError("batch too large: 4 > 2")
         return {
             "chunk_id": item.chunk_id,
             "provider": "p1",
@@ -455,10 +466,9 @@ def test_adaptive_serial_scheduler_shrinks_then_grows(monkeypatch, tmp_path) -> 
     assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1", "c00001s0", "c00001s1", "c00002"]
 
 
-def test_bootstrap_first_memory_mode_allows_parallel_windows(monkeypatch, tmp_path) -> None:
+def test_auto_bootstrap_memory_workflow_allows_parallel_windows(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
-    config.pipeline.memory.enabled = True
-    config.pipeline.memory.mode = "bootstrap_first"
+    config.pipeline.memory.workflow = "auto_bootstrap"
     config.pipeline.default_concurrency = 2
     chunks = [
         Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),
@@ -466,7 +476,17 @@ def test_bootstrap_first_memory_mode_allows_parallel_windows(monkeypatch, tmp_pa
     ]
     seen: list[str] = []
 
-    def fake_submit(_pool, _config, chunk, _source_lang, _target_lang, _memory_prompt, _progress_callback, _already_done=None):
+    def fake_submit(
+        _pool,
+        _config,
+        chunk,
+        _source_lang,
+        _target_lang,
+        _memory_prompt,
+        _progress_callback,
+        _already_done=None,
+        _memory_prompt_builder=None,
+    ):
         seen.append(chunk.chunk_id)
 
         class Done:
@@ -483,10 +503,9 @@ def test_bootstrap_first_memory_mode_allows_parallel_windows(monkeypatch, tmp_pa
     assert seen == ["c00000", "c00001"]
 
 
-def test_dynamic_patch_memory_mode_uses_serial_windows(monkeypatch, tmp_path) -> None:
+def test_experimental_dynamic_memory_workflow_uses_serial_windows(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
-    config.pipeline.memory.enabled = True
-    config.pipeline.memory.mode = "dynamic_patch"
+    config.pipeline.memory.workflow = "experimental_dynamic"
     config.pipeline.default_concurrency = 2
     chunks = [
         Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),

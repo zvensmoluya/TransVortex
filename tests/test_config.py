@@ -194,7 +194,7 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  enabled: true
+  workflow: auto_bootstrap
   patch:
     enabled: true
         """.strip(),
@@ -212,7 +212,7 @@ memory:
             "provider_read_timeout_seconds": 77,
             "translation_batching_mode": "fixed",
             "translation_min_chunk_lines": 12,
-            "memory_patch_enabled": "false",
+            "memory_workflow": "preset_only",
             "memory_patch_window_chunks": 4,
         },
     )
@@ -227,12 +227,11 @@ memory:
     assert cfg.providers["p1"].limits.read_timeout_seconds == 77
     assert cfg.pipeline.translation.batching.mode == "fixed"
     assert cfg.pipeline.translation.batching.min_chunk_lines == 12
-    assert cfg.pipeline.memory.patch.enabled is False
-    assert cfg.pipeline.memory.patch.after_each_window is False
+    assert cfg.pipeline.memory.workflow == "preset_only"
     assert cfg.pipeline.memory.patch.window_chunks == 4
 
 
-def test_memory_patch_enabled_implies_after_each_window(tmp_path: Path) -> None:
+def test_memory_workflow_override_sets_workflow(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -249,16 +248,14 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  patch:
-    enabled: true
+  workflow: preset_only
         """.strip(),
         encoding="utf-8",
     )
 
-    cfg = load_app_config(root_dir=tmp_path)
+    cfg = load_app_config(root_dir=tmp_path, cli_overrides={"memory_workflow": "experimental_dynamic"})
 
-    assert cfg.pipeline.memory.patch.enabled is True
-    assert cfg.pipeline.memory.patch.after_each_window is True
+    assert cfg.pipeline.memory.workflow == "experimental_dynamic"
 
 
 def test_memory_patch_defaults_disabled(tmp_path: Path) -> None:
@@ -1028,7 +1025,7 @@ prompts:
   translation_style: prompts/user/translation_style.md
   memory_patch_system: prompts/user/memory_patch_system.md
 memory:
-  enabled: true
+  workflow: auto_bootstrap
         """.strip(),
         encoding="utf-8",
     )
@@ -1055,8 +1052,7 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  enabled: true
-  mode: consistency_first
+  workflow: experimental_dynamic
   chunking:
     min_initial_chunk_lines: 96
     max_initial_chunks: 12
@@ -1076,8 +1072,7 @@ memory:
         encoding="utf-8",
     )
     cfg = load_app_config(root_dir=tmp_path)
-    assert cfg.pipeline.memory.enabled is True
-    assert cfg.pipeline.memory.mode == "consistency_first"
+    assert cfg.pipeline.memory.workflow == "experimental_dynamic"
     assert cfg.pipeline.memory.chunking.min_initial_chunk_lines == 96
     assert cfg.pipeline.memory.chunking.max_initial_chunks == 12
     assert cfg.pipeline.memory.inject.strategy == "full"
@@ -1145,7 +1140,7 @@ memory:
         load_app_config(root_dir=tmp_path)
 
 
-def test_memory_enabled_cli_override(tmp_path: Path) -> None:
+def test_legacy_memory_enabled_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -1166,8 +1161,33 @@ memory:
         """.strip(),
         encoding="utf-8",
     )
-    cfg = load_app_config(root_dir=tmp_path, cli_overrides={"memory_enabled": "true"})
-    assert cfg.pipeline.memory.enabled is True
+    with pytest.raises(ValueError, match="memory.enabled is no longer supported"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_legacy_memory_mode_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  mode: bootstrap_first
+        """.strip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.mode is no longer supported"):
+        load_app_config(root_dir=tmp_path)
 
 
 def test_subtitle_reflow_config_parse(tmp_path: Path) -> None:

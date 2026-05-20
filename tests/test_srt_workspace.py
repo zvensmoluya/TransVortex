@@ -158,7 +158,7 @@ subtitle:
     max_window_segments: 3
     batch_windows: 10
 memory:
-  enabled: true
+  workflow: preset_only
   presets:
     - reflow_hello
   inject:
@@ -250,8 +250,7 @@ def test_srt_translate_memory_artifacts_and_result_summary(tmp_path: Path, monke
         pipeline.read_text(encoding="utf-8")
         + """
 memory:
-  enabled: true
-  mode: balanced
+  workflow: experimental_dynamic
   presets:
     - subaru
   inject:

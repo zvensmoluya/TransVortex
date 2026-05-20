@@ -260,7 +260,7 @@ export type FormState = {
   translationStylePreset: string;
   translationStylePrompt: string;
   projectPrompt: string;
-  memoryEnabled: boolean;
+  memoryWorkflow: "off" | "preset_only" | "auto_bootstrap" | "draft_only" | "experimental_dynamic";
   memoryPreset: string;
   translationChunkLines: number;
   translationContextBeforeLines: number;
@@ -308,7 +308,7 @@ export const emptyForm: FormState = {
   translationStylePreset: "subtitle_natural",
   translationStylePrompt: "",
   projectPrompt: "",
-  memoryEnabled: true,
+  memoryWorkflow: "auto_bootstrap",
   memoryPreset: "",
   translationChunkLines: 40,
   translationContextBeforeLines: 20,

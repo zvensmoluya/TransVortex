@@ -156,16 +156,15 @@ translation:
 
 说明：
 - `translation.chunking.mode: capacity_aware` 会按 provider 输出预算和 `max_batch_lines` 规划初始大 chunk；`chunk_lines` 保留为旧 fixed 分片兼容项。
-- `batching.mode: adaptive` 只负责 provider 超时或网关错误后的失败 chunk 二分重试。
+- `batching.mode: adaptive` 只在明确容量/上下文/输出截断类错误后拆分失败 chunk；timeout、限流和 5xx 走 retry/fallback。
 - `context_before_lines` / `context_after_lines` 只作为只读上下文发给模型，不会进入回填范围。
 - `style_prompt: ""` 表示不追加用户文风；固定格式约束始终由系统控制。
 - 旧配置 `translation_batch_size` 仍可用，并作为 `translation.chunk_lines` 的兼容别名。
-- 默认 memory 流程是 `bootstrap_first`：先用全片 source subtitles 生成全局记忆，再翻译大 chunk；翻译过程中的动态 patch 默认关闭，可按需显式开启。
+- 默认 memory 流程是 `auto_bootstrap`：先用全片 source subtitles 生成全局记忆，再按条目自身状态和约束注入翻译。人工术语表可用 `preset_only`，运行时自维护使用实验性 `experimental_dynamic`。
 
 ```yaml
 memory:
-  enabled: true
-  mode: bootstrap_first
+  workflow: auto_bootstrap
   bootstrap:
     enabled: true
     mode: whole_document
