@@ -280,6 +280,33 @@ routing:
     assert cfg.pipeline.memory.patch.after_each_window is False
 
 
+def test_repository_default_auto_bootstrap_injects_memory(tmp_path: Path) -> None:
+    providers_file = tmp_path / "providers.yaml"
+    providers_file.write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    pipeline_file = Path(__file__).resolve().parents[1] / "pipeline.yaml"
+
+    cfg = load_app_config(root_dir=tmp_path, providers_file=providers_file, pipeline_file=pipeline_file)
+
+    assert cfg.pipeline.memory.workflow == "auto_bootstrap"
+    assert cfg.pipeline.memory.bootstrap.enabled is True
+    assert cfg.pipeline.memory.inject.locked is True
+    assert cfg.pipeline.memory.inject.confirmed is True
+    assert cfg.pipeline.memory.inject.proposed is True
+    assert cfg.pipeline.memory.inject.max_entries_per_chunk == 30
+
+
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

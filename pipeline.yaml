@@ -66,11 +66,11 @@ memory:
     min_initial_chunk_lines: 80
     max_initial_chunks: 24
   inject:
-    locked: false
-    confirmed: false
-    proposed: false
+    locked: true
+    confirmed: true
+    proposed: true
     strategy: balanced
-    max_entries_per_chunk: 0
+    max_entries_per_chunk: 30
   patch:
     enabled: false
     after_each_window: false
