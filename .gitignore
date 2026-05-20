@@ -13,3 +13,4 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 desktop/*-dev*.log
 desktop/run-tauri-dev*.ps1
+docs/RESEARCH/
