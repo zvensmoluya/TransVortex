@@ -4,7 +4,7 @@ from pathlib import Path
 
 from transvortex.app.models import Chunk, MemoryInjectConfig, Segment
 from transvortex.app.models import AppConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig
-from transvortex.core.translate import iter_translate_all_chunks
+from transvortex.core.translate import _memory_prompt_entry_count, iter_translate_all_chunks
 from transvortex.memory.checker import check_consistency
 from transvortex.memory.injector import build_memory_prompt
 from transvortex.memory.merger import merge_patch, patch_from_payload
@@ -113,6 +113,28 @@ def test_memory_schema_v11_roundtrip_optional_fields() -> None:
     assert entry.enforcement_policy["translation"] == "preferred"
     assert entry.target_variants[0].speaker_scope == {"speaker": "スバル"}
     assert entry.target_variants[0].notes == "affectionate"
+
+
+def test_memory_prompt_entry_count_supports_v1_and_v2_rows() -> None:
+    v2_prompt = (
+        "TRANSLATION MEMORY\n"
+        "Use according to policy.\n\n"
+        "MUST_USE\n"
+        "- Subaru -> 昴 | policy: exact\n"
+        "- Emilia -> 爱蜜莉雅 | policy: preferred\n\n"
+        "WEAK_HINTS\n"
+        "- hint: ロズっち | canonical: ロズワール | target: 罗兹亲"
+    )
+    v1_prompt = (
+        "LOCKED TERMS\n"
+        "- Subaru => 昴\n"
+        "- Emilia => 爱蜜莉雅\n\n"
+        "ADDRESS VARIANTS\n"
+        "- エミリアタン => 爱蜜莉雅碳; canonical: エミリア => 爱蜜莉雅"
+    )
+
+    assert _memory_prompt_entry_count(v2_prompt) == 3
+    assert _memory_prompt_entry_count(v1_prompt) == 3
 
 
 def test_selector_and_injector_group_relevant_entries() -> None:

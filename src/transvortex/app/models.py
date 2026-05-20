@@ -354,7 +354,6 @@ class MemoryInjectConfig:
     proposed: bool = True
     strategy: str = "balanced"
     max_entries_per_chunk: int = 30
-    format: str = "v2"
     max_prompt_tokens: int = 1200
     max_proposed_entries: int = 12
     max_context_only_entries: int = 10
@@ -384,7 +383,6 @@ class MemoryMergeConfig:
 @dataclass
 class MemoryConsistencyCheckConfig:
     enabled: bool = True
-    enforcement_policy: bool = True
 
 
 @dataclass

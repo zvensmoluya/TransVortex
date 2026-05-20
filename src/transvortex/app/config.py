@@ -605,6 +605,14 @@ def load_app_config(
     memory_check_raw = memory_raw.get("consistency_check") or {}
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
     memory_patch_enabled = _to_bool(memory_patch_raw.get("enabled"), False)
+    memory_inject_format = _to_str(memory_inject_raw.get("format"), "v2").strip().lower()
+    if memory_inject_format != "v2":
+        raise ValueError(f"Unsupported memory.inject.format: {memory_inject_format}; only v2 is supported")
+    if "enforcement_policy" in memory_check_raw and not _to_bool(memory_check_raw.get("enforcement_policy"), True):
+        raise ValueError(
+            "memory.consistency_check.enforcement_policy=false is no longer supported; "
+            "set memory.consistency_check.enabled=false to disable consistency checks"
+        )
     memory = MemoryConfig(
         enabled=_to_bool(memory_raw.get("enabled"), True),
         mode=_to_str(memory_raw.get("mode"), "bootstrap_first"),
@@ -631,7 +639,6 @@ def load_app_config(
             proposed=_to_bool(memory_inject_raw.get("proposed"), True),
             strategy=_to_str(memory_inject_raw.get("strategy"), "balanced"),
             max_entries_per_chunk=_to_int(memory_inject_raw.get("max_entries_per_chunk"), 30),
-            format=_to_str(memory_inject_raw.get("format"), "v2"),
             max_prompt_tokens=_to_int(memory_inject_raw.get("max_prompt_tokens"), 1200),
             max_proposed_entries=_to_int(memory_inject_raw.get("max_proposed_entries"), 12),
             max_context_only_entries=_to_int(memory_inject_raw.get("max_context_only_entries"), 10),
@@ -653,7 +660,6 @@ def load_app_config(
         ),
         consistency_check=MemoryConsistencyCheckConfig(
             enabled=_to_bool(memory_check_raw.get("enabled"), True),
-            enforcement_policy=_to_bool(memory_check_raw.get("enforcement_policy"), True),
         ),
     )
     ass_raw = pip_yaml.get("subtitle_ass_style") or {}

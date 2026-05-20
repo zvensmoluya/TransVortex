@@ -67,6 +67,10 @@ def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any)
         pass
 
 
+def _memory_prompt_entry_count(memory_prompt: str) -> int:
+    return sum(1 for line in str(memory_prompt or "").splitlines() if line.strip().startswith("- "))
+
+
 _RETRYABLE_SPLIT_ERRORS = {
     "provider_timeout",
     "connect_timeout",
@@ -575,7 +579,7 @@ def translate_chunk(
                     model=route.model,
                     attempt=attempt + 1,
                     max_attempts=retries,
-                    memory_entries=memory_prompt.count(" => "),
+                    memory_entries=_memory_prompt_entry_count(memory_prompt),
                 )
                 req = _base_request(
                     config=config,
@@ -623,7 +627,7 @@ def translate_chunk(
                     model=route.model,
                     attempt=attempt + 1,
                     max_attempts=retries,
-                    memory_entries=memory_prompt.count(" => "),
+                    memory_entries=_memory_prompt_entry_count(memory_prompt),
                     provider_meta=provider_meta,
                 )
                 return {
@@ -645,7 +649,7 @@ def translate_chunk(
                         "line_count": len(request_chunk.lines),
                         "context_before_lines": len(request_chunk.context_before),
                         "context_after_lines": len(request_chunk.context_after),
-                        "memory_entries": memory_prompt.count(" => "),
+                        "memory_entries": _memory_prompt_entry_count(memory_prompt),
                         "memory_prompt_chars": len(memory_prompt or ""),
                         "chunk_meta": dict(request_chunk.meta or {}),
                     },

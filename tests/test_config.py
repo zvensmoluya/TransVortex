@@ -1064,12 +1064,14 @@ memory:
     strategy: full
     proposed: false
     max_entries_per_chunk: 12
+    format: v2
   patch:
     enabled: false
   merge:
     auto_confirm_high_confidence: true
   consistency_check:
     enabled: false
+    enforcement_policy: true
         """.strip(),
         encoding="utf-8",
     )
@@ -1085,6 +1087,62 @@ memory:
     assert cfg.pipeline.memory.patch.after_each_window is False
     assert cfg.pipeline.memory.merge.auto_confirm_high_confidence is True
     assert cfg.pipeline.memory.consistency_check.enabled is False
+    assert not hasattr(cfg.pipeline.memory.inject, "format")
+    assert not hasattr(cfg.pipeline.memory.consistency_check, "enforcement_policy")
+
+
+def test_memory_inject_format_rejects_legacy_values(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    format: v1
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported memory.inject.format: v1; only v2 is supported"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_memory_consistency_check_rejects_disabled_policy_switch(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  consistency_check:
+    enforcement_policy: false
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="set memory.consistency_check.enabled=false"):
+        load_app_config(root_dir=tmp_path)
 
 
 def test_memory_enabled_cli_override(tmp_path: Path) -> None:

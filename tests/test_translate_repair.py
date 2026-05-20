@@ -115,6 +115,52 @@ def test_translate_chunk_passes_memory_prompt_to_repair(monkeypatch, tmp_path) -
     assert "Subaru => 斯巴鲁" in seen_repair_memory["value"]
 
 
+def test_translate_chunk_reports_v2_memory_prompt_entries(monkeypatch, tmp_path) -> None:
+    provider = ProviderConfig(
+        name="p1",
+        api_type="openai",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        compat_mode="openai_chat",
+    )
+    config = AppConfig(
+        pipeline=PipelineConfig(artifacts_dir=tmp_path),
+        providers={"p1": provider},
+        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+    )
+
+    class SuccessClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, _req):
+            from transvortex.app.models import NormalizedResponse
+
+            return NormalizedResponse(numbered_lines=["[1] 昴来了"], raw_text="[1] 昴来了")
+
+    events: list[dict] = []
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: SuccessClient(provider))
+    chunk = Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] Subaru arrives"])
+    result = translate_chunk(
+        config,
+        chunk,
+        source_lang="en",
+        target_lang="zh-CN",
+        memory_prompt=(
+            "TRANSLATION MEMORY\n"
+            "Use according to policy.\n\n"
+            "MUST_USE\n"
+            "- Subaru -> 昴 | policy: exact\n"
+            "- Emilia -> 爱蜜莉雅 | policy: preferred"
+        ),
+        progress_callback=events.append,
+    )
+
+    assert result["request"]["memory_entries"] == 2
+    assert [event["memory_entries"] for event in events if event.get("mode") == "translate"] == [2, 2]
+
+
 def test_adaptive_translation_splits_retryable_chunk(monkeypatch, tmp_path) -> None:
     provider = ProviderConfig(
         name="p1",
