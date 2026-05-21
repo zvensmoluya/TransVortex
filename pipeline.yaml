@@ -135,6 +135,7 @@ asr_providers:
     credential_id: TVX_MODEL_API_KEY
     timeout_seconds: 300
     retry: 2
+    http2: true
     request:
       response_format: verbose_json
       temperature: 0

@@ -254,6 +254,7 @@ asr_providers:
     credential_id: openai_asr
     timeout_seconds: 300
     retry: 2
+    http2: true
     request:
       response_format: verbose_json
       temperature: 0
@@ -273,6 +274,7 @@ asr_providers:
 - `asr.execution.cloud_concurrency` 控制 cloud ASR 并发上传，默认 8；遇到 timeout、429 或 5xx 时调度层会降并发，单片失败后会尝试细分成更小片重跑，仍失败才失败任务。
 - ASR 行进入 `source/segments.normalized.jsonl` 前会过滤确定性垃圾，例如纯音乐符号、替换字符乱码、长时间重复 hallucination；raw response 和 `source/asr/quality/*.json` 会保留诊断信息。
 - `asr_providers[].request` 支持 `temperature`、`timestamp_granularities`、`include` 和 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。默认请求 `timestamp_granularities: [segment]`，让归一化层优先消费 `segments[]` 时间戳。
+- `asr_providers[].http2` 默认 `true`，表示云端 ASR 优先使用统一 `httpx` 传输层的 HTTP/2；客户端或服务端不可用时会按实际能力降级，并在 ASR meta 中记录实际协议。
 - `asr_providers[].retry` 控制云端 ASR 请求短重试次数，timeout、429 和 5xx 会重试；重试仍失败会保留失败，不会静默丢弃音频片段。
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。
 - `asr.provider` 选择云 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。

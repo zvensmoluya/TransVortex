@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.error import HTTPError
 
 import yaml
 
+from transvortex.http import HttpTransportError
 from transvortex.providers.admin import (
     custom_adapter_template_payload,
     delete_provider_config,
@@ -237,7 +237,7 @@ def test_provider_connection_retries_transient_upstream_error(monkeypatch) -> No
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise HTTPError(url, 502, "Bad Gateway", hdrs=None, fp=None)
+            raise HttpTransportError("bad_gateway", "provider upstream returned HTTP 502: Bad Gateway", status_code=502)
         return {"choices": [{"message": {"content": "[1] pong"}}]}
 
     monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
@@ -261,7 +261,7 @@ def test_provider_connection_retries_transient_upstream_error(monkeypatch) -> No
 
 def test_provider_connection_reports_upstream_error_hint(monkeypatch) -> None:
     def fake_request_json(url, payload, headers, timeout, method="POST"):
-        raise HTTPError(url, 502, "Bad Gateway", hdrs=None, fp=None)
+        raise HttpTransportError("bad_gateway", "provider upstream returned HTTP 502: Bad Gateway", status_code=502)
 
     monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
     monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)

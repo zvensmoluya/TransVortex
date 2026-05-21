@@ -210,6 +210,7 @@ class AsrProviderConfig:
     credential_id: str = "TVX_MODEL_API_KEY"
     timeout_seconds: int = 300
     retry: int = 2
+    http2: bool = True
     request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
 
 

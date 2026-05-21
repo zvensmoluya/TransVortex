@@ -1,24 +1,18 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import posixpath
 import site
-import socket
 import sys
-import time
 import urllib.parse
-import urllib.request
-import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 from ..app.credentials import resolve_credential
 from ..app.models import AsrProviderConfig
-from ..http import DEFAULT_USER_AGENT, merge_default_headers
+from ..http import DEFAULT_JSON_HEADERS, merge_default_headers, request_json_with_retry
 from ..utils import write_json
 
 
@@ -49,6 +43,7 @@ _CUDA_DLL_DIRECTORIES_REGISTERED = False
 class AsrTranscriptionResult:
     rows: list[dict]
     raw_response: dict[str, Any] | None = None
+    transport_meta: dict[str, Any] = field(default_factory=dict)
 
 
 class AsrEngine:
@@ -175,7 +170,7 @@ class OpenAITranscriptionsAsrClient:
                 f"unsupported_asr_response_format_for_segments: {self.config.request.response_format}"
             )
         _validate_extra_form_fields(self.config.request.extra_form_fields)
-        response = self._call_openai_transcriptions(
+        response, transport_meta = self._call_openai_transcriptions(
             audio_path,
             api_key=credential.key,
             source_lang=source_lang,
@@ -198,13 +193,14 @@ class OpenAITranscriptionsAsrClient:
                             "provider": self.config.name,
                             "protocol": self.config.protocol,
                             "source": "asr",
+                            **_asr_row_transport_meta(transport_meta),
                         },
                     }
                 )
-            return AsrTranscriptionResult(rows=rows, raw_response=response)
+            return AsrTranscriptionResult(rows=rows, raw_response=response, transport_meta=transport_meta)
         text = str(response.get("text", "")).strip()
         if not text:
-            return AsrTranscriptionResult(rows=[], raw_response=response)
+            return AsrTranscriptionResult(rows=[], raw_response=response, transport_meta=transport_meta)
         return AsrTranscriptionResult(
             rows=[
                 {
@@ -217,10 +213,12 @@ class OpenAITranscriptionsAsrClient:
                         "protocol": self.config.protocol,
                         "source": "asr",
                         "warning": "missing_timestamps",
+                        **_asr_row_transport_meta(transport_meta),
                     },
                 }
             ],
             raw_response=response,
+            transport_meta=transport_meta,
         )
 
     def _call_openai_transcriptions(
@@ -230,114 +228,85 @@ class OpenAITranscriptionsAsrClient:
         api_key: str,
         source_lang: str | None = None,
         prompt: str = "",
-    ) -> dict[str, Any]:
-        boundary = f"----TransVortex{uuid.uuid4().hex}"
-        body = self._build_multipart_body(
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        data, files = self._build_multipart_fields(
             audio_path=audio_path,
-            boundary=boundary,
             source_lang=source_lang,
             prompt=prompt,
         )
         url = _build_cloud_asr_url(self.config.base_url, self.config.endpoint)
         auth_headers = {"Authorization": f"Bearer {api_key}"}
-        method = "POST"
-        req = urllib.request.Request(
-            url=url,
-            data=body,
-            method=method,
-            headers=merge_default_headers(
-                auth_headers,
-                Accept="application/json",
-                **{
-                    "User-Agent": DEFAULT_USER_AGENT,
-                    "Content-Type": f"multipart/form-data; boundary={boundary}",
-                },
-            ),
+        payload, transport_meta = request_json_with_retry(
+            "POST",
+            url,
+            data=data,
+            files=files,
+            headers=merge_default_headers(auth_headers, **DEFAULT_JSON_HEADERS),
+            timeout=float(self.config.timeout_seconds),
+            http2=bool(getattr(self.config, "http2", True)),
+            retry=max(1, int(getattr(self.config, "retry", 1) or 1)),
+            context="cloud ASR upstream",
         )
-        raw = self._urlopen_with_retry(req)
-        payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise RuntimeError("bad_schema: unexpected cloud ASR response")
-        return payload
+        return payload, transport_meta
 
-    def _urlopen_with_retry(self, req: urllib.request.Request) -> str:
-        attempts = max(1, int(getattr(self.config, "retry", 1) or 1))
-        last_exc: Exception | None = None
-        for attempt in range(attempts):
-            try:
-                with urllib.request.urlopen(req, timeout=self.config.timeout_seconds) as resp:
-                    return resp.read().decode("utf-8")
-            except Exception as exc:
-                last_exc = exc
-                if attempt + 1 >= attempts or not _is_retryable_asr_error(exc):
-                    raise
-                time.sleep(min(0.5 * (2**attempt), 4.0))
-        if last_exc is not None:
-            raise last_exc
-        raise RuntimeError("cloud_asr_request_failed")
-
-    def _build_multipart_body(
+    def _build_multipart_fields(
         self,
         *,
         audio_path: Path,
-        boundary: str,
         source_lang: str | None = None,
         prompt: str = "",
-    ) -> bytes:
-        def add_field(chunks: list[bytes], name: str, value: str) -> None:
-            chunks.append(f"--{boundary}\r\n".encode("utf-8"))
-            chunks.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
-            chunks.append(value.encode("utf-8"))
-            chunks.append(b"\r\n")
+    ) -> tuple[dict[str, Any], list[tuple[str, Any]]]:
+        data: dict[str, Any] = {}
 
-        def add_multi_field(chunks: list[bytes], name: str, value: Any) -> None:
+        def add_field(name: str, value: str) -> None:
+            existing = data.get(name)
+            if existing is None:
+                data[name] = value
+            elif isinstance(existing, list):
+                existing.append(value)
+            else:
+                data[name] = [existing, value]
+
+        def add_multi_field(name: str, value: Any) -> None:
             if value is None:
                 return
             if isinstance(value, (list, tuple)):
                 for item in value:
-                    add_multi_field(chunks, name, item)
+                    add_multi_field(name, item)
                 return
             if isinstance(value, bool):
-                add_field(chunks, name, "true" if value else "false")
+                add_field(name, "true" if value else "false")
                 return
-            add_field(chunks, name, str(value))
+            add_field(name, str(value))
 
         _validate_extra_form_fields(self.config.request.extra_form_fields)
         array_format = _normalize_asr_array_format(self.config.request.array_format)
-        chunks: list[bytes] = []
-        add_field(chunks, "model", self.config.model)
-        add_field(chunks, "response_format", self.config.request.response_format)
+        add_field("model", self.config.model)
+        add_field("response_format", self.config.request.response_format)
         language = _normalize_whisper_language(source_lang)
         if language:
-            add_field(chunks, "language", language)
-        add_field(chunks, "temperature", _format_form_number(self.config.request.temperature))
+            add_field("language", language)
+        add_field("temperature", _format_form_number(self.config.request.temperature))
         timestamp_key = _asr_array_field_name("timestamp_granularities", array_format)
         for granularity in self.config.request.timestamp_granularities:
             if str(granularity).strip():
-                add_field(chunks, timestamp_key, str(granularity).strip())
+                add_field(timestamp_key, str(granularity).strip())
         if prompt:
-            add_field(chunks, "prompt", prompt)
+            add_field("prompt", prompt)
         include_key = _asr_array_field_name("include", array_format)
         for include_item in self.config.request.include:
             if str(include_item).strip():
-                add_field(chunks, include_key, str(include_item).strip())
+                add_field(include_key, str(include_item).strip())
         for name, value in self.config.request.extra_form_fields.items():
-            add_multi_field(chunks, str(name), value)
+            add_multi_field(str(name), value)
 
         file_name = audio_path.name
         file_bytes = audio_path.read_bytes()
         mime = "audio/wav" if audio_path.suffix.lower() == ".wav" else "application/octet-stream"
-        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
-        chunks.append(
-            (
-                f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'
-                f"Content-Type: {mime}\r\n\r\n"
-            ).encode("utf-8")
-        )
-        chunks.append(file_bytes)
-        chunks.append(b"\r\n")
-        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
-        return b"".join(chunks)
+        files = [("file", (file_name, file_bytes, mime))]
+        return data, files
 
 
 def build_asr_client(config: AsrProviderConfig | None) -> OpenAITranscriptionsAsrClient:
@@ -440,44 +409,12 @@ def _asr_array_field_name(name: str, array_format: str) -> str:
     return f"{name}[]" if array_format == "brackets" else name
 
 
-def _is_retryable_asr_error(exc: Exception) -> bool:
-    if isinstance(exc, (TimeoutError, socket.timeout)):
-        return True
-    if isinstance(exc, HTTPError):
-        return exc.code in {408, 409, 425, 429, 500, 502, 503, 504}
-    if isinstance(exc, URLError):
-        reason = getattr(exc, "reason", None)
-        if isinstance(reason, (TimeoutError, socket.timeout)):
-            return True
-        lowered = str(reason or exc).lower()
-        return any(
-            marker in lowered
-            for marker in (
-                "timed out",
-                "timeout",
-                "temporarily unavailable",
-                "unexpected_eof",
-                "eof occurred",
-                "connection reset",
-                "connection aborted",
-                "remote end closed connection",
-            )
-        )
-    lowered = str(exc).lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "timed out",
-            "timeout",
-            "http error 429",
-            "http error 5",
-            "unexpected_eof",
-            "eof occurred",
-            "connection reset",
-            "connection aborted",
-            "remote end closed connection",
-        )
-    )
+def _asr_row_transport_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: meta[key]
+        for key in ("transport", "http_version", "http2_requested", "http2_enabled")
+        if key in meta
+    }
 
 
 def _validate_extra_form_fields(fields: dict[str, Any]) -> None:

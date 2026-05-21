@@ -6,7 +6,6 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 import yaml
 
@@ -28,6 +27,7 @@ from ..app.models import (
     ProviderConfig,
     ProviderLimits,
 )
+from ..http import HttpTransportError, is_retryable_http_error
 from .factory import (
     _build_payload,
     _build_url_and_headers,
@@ -923,74 +923,62 @@ def _api_key_for(config: ProviderConfig, *, root_dir: Path | None = None, overri
 
 
 def _is_retryable_provider_error(exc: Exception) -> bool:
-    if isinstance(exc, HTTPError):
-        return exc.code in {408, 429, 500, 502, 503, 504}
-    if isinstance(exc, URLError):
-        return True
-    return "timed out" in str(exc).lower()
+    return is_retryable_http_error(exc)
 
 
 def _network_error_hint(exc: Exception) -> ProviderCheck:
-    if isinstance(exc, HTTPError):
-        if exc.code in {401, 403}:
+    if isinstance(exc, HttpTransportError):
+        status_code = exc.status_code or 0
+        if status_code in {401, 403}:
             return ProviderCheck(
                 name="network",
                 status="FAIL",
                 code="provider_auth_failed",
-                message=f"provider returned HTTP {exc.code}",
+                message=f"provider returned HTTP {status_code}",
                 hint_zh="API key 或鉴权方式不正确，请检查 key、auth type 和 base_url。",
-                details={"status": exc.code},
+                details={"status": status_code},
             )
-        if exc.code == 404:
+        if status_code == 404:
             return ProviderCheck(
                 name="network",
                 status="WARN",
                 code="provider_endpoint_not_found",
                 message="provider endpoint not found",
                 hint_zh="当前接口路径没有响应。若是非标准网关，可以手动填写模型并检查 endpoint。",
-                details={"status": exc.code},
+                details={"status": status_code},
             )
-        if exc.code in {502, 503, 504}:
+        if status_code in {502, 503, 504}:
             return ProviderCheck(
                 name="network",
                 status="FAIL",
                 code="provider_upstream_error",
-                message=f"provider upstream returned HTTP {exc.code}",
+                message=f"provider upstream returned HTTP {status_code}",
                 hint_zh="Provider 网关或上游服务暂时失败，请稍后重试；如果持续失败，再检查 base_url、模型和服务商状态。",
-                details={"status": exc.code},
+                details={"status": status_code},
             )
-        if exc.code in {408, 429, 500}:
+        if status_code in {408, 429, 500}:
             return ProviderCheck(
                 name="network",
                 status="FAIL",
                 code="provider_retryable_http_error",
-                message=f"provider returned retryable HTTP {exc.code}",
+                message=f"provider returned retryable HTTP {status_code}",
                 hint_zh="Provider 暂时不可用或限流，请稍后重试；如果持续失败，再检查模型和账号额度。",
-                details={"status": exc.code},
+                details={"status": status_code},
             )
         return ProviderCheck(
             name="network",
             status="FAIL",
             code="provider_http_error",
-            message=f"provider returned HTTP {exc.code}",
+            message=f"provider returned HTTP {status_code}" if status_code else str(exc),
             hint_zh="Provider 返回了 HTTP 错误，请检查 base_url、模型名和账号权限。",
-            details={"status": exc.code},
-        )
-    if isinstance(exc, URLError):
-        return ProviderCheck(
-            name="network",
-            status="FAIL",
-            code="provider_network_error",
-            message=str(exc),
-            hint_zh="无法连接到 provider，请检查网络、代理和 base_url。",
-            details={},
+            details={"status": status_code} if status_code else {},
         )
     return ProviderCheck(
         name="network",
         status="FAIL",
-        code="provider_unknown_error",
+        code="provider_network_error" if is_retryable_http_error(exc) else "provider_unknown_error",
         message=str(exc),
-        hint_zh="Provider 测试失败，请查看英文错误详情。",
+        hint_zh="无法连接到 provider，请检查网络、代理和 base_url。" if is_retryable_http_error(exc) else "Provider 测试失败，请查看英文错误详情。",
         details={},
     )
 

@@ -38,6 +38,7 @@ from ..app.models import AppConfig, Segment, TaskRecord
 from ..providers.probe import probe_provider
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..formats.srt import parse_srt_file
+from ..http import is_retryable_http_error
 from .subtitle_compression import compress_overlong_subtitles
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_reflow import reflow_subtitles
@@ -82,14 +83,14 @@ def _transcribe_asr_segment(
     segment_start_offset: float,
     *,
     prompt: str | None = None,
-) -> tuple[list[dict], dict | None]:
+) -> tuple[list[dict], dict | None, dict[str, Any]]:
     if hasattr(asr, "transcribe_segment_result"):
         try:
             result = asr.transcribe_segment_result(audio_path, segment_start_offset, prompt=prompt)
         except TypeError:
             result = asr.transcribe_segment_result(audio_path, segment_start_offset)
-        return list(result.rows), result.raw_response
-    return list(asr.transcribe_segment(audio_path, segment_start_offset)), None
+        return list(result.rows), result.raw_response, dict(getattr(result, "transport_meta", {}) or {})
+    return list(asr.transcribe_segment(audio_path, segment_start_offset)), None, {}
 
 
 def _build_asr_engine(config: AppConfig, *, task: TaskRecord, root_dir: Path) -> AsrEngine:
@@ -107,6 +108,8 @@ def _build_asr_engine(config: AppConfig, *, task: TaskRecord, root_dir: Path) ->
 
 
 def _is_retryable_asr_exception(exc: Exception) -> bool:
+    if is_retryable_http_error(exc):
+        return True
     lowered = str(exc).lower()
     return any(
         marker in lowered
@@ -264,6 +267,14 @@ def _write_asr_segment_artifacts(
     write_segment_asr_output(artifact_paths["rows"], filtered_rows)
 
 
+def _asr_raw_response_with_transport(raw_response: dict | None, transport_meta: dict[str, Any]) -> dict | None:
+    if raw_response is None:
+        return None
+    if not transport_meta:
+        return raw_response
+    return {**raw_response, "_transport_meta": transport_meta}
+
+
 def _asr_previous_text(rows: list[dict]) -> str:
     return " ".join(str(row.get("text") or "").strip() for row in rows if str(row.get("text") or "").strip()).strip()
 
@@ -360,7 +371,12 @@ def _process_asr_manifest_item(
         transcribe_offset += float(preprocess_meta.get("trim_start_seconds") or 0.0)
     try:
         segment_prompt = _asr_segment_prompt(config, previous_text)
-        rows, raw_response = _transcribe_asr_segment(asr, transcribe_path, transcribe_offset, prompt=segment_prompt)
+        rows, raw_response, transport_meta = _transcribe_asr_segment(
+            asr,
+            transcribe_path,
+            transcribe_offset,
+            prompt=segment_prompt,
+        )
     except Exception as exc:
         if (
             allow_split_retry
@@ -381,7 +397,7 @@ def _process_asr_manifest_item(
         raise
     if preprocess_meta is not None:
         if preprocess_meta.get("reason") == "trimmed" and _should_retry_cloud_asr_without_preprocess(rows):
-            fallback_rows, fallback_raw_response = _transcribe_asr_segment(
+            fallback_rows, fallback_raw_response, fallback_transport_meta = _transcribe_asr_segment(
                 asr,
                 audio_path,
                 float(item["start"]),
@@ -395,14 +411,22 @@ def _process_asr_manifest_item(
                 preprocess_meta["trim_end_seconds"] = float(item.get("duration", 0.0))
                 rows = fallback_rows
                 raw_response = fallback_raw_response
+                transport_meta = fallback_transport_meta
         rows = _apply_audio_preprocess_meta(rows, preprocess_meta)
     _write_asr_segment_artifacts(
         artifact_paths=artifact_paths,
         rows=rows,
-        raw_response=raw_response,
+        raw_response=_asr_raw_response_with_transport(raw_response, transport_meta),
         preprocess_meta=preprocess_meta,
     )
-    return {"idx": idx, "rows": rows, "raw_response": raw_response, "preprocess_meta": preprocess_meta, "skipped": False}
+    return {
+        "idx": idx,
+        "rows": rows,
+        "raw_response": _asr_raw_response_with_transport(raw_response, transport_meta),
+        "preprocess_meta": preprocess_meta,
+        "skipped": False,
+        "transport_meta": transport_meta,
+    }
 
 
 def _retry_asr_manifest_item_with_subsegments(

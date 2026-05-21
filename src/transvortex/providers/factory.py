@@ -5,7 +5,6 @@ import re
 import time
 import urllib.parse
 import posixpath
-from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,20 +12,23 @@ import httpx
 
 from ..app.models import NormalizedRequest, NormalizedResponse, ProviderConfig
 from ..app.credentials import resolve_provider_credential
-from ..http import DEFAULT_JSON_HEADERS, merge_default_headers
+from ..http import (
+    DEFAULT_JSON_HEADERS,
+    HttpTransportError,
+    build_http_limits,
+    build_http_timeout,
+    classify_http_error,
+    get_shared_httpx_client,
+    merge_default_headers,
+    raise_for_status,
+    request_json_with_retry,
+    transport_meta,
+)
 from ..prompts import FALLBACK_TRANSLATION_SYSTEM_PROMPT
 from .base import ProviderClient
 
 
-_CLIENTS: dict[tuple, httpx.Client] = {}
-_HTTP2_AVAILABLE: bool | None = None
-
-
-class ProviderTransportError(RuntimeError):
-    def __init__(self, error_type: str, message: str, *, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.error_type = error_type
-        self.status_code = status_code
+ProviderTransportError = HttpTransportError
 
 
 def _extract_numbered_lines(text: str) -> list[str]:
@@ -193,61 +195,7 @@ def _translation_prompt(
 
 
 def classify_error(exc: Exception) -> str:
-    text = str(exc).lower()
-    if isinstance(exc, ProviderTransportError):
-        return exc.error_type
-    if isinstance(exc, httpx.ConnectTimeout):
-        return "connect_timeout"
-    if isinstance(exc, httpx.ReadTimeout):
-        return "read_timeout"
-    if isinstance(exc, httpx.WriteTimeout):
-        return "write_timeout"
-    if isinstance(exc, httpx.PoolTimeout):
-        return "pool_timeout"
-    if isinstance(exc, httpx.TimeoutException):
-        return "provider_timeout"
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        if code in {401, 403}:
-            return "auth_error"
-        if code in {429}:
-            return "rate_limit"
-        if code == 408:
-            return "provider_timeout"
-        if code == 502:
-            return "bad_gateway"
-        if code == 503:
-            return "service_unavailable"
-        if code == 504:
-            return "gateway_timeout"
-        if 500 <= code <= 599:
-            return "provider_server_error"
-        return "bad_schema"
-    if isinstance(exc, httpx.TransportError):
-        return "network_error"
-    if isinstance(exc, HTTPError):
-        if exc.code in {401, 403}:
-            return "auth_error"
-        if exc.code in {429}:
-            return "rate_limit"
-        if exc.code == 408:
-            return "provider_timeout"
-        if exc.code == 502:
-            return "bad_gateway"
-        if exc.code == 503:
-            return "service_unavailable"
-        if exc.code == 504:
-            return "gateway_timeout"
-        if 500 <= exc.code <= 599:
-            return "provider_server_error"
-        return "bad_schema"
-    if isinstance(exc, URLError):
-        return "timeout" if "timed out" in text else "network_error"
-    if "timed out" in text:
-        return "timeout"
-    if "mismatch" in text:
-        return "mismatch_lines"
-    return "unknown_error"
+    return classify_http_error(exc)
 
 
 def _request_json(
@@ -260,16 +208,17 @@ def _request_json(
     request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS)
     if payload is not None:
         request_headers = merge_default_headers(request_headers, **{"Content-Type": "application/json"})
-    with httpx.Client(timeout=float(timeout), http2=_http2_enabled(True)) as client:
-        response = client.request(
-            method=method,
-            url=url,
-            json=payload,
-            headers=request_headers,
-        )
-        if response.status_code >= 400:
-            response.raise_for_status()
-        return response.json()
+    data, _meta = request_json_with_retry(
+        method,
+        url,
+        json_payload=payload,
+        headers=request_headers,
+        timeout=float(timeout),
+        http2=True,
+        retry=1,
+        context="provider upstream",
+    )
+    return data
 
 
 def _client_key(config: ProviderConfig) -> tuple:
@@ -277,7 +226,7 @@ def _client_key(config: ProviderConfig) -> tuple:
     return (
         config.name,
         config.base_url,
-        _http2_enabled(limits.http2),
+        limits.http2,
         limits.connect_timeout_seconds,
         limits.read_timeout_seconds,
         limits.write_timeout_seconds,
@@ -289,7 +238,7 @@ def _client_key(config: ProviderConfig) -> tuple:
 
 def _provider_timeout(config: ProviderConfig) -> httpx.Timeout:
     limits = config.limits
-    return httpx.Timeout(
+    return build_http_timeout(
         connect=float(limits.connect_timeout_seconds),
         read=float(limits.read_timeout_seconds),
         write=float(limits.write_timeout_seconds),
@@ -299,75 +248,19 @@ def _provider_timeout(config: ProviderConfig) -> httpx.Timeout:
 
 def _provider_limits(config: ProviderConfig) -> httpx.Limits:
     limits = config.limits
-    return httpx.Limits(
+    return build_http_limits(
         max_connections=max(1, int(limits.max_connections)),
         max_keepalive_connections=max(0, int(limits.max_keepalive_connections)),
     )
 
 
-def _http2_enabled(requested: bool) -> bool:
-    global _HTTP2_AVAILABLE
-    if not requested:
-        return False
-    if _HTTP2_AVAILABLE is None:
-        try:
-            import h2  # noqa: F401
-
-            _HTTP2_AVAILABLE = True
-        except ImportError:
-            _HTTP2_AVAILABLE = False
-    return bool(_HTTP2_AVAILABLE)
-
-
 def _get_provider_client(config: ProviderConfig) -> httpx.Client:
-    key = _client_key(config)
-    client = _CLIENTS.get(key)
-    if client is None or client.is_closed:
-        client = httpx.Client(
-            timeout=_provider_timeout(config),
-            limits=_provider_limits(config),
-            http2=_http2_enabled(config.limits.http2),
-        )
-        _CLIENTS[key] = client
-    return client
-
-
-def _raise_for_status(response: httpx.Response) -> None:
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        error_type = classify_error(exc)
-        raise ProviderTransportError(
-            error_type,
-            f"provider upstream returned HTTP {response.status_code}: {_response_text_preview(response)}",
-            status_code=response.status_code,
-        ) from exc
-
-
-def _response_text_preview(response: httpx.Response) -> str:
-    try:
-        return response.text[:500]
-    except httpx.ResponseNotRead:
-        try:
-            response.read()
-            return response.text[:500]
-        except Exception:
-            return ""
-    except Exception:
-        return ""
-
-
-def _transport_meta(response: httpx.Response, *, streaming: bool, stream_meta: dict[str, Any] | None = None) -> dict[str, Any]:
-    meta: dict[str, Any] = {
-        "transport": "httpx",
-        "http_version": response.extensions.get("http_version", b""),
-        "streaming": streaming,
-    }
-    if isinstance(meta["http_version"], bytes):
-        meta["http_version"] = meta["http_version"].decode("ascii", errors="ignore")
-    if stream_meta:
-        meta.update(stream_meta)
-    return meta
+    return get_shared_httpx_client(
+        _client_key(config),
+        timeout=_provider_timeout(config),
+        limits=_provider_limits(config),
+        http2=config.limits.http2,
+    )
 
 
 def _response_json(data: bytes) -> dict[str, Any]:
@@ -389,8 +282,12 @@ def _provider_request_json(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS, **{"Content-Type": "application/json"})
     response = _get_provider_client(config).request(method=method, url=url, json=payload, headers=request_headers)
-    _raise_for_status(response)
-    return _response_json(response.content), _transport_meta(response, streaming=False)
+    raise_for_status(response, context="provider upstream")
+    return _response_json(response.content), transport_meta(
+        response,
+        streaming=False,
+        http2_requested=config.limits.http2,
+    )
 
 
 def _extract_sse_json(line: str) -> dict[str, Any] | None:
@@ -468,7 +365,7 @@ def _stream_response_payload(
     usage: dict[str, Any] = {}
     final_payload: dict[str, Any] | None = None
     with _get_provider_client(config).stream(method=method, url=url, json=payload, headers=request_headers) as response:
-        _raise_for_status(response)
+        raise_for_status(response, context="provider upstream")
         for line in response.iter_lines():
             if not line:
                 continue
@@ -502,7 +399,12 @@ def _stream_response_payload(
             data = final_payload or {"text": text}
         if usage:
             data["usage"] = usage
-        return data, _transport_meta(response, streaming=True, stream_meta=stream_meta)
+        return data, transport_meta(
+            response,
+            streaming=True,
+            http2_requested=config.limits.http2,
+            stream_meta=stream_meta,
+        )
 
 
 def _can_stream(config: ProviderConfig) -> bool:

@@ -797,6 +797,7 @@ asr_providers:
     env_key: OPENAI_API_KEY
     credential_id: openai_asr
     timeout_seconds: 180
+    http2: false
     request:
       response_format: verbose_json
       temperature: 0.25
@@ -835,6 +836,7 @@ asr_providers:
     assert provider.env_key == "OPENAI_API_KEY"
     assert provider.credential_id == "openai_asr"
     assert provider.timeout_seconds == 180
+    assert provider.http2 is False
     assert provider.request.response_format == "verbose_json"
     assert provider.request.temperature == 0.25
     assert provider.request.timestamp_granularities == ["segment", "word"]

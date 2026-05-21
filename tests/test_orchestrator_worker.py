@@ -14,6 +14,7 @@ from transvortex.core.orchestrator import (
 from transvortex.app.config import load_app_config
 from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
+from transvortex.http import HttpTransportError
 
 
 def _write_config(root: Path) -> None:
@@ -1049,6 +1050,135 @@ providers:
     assert "source/asr/retry/segment_00000" in preprocess["child_artifact_dir"].replace("\\", "/")
     assert not (task_dir / "source" / "asr" / "rows" / "segment_00001.json").exists()
     assert (task_dir / "source" / "asr" / "retry" / "segment_00000" / "asr" / "rows" / "segment_00001.json").exists()
+
+
+def test_cloud_asr_http_transport_error_splits_segment(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    (root / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  mode: cloud
+  provider: cloud1
+  execution:
+    cloud_concurrency: 1
+  preprocessing:
+    cloud_trim_silence:
+      enabled: false
+  chunking:
+    mode: fixed
+    window_seconds: 60
+    max_window_seconds: 60
+    min_window_seconds: 12
+    overlap_seconds: 0
+asr_providers:
+  - name: cloud1
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    env_key: PROVIDER_KEY
+    credential_id: cloud1
+providers:
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 60.0}
+
+    split_calls = []
+
+    def fake_split_audio_for_asr(audio_path: Path, segments_dir: Path, **kwargs) -> list[dict]:
+        split_calls.append({"audio_path": audio_path, "segments_dir": segments_dir, "kwargs": kwargs})
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        if "segments_retry" in str(segments_dir):
+            out = []
+            for idx, start in enumerate([0.0, 30.0]):
+                part = segments_dir / f"part_{idx:05d}.wav"
+                part.write_bytes(str(idx).encode("utf-8"))
+                out.append(
+                    {
+                        "segment_index": idx,
+                        "start": start,
+                        "duration": 30.0,
+                        "trusted_start": start,
+                        "trusted_end": start + 30.0,
+                        "path": str(part),
+                    }
+                )
+            return out
+        part = segments_dir / "part_00000.wav"
+        part.write_bytes(b"parent")
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 60.0,
+                "trusted_start": 0.0,
+                "trusted_end": 60.0,
+                "path": str(part),
+            }
+        ]
+
+    class FakeCloudAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
+            if audio_path.name == "part_00000.wav" and "segments_retry" not in str(audio_path):
+                raise HttpTransportError(
+                    "bad_gateway",
+                    "cloud ASR upstream returned HTTP 502: Bad Gateway",
+                    status_code=502,
+                )
+            return type(
+                "Result",
+                (),
+                {
+                    "rows": [
+                        {
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                            "text": f"child {audio_path.stem}",
+                            "meta": {"source": "asr"},
+                        }
+                    ],
+                    "raw_response": {"segments": []},
+                    "transport_meta": {},
+                },
+            )()
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeCloudAsrEngine)
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": [{"status": "PASS"}]})
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="ja",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_rows] == ["child part_00000", "child part_00001"]
+    assert any("segments_retry" in str(call["segments_dir"]) for call in split_calls)
 
 
 def test_cloud_asr_adaptive_concurrency_requeues_retryable_failure(tmp_path: Path, monkeypatch) -> None:

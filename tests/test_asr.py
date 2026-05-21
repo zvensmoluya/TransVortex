@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
-import socket
 from types import SimpleNamespace
-from urllib.error import URLError
+
+import httpx
 
 from transvortex.app.models import AsrProviderConfig
 from transvortex.core.asr import (
@@ -13,6 +12,7 @@ from transvortex.core.asr import (
     _normalize_whisper_language,
     _prepare_local_cuda_runtime,
 )
+from transvortex.http import HttpTransportError
 
 
 def test_normalize_whisper_language() -> None:
@@ -37,45 +37,48 @@ def test_build_cloud_asr_url_dedupes_version_path() -> None:
     )
 
 
-def test_cloud_asr_request_uses_product_headers(tmp_path, monkeypatch) -> None:
+def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     captured = {}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return {"text": "ok"}, {
+            "transport": "httpx",
+            "http_version": "HTTP/2",
+            "http2_requested": kwargs["http2"],
+            "http2_enabled": True,
+            "streaming": False,
+            "attempts": 1,
+        }
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
-        captured["url"] = req.full_url
-        captured["headers"] = dict(req.header_items())
-        captured["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
     client = OpenAITranscriptionsAsrClient(
         AsrProviderConfig(
             name="openai",
             base_url="https://api.example.com/v1",
             endpoint="/v1/audio/transcriptions",
             timeout_seconds=12,
+            http2=True,
         )
     )
 
-    assert client._call_openai_transcriptions(audio, api_key="secret") == {"text": "ok"}
+    payload, meta = client._call_openai_transcriptions(audio, api_key="secret")
 
+    assert payload == {"text": "ok"}
+    assert meta["transport"] == "httpx"
+    assert captured["method"] == "POST"
     assert captured["url"] == "https://api.example.com/v1/audio/transcriptions"
     assert captured["headers"]["Accept"] == "application/json"
-    assert captured["headers"]["User-agent"] == "TransVortex/0.1.0"
-    assert captured["headers"]["Content-type"].startswith("multipart/form-data; boundary=")
+    assert captured["headers"]["User-Agent"] == "TransVortex/0.1.0"
+    assert "Content-Type" not in captured["headers"]
     assert captured["headers"]["Authorization"] == "Bearer secret"
-    assert captured["timeout"] == 12
+    assert captured["timeout"] == 12.0
+    assert captured["http2"] is True
+    assert captured["retry"] == 2
 
 
 def test_cloud_asr_request_sends_configured_form_fields(tmp_path, monkeypatch) -> None:
@@ -83,21 +86,11 @@ def test_cloud_asr_request_sends_configured_form_fields(tmp_path, monkeypatch) -
     audio.write_bytes(b"RIFF")
     captured = {}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured.update(kwargs)
+        return {"text": "ok"}, {"transport": "httpx"}
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
-        captured["body"] = req.data.decode("utf-8", errors="replace")
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
     client = OpenAITranscriptionsAsrClient(
         AsrProviderConfig(
             name="openai",
@@ -119,21 +112,17 @@ def test_cloud_asr_request_sends_configured_form_fields(tmp_path, monkeypatch) -
         source_lang="ja-JP",
         prompt="Names: Subaru, Emilia",
     )
-    body = captured["body"]
-    assert 'name="model"' in body
-    assert "whisper-1" in body
-    assert 'name="response_format"' in body
-    assert "verbose_json" in body
-    assert 'name="temperature"' in body
-    assert "0.25" in body
-    assert body.count('name="timestamp_granularities[]"') == 2
-    assert body.count('name="include[]"') == 1
-    assert 'name="language"' in body
-    assert "\r\nja\r\n" in body
-    assert "Names: Subaru, Emilia" in body
-    assert 'name="custom_flag"' in body
-    assert "\r\ntrue\r\n" in body
-    assert body.count('name="custom_list"') == 2
+    data = captured["data"]
+    assert data["model"] == "whisper-1"
+    assert data["response_format"] == "verbose_json"
+    assert data["temperature"] == "0.25"
+    assert data["timestamp_granularities[]"] == ["segment", "word"]
+    assert data["include[]"] == "logprobs"
+    assert data["language"] == "ja"
+    assert data["prompt"] == "Names: Subaru, Emilia"
+    assert data["custom_flag"] == "true"
+    assert data["custom_list"] == ["a", "b"]
+    assert captured["files"] == [("file", ("sample.wav", b"RIFF", "audio/wav"))]
 
 
 def test_cloud_asr_request_can_send_array_fields_as_repeated_plain_names(tmp_path, monkeypatch) -> None:
@@ -141,21 +130,11 @@ def test_cloud_asr_request_can_send_array_fields_as_repeated_plain_names(tmp_pat
     audio.write_bytes(b"RIFF")
     captured = {}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured.update(kwargs)
+        return {"text": "ok"}, {"transport": "httpx"}
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
-        captured["body"] = req.data.decode("utf-8", errors="replace")
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
     client = OpenAITranscriptionsAsrClient(
         AsrProviderConfig(
             name="openai",
@@ -171,11 +150,11 @@ def test_cloud_asr_request_can_send_array_fields_as_repeated_plain_names(tmp_pat
     )
 
     client._call_openai_transcriptions(audio, api_key="secret")
-    body = captured["body"]
-    assert body.count('name="timestamp_granularities"') == 2
-    assert 'name="timestamp_granularities[]"' not in body
-    assert body.count('name="include"') == 1
-    assert 'name="include[]"' not in body
+    data = captured["data"]
+    assert data["timestamp_granularities"] == ["segment", "word"]
+    assert "timestamp_granularities[]" not in data
+    assert data["include"] == "logprobs"
+    assert "include[]" not in data
 
 
 def test_cloud_asr_retries_retryable_request_errors(tmp_path, monkeypatch) -> None:
@@ -183,34 +162,26 @@ def test_cloud_asr_retries_retryable_request_errors(tmp_path, monkeypatch) -> No
     audio.write_bytes(b"RIFF")
     attempts = {"count": 0}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
+    def handler(request: httpx.Request) -> httpx.Response:
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise TimeoutError("The read operation timed out")
-        return FakeResponse()
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        return httpx.Response(200, json={"text": "ok"}, request=request)
 
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("transvortex.core.asr.time.sleep", lambda _seconds: None)
-    client = OpenAITranscriptionsAsrClient(
-        AsrProviderConfig(
-            name="openai",
-            timeout_seconds=12,
-            retry=2,
-        )
-    )
+    transport = httpx.MockTransport(handler)
 
-    assert client._call_openai_transcriptions(audio, api_key="secret") == {"text": "ok"}
+    def fake_build_httpx_client(**kwargs):
+        return httpx.Client(transport=transport, timeout=kwargs["timeout"], http2=kwargs["http2"])
+
+    monkeypatch.setattr("transvortex.http.build_httpx_client", fake_build_httpx_client)
+    monkeypatch.setattr("transvortex.http.time.sleep", lambda _seconds: None)
+    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", timeout_seconds=12, retry=2))
+
+    payload, meta = client._call_openai_transcriptions(audio, api_key="secret")
+
+    assert payload == {"text": "ok"}
     assert attempts["count"] == 2
+    assert meta["attempts"] == 2
 
 
 def test_cloud_asr_does_not_retry_non_retryable_request_errors(tmp_path, monkeypatch) -> None:
@@ -218,18 +189,12 @@ def test_cloud_asr_does_not_retry_non_retryable_request_errors(tmp_path, monkeyp
     audio.write_bytes(b"RIFF")
     attempts = {"count": 0}
 
-    def fake_urlopen(req, timeout):
+    def fake_request_json_with_retry(method, url, **kwargs):
         attempts["count"] += 1
         raise ValueError("bad request body")
 
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
-    client = OpenAITranscriptionsAsrClient(
-        AsrProviderConfig(
-            name="openai",
-            timeout_seconds=12,
-            retry=3,
-        )
-    )
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", timeout_seconds=12, retry=3))
 
     try:
         client._call_openai_transcriptions(audio, api_key="secret")
@@ -240,62 +205,49 @@ def test_cloud_asr_does_not_retry_non_retryable_request_errors(tmp_path, monkeyp
     assert attempts["count"] == 1
 
 
-def test_cloud_asr_retries_url_timeout_reason(tmp_path, monkeypatch) -> None:
+def test_cloud_asr_retries_remote_protocol_upload_failure(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     attempts = {"count": 0}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
+    def handler(request: httpx.Request) -> httpx.Response:
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise socket.timeout("timed out")
-        return FakeResponse()
+            raise httpx.RemoteProtocolError("remote end closed connection", request=request)
+        return httpx.Response(200, json={"text": "ok"}, request=request)
 
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("transvortex.core.asr.time.sleep", lambda _seconds: None)
+    transport = httpx.MockTransport(handler)
+
+    def fake_build_httpx_client(**kwargs):
+        return httpx.Client(transport=transport, timeout=kwargs["timeout"], http2=kwargs["http2"])
+
+    monkeypatch.setattr("transvortex.http.build_httpx_client", fake_build_httpx_client)
+    monkeypatch.setattr("transvortex.http.time.sleep", lambda _seconds: None)
     client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", retry=2))
 
-    assert client._call_openai_transcriptions(audio, api_key="secret") == {"text": "ok"}
+    payload, meta = client._call_openai_transcriptions(audio, api_key="secret")
+
+    assert payload == {"text": "ok"}
     assert attempts["count"] == 2
+    assert meta["attempts"] == 2
 
 
-def test_cloud_asr_retries_ssl_eof_upload_failure(tmp_path, monkeypatch) -> None:
+def test_cloud_asr_raises_bad_schema_for_non_object_response(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
-    attempts = {"count": 0}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    def fake_request_json_with_retry(method, url, **kwargs):
+        return ["not", "object"], {"transport": "httpx"}
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai"))
 
-        def read(self):
-            return json.dumps({"text": "ok"}).encode("utf-8")
-
-    def fake_urlopen(req, timeout):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise URLError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol")
-        return FakeResponse()
-
-    monkeypatch.setattr("transvortex.core.asr.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("transvortex.core.asr.time.sleep", lambda _seconds: None)
-    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", retry=2))
-
-    assert client._call_openai_transcriptions(audio, api_key="secret") == {"text": "ok"}
-    assert attempts["count"] == 2
+    try:
+        client._call_openai_transcriptions(audio, api_key="secret")
+    except RuntimeError as exc:
+        assert "bad_schema" in str(exc)
+    else:
+        raise AssertionError("expected bad schema error")
 
 
 def test_cloud_asr_rejects_unsupported_response_format_and_reserved_extra_field(tmp_path, monkeypatch) -> None:
@@ -346,42 +298,87 @@ def test_cloud_asr_rejects_unsupported_response_format_and_reserved_extra_field(
         raise AssertionError("expected reserved field error")
 
 
-def test_openai_transcriptions_maps_segments_and_fallback(tmp_path, monkeypatch) -> None:
+def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai"))
+    transport_meta = {
+        "transport": "httpx",
+        "http_version": "HTTP/2",
+        "http2_requested": True,
+        "http2_enabled": True,
+    }
 
     monkeypatch.setattr(
         client,
         "_call_openai_transcriptions",
-        lambda _audio, *, api_key, source_lang=None, prompt="": {
-            "segments": [{"start": 0.2, "end": 1.8, "text": "Hello", "avg_logprob": -0.2}]
-        },
+        lambda _audio, *, api_key, source_lang=None, prompt="": (
+            {"segments": [{"start": 0.2, "end": 1.8, "text": "Hello", "avg_logprob": -0.2}]},
+            transport_meta,
+        ),
     )
     monkeypatch.setattr(
         "transvortex.core.asr.resolve_credential",
         lambda **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
     )
-    rows = client.transcribe_segment(audio, 10.0, source_lang="en").rows
+    result = client.transcribe_segment(audio, 10.0, source_lang="en")
+    rows = result.rows
+    assert result.transport_meta == transport_meta
     assert rows == [
         {
             "start": 10.2,
             "end": 11.8,
             "text": "Hello",
             "confidence": -0.2,
-            "meta": {"provider": "openai", "protocol": "openai_transcriptions", "source": "asr"},
+            "meta": {
+                "provider": "openai",
+                "protocol": "openai_transcriptions",
+                "source": "asr",
+                "transport": "httpx",
+                "http_version": "HTTP/2",
+                "http2_requested": True,
+                "http2_enabled": True,
+            },
         }
     ]
 
     monkeypatch.setattr(
         client,
         "_call_openai_transcriptions",
-        lambda _audio, *, api_key, source_lang=None, prompt="": {"text": "Whole file"},
+        lambda _audio, *, api_key, source_lang=None, prompt="": ({"text": "Whole file"}, transport_meta),
     )
-    fallback = client.transcribe_segment(audio, 5.0).rows
-    assert fallback[0]["meta"]["warning"] == "missing_timestamps"
-    assert fallback[0]["start"] == 5.0
-    assert fallback[0]["end"] == 5.1
+    fallback = client.transcribe_segment(audio, 5.0)
+    assert fallback.transport_meta == transport_meta
+    assert fallback.rows[0]["meta"]["warning"] == "missing_timestamps"
+    assert fallback.rows[0]["meta"]["transport"] == "httpx"
+    assert fallback.rows[0]["start"] == 5.0
+    assert fallback.rows[0]["end"] == 5.1
+
+
+def test_cloud_asr_transcribe_propagates_transport_error(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai"))
+
+    monkeypatch.setattr(
+        "transvortex.core.asr.resolve_credential",
+        lambda **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
+    )
+    monkeypatch.setattr(
+        client,
+        "_call_openai_transcriptions",
+        lambda _audio, *, api_key, source_lang=None, prompt="": (_ for _ in ()).throw(
+            HttpTransportError("gateway_timeout", "cloud ASR upstream returned HTTP 504", status_code=504)
+        ),
+    )
+
+    try:
+        client.transcribe_segment(audio, 0.0)
+    except HttpTransportError as exc:
+        assert exc.error_type == "gateway_timeout"
+        assert exc.status_code == 504
+    else:
+        raise AssertionError("expected transport error")
 
 
 def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> None:

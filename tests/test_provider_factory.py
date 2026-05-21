@@ -5,6 +5,7 @@ from urllib.error import HTTPError
 import httpx
 import pytest
 
+from transvortex import http as tvx_http
 from transvortex.app.models import (
     AuthConfig,
     CapabilityConfig,
@@ -19,6 +20,7 @@ from transvortex.providers.factory import (
     ProviderTransportError,
     _build_payload,
     _request_json,
+    _provider_request_json,
     _build_url_and_headers,
     _extract_numbered_lines,
     _extract_text_by_paths,
@@ -56,6 +58,9 @@ def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:
         NormalizedRequest(model="model-a", lines=["[1] ping"], source_lang="en", target_lang="zh-CN")
     )
     assert response.numbered_lines == ["[1] pong"]
+    assert response.provider_meta["transport"] == "httpx"
+    assert response.provider_meta["http_version"] == "HTTP/2"
+    assert response.provider_meta["streaming"] is False
 
 
 def test_translation_prompt_includes_recovery_and_adaptive_hints() -> None:
@@ -100,14 +105,17 @@ def test_request_json_adds_product_headers(monkeypatch) -> None:
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def request(self, method, url, json, headers):
+        def request(self, method, url, json, data=None, files=None, headers=None):
             captured["method"] = method
             captured["url"] = url
             captured["payload"] = json
             captured["headers"] = headers
-            return httpx.Response(200, json={"ok": True})
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
 
-    monkeypatch.setattr("transvortex.providers.factory.httpx.Client", FakeClient)
+        def close(self):
+            pass
+
+    monkeypatch.setattr("transvortex.http.httpx.Client", FakeClient)
 
     assert _request_json("https://example.com/v1/models", None, {}, 30, method="GET") == {"ok": True}
 
@@ -115,6 +123,7 @@ def test_request_json_adds_product_headers(monkeypatch) -> None:
     assert captured["headers"]["User-Agent"] == "TransVortex/0.1.0"
     assert "Content-Type" not in captured["headers"]
     assert captured["timeout"] == 30.0
+    assert captured["http2"] is tvx_http.http2_enabled(True)
 
 
 def test_classify_error_treats_gateway_timeout_as_retryable_provider_error() -> None:
@@ -136,11 +145,14 @@ def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def request(self, method, url, json, headers):
+        def request(self, method, url, json, data=None, files=None, headers=None):
             captured["headers"] = headers
-            return httpx.Response(200, json={"ok": True})
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request(method, url))
 
-    monkeypatch.setattr("transvortex.providers.factory.httpx.Client", FakeClient)
+        def close(self):
+            pass
+
+    monkeypatch.setattr("transvortex.http.httpx.Client", FakeClient)
 
     _request_json(
         "https://example.com/v1/responses",
@@ -153,6 +165,38 @@ def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) 
     assert normalized["user-agent"] == "CustomClient/1.0"
     assert normalized["accept"] == "application/vnd.test+json"
     assert captured["headers"]["Content-Type"] == "application/json"
+
+
+def test_provider_request_meta_records_http2_switch(monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="plain_http",
+        api_type="openai-compatible",
+        compat_mode="openai_chat",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        limits=ProviderLimits(http2=False),
+    )
+
+    class FakeClient:
+        def request(self, method, url, json, headers):
+            request = httpx.Request(method, url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "[1] pong"}}]},
+                request=request,
+                extensions={"http_version": b"HTTP/1.1"},
+            )
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+
+    _payload, meta = _provider_request_json(cfg, "https://example.com/v1/chat/completions", {"model": "m1"}, {}, "POST")
+
+    assert meta["transport"] == "httpx"
+    assert meta["http_version"] == "HTTP/1.1"
+    assert meta["http2_requested"] is False
+    assert meta["http2_enabled"] is False
+    assert meta["streaming"] is False
 
 
 def test_response_mapping_multi_shape() -> None:

@@ -445,6 +445,7 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         credential_id=_to_str(row.get("credential_id"), env_key),
         timeout_seconds=_to_int(row.get("timeout_seconds"), 300),
         retry=_to_int(row.get("retry"), 2),
+        http2=_to_bool(row.get("http2"), True),
         request=AsrProviderRequestConfig(
             response_format=_to_str(request_raw.get("response_format"), "verbose_json"),
             temperature=_to_float(request_raw.get("temperature"), 0.0),
@@ -469,6 +470,7 @@ def _legacy_asr_provider_from_cloud(asr_cloud_raw: dict[str, Any]) -> AsrProvide
         env_key=env_key,
         credential_id=_to_str(asr_cloud_raw.get("credential_id"), env_key),
         timeout_seconds=_to_int(asr_cloud_raw.get("timeout_seconds"), 300),
+        http2=_to_bool(asr_cloud_raw.get("http2"), True),
     )
 
 
