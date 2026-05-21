@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 from transvortex.cli import main
@@ -401,6 +404,7 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
     assert "source/segments.normalized.jsonl" in payload["artifact_contract"]
+    assert "memory/rejected_memory_candidates.jsonl" in payload["artifact_contract"]
     assert "asr/segments.raw.jsonl" not in payload["artifact_contract"]
     assert "super-secret-value" not in raw
 
@@ -462,6 +466,54 @@ def test_run_detach_json_creates_queued_task_and_spawns_worker(tmp_path: Path, m
     store = TaskStore(tmp_path / "artifacts")
     task = store.load_task(payload["task_id"])
     assert task.status == "QUEUED"
+
+
+def test_run_detach_json_prints_receipt_with_real_worker_process(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    input_file = tmp_path / "missing.mp4"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "transvortex.cli",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--input",
+            str(input_file),
+            "--src",
+            "en",
+            "--tgt",
+            "zh-CN",
+            "--providers-file",
+            str(tmp_path / "providers.yaml"),
+            "--provider",
+            "p1",
+            "--model",
+            "m1",
+            "--detach",
+            "--json",
+        ],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["detached"] is True
+    assert payload["command"] == "run"
+    assert payload["worker"]["pid"] > 0
+    assert not result.stderr.strip()
+    worker_stdout = Path(payload["worker"]["stdout_log"])
+    for _ in range(100):
+        if worker_stdout.exists() and "Input file not found" in worker_stdout.read_text(encoding="utf-8"):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("worker did not write expected preflight failure event")
 
 
 def test_status_json_missing_task_returns_structured_error(tmp_path: Path, monkeypatch, capsys) -> None:

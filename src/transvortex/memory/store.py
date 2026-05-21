@@ -36,6 +36,10 @@ class MemoryStore:
         return self.memory_dir / "consistency_issues.jsonl"
 
     @property
+    def rejected_candidates_file(self) -> Path:
+        return self.memory_dir / "rejected_memory_candidates.jsonl"
+
+    @property
     def snapshots_dir(self) -> Path:
         return self.memory_dir / "snapshots"
 
@@ -46,6 +50,7 @@ class MemoryStore:
         self.conflicts_file.touch(exist_ok=True)
         self.decisions_file.touch(exist_ok=True)
         self.issues_file.touch(exist_ok=True)
+        self.rejected_candidates_file.touch(exist_ok=True)
 
     def ensure_runtime_document(self) -> None:
         self.ensure()
@@ -117,6 +122,9 @@ class MemoryStore:
 
     def append_issue(self, issue: Any) -> None:
         append_jsonl(self.issues_file, issue)
+
+    def append_rejected_candidate(self, candidate: Any) -> None:
+        append_jsonl(self.rejected_candidates_file, candidate)
 
     def write_snapshot(self, document: MemoryDocument, index: int) -> Path:
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)

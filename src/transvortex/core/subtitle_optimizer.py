@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..app.models import Segment, SubtitleQualityConfig
-from .subtitle_quality import clean_subtitle_text, visual_width, wrap_subtitle_text
+from .subtitle_quality import clean_subtitle_text, subtitle_line_width, wrap_subtitle_text
 
 
 _QUALITY_EPSILON = 1e-6
@@ -44,7 +44,7 @@ def subtitle_cps(seg: Segment) -> float:
 
 def _line_metrics(text: str, *, max_line_width: int) -> tuple[list[str], int]:
     lines = wrap_subtitle_text(text, max_line_width=max_line_width)
-    return lines, max((visual_width(line) for line in lines), default=0)
+    return lines, max((subtitle_line_width(line) for line in lines), default=0)
 
 
 def _segment_text(seg: Segment) -> str:

@@ -13,7 +13,7 @@ from transvortex.memory.schema import MemoryAlias, MemoryDocument, MemoryEntry, 
 from transvortex.memory.schema import entry_from_dict
 from transvortex.memory.selector import select_memory_entries
 from transvortex.memory.store import MemoryStore
-from transvortex.memory.validator import MemoryEvidence, validate_memory_payload
+from transvortex.memory.validator import MemoryEvidence, validate_memory_payload, validate_memory_payload_with_report
 from transvortex.memory.bootstrapper import bootstrap_memory
 from transvortex.memory.bootstrap_input import build_bootstrap_input_view, render_bootstrap_input_text
 
@@ -628,6 +628,113 @@ def test_memory_validator_scopes_patch_evidence_to_cited_ids() -> None:
     ]
 
 
+def test_memory_validator_keeps_bootstrap_source_only_recurring_entity_hint() -> None:
+    payload = {
+        "actions": [
+            {
+                "source": "スバル",
+                "target": "",
+                "memory_type": "entity",
+                "constraint": "must_use",
+                "confidence": 0.86,
+                "evidence_ids": [1, 2],
+                "enforcement_policy": {"translation": "recognize_only", "qa": "info"},
+                "notes": "Recurring character name.",
+            }
+        ]
+    }
+    evidence = MemoryEvidence(source_by_id={1: "やったわ! スバル", 2: "問題を解いたのはスバルでしょ?"})
+
+    out = validate_memory_payload(payload, mode="bootstrap", evidence=evidence)
+
+    assert [row["source"] for row in out["actions"]] == ["スバル"]
+    assert out["actions"][0]["target"] == ""
+    assert out["actions"][0]["status"] == "proposed"
+    assert out["actions"][0]["constraint"] == "hint"
+
+
+def test_memory_validator_filters_low_signal_source_only_bootstrap_hint() -> None:
+    payload = {
+        "actions": [
+            {
+                "source": "ラム",
+                "target": "",
+                "memory_type": "entity",
+                "confidence": 0.58,
+                "evidence_ids": [1],
+                "enforcement_policy": {"translation": "recognize_only", "qa": "info"},
+                "notes": "Referenced character name.",
+            }
+        ]
+    }
+    evidence = MemoryEvidence(source_by_id={1: "ラムとかアナスタシアさんに言われるより"})
+
+    out = validate_memory_payload(payload, mode="bootstrap", evidence=evidence)
+
+    assert out["actions"] == []
+
+
+def test_memory_validator_filters_source_only_patch_even_with_notes() -> None:
+    payload = {
+        "actions": [
+            {
+                "source": "Alpha",
+                "target": "",
+                "memory_type": "entity",
+                "confidence": 0.95,
+                "evidence_ids": [1],
+                "enforcement_policy": {"translation": "recognize_only", "qa": "info"},
+                "notes": "Recurring character name.",
+            }
+        ]
+    }
+    evidence = MemoryEvidence(source_by_id={1: "Alpha appears"}, target_by_id={1: ""})
+
+    out = validate_memory_payload(payload, mode="patch", evidence=evidence)
+
+    assert out["actions"] == []
+
+
+def test_memory_validator_report_includes_rejection_reason() -> None:
+    payload = {
+        "actions": [
+            {
+                "source": "ラム",
+                "target": "",
+                "memory_type": "entity",
+                "confidence": 0.58,
+                "evidence_ids": [1],
+                "enforcement_policy": {"translation": "recognize_only", "qa": "info"},
+                "notes": "Referenced character name.",
+            }
+        ]
+    }
+    evidence = MemoryEvidence(source_by_id={1: "ラムとかアナスタシアさんに言われるより"})
+
+    result = validate_memory_payload_with_report(payload, mode="bootstrap", evidence=evidence)
+
+    assert result.payload["actions"] == []
+    assert result.rejected == [
+        {
+            "reason": "source_only_entity_below_threshold",
+            "mode": "bootstrap",
+            "source": "ラム",
+            "target": "",
+            "category": "",
+            "memory_type": "entity",
+            "constraint": "hint",
+            "confidence": 0.58,
+            "confidence_breakdown": {},
+            "evidence_ids": [1],
+            "evidence_count": 1,
+            "translation_policy": "recognize_only",
+            "alias_count": 0,
+            "target_variant_count": 0,
+            "notes": "Referenced character name.",
+        }
+    ]
+
+
 def test_consistency_check_reports_missing_locked_translation() -> None:
     doc = MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")])
     issues = check_consistency(
@@ -932,6 +1039,7 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
     assert "flags=possible_term" in input_text
     assert "flags=scene_gap,filler,low_info,low_confidence,uncertain" in input_text
     assert (tmp_path / "memory" / "memory_patches.jsonl").read_text(encoding="utf-8").strip()
+    assert (tmp_path / "memory" / "rejected_memory_candidates.jsonl").exists()
     doc = MemoryStore(tmp_path / "memory").load()
     assert any(entry.source == "Subaru" and entry.target == "斯巴鲁" for entry in doc.entries)
 
@@ -997,6 +1105,11 @@ def test_memory_bootstrap_validator_filters_generic_and_downgrades_hard_targets(
     assert [row["source"] for row in payload["actions"]] == ["ベアトリス"]
     assert payload["actions"][0]["status"] == "proposed"
     assert payload["actions"][0]["constraint"] == "hint"
+    assert payload["rejected_candidates"] == 1
+    rejected_rows = (tmp_path / "memory" / "rejected_memory_candidates.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rejected_rows) == 1
+    assert '"reason": "generic_source"' in rejected_rows[0]
+    assert '"source": "この塔"' in rejected_rows[0]
     doc = MemoryStore(tmp_path / "memory").load()
     assert doc.entries[0].source == "ベアトリス"
     assert doc.entries[0].target == ""

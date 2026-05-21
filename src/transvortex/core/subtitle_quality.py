@@ -8,6 +8,7 @@ from ..app.models import Segment
 
 
 _INLINE_SPACE_RE = re.compile(r"[ \t\f\v]+")
+_NO_LINE_START_CHARS = set("，。！？；：、,.!?;:)]}）】〕〉》」』”’")
 
 
 def clean_subtitle_text(value: str | None) -> str:
@@ -30,6 +31,10 @@ def visual_width(text: str) -> int:
     return sum(_char_width(ch) for ch in text)
 
 
+def subtitle_line_width(text: str) -> int:
+    return visual_width(text.rstrip("".join(_NO_LINE_START_CHARS)))
+
+
 def _split_by_visual_width(text: str, max_width: int) -> list[str]:
     if max_width <= 0:
         return [text]
@@ -39,6 +44,10 @@ def _split_by_visual_width(text: str, max_width: int) -> list[str]:
     for ch in text:
         ch_width = _char_width(ch)
         if buf and width + ch_width > max_width:
+            if ch in _NO_LINE_START_CHARS:
+                buf.append(ch)
+                width += ch_width
+                continue
             lines.append("".join(buf).strip())
             buf = []
             width = 0

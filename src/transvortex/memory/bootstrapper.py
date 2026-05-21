@@ -11,7 +11,7 @@ from .bootstrap_input import build_bootstrap_input_view, render_bootstrap_input_
 from .merger import merge_patch, patch_from_payload
 from .patcher import json_from_memory_text
 from .store import MemoryStore
-from .validator import MemoryEvidence, validate_memory_payload
+from .validator import MemoryEvidence, validate_memory_payload_with_report
 from .plan import runs_bootstrap
 
 
@@ -154,7 +154,7 @@ def _classify_candidates(
     evidence: MemoryEvidence,
     source_lang: str,
     target_lang: str,
-) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     req = NormalizedRequest(
         model=route_model,
         lines=[],
@@ -167,12 +167,13 @@ def _classify_candidates(
         system_prompt=config.pipeline.memory.bootstrap.system_prompt,
     )
     response = client.translate_request(req)
-    payload = validate_memory_payload(json_from_memory_text(response.raw_text), mode="bootstrap", evidence=evidence)
+    validation = validate_memory_payload_with_report(json_from_memory_text(response.raw_text), mode="bootstrap", evidence=evidence)
     return (
-        payload,
+        validation.payload,
         response.raw_text,
         dict(getattr(response, "usage", {}) or {}),
         dict(getattr(response, "provider_meta", {}) or {}),
+        validation.rejected,
     )
 
 
@@ -185,7 +186,7 @@ def _single_pass_bootstrap(
     evidence: MemoryEvidence,
     source_lang: str,
     target_lang: str,
-) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
     req = NormalizedRequest(
         model=route_model,
         lines=[],
@@ -198,8 +199,15 @@ def _single_pass_bootstrap(
         system_prompt=config.pipeline.memory.bootstrap.system_prompt,
     )
     response = client.translate_request(req)
-    payload = validate_memory_payload(json_from_memory_text(response.raw_text), mode="bootstrap", evidence=evidence)
-    return payload, response.raw_text, dict(getattr(response, "usage", {}) or {}), dict(getattr(response, "provider_meta", {}) or {}), None
+    validation = validate_memory_payload_with_report(json_from_memory_text(response.raw_text), mode="bootstrap", evidence=evidence)
+    return (
+        validation.payload,
+        response.raw_text,
+        dict(getattr(response, "usage", {}) or {}),
+        dict(getattr(response, "provider_meta", {}) or {}),
+        None,
+        validation.rejected,
+    )
 
 
 def bootstrap_memory(
@@ -262,7 +270,7 @@ def bootstrap_memory(
                     source_lang=source_lang,
                     target_lang=target_lang,
                 )
-                payload, raw_text, usage, provider_meta = _classify_candidates(
+                payload, raw_text, usage, provider_meta, rejected_candidates = _classify_candidates(
                     client=client,
                     route_model=route.model,
                     config=config,
@@ -274,7 +282,7 @@ def bootstrap_memory(
                 payload["extract_raw_text"] = extract_raw_text
                 payload["extract_candidates"] = len(candidates_payload.get("candidates", []))
             else:
-                payload, raw_text, usage, provider_meta, candidates_payload = _single_pass_bootstrap(
+                payload, raw_text, usage, provider_meta, candidates_payload, rejected_candidates = _single_pass_bootstrap(
                     client=client,
                     route_model=route.model,
                     config=config,
@@ -291,8 +299,11 @@ def bootstrap_memory(
             payload["provider_meta"] = provider_meta
             payload["bootstrap_pipeline"] = str(config.pipeline.memory.bootstrap.pipeline or "single")
             payload["status"] = "completed"
+            payload["rejected_candidates"] = len(rejected_candidates)
             patch = patch_from_payload(payload)
             store.append_patch({"bootstrap": True, **payload})
+            for candidate in rejected_candidates:
+                store.append_rejected_candidate({"bootstrap": True, **candidate})
             document = store.load_runtime()
             document, conflicts = merge_patch(
                 document,

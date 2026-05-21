@@ -8,6 +8,7 @@ from transvortex.core.subtitle_quality import (
     clean_subtitle_text,
     format_subtitle_lines,
     prepare_segments_for_export,
+    subtitle_line_width,
     visual_width,
     wrap_subtitle_text,
 )
@@ -31,8 +32,17 @@ def test_wrap_cjk_uses_visual_width() -> None:
     text = "\u8fd9\u662f\u4e00\u4e2a\u5f88\u957f\u5f88\u957f\u7684\u4e2d\u6587\u5b57\u5e55\u7528\u4e8e\u6d4b\u8bd5\u81ea\u52a8\u6362\u884c"
     lines = wrap_subtitle_text(text, max_line_width=12)
     assert len(lines) > 1
-    assert all(visual_width(line) <= 12 for line in lines)
+    assert all(subtitle_line_width(line) <= 12 for line in lines)
     assert "".join(lines) == text
+
+
+def test_wrap_cjk_keeps_closing_punctuation_with_previous_line() -> None:
+    lines = wrap_subtitle_text(
+        "\u5c45\u7136\u51fa\u8fd9\u79cd\u4e0d\u77e5\u9053\u548c\u6211\u4e00\u6837\u7684\u661f\u7a7a\u5c31\u89e3\u4e0d\u5f00\u7684\u9898\u3002",
+        max_line_width=42,
+    )
+
+    assert lines == ["\u5c45\u7136\u51fa\u8fd9\u79cd\u4e0d\u77e5\u9053\u548c\u6211\u4e00\u6837\u7684\u661f\u7a7a\u5c31\u89e3\u4e0d\u5f00\u7684\u9898\u3002"]
 
 
 def test_format_bilingual_lines_source_first() -> None:

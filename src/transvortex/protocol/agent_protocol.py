@@ -121,6 +121,7 @@ def agent_info_payload() -> dict:
             "memory/selected_presets.json",
             "memory/translation_memory.json",
             "memory/memory_patches.jsonl",
+            "memory/rejected_memory_candidates.jsonl",
             "memory/conflicts.jsonl",
             "memory/consistency_issues.jsonl",
             "memory/snapshots/*.json",
