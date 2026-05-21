@@ -39,6 +39,10 @@ def test_doctor_report_passes_with_runtime_config_and_key(tmp_path: Path, monkey
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr(
+        "transvortex.app.doctor.importlib.metadata.version",
+        lambda name: "1.0.2" if name == "faster-whisper" else "0.1.0",
+    )
 
     report = doctor_report(root_dir=tmp_path)
 
@@ -53,12 +57,35 @@ def test_doctor_report_passes_with_runtime_config_and_key(tmp_path: Path, monkey
     assert "TransVortex Doctor: PASS" in format_doctor_report(report)
 
 
+def test_doctor_reports_old_faster_whisper_version(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr(
+        "transvortex.app.doctor.importlib.metadata.version",
+        lambda name: "1.0.1" if name == "faster-whisper" else "0.1.0",
+    )
+
+    report = doctor_report(root_dir=tmp_path)
+    wh_check = next(item for item in report["checks"] if item["name"] == "faster_whisper")
+
+    assert report["status"] == "FAIL"
+    assert wh_check["code"] == "faster_whisper_version_too_old"
+    assert wh_check["details"]["installed_version"] == "1.0.1"
+    assert wh_check["details"]["required_version"] == "1.0.2"
+
+
 def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     (tmp_path / ".env").write_text("OPENAI_API_KEY=old\nVECTORENGINE_API_KEY=old\n", encoding="utf-8")
     monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
+    monkeypatch.setattr(
+        "transvortex.app.doctor.importlib.metadata.version",
+        lambda name: "1.0.2" if name == "faster-whisper" else "0.1.0",
+    )
 
     report = doctor_report(root_dir=tmp_path)
     key_check = next(item for item in report["checks"] if item["name"] == "provider_env_key")
@@ -75,6 +102,10 @@ def test_doctor_reports_missing_binary_and_asr_dependency(tmp_path: Path, monkey
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr(
+        "transvortex.app.doctor.importlib.metadata.version",
+        lambda name: None if name == "faster-whisper" else "0.1.0",
+    )
 
     report = doctor_report(root_dir=tmp_path)
     statuses = _status_by_name(report)

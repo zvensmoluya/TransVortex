@@ -155,6 +155,10 @@ class AsrLocalConfig:
     device: str = "auto"
     compute_type: str = "int8"
     max_initial_timestamp: float = 30.0
+    beam_size: int = 5
+    temperature: float = 0.0
+    condition_on_previous_text: bool = True
+    hotwords: str = ""
 
 
 @dataclass

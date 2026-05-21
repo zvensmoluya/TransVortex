@@ -88,11 +88,14 @@ asr:
     device: auto
     compute_type: int8
     max_initial_timestamp: 30.0
+    beam_size: 5
+    temperature: 0.0
+    condition_on_previous_text: true
+    hotwords: ""
   prompt:
     enabled: true
     active_profile: ""
     profiles: []
-    text: ""
     include_previous_text: false
     max_chars: 800
   preprocessing:

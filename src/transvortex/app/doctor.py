@@ -12,6 +12,8 @@ from .config import load_app_config, resolve_providers_file
 from .credentials import resolve_credential
 from ..providers.probe import probe_provider
 
+FASTER_WHISPER_MIN_VERSION = "1.0.2"
+
 
 def _check(
     name: str,
@@ -112,6 +114,37 @@ def _package_version() -> str:
         return importlib.metadata.version("transvortex")
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
+
+
+def _faster_whisper_version() -> str | None:
+    try:
+        return importlib.metadata.version("faster-whisper")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _version_lt(actual: str, minimum: str) -> bool:
+    def parse(value: str) -> list[int]:
+        parts: list[int] = []
+        for chunk in value.split("."):
+            digits = ""
+            for char in chunk:
+                if char.isdigit():
+                    digits += char
+                else:
+                    break
+            if digits:
+                parts.append(int(digits))
+            else:
+                parts.append(0)
+        return parts
+
+    actual_parts = parse(actual)
+    minimum_parts = parse(minimum)
+    length = max(len(actual_parts), len(minimum_parts))
+    actual_parts.extend([0] * (length - len(actual_parts)))
+    minimum_parts.extend([0] * (length - len(minimum_parts)))
+    return actual_parts < minimum_parts
 
 
 def _env_key_check(
@@ -230,7 +263,8 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
     checks.append(_artifacts_check(config.pipeline.artifacts_dir))
 
     if config.pipeline.asr_mode == "local":
-        if importlib.util.find_spec("faster_whisper") is None:
+        installed_version = _faster_whisper_version()
+        if installed_version is None:
             checks.append(
                 _check(
                     "faster_whisper",
@@ -239,6 +273,21 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     "faster-whisper is required for local ASR",
                     "本地 ASR 需要 faster-whisper。请执行 python -m pip install -e .[asr]。",
                     details={"asr_mode": config.pipeline.asr_mode},
+                )
+            )
+        elif _version_lt(installed_version, FASTER_WHISPER_MIN_VERSION):
+            checks.append(
+                _check(
+                    "faster_whisper",
+                    "FAIL",
+                    "faster_whisper_version_too_old",
+                    f"faster-whisper {installed_version} is installed, but {FASTER_WHISPER_MIN_VERSION}+ is required",
+                    f"本地 ASR 需要 faster-whisper {FASTER_WHISPER_MIN_VERSION} 或更高版本，当前安装的是 {installed_version}。",
+                    details={
+                        "asr_mode": config.pipeline.asr_mode,
+                        "installed_version": installed_version,
+                        "required_version": FASTER_WHISPER_MIN_VERSION,
+                    },
                 )
             )
         else:

@@ -56,6 +56,10 @@ class AsrEngine:
         mode: str = "local",
         source_lang: str | None = None,
         local_max_initial_timestamp: float = 30.0,
+        local_beam_size: int = 5,
+        local_temperature: float = 0.0,
+        local_condition_on_previous_text: bool = True,
+        local_hotwords: str = "",
         prompt: str = "",
         asr_provider: AsrProviderConfig | None = None,
         root_dir: Path | None = None,
@@ -66,6 +70,10 @@ class AsrEngine:
         self.mode = mode
         self.source_lang = source_lang
         self.local_max_initial_timestamp = max(float(local_max_initial_timestamp), 0.0)
+        self.local_beam_size = max(int(local_beam_size), 1)
+        self.local_temperature = float(local_temperature)
+        self.local_condition_on_previous_text = bool(local_condition_on_previous_text)
+        self.local_hotwords = str(local_hotwords or "").strip()
         self.prompt = prompt
         self.asr_provider = asr_provider
         self.root_dir = root_dir
@@ -98,7 +106,13 @@ class AsrEngine:
         prompt: str | None = None,
     ) -> AsrTranscriptionResult:
         if self.mode == "local":
-            return AsrTranscriptionResult(rows=self._transcribe_segment_local(audio_path, segment_start_offset))
+            return AsrTranscriptionResult(
+                rows=self._transcribe_segment_local(
+                    audio_path,
+                    segment_start_offset,
+                    prompt=self.prompt if prompt is None else prompt,
+                )
+            )
         if self.mode == "cloud":
             client = build_asr_client(self.asr_provider)
             return client.transcribe_segment(
@@ -110,13 +124,29 @@ class AsrEngine:
             )
         raise RuntimeError(f"Unsupported ASR mode: {self.mode}")
 
-    def _transcribe_segment_local(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
+    def _transcribe_segment_local(
+        self,
+        audio_path: Path,
+        segment_start_offset: float,
+        *,
+        prompt: str = "",
+    ) -> list[dict]:
         model = self._ensure_model()
-        transcribe_kwargs: dict[str, Any] = {"vad_filter": False}
+        transcribe_kwargs: dict[str, Any] = {
+            "vad_filter": False,
+            "beam_size": self.local_beam_size,
+            "temperature": self.local_temperature,
+            "condition_on_previous_text": self.local_condition_on_previous_text,
+        }
         language = _normalize_whisper_language(self.source_lang)
         if language:
             transcribe_kwargs["language"] = language
         transcribe_kwargs["max_initial_timestamp"] = self.local_max_initial_timestamp
+        prompt = str(prompt or "").strip()
+        if prompt:
+            transcribe_kwargs["initial_prompt"] = prompt
+        if self.local_hotwords:
+            transcribe_kwargs["hotwords"] = self.local_hotwords
         segments, _info = model.transcribe(str(audio_path), **transcribe_kwargs)
         rows = []
         for item in segments:

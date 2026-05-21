@@ -399,6 +399,11 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
         mode="local",
         source_lang="ja-JP",
         local_max_initial_timestamp=30.0,
+        local_beam_size=7,
+        local_temperature=0.2,
+        local_condition_on_previous_text=False,
+        local_hotwords="Subaru, Emilia",
+        prompt="Names: Subaru, Emilia",
     )
     engine._model = FakeModel()
 
@@ -407,8 +412,13 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
     assert captured["path"] == str(audio)
     assert captured["kwargs"] == {
         "vad_filter": False,
+        "beam_size": 7,
+        "temperature": 0.2,
+        "condition_on_previous_text": False,
         "language": "ja",
         "max_initial_timestamp": 30.0,
+        "initial_prompt": "Names: Subaru, Emilia",
+        "hotwords": "Subaru, Emilia",
     }
     assert rows == [
         {

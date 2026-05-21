@@ -374,9 +374,76 @@ def test_resume_uses_saved_pipeline_settings_for_asr_mode(tmp_path: Path, monkey
     }
 
 
+def test_resume_uses_saved_one_off_asr_prompt(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    prompt_dir = root / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "anime.v1.md").write_text("Project prompt", encoding="utf-8")
+    pipeline = root / "pipeline.yaml"
+    raw = pipeline.read_text(encoding="utf-8")
+    pipeline.write_text(
+        raw.replace(
+            "  compute_type: int8",
+            """  compute_type: int8
+  prompt:
+    active_profile: anime
+    profiles:
+      - id: anime
+        name: Anime
+        path: prompts/asr/anime.v1.md
+        include_previous_text: false
+        max_chars: 100""",
+        ),
+        encoding="utf-8",
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    task_id, _artifacts_dir = create_pipeline_task(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="zh-CN",
+        cli_overrides={
+            "source_mode": "asr",
+            "asr_prompt_text": "Task-only prompt",
+            "asr_prompt_include_previous_text": "true",
+            "asr_prompt_max_chars": 80,
+        },
+        input_type="video_asr",
+    )
+    store = TaskStore(root / "artifacts")
+    task = store.load_task(task_id)
+    assert task.settings["asr_prompt"]["text"] == "Task-only prompt"
+    assert task.settings["asr_prompt"]["active_profile"] == "anime"
+
+    (prompt_dir / "anime.v1.md").write_text("Changed project prompt", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_execute_task(config, store, task_id, **_kwargs):
+        captured["prompt_text"] = config.pipeline.asr_prompt.text
+        captured["active_profile"] = config.pipeline.asr_prompt.active_profile
+        captured["include_previous_text"] = config.pipeline.asr_prompt.include_previous_text
+        captured["max_chars"] = config.pipeline.asr_prompt.max_chars
+
+    monkeypatch.setattr("transvortex.core.orchestrator._execute_task", fake_execute_task)
+
+    resume_pipeline(root_dir=root, task_id=task_id)
+
+    assert captured == {
+        "prompt_text": "Task-only prompt",
+        "active_profile": "anime",
+        "include_previous_text": True,
+        "max_chars": 80,
+    }
+
+
 def test_cloud_asr_trims_silence_before_provider_and_records_preprocess_artifact(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
+    prompt_dir = root / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "cloud.v1.md").write_text("Names: Subaru", encoding="utf-8")
     pipeline = root / "pipeline.yaml"
     pipeline.write_text(
         """
@@ -388,7 +455,12 @@ asr:
   provider: cloud1
   prompt:
     enabled: true
-    text: "Names: Subaru"
+    active_profile: cloud
+    profiles:
+      - id: cloud
+        name: Cloud prompt
+        path: prompts/asr/cloud.v1.md
+        max_chars: 80
     max_chars: 80
   preprocessing:
     cloud_trim_silence:
@@ -508,6 +580,9 @@ providers:
 def test_cloud_asr_previous_text_is_added_to_next_segment_prompt(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
+    prompt_dir = root / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "cloud.v1.md").write_text("Names: Subaru", encoding="utf-8")
     (root / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
@@ -517,7 +592,13 @@ asr:
   provider: cloud1
   prompt:
     enabled: true
-    text: "Names: Subaru"
+    active_profile: cloud
+    profiles:
+      - id: cloud
+        name: Cloud prompt
+        path: prompts/asr/cloud.v1.md
+        include_previous_text: true
+        max_chars: 400
     include_previous_text: true
     max_chars: 400
   preprocessing:

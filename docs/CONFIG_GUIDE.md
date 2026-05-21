@@ -208,9 +208,14 @@ asr:
     model_size: small
     compute_type: int8
     max_initial_timestamp: 30.0
+    beam_size: 5
+    temperature: 0.0
+    condition_on_previous_text: true
+    hotwords: ""
   prompt:
     enabled: true
-    text: ""
+    active_profile: ""
+    profiles: []
     include_previous_text: false
     max_chars: 800
   preprocessing:
@@ -267,9 +272,9 @@ asr_providers:
 说明：
 - `silence` ASR 会用 ffmpeg `silencedetect` 寻找静音边界，默认把 cloud ASR 切成最长约 120 秒的自然语音片段；没有合适静音点时按 `max_window_seconds` hard cut。`max_upload_mb` 只作为 OpenAI 上传上限保护，不再作为“尽量单片上传”的目标。
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
-- `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。
+- `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。本地 ASR 还会传入 `beam_size`、`temperature`、`condition_on_previous_text` 和 `hotwords`；`vad_filter` 固定为 `false`，避免 faster-whisper 内部再丢弃无人声区间。
 - `mode: cloud` 使用独立 ASR provider，不复用翻译 provider routing；当前实现 `protocol: openai_transcriptions`。
-- `asr.prompt.text` 是任务级 ASR hint，会作为 transcription `prompt` 发送；它适合短专名、术语或上一段上下文，不要复用翻译 prompt。
+- 长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为云端 transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`。
 - `asr.preprocessing.cloud_trim_silence` 只默认作用于 cloud ASR，使用 ffmpeg 分析真实静音并裁剪上传音频，返回时间轴会加回裁剪 offset；它不会识别背景音乐或环境声中的“无人声”。
 - `asr.execution.cloud_concurrency` 控制 cloud ASR 并发上传，默认 8；遇到 timeout、429 或 5xx 时调度层会降并发，单片失败后会尝试细分成更小片重跑，仍失败才失败任务。
 - ASR 行进入 `source/segments.normalized.jsonl` 前会过滤确定性垃圾，例如纯音乐符号、替换字符乱码、长时间重复 hallucination；raw response 和 `source/asr/quality/*.json` 会保留诊断信息。
@@ -280,7 +285,7 @@ asr_providers:
 - `asr.provider` 选择云 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。
 - ASR、SRT、内嵌字幕和外部 segments 都会归一化为 `source/segments.normalized.jsonl`，翻译层只读取统一 `Segment`。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
-- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds`、`--asr-max-upload-mb`、`--asr-audio-track`、`--asr-cloud-concurrency` 覆盖。
+- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-beam-size`、`--asr-temperature`、`--asr-condition-on-previous-text`、`--asr-hotwords`、`--asr-prompt-profile`、`--asr-prompt-text`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds`、`--asr-max-upload-mb`、`--asr-audio-track`、`--asr-cloud-concurrency` 覆盖。
 
 ## 6. 零 Token 协议预检
 

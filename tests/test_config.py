@@ -761,6 +761,9 @@ routing:
         """.strip(),
         encoding="utf-8",
     )
+    prompt_dir = tmp_path / "prompts" / "asr"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "show.v1.md").write_text("Use known character names.", encoding="utf-8")
     (tmp_path / "pipeline.yaml").write_text(
         """
 asr:
@@ -785,7 +788,12 @@ asr:
       cut_padding_seconds: 0.2
   prompt:
     enabled: true
-    text: "Use known character names."
+    active_profile: show
+    profiles:
+      - id: show
+        name: Show terms
+        path: prompts/asr/show.v1.md
+        max_chars: 120
     include_previous_text: false
     max_chars: 120
 asr_providers:
@@ -844,12 +852,40 @@ asr_providers:
     assert provider.request.array_format == "brackets"
     assert provider.request.extra_form_fields == {"custom_flag": True, "custom_list": ["a", "b"]}
     assert cfg.pipeline.asr_prompt.enabled is True
+    assert cfg.pipeline.asr_prompt.active_profile == "show"
     assert cfg.pipeline.asr_prompt.text == "Use known character names."
     assert cfg.pipeline.asr_prompt.include_previous_text is False
     assert cfg.pipeline.asr_prompt.max_chars == 120
 
 
-def test_asr_prompt_profile_overrides_legacy_text(tmp_path: Path) -> None:
+def test_asr_prompt_rejects_inline_project_text(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  prompt:
+    text: "legacy text"
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"Unsupported asr\.prompt field\(s\): text"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_asr_prompt_profile_loads_prompt_file(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -872,7 +908,6 @@ asr:
   prompt:
     enabled: true
     active_profile: anime
-    text: "legacy text"
     profiles:
       - id: anime
         name: Anime names
@@ -936,7 +971,7 @@ asr:
         },
     )
 
-    assert cfg.pipeline.asr_prompt.active_profile == ""
+    assert cfg.pipeline.asr_prompt.active_profile == "anime"
     assert cfg.pipeline.asr_prompt.text == "Task prompt"
     assert cfg.pipeline.asr_prompt.enabled is False
     assert cfg.pipeline.asr_prompt.include_previous_text is True
@@ -1655,6 +1690,10 @@ routing:
             "asr_model_size": "medium",
             "asr_compute_type": "float16",
             "asr_max_initial_timestamp": 8.5,
+            "asr_beam_size": 7,
+            "asr_temperature": 0.2,
+            "asr_condition_on_previous_text": "false",
+            "asr_hotwords": "Subaru, Emilia",
             "asr_cloud_model": "whisper-large",
             "asr_cloud_base_url": "https://asr.example.com",
             "asr_cloud_endpoint": "/v1/audio/transcriptions",
@@ -1674,6 +1713,10 @@ routing:
     assert cfg.pipeline.asr_local.model_size == "medium"
     assert cfg.pipeline.asr_local.compute_type == "float16"
     assert cfg.pipeline.asr_local.max_initial_timestamp == 8.5
+    assert cfg.pipeline.asr_local.beam_size == 7
+    assert cfg.pipeline.asr_local.temperature == 0.2
+    assert cfg.pipeline.asr_local.condition_on_previous_text is False
+    assert cfg.pipeline.asr_local.hotwords == "Subaru, Emilia"
     assert cfg.pipeline.asr_cloud.model == "whisper-large"
     assert cfg.pipeline.asr_cloud.base_url == "https://asr.example.com"
     assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
@@ -1711,6 +1754,10 @@ routing:
 
     assert cfg.pipeline.asr_local.device == "auto"
     assert cfg.pipeline.asr_local.max_initial_timestamp == 30.0
+    assert cfg.pipeline.asr_local.beam_size == 5
+    assert cfg.pipeline.asr_local.temperature == 0.0
+    assert cfg.pipeline.asr_local.condition_on_previous_text is True
+    assert cfg.pipeline.asr_local.hotwords == ""
     assert cfg.pipeline.asr_chunking.mode == "silence"
     assert cfg.pipeline.asr_chunking.window_seconds == 300
     assert cfg.pipeline.asr_chunking.max_window_seconds == 120

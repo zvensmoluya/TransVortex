@@ -65,6 +65,13 @@ LEGACY_MEMORY_INJECT_FIELDS = {
     "max_proposed_entries",
     "max_context_only_entries",
 }
+ASR_PROMPT_ALLOWED_FIELDS = {
+    "enabled",
+    "active_profile",
+    "profiles",
+    "include_previous_text",
+    "max_chars",
+}
 
 ENV_MAP = {
     "chunk_seconds": "TVX_CHUNK_SECONDS",
@@ -230,10 +237,13 @@ def _parse_asr_prompt_profiles(root_dir: Path, raw_profiles: Any) -> list[AsrPro
 
 
 def _resolve_asr_prompt_config(root_dir: Path, asr_prompt_raw: dict[str, Any]) -> AsrPromptConfig:
+    unsupported = sorted(set(asr_prompt_raw) - ASR_PROMPT_ALLOWED_FIELDS)
+    if unsupported:
+        raise ValueError(f"Unsupported asr.prompt field(s): {', '.join(unsupported)}")
     profiles = _parse_asr_prompt_profiles(root_dir, asr_prompt_raw.get("profiles"))
     active_profile = _to_str(asr_prompt_raw.get("active_profile"), "")
     selected = next((item for item in profiles if item.id == active_profile), None)
-    text = _to_str(asr_prompt_raw.get("text"), "")
+    text = ""
     include_previous = _to_bool(asr_prompt_raw.get("include_previous_text"), False)
     max_chars = _to_int(asr_prompt_raw.get("max_chars"), 800)
     if selected is not None:
@@ -753,6 +763,10 @@ def load_app_config(
             device=_to_str(asr_local_raw.get("device"), "auto"),
             compute_type=_to_str(asr_local_raw.get("compute_type"), "int8"),
             max_initial_timestamp=_to_float(asr_local_raw.get("max_initial_timestamp"), 30.0),
+            beam_size=_to_int(asr_local_raw.get("beam_size"), 5),
+            temperature=_to_float(asr_local_raw.get("temperature"), 0.0),
+            condition_on_previous_text=_to_bool(asr_local_raw.get("condition_on_previous_text"), True),
+            hotwords=_to_str(asr_local_raw.get("hotwords"), ""),
         ),
         asr_cloud=AsrCloudConfig(
             base_url=_to_str(asr_cloud_raw.get("base_url"), "https://api.openai.com"),
@@ -878,6 +892,14 @@ def load_app_config(
             pipeline.asr_local.compute_type = _to_str(value, pipeline.asr_local.compute_type)
         elif key == "asr_max_initial_timestamp":
             pipeline.asr_local.max_initial_timestamp = _to_float(value, pipeline.asr_local.max_initial_timestamp)
+        elif key == "asr_beam_size":
+            pipeline.asr_local.beam_size = _to_int(value, pipeline.asr_local.beam_size)
+        elif key == "asr_temperature":
+            pipeline.asr_local.temperature = _to_float(value, pipeline.asr_local.temperature)
+        elif key == "asr_condition_on_previous_text":
+            pipeline.asr_local.condition_on_previous_text = _to_bool(value, pipeline.asr_local.condition_on_previous_text)
+        elif key == "asr_hotwords":
+            pipeline.asr_local.hotwords = _to_str(value, pipeline.asr_local.hotwords)
         elif key == "asr_provider":
             pipeline.asr_provider = _to_str(value, pipeline.asr_provider)
         elif key == "asr_cloud_base_url":
@@ -935,8 +957,6 @@ def load_app_config(
                 pipeline.asr_prompt.max_chars = selected_profile.max_chars
         elif key == "asr_prompt_text":
             pipeline.asr_prompt.text = _to_str(value, pipeline.asr_prompt.text)
-            if not cli_overrides.get("asr_prompt_profile"):
-                pipeline.asr_prompt.active_profile = ""
         elif key == "asr_prompt_enabled":
             pipeline.asr_prompt.enabled = _to_bool(value, pipeline.asr_prompt.enabled)
         elif key == "asr_prompt_include_previous_text":

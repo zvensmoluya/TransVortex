@@ -75,6 +75,10 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "asr_model_size": args.asr_model_size,
         "asr_compute_type": args.asr_compute_type,
         "asr_max_initial_timestamp": getattr(args, "asr_max_initial_timestamp", None),
+        "asr_beam_size": getattr(args, "asr_beam_size", None),
+        "asr_temperature": getattr(args, "asr_temperature", None),
+        "asr_condition_on_previous_text": getattr(args, "asr_condition_on_previous_text", None),
+        "asr_hotwords": getattr(args, "asr_hotwords", None),
         "asr_provider": getattr(args, "asr_provider", None),
         "asr_cloud_base_url": getattr(args, "asr_cloud_base_url", None),
         "asr_cloud_endpoint": getattr(args, "asr_cloud_endpoint", None),
@@ -214,6 +218,10 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-model-size", default=None)
     subparser.add_argument("--asr-compute-type", default=None)
     subparser.add_argument("--asr-max-initial-timestamp", type=float, default=None)
+    subparser.add_argument("--asr-beam-size", type=int, default=None)
+    subparser.add_argument("--asr-temperature", type=float, default=None)
+    subparser.add_argument("--asr-condition-on-previous-text", choices=["true", "false"], default=None)
+    subparser.add_argument("--asr-hotwords", default=None)
     subparser.add_argument("--asr-provider", default=None)
     subparser.add_argument("--asr-cloud-base-url", default=None)
     subparser.add_argument("--asr-cloud-endpoint", default=None)
@@ -413,6 +421,10 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--asr-model-size", getattr(ns, "asr_model_size", None)),
         ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
         ("--asr-max-initial-timestamp", getattr(ns, "asr_max_initial_timestamp", None)),
+        ("--asr-beam-size", getattr(ns, "asr_beam_size", None)),
+        ("--asr-temperature", getattr(ns, "asr_temperature", None)),
+        ("--asr-condition-on-previous-text", bool_text(getattr(ns, "asr_condition_on_previous_text", None))),
+        ("--asr-hotwords", getattr(ns, "asr_hotwords", None)),
         ("--asr-provider", getattr(ns, "asr_provider", None)),
         ("--asr-cloud-base-url", getattr(ns, "asr_cloud_base_url", None)),
         ("--asr-cloud-endpoint", getattr(ns, "asr_cloud_endpoint", None)),

@@ -75,7 +75,8 @@ asr:
   provider: openai_whisper
   prompt:
     enabled: true
-    text: ""
+    active_profile: ""
+    profiles: []
     include_previous_text: false
     max_chars: 800
   preprocessing:
@@ -122,7 +123,7 @@ asr_providers:
 transvortex auth set openai_asr
 ```
 
-当前云端 ASR 适配的是 OpenAI Transcriptions multipart API；原始响应会先归一化为 `source/segments.normalized.jsonl`，翻译层不直接依赖 ASR 原始格式。`asr.prompt.text` 是任务级 ASR hint，会作为 transcription `prompt` 发送；provider `request` 保存 OpenAI transcription 表单字段和受限 `extra_form_fields` 扩展，`response_format` 第一版固定使用 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。`timestamp_granularities` 默认请求 `segment`。Cloud ASR 默认通过统一 `httpx` 传输层请求，`http2: true` 表示优先 HTTP/2，实际不可用时会按客户端能力降级。Cloud ASR 默认用 ffmpeg 静音边界切成约 120 秒以内的自然片段，并发 8 个上传；`max_upload_mb: 24` 只作为 OpenAI 25MB 上传限制保护。请求遇到 timeout、429 或 5xx 会重试并降并发，单片仍失败会细分重跑。明显垃圾 ASR 行会在进入标准 source 前过滤，raw 和 quality diagnostics 会保留。
+当前云端 ASR 适配的是 OpenAI Transcriptions multipart API；原始响应会先归一化为 `source/segments.normalized.jsonl`，翻译层不直接依赖 ASR 原始格式。长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为云端 transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`。provider `request` 保存 OpenAI transcription 表单字段和受限 `extra_form_fields` 扩展，`response_format` 第一版固定使用 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。`timestamp_granularities` 默认请求 `segment`。Cloud ASR 默认通过统一 `httpx` 传输层请求，`http2: true` 表示优先 HTTP/2，实际不可用时会按客户端能力降级。Cloud ASR 默认用 ffmpeg 静音边界切成约 120 秒以内的自然片段，并发 8 个上传；`max_upload_mb: 24` 只作为 OpenAI 25MB 上传限制保护。请求遇到 timeout、429 或 5xx 会重试并降并发，单片仍失败会细分重跑。明显垃圾 ASR 行会在进入标准 source 前过滤，raw 和 quality diagnostics 会保留。
 
 ## 常用命令
 
