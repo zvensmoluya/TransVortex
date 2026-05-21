@@ -71,6 +71,19 @@ export function setRequestBodyOverride(raw: string, path: string, value: unknown
   });
 }
 
+export function setRequestBodyOverrideWithAliases(raw: string, path: string, value: unknown, aliases: string[] = []) {
+  return updateRequestMappingJson(raw, (mapping) => {
+    for (const alias of aliases) {
+      deletePathValue(mapping, requestBodyPath(alias));
+    }
+    if (value === "" || value === undefined || value === null) {
+      deletePathValue(mapping, requestBodyPath(path));
+      return;
+    }
+    setPathValue(mapping, requestBodyPath(path), value);
+  });
+}
+
 export const tokenLimitFields = [
   { value: "auto", label: "不指定" },
   { value: "max_tokens", label: "max_tokens" },

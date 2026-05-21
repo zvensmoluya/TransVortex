@@ -42,6 +42,7 @@ export type ProviderTemplate = {
   api_type: string;
   compat_mode: string;
   base_url: string;
+  models?: string[];
   endpoint: EndpointConfig;
   auth: AuthConfig;
   request_mapping: Record<string, unknown>;

@@ -71,12 +71,13 @@ def test_provider_templates_include_core_compat_modes() -> None:
         "gemini_ai_studio_native",
         "gemini_openai_compatible",
         "vertex_native",
+        "vertex_express",
         "vertex_openai_compatible",
         "custom_json",
     }.issubset(ids)
     protocol_ids = {row["id"] for row in protocol_templates_payload()}
     assert "custom_json" not in protocol_ids
-    assert {"openai_chat", "openai_responses", "vertex_native"}.issubset(protocol_ids)
+    assert {"openai_chat", "openai_responses", "vertex_native", "vertex_express"}.issubset(protocol_ids)
     preset_ids = {row["id"] for row in provider_presets_payload()}
     assert {"openai_official", "google_ai_studio", "google_vertex_gemini"}.issubset(preset_ids)
     assert custom_adapter_template_payload()["id"] == "custom_json"
@@ -84,6 +85,12 @@ def test_provider_templates_include_core_compat_modes() -> None:
     assert templates_by_id["openai_responses"]["capabilities"]["max_output_tokens"] == 65536
     assert "max_tokens" not in templates_by_id["anthropic_messages"]["request_mapping"]
     assert "maxOutputTokens" not in templates_by_id["gemini_ai_studio_native"]["request_mapping"]["body_overrides"]["generationConfig"]
+    assert templates_by_id["vertex_express"]["auth"]["type"] == "query"
+    assert templates_by_id["vertex_express"]["endpoint"]["path_template"] == "/publishers/google/models/{model}:generateContent"
+    assert templates_by_id["vertex_express"]["model_list"]["path_template"] == ""
+    assert templates_by_id["vertex_express"]["models"]
+    presets_by_id = {row["id"]: row for row in provider_presets_payload()}
+    assert presets_by_id["google_vertex_gemini"]["compat_mode"] == "vertex_express"
 
 
 def test_save_provider_config_writes_yaml_without_api_key(tmp_path: Path, monkeypatch) -> None:
@@ -159,6 +166,21 @@ def test_fetch_provider_models_missing_key_fails() -> None:
     )
     assert report["status"] == "FAIL"
     assert report["code"] == "provider_key_missing"
+
+
+def test_fetch_vertex_express_models_reports_manual_fallback() -> None:
+    report = fetch_provider_models(
+        provider_draft={
+            "name": "vertex",
+            "compat_mode": "vertex_express",
+            "env_key": "KEY",
+        },
+        api_key="secret",
+    )
+    assert report["status"] == "WARN"
+    assert report["code"] == "provider_model_list_unsupported"
+    assert report["models"]
+    assert "Vertex 的模型列表" in report["hint_zh"]
 
 
 def test_fetch_provider_models_uses_auth_json(tmp_path: Path, monkeypatch) -> None:

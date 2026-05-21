@@ -272,6 +272,20 @@ def _infer_compat_mode(api_type: str) -> str:
     raise ValueError(f"Unsupported api_type: {api_type}")
 
 
+def _default_base_url_for_mode(compat_mode: str) -> str:
+    if compat_mode in {"openai_chat", "openai_responses", "openai_completions"}:
+        return "https://api.openai.com/v1"
+    if compat_mode == "anthropic_messages":
+        return "https://api.anthropic.com/v1"
+    if compat_mode == "gemini_generate_content":
+        return "https://generativelanguage.googleapis.com/v1beta"
+    if compat_mode == "vertex_express":
+        return "https://aiplatform.googleapis.com/v1"
+    if compat_mode == "custom_json":
+        return "https://example.com"
+    raise ValueError(f"Unsupported compat_mode: {compat_mode}")
+
+
 def _default_endpoint_for_mode(compat_mode: str) -> EndpointConfig:
     if compat_mode == "openai_chat":
         return EndpointConfig(path_template="/chat/completions", method="POST")
@@ -283,6 +297,8 @@ def _default_endpoint_for_mode(compat_mode: str) -> EndpointConfig:
         return EndpointConfig(path_template="/messages", method="POST")
     if compat_mode == "gemini_generate_content":
         return EndpointConfig(path_template="/models/{model}:generateContent", method="POST")
+    if compat_mode == "vertex_express":
+        return EndpointConfig(path_template="/publishers/google/models/{model}:generateContent", method="POST")
     if compat_mode == "custom_json":
         return EndpointConfig(path_template="/", method="POST")
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
@@ -294,6 +310,8 @@ def _default_auth_for_mode(compat_mode: str) -> AuthConfig:
     if compat_mode == "anthropic_messages":
         return AuthConfig(type="header", header_name="x-api-key", prefix="")
     if compat_mode == "gemini_generate_content":
+        return AuthConfig(type="query", query_name="key", prefix="")
+    if compat_mode == "vertex_express":
         return AuthConfig(type="query", query_name="key", prefix="")
     if compat_mode == "custom_json":
         return AuthConfig(type="bearer", header_name="Authorization", prefix="Bearer ")
@@ -347,6 +365,15 @@ def _default_mapping_for_mode(compat_mode: str) -> MappingConfig:
                 ]
             },
         )
+    if compat_mode == "vertex_express":
+        return MappingConfig(
+            request={"style": "gemini_generate_content"},
+            response={
+                "text_paths": [
+                    "candidates[0].content.parts[].text",
+                ]
+            },
+        )
     if compat_mode == "custom_json":
         return MappingConfig(
             request={
@@ -368,9 +395,17 @@ def _default_model_list_for_mode(compat_mode: str) -> ModelListConfig:
         return ModelListConfig(path_template="/models", method="GET", response_paths=["data[].id"])
     if compat_mode == "gemini_generate_content":
         return ModelListConfig(path_template="/models", method="GET", response_paths=["models[].name", "data[].id"])
+    if compat_mode == "vertex_express":
+        return ModelListConfig(path_template="", method="GET", response_paths=[])
     if compat_mode == "custom_json":
         return ModelListConfig(path_template="", method="GET", response_paths=[])
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
+
+
+def _default_models_for_mode(compat_mode: str) -> list[str]:
+    if compat_mode == "vertex_express":
+        return ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
+    return []
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -1102,9 +1137,10 @@ def load_app_config(
         cfg = ProviderConfig(
             name=row["name"],
             api_type=api_type,
-            base_url=row["base_url"].rstrip("/"),
+            base_url=_to_str(row.get("base_url"), _default_base_url_for_mode(compat_mode)).rstrip("/"),
             env_key=row["env_key"],
-            models=list(row.get("models", [])),
+            models=[str(item).strip() for item in _to_str_list(row.get("models")) if str(item).strip()]
+            or _default_models_for_mode(compat_mode),
             credential_id=str(row.get("credential_id", row["name"])),
             credential_root_dir=root_dir,
             compat_mode=compat_mode,

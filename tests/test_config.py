@@ -507,6 +507,30 @@ routing:
     assert p.capabilities.max_batch_lines == 20
 
 
+def test_vertex_express_defaults(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: vertex
+    api_type: gemini-compatible
+    compat_mode: vertex_express
+    env_key: KEY
+routing:
+  primary: {provider: vertex, model: gemini-3.5-flash}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+    p = cfg.providers["vertex"]
+    assert p.base_url == "https://aiplatform.googleapis.com/v1"
+    assert p.endpoint.path_template == "/publishers/google/models/{model}:generateContent"
+    assert p.auth.type == "query"
+    assert p.auth.query_name == "key"
+    assert p.models[0] == "gemini-3.5-flash"
+    assert p.model_list.path_template == ""
+
+
 def test_provider_extended_schema_model_list_and_extra_headers(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

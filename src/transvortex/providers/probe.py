@@ -16,6 +16,7 @@ VALID_COMPAT_MODES = {
     "openai_completions",
     "anthropic_messages",
     "gemini_generate_content",
+    "vertex_express",
     "custom_json",
 }
 
@@ -38,6 +39,8 @@ def _mock_response_for_compat_mode(compat_mode: str) -> dict:
     if compat_mode == "anthropic_messages":
         return {"content": [{"text": "[1] ok"}]}
     if compat_mode == "gemini_generate_content":
+        return {"candidates": [{"content": {"parts": [{"text": "[1] ok"}]}}]}
+    if compat_mode == "vertex_express":
         return {"candidates": [{"content": {"parts": [{"text": "[1] ok"}]}}]}
     if compat_mode == "custom_json":
         return {"text": "[1] ok"}

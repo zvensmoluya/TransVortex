@@ -228,6 +228,26 @@ def test_query_auth_builds_url() -> None:
     assert headers == {}
 
 
+def test_vertex_express_payload_uses_system_instruction() -> None:
+    cfg = ProviderConfig(
+        name="g1",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-3.5-flash"],
+        capabilities=CapabilityConfig(supports_system_prompt=True),
+        mapping=MappingConfig(request={"style": "gemini_generate_content"}, response={}),
+        limits=ProviderLimits(),
+    )
+    req = NormalizedRequest(model="gemini-3.5-flash", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
+    payload = _build_payload(cfg, req)
+    assert "systemInstruction" in payload
+    assert payload["systemInstruction"]["parts"][0]["text"]
+    assert payload["contents"][0]["role"] == "user"
+    assert payload["contents"][0]["parts"][0]["text"].startswith("Output reminder:")
+
+
 def test_anthropic_url_v1_dedup_and_header_auth() -> None:
     cfg = ProviderConfig(
         name="vector",
@@ -522,9 +542,12 @@ def test_body_overrides_add_gemini_generation_fields() -> None:
             request={
                 "style": "gemini_generate_content",
                 "body_overrides": {
-                    "generationConfig": {"topP": 0.95, "maxOutputTokens": 8192},
+                    "generationConfig": {
+                        "topP": 0.95,
+                        "maxOutputTokens": 8192,
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    },
                     "safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}],
-                    "thinkingConfig": {"thinkingBudget": 0},
                 },
             },
             response={},
@@ -536,7 +559,41 @@ def test_body_overrides_add_gemini_generation_fields() -> None:
     assert payload["generationConfig"]["topP"] == 0.95
     assert payload["generationConfig"]["maxOutputTokens"] == 8192
     assert payload["safetySettings"][0]["threshold"] == "BLOCK_NONE"
-    assert payload["thinkingConfig"]["thinkingBudget"] == 0
+    assert payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
+
+
+def test_vertex_express_generation_fields_stay_under_generation_config() -> None:
+    cfg = ProviderConfig(
+        name="vertex",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-3.5-flash"],
+        capabilities=CapabilityConfig(supports_system_prompt=True),
+        mapping=MappingConfig(
+            request={
+                "style": "gemini_generate_content",
+                "body_overrides": {
+                    "generationConfig": {
+                        "topP": 0.9,
+                        "topK": 40,
+                        "thinkingConfig": {"thinkingBudget": 128},
+                    }
+                },
+            },
+            response={},
+        ),
+        limits=ProviderLimits(),
+    )
+    payload = _build_payload(cfg, NormalizedRequest(model="gemini-3.5-flash", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
+    assert payload["generationConfig"]["temperature"] == 0.1
+    assert payload["generationConfig"]["topP"] == 0.9
+    assert payload["generationConfig"]["topK"] == 40
+    assert payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 128
+    assert "top_p" not in payload
+    assert "top_k" not in payload
+    assert "thinkingConfig" not in payload
 
 
 def test_gemini_uses_capability_output_tokens_without_overrides() -> None:
@@ -613,6 +670,20 @@ def test_query_params_coexist_with_query_auth() -> None:
     assert "api-version=2024-01-01" in url
     assert "model_hint=m1" in url
     assert "key=secret" in url
+
+
+def test_build_provider_client_accepts_vertex_express() -> None:
+    cfg = ProviderConfig(
+        name="g1",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-2.5-flash"],
+        limits=ProviderLimits(),
+    )
+    client = ConfigurableProtocolClient(config=cfg, timeout=30)
+    assert client.config.compat_mode == "vertex_express"
 
 
 def test_custom_json_renders_body_template_and_extracts_text() -> None:

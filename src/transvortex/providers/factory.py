@@ -814,9 +814,12 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         payload = _apply_capability_output_tokens(payload, config, style)
         return _apply_request_mapping(payload, config, context)
     if style == "gemini_generate_content":
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-        }
+        content = {"parts": [{"text": prompt}]}
+        if config.compat_mode == "vertex_express":
+            content["role"] = "user"
+        payload = {"contents": [content]}
+        if config.capabilities.supports_system_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
         if config.capabilities.supports_temperature:
             payload["generationConfig"] = {"temperature": req.temperature}
         payload = _apply_request_mapping_output_tokens(payload, config, style)
@@ -891,6 +894,7 @@ def build_provider_client(config: ProviderConfig) -> ProviderClient:
         "openai_completions",
         "anthropic_messages",
         "gemini_generate_content",
+        "vertex_express",
         "custom_json",
     }:
         raise ValueError(f"Unsupported compat_mode: {config.compat_mode}")

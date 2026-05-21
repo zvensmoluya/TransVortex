@@ -35,6 +35,7 @@ import {
   parseJsonObject,
   requestBodyPath,
   setRequestBodyOverride,
+  setRequestBodyOverrideWithAliases,
   setTokenLimit,
   tokenLimitFieldForMapping,
   tokenLimitFields,
@@ -467,7 +468,7 @@ function App() {
         name: base.name,
         env_key: base.env_key,
         credential_id: base.credential_id,
-        models: [...base.models],
+        models: [...(template.models || base.models)],
         api_type: template.api_type,
         compat_mode: template.compat_mode,
         base_url: template.base_url,
@@ -477,9 +478,9 @@ function App() {
         response_mapping: { text_paths: [...(template.response_mapping?.text_paths || [])] },
         extra_headers: { ...(template.extra_headers || {}) },
         model_list: {
-          path_template: template.model_list?.path_template || "/models",
+          path_template: template.model_list?.path_template ?? "",
           method: template.model_list?.method || "GET",
-          response_paths: [...(template.model_list?.response_paths || ["data[].id"])],
+          response_paths: [...(template.model_list?.response_paths || [])],
         },
         capabilities: { ...(template.capabilities || {}) },
       };
@@ -498,7 +499,7 @@ function App() {
         name: base.name,
         env_key: base.env_key,
         credential_id: base.credential_id,
-        models: [...base.models],
+        models: [...(preset.models || base.models)],
         api_type: preset.api_type,
         compat_mode: preset.compat_mode,
         base_url: preset.base_url,
@@ -508,9 +509,9 @@ function App() {
         response_mapping: { text_paths: [...(preset.response_mapping?.text_paths || [])] },
         extra_headers: { ...(preset.extra_headers || {}) },
         model_list: {
-          path_template: preset.model_list?.path_template || "/models",
+          path_template: preset.model_list?.path_template ?? "",
           method: preset.model_list?.method || "GET",
-          response_paths: [...(preset.model_list?.response_paths || ["data[].id"])],
+          response_paths: [...(preset.model_list?.response_paths || [])],
         },
         capabilities: { ...(preset.capabilities || {}) },
       };
@@ -1770,10 +1771,32 @@ function ConfigPanel({
   const requestMapping = parseJsonObject(requestMappingText);
   const reasoningEffort = String(getPathValue(requestMapping || {}, requestBodyPath("reasoning_effort")) ?? "");
   const knownReasoningEffort = ["", "none", "low", "medium", "high", "xhigh", "minimal", "max"].includes(reasoningEffort);
-  const topP = String(getPathValue(requestMapping || {}, requestBodyPath("top_p")) ?? "");
+  const usesGeminiGenerationConfig = providerDraft?.compat_mode === "gemini_generate_content" || providerDraft?.compat_mode === "vertex_express";
+  const topPPath = usesGeminiGenerationConfig ? "generationConfig.topP" : "top_p";
+  const topKPath = usesGeminiGenerationConfig ? "generationConfig.topK" : "top_k";
+  const topP = String(
+    getPathValue(requestMapping || {}, requestBodyPath(topPPath)) ??
+      getPathValue(requestMapping || {}, requestBodyPath("top_p")) ??
+      "",
+  );
+  const topK = String(
+    getPathValue(requestMapping || {}, requestBodyPath(topKPath)) ??
+      getPathValue(requestMapping || {}, requestBodyPath("top_k")) ??
+      "",
+  );
   const tokenLimitField = tokenLimitFieldForMapping(requestMapping);
   const tokenLimitValue = tokenLimitValueForMapping(requestMapping);
-  const geminiThinkingBudget = String(getPathValue(requestMapping || {}, requestBodyPath("extra_body.google.thinking_config.thinking_budget")) ?? getPathValue(requestMapping || {}, requestBodyPath("thinkingConfig.thinkingBudget")) ?? "");
+  const geminiThinkingLevel = String(
+    getPathValue(requestMapping || {}, requestBodyPath("generationConfig.thinkingConfig.thinkingLevel")) ??
+      getPathValue(requestMapping || {}, requestBodyPath("thinkingConfig.thinkingLevel")) ??
+      "",
+  );
+  const geminiThinkingBudget = String(
+    getPathValue(requestMapping || {}, requestBodyPath("extra_body.google.thinking_config.thinking_budget")) ??
+      getPathValue(requestMapping || {}, requestBodyPath("generationConfig.thinkingConfig.thinkingBudget")) ??
+      getPathValue(requestMapping || {}, requestBodyPath("thinkingConfig.thinkingBudget")) ??
+      "",
+  );
   const requestMappingInvalid = requestMappingText.trim().length > 0 && !requestMapping;
   const activeProfile = routingProfilesDraft.find((profile) => profile.id === activeRoutingProfileId) || routingProfilesDraft[0];
   return (
@@ -1942,7 +1965,13 @@ function ConfigPanel({
                   </label>
                   <label className="tvx-label">
                     {t("baseUrl")}
-                    <input className="tvx-input" value={providerDraft.base_url} onChange={(event) => updateProviderDraft({ base_url: event.target.value })} />
+                    <input
+                      className="tvx-input"
+                      value={providerDraft.base_url}
+                      readOnly={providerDraft.compat_mode === "vertex_express"}
+                      onChange={(event) => updateProviderDraft({ base_url: event.target.value })}
+                    />
+                    {providerDraft.compat_mode === "vertex_express" && <span className="text-xs text-muted">Vertex Express 使用固定官方端点。</span>}
                   </label>
                   <label className="tvx-label">
                     {t("envKey")}
@@ -2075,7 +2104,7 @@ function ConfigPanel({
                           />
                         </label>
                         <label className="tvx-label">
-                          top_p
+                          {usesGeminiGenerationConfig ? "topP" : "top_p"}
                           <input
                             className="tvx-input"
                             type="number"
@@ -2086,10 +2115,32 @@ function ConfigPanel({
                             placeholder="auto"
                             onChange={(event) =>
                               setRequestMappingText(
-                                setRequestBodyOverride(
+                                setRequestBodyOverrideWithAliases(
                                   requestMappingText,
-                                  "top_p",
+                                  topPPath,
                                   event.target.value === "" ? "" : Number(event.target.value),
+                                  usesGeminiGenerationConfig ? ["top_p"] : ["generationConfig.topP"],
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="tvx-label">
+                          {usesGeminiGenerationConfig ? "topK" : "top_k"}
+                          <input
+                            className="tvx-input"
+                            type="number"
+                            step="1"
+                            min="1"
+                            value={topK}
+                            placeholder="auto"
+                            onChange={(event) =>
+                              setRequestMappingText(
+                                setRequestBodyOverrideWithAliases(
+                                  requestMappingText,
+                                  topKPath,
+                                  event.target.value === "" ? "" : Number(event.target.value),
+                                  usesGeminiGenerationConfig ? ["top_k"] : ["generationConfig.topK"],
                                 ),
                               )
                             }
@@ -2120,6 +2171,27 @@ function ConfigPanel({
                           />
                         </label>
                         <label className="tvx-label">
+                          Gemini thinking level
+                          <select
+                            className="tvx-input"
+                            value={geminiThinkingLevel || "auto"}
+                            onChange={(event) => {
+                              const value = event.target.value === "auto" ? "" : event.target.value;
+                              const path =
+                                providerDraft.compat_mode === "openai_chat"
+                                  ? "extra_body.google.thinking_config.thinking_level"
+                                  : "generationConfig.thinkingConfig.thinkingLevel";
+                              setRequestMappingText(setRequestBodyOverride(requestMappingText, path, value));
+                            }}
+                          >
+                            <option value="auto">auto / 不指定</option>
+                            <option value="MINIMAL">MINIMAL</option>
+                            <option value="LOW">LOW</option>
+                            <option value="MEDIUM">MEDIUM</option>
+                            <option value="HIGH">HIGH</option>
+                          </select>
+                        </label>
+                        <label className="tvx-label">
                           Gemini thinking budget
                           <input
                             className="tvx-input"
@@ -2131,7 +2203,7 @@ function ConfigPanel({
                               const path =
                                 providerDraft.compat_mode === "openai_chat"
                                   ? "extra_body.google.thinking_config.thinking_budget"
-                                  : "thinkingConfig.thinkingBudget";
+                                  : "generationConfig.thinkingConfig.thinkingBudget";
                               setRequestMappingText(setRequestBodyOverride(requestMappingText, path, value));
                             }}
                           />
@@ -2218,9 +2290,9 @@ function ConfigPanel({
                         }
                       />
                     </label>
-                    <p className="col-span-2 text-xs text-muted">
-                      当前模板：{selectedTemplate?.label || providerDraft.compat_mode}。高级字段用于兼容非标准网关，普通 OpenAI-compatible 只需要 base_url、key 和模型。
-                    </p>
+                  <p className="col-span-2 text-xs text-muted">
+                    当前模板：{selectedTemplate?.label || providerDraft.compat_mode}。高级字段用于兼容非标准网关；Vertex Express 会固定官方端点和 `key` 鉴权。
+                  </p>
                   </div>
                 )}
               </>

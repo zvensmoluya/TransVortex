@@ -232,6 +232,31 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "output_token_param": "",
         },
     },
+    "vertex_express": {
+        "label": "Vertex AI Gemini Express",
+        "api_type": "gemini-compatible",
+        "compat_mode": "vertex_express",
+        "base_url": "https://aiplatform.googleapis.com/v1",
+        "endpoint": {"path_template": "/publishers/google/models/{model}:generateContent", "method": "POST"},
+        "auth": {"type": "query", "query_name": "key", "prefix": ""},
+        "request_mapping": {
+            "style": "gemini_generate_content",
+            "body_overrides": {"generationConfig": {"topP": 0.95}},
+        },
+        "response_mapping": {"text_paths": ["candidates[0].content.parts[].text"]},
+        "model_list": {"path_template": "", "method": "GET", "response_paths": []},
+        "models": ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+        "capabilities": {
+            "supports_system_prompt": True,
+            "supports_temperature": True,
+            "supports_json_mode": False,
+            "max_batch_lines": 1000,
+            "max_context_tokens": 0,
+            "max_output_tokens": 65536,
+            "recommended_output_tokens": 32768,
+            "output_token_param": "",
+        },
+    },
     "vertex_openai_compatible": {
         "label": "Vertex AI OpenAI-compatible",
         "api_type": "openai-compatible",
@@ -290,6 +315,7 @@ PROTOCOL_TEMPLATE_IDS = [
     "anthropic_messages",
     "gemini_generate_content",
     "gemini_openai_compatible",
+    "vertex_express",
     "vertex_native",
     "vertex_openai_compatible",
 ]
@@ -312,9 +338,9 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         **PROVIDER_TEMPLATES["gemini_ai_studio_native"],
     },
     "google_vertex_gemini": {
-        "label": "Google Vertex AI Gemini",
-        "protocol_template_id": "vertex_native",
-        **PROVIDER_TEMPLATES["vertex_native"],
+        "label": "Google Vertex AI Gemini (Express)",
+        "protocol_template_id": "vertex_express",
+        **PROVIDER_TEMPLATES["vertex_express"],
     },
     "google_vertex_openai": {
         "label": "Google Vertex AI OpenAI-compatible",
@@ -449,7 +475,7 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
     env_key = str(draft.get("env_key") or draft.get("envKey") or _slug_env_key(name)).strip()
     models = [str(item).strip() for item in _as_list(draft.get("models")) if str(item).strip()]
     if not models:
-        models = ["custom-model"]
+        models = list(template.get("models") or []) or ["custom-model"]
     auth_raw = _as_dict(draft.get("auth") or template.get("auth"))
     endpoint_raw = _as_dict(draft.get("endpoint") or template.get("endpoint"))
     request_mapping = _as_dict(draft.get("request_mapping") or draft.get("requestMapping") or template.get("request_mapping"))
@@ -1003,15 +1029,22 @@ def fetch_provider_models(
             "models": [],
         }
     if not provider.model_list.path_template:
+        hint = "这个 provider 没有配置模型列表接口，请手动填写模型。"
+        if provider.compat_mode in {"vertex_express", "gemini_generate_content"} and provider.base_url.startswith("https://aiplatform.googleapis.com"):
+            hint = (
+                "当前 Vertex 的模型列表没有可直接复用的 OpenAI 风格 /models 接口；"
+                "请先使用默认模型或手动填写模型。"
+            )
         return {
             "status": "WARN",
             "code": "provider_model_list_unsupported",
             "message": "model list endpoint is not configured",
-            "hint_zh": "这个 provider 没有配置模型列表接口，请手动填写模型。",
-            "models": [],
+            "hint_zh": hint,
+            "models": list(provider.models),
         }
     try:
-        url, headers = _build_url_and_headers_for_path(provider, credential.key, provider.models[0], provider.model_list.path_template)
+        model_for_path = provider.models[0] if provider.models else "models"
+        url, headers = _build_url_and_headers_for_path(provider, credential.key, model_for_path, provider.model_list.path_template)
         headers.update(provider.extra_headers)
         data = _request_json(url, None, headers, provider.limits.timeout_seconds, provider.model_list.method)
         found: list[str] = []
