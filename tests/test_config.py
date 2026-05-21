@@ -192,7 +192,6 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  workflow: auto_bootstrap
   patch:
     enabled: true
         """.strip(),
@@ -210,7 +209,7 @@ memory:
             "provider_read_timeout_seconds": 77,
             "translation_batching_mode": "fixed",
             "translation_min_chunk_lines": 12,
-            "memory_workflow": "preset_only",
+            "memory_patch_enabled": "false",
             "memory_patch_window_chunks": 4,
         },
     )
@@ -225,11 +224,11 @@ memory:
     assert cfg.providers["p1"].limits.read_timeout_seconds == 77
     assert cfg.pipeline.translation.batching.mode == "fixed"
     assert cfg.pipeline.translation.batching.min_chunk_lines == 12
-    assert cfg.pipeline.memory.workflow == "preset_only"
+    assert cfg.pipeline.memory.patch.enabled is False
     assert cfg.pipeline.memory.patch.window_chunks == 4
 
 
-def test_memory_workflow_override_sets_workflow(tmp_path: Path) -> None:
+def test_memory_atomic_overrides_set_feature_switches(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -246,14 +245,64 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  workflow: preset_only
+  enabled: true
+  bootstrap:
+    enabled: true
+  inject:
+    enabled: true
         """.strip(),
         encoding="utf-8",
     )
 
-    cfg = load_app_config(root_dir=tmp_path, cli_overrides={"memory_workflow": "experimental_dynamic"})
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "memory_enabled": "false",
+            "memory_bootstrap_enabled": "false",
+            "memory_inject_enabled": "false",
+        },
+    )
 
-    assert cfg.pipeline.memory.workflow == "experimental_dynamic"
+    assert cfg.pipeline.memory.enabled is False
+    assert cfg.pipeline.memory.bootstrap.enabled is False
+    assert cfg.pipeline.memory.inject.enabled is False
+
+
+def test_memory_inject_and_patch_overrides_are_validated_together(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    enabled: true
+  patch:
+    enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        cli_overrides={
+            "memory_inject_enabled": "false",
+            "memory_patch_enabled": "false",
+        },
+    )
+
+    assert cfg.pipeline.memory.inject.enabled is False
+    assert cfg.pipeline.memory.patch.enabled is False
 
 
 def test_memory_patch_defaults_disabled(tmp_path: Path) -> None:
@@ -275,7 +324,8 @@ routing:
     cfg = load_app_config(root_dir=tmp_path)
 
     assert cfg.pipeline.memory.patch.enabled is False
-    assert cfg.pipeline.memory.patch.after_each_window is False
+    assert cfg.pipeline.memory.patch.mode == "serial"
+    assert cfg.pipeline.memory.patch.window_chunks == 1
 
 
 def test_repository_default_auto_bootstrap_injects_memory(tmp_path: Path) -> None:
@@ -297,13 +347,16 @@ routing:
 
     cfg = load_app_config(root_dir=tmp_path, providers_file=providers_file, pipeline_file=pipeline_file)
 
-    assert cfg.pipeline.memory.workflow == "auto_bootstrap"
+    assert cfg.pipeline.memory.enabled is True
     assert cfg.pipeline.memory.bootstrap.enabled is True
+    assert cfg.pipeline.memory.inject.enabled is True
     assert cfg.pipeline.memory.inject.locked is True
     assert cfg.pipeline.memory.inject.confirmed is True
     assert cfg.pipeline.memory.inject.proposed is True
     assert cfg.pipeline.memory.inject.intensity == "high"
     assert cfg.pipeline.memory.inject.max_prompt_tokens == 2400
+    assert cfg.pipeline.memory.patch.enabled is False
+    assert cfg.pipeline.memory.patch.window_chunks == 1
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:
@@ -1051,7 +1104,7 @@ prompts:
   translation_style: prompts/user/translation_style.md
   memory_patch_system: prompts/user/memory_patch_system.md
 memory:
-  workflow: auto_bootstrap
+  enabled: true
         """.strip(),
         encoding="utf-8",
     )
@@ -1078,11 +1131,12 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 memory:
-  workflow: experimental_dynamic
+  enabled: false
   chunking:
     min_initial_chunk_lines: 96
     max_initial_chunks: 12
   inject:
+    enabled: false
     intensity: max
     proposed: false
     max_prompt_tokens: 3600
@@ -1098,14 +1152,15 @@ memory:
         encoding="utf-8",
     )
     cfg = load_app_config(root_dir=tmp_path)
-    assert cfg.pipeline.memory.workflow == "experimental_dynamic"
+    assert cfg.pipeline.memory.enabled is False
     assert cfg.pipeline.memory.chunking.min_initial_chunk_lines == 96
     assert cfg.pipeline.memory.chunking.max_initial_chunks == 12
     assert cfg.pipeline.memory.inject.intensity == "max"
+    assert cfg.pipeline.memory.inject.enabled is False
     assert cfg.pipeline.memory.inject.proposed is False
     assert cfg.pipeline.memory.inject.max_prompt_tokens == 3600
     assert cfg.pipeline.memory.patch.enabled is False
-    assert cfg.pipeline.memory.patch.after_each_window is False
+    assert cfg.pipeline.memory.patch.mode == "serial"
     assert cfg.pipeline.memory.merge.auto_confirm_high_confidence is True
     assert cfg.pipeline.memory.consistency_check.enabled is False
     assert not hasattr(cfg.pipeline.memory.inject, "format")
@@ -1194,6 +1249,89 @@ memory:
         load_app_config(root_dir=tmp_path)
 
 
+def test_memory_inject_rejects_none_intensity(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    intensity: none
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported memory.inject.intensity"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_memory_patch_requires_inject_enabled(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  inject:
+    enabled: false
+  patch:
+    enabled: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires memory.inject.enabled=true"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_memory_patch_rejects_after_each_window(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  patch:
+    after_each_window: true
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="memory.patch.after_each_window is no longer supported"):
+        load_app_config(root_dir=tmp_path)
+
+
 def test_translation_chunking_rejects_legacy_memory_entry_tokens(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
@@ -1275,7 +1413,7 @@ memory:
         load_app_config(root_dir=tmp_path)
 
 
-def test_legacy_memory_enabled_is_rejected(tmp_path: Path) -> None:
+def test_memory_enabled_can_disable_memory(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -1296,7 +1434,32 @@ memory:
         """.strip(),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="memory.enabled is no longer supported"):
+    cfg = load_app_config(root_dir=tmp_path)
+    assert cfg.pipeline.memory.enabled is False
+
+
+def test_legacy_memory_workflow_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+memory:
+  workflow: auto_bootstrap
+        """.strip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.workflow is no longer supported"):
         load_app_config(root_dir=tmp_path)
 
 

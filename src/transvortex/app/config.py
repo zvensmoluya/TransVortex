@@ -57,9 +57,8 @@ from ..prompts import load_prompt
 from .credentials import read_dotenv_values
 
 
-MEMORY_WORKFLOWS = {"off", "preset_only", "auto_bootstrap", "draft_only", "experimental_dynamic"}
-LEGACY_MEMORY_MODES = {"bootstrap_first", "consistency_first", "dynamic_patch", "static", "balanced"}
-MEMORY_INJECT_INTENSITIES = {"none", "low", "auto", "high", "max"}
+MEMORY_INJECT_INTENSITIES = {"low", "auto", "high", "max"}
+MEMORY_PATCH_MODES = {"serial"}
 LEGACY_MEMORY_INJECT_FIELDS = {
     "strategy",
     "max_entries_per_chunk",
@@ -150,23 +149,19 @@ def _parse_memory_presets(raw: Any) -> list[MemoryPresetRef]:
     return out
 
 
-def _memory_workflow(memory_raw: dict[str, Any]) -> str:
+def _reject_legacy_memory_fields(memory_raw: dict[str, Any], memory_patch_raw: dict[str, Any]) -> None:
+    if "workflow" in memory_raw:
+        raise ValueError(
+            "memory.workflow is no longer supported; use memory.enabled plus "
+            "memory.bootstrap.enabled, memory.inject.enabled, and memory.patch.enabled"
+        )
     if "mode" in memory_raw:
         raise ValueError(
-            "memory.mode is no longer supported; use memory.workflow "
-            "(off, preset_only, auto_bootstrap, draft_only, experimental_dynamic)"
+            "memory.mode is no longer supported; use memory.enabled plus "
+            "memory.bootstrap.enabled, memory.inject.enabled, and memory.patch.enabled"
         )
-    if "enabled" in memory_raw:
-        raise ValueError(
-            "memory.enabled is no longer supported; use memory.workflow "
-            "(off, preset_only, auto_bootstrap, draft_only, experimental_dynamic)"
-        )
-    workflow = _to_str(memory_raw.get("workflow"), "auto_bootstrap").strip()
-    if workflow in LEGACY_MEMORY_MODES:
-        raise ValueError(f"Unsupported legacy memory workflow: {workflow}; use memory.workflow with the new values")
-    if workflow not in MEMORY_WORKFLOWS:
-        raise ValueError(f"Unsupported memory.workflow: {workflow}; expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}")
-    return workflow
+    if "after_each_window" in memory_patch_raw:
+        raise ValueError("memory.patch.after_each_window is no longer supported; use memory.patch.enabled and memory.patch.window_chunks")
 
 
 def _memory_inject_intensity(memory_inject_raw: dict[str, Any]) -> str:
@@ -658,7 +653,7 @@ def load_app_config(
     memory_merge_raw = memory_raw.get("merge") or {}
     memory_check_raw = memory_raw.get("consistency_check") or {}
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
-    memory_workflow = _memory_workflow(memory_raw)
+    _reject_legacy_memory_fields(memory_raw, memory_patch_raw)
     memory_inject_format = _to_str(memory_inject_raw.get("format"), "v2").strip().lower()
     if memory_inject_format != "v2":
         raise ValueError(f"Unsupported memory.inject.format: {memory_inject_format}; only v2 is supported")
@@ -667,8 +662,15 @@ def load_app_config(
             "memory.consistency_check.enforcement_policy=false is no longer supported; "
             "set memory.consistency_check.enabled=false to disable consistency checks"
         )
+    memory_inject_enabled = _to_bool(memory_inject_raw.get("enabled"), True)
+    memory_patch_enabled = _to_bool(memory_patch_raw.get("enabled"), False)
+    memory_patch_mode = _to_str(memory_patch_raw.get("mode"), "serial").strip().lower()
+    if memory_patch_mode not in MEMORY_PATCH_MODES:
+        raise ValueError(f"Unsupported memory.patch.mode: {memory_patch_mode}; expected one of: {', '.join(sorted(MEMORY_PATCH_MODES))}")
+    if memory_patch_enabled and not memory_inject_enabled:
+        raise ValueError("memory.patch.enabled=true requires memory.inject.enabled=true")
     memory = MemoryConfig(
-        workflow=memory_workflow,
+        enabled=_to_bool(memory_raw.get("enabled"), True),
         presets=memory_presets,
         bootstrap=MemoryBootstrapConfig(
             enabled=_to_bool(memory_bootstrap_raw.get("enabled"), True),
@@ -687,6 +689,7 @@ def load_app_config(
             max_initial_chunks=_to_int(memory_chunking_raw.get("max_initial_chunks"), 24),
         ),
         inject=MemoryInjectConfig(
+            enabled=memory_inject_enabled,
             locked=_to_bool(memory_inject_raw.get("locked"), True),
             confirmed=_to_bool(memory_inject_raw.get("confirmed"), True),
             proposed=_to_bool(memory_inject_raw.get("proposed"), True),
@@ -695,9 +698,9 @@ def load_app_config(
             max_notes_chars_per_entry=_to_int(memory_inject_raw.get("max_notes_chars_per_entry"), 60),
         ),
         patch=MemoryPatchConfig(
-            enabled=_to_bool(memory_patch_raw.get("enabled"), False),
-            after_each_window=_to_bool(memory_patch_raw.get("after_each_window"), False),
-            window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 8),
+            enabled=memory_patch_enabled,
+            mode=memory_patch_mode,
+            window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 1),
             system_prompt=load_prompt(
                 "memory_patch_system",
                 root_dir=root_dir,
@@ -810,8 +813,22 @@ def load_app_config(
         elif field_name == "max_cps":
             pipeline.subtitle.quality.hard_max_cps = pipeline.max_cps
 
+    memory_override_keys = {
+        "memory_enabled",
+        "memory_bootstrap_enabled",
+        "memory_inject_enabled",
+        "memory_patch_enabled",
+        "memory_intensity",
+        "memory_patch_window_chunks",
+        "memory_presets",
+    }
+    memory_overrides: dict[str, Any] = {}
+
     for key, value in cli_overrides.items():
         if value is None:
+            continue
+        if key in memory_override_keys:
+            memory_overrides[key] = value
             continue
         if key == "translation_batch_size":
             pipeline.translation_batch_size = _to_int(value, pipeline.translation_batch_size)
@@ -935,26 +952,6 @@ def load_app_config(
             pipeline.subtitle.compression.enabled = _to_bool(value, pipeline.subtitle.compression.enabled)
         elif key == "subtitle_reflow_enabled":
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
-        elif key == "memory_workflow":
-            workflow = _to_str(value, pipeline.memory.workflow).strip()
-            if workflow in LEGACY_MEMORY_MODES or workflow not in MEMORY_WORKFLOWS:
-                raise ValueError(
-                    f"Unsupported memory_workflow override: {workflow}; "
-                    f"expected one of: {', '.join(sorted(MEMORY_WORKFLOWS))}"
-                )
-            pipeline.memory.workflow = workflow
-        elif key == "memory_intensity":
-            intensity = _to_str(value, pipeline.memory.inject.intensity).strip().lower()
-            if intensity not in MEMORY_INJECT_INTENSITIES:
-                raise ValueError(
-                    f"Unsupported memory_intensity override: {intensity}; "
-                    f"expected one of: {', '.join(sorted(MEMORY_INJECT_INTENSITIES))}"
-                )
-            pipeline.memory.inject.intensity = intensity
-        elif key == "memory_patch_window_chunks":
-            pipeline.memory.patch.window_chunks = _to_int(value, pipeline.memory.patch.window_chunks)
-        elif key == "memory_presets":
-            pipeline.memory.presets = _parse_memory_presets(value)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
             for style_key, style_value in value.items():
                 if hasattr(pipeline.subtitle_ass_style, style_key):
@@ -967,6 +964,41 @@ def load_app_config(
             setattr(pipeline, key, value)
             if key == "max_cps":
                 pipeline.subtitle.quality.hard_max_cps = _to_int(value, pipeline.subtitle.quality.hard_max_cps)
+
+    if "memory_enabled" in memory_overrides:
+        pipeline.memory.enabled = _to_bool(memory_overrides["memory_enabled"], pipeline.memory.enabled)
+    if "memory_bootstrap_enabled" in memory_overrides:
+        pipeline.memory.bootstrap.enabled = _to_bool(
+            memory_overrides["memory_bootstrap_enabled"],
+            pipeline.memory.bootstrap.enabled,
+        )
+    if "memory_inject_enabled" in memory_overrides:
+        pipeline.memory.inject.enabled = _to_bool(
+            memory_overrides["memory_inject_enabled"],
+            pipeline.memory.inject.enabled,
+        )
+    if "memory_patch_enabled" in memory_overrides:
+        pipeline.memory.patch.enabled = _to_bool(
+            memory_overrides["memory_patch_enabled"],
+            pipeline.memory.patch.enabled,
+        )
+    if "memory_intensity" in memory_overrides:
+        intensity = _to_str(memory_overrides["memory_intensity"], pipeline.memory.inject.intensity).strip().lower()
+        if intensity not in MEMORY_INJECT_INTENSITIES:
+            raise ValueError(
+                f"Unsupported memory_intensity override: {intensity}; "
+                f"expected one of: {', '.join(sorted(MEMORY_INJECT_INTENSITIES))}"
+            )
+        pipeline.memory.inject.intensity = intensity
+    if "memory_patch_window_chunks" in memory_overrides:
+        pipeline.memory.patch.window_chunks = _to_int(
+            memory_overrides["memory_patch_window_chunks"],
+            pipeline.memory.patch.window_chunks,
+        )
+    if "memory_presets" in memory_overrides:
+        pipeline.memory.presets = _parse_memory_presets(memory_overrides["memory_presets"])
+    if pipeline.memory.patch.enabled and not pipeline.memory.inject.enabled:
+        raise ValueError("memory_patch_enabled=true requires memory_inject_enabled=true")
 
     providers: dict[str, ProviderConfig] = {}
     for row in p_yaml.get("providers", []):

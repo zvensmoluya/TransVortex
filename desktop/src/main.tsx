@@ -320,7 +320,11 @@ function App() {
         ),
         translationContextAfterLines: numberValue(translation?.context_after_lines, current.translationContextAfterLines),
         translationRepairEnabled: translation?.repair?.enabled ?? current.translationRepairEnabled,
-        memoryWorkflow: textValue(memory.workflow, current.memoryWorkflow) as FormState["memoryWorkflow"],
+        memoryEnabled: (memory.enabled as boolean | undefined) ?? current.memoryEnabled,
+        memoryBootstrapEnabled:
+          (objectValue(memory.bootstrap).enabled as boolean | undefined) ?? current.memoryBootstrapEnabled,
+        memoryInjectEnabled: (objectValue(memory.inject).enabled as boolean | undefined) ?? current.memoryInjectEnabled,
+        memoryPatchEnabled: (objectValue(memory.patch).enabled as boolean | undefined) ?? current.memoryPatchEnabled,
         memoryIntensity: textValue(objectValue(memory.inject).intensity, current.memoryIntensity) as FormState["memoryIntensity"],
         memoryPreset: current.memoryPreset || memoryPresetString(memory.presets),
         subtitleQualityMode: textValue(
@@ -401,7 +405,13 @@ function App() {
   }, [selectedProvider?.name, config?.protocol_templates, config?.provider_templates]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      const next: FormState = { ...current, [key]: value };
+      if ((key === "memoryEnabled" || key === "memoryInjectEnabled") && value === false) {
+        next.memoryPatchEnabled = false;
+      }
+      return next;
+    });
   }
 
   function applySubtitleStreams(streams: SubtitleStream[], sourceLang: string) {
@@ -917,7 +927,10 @@ function App() {
       subtitleQualityMode: form.subtitleQualityMode,
       subtitleCompressionEnabled: form.subtitleCompressionEnabled,
       subtitleReflowEnabled: form.subtitleReflowEnabled,
-      memoryWorkflow: form.memoryWorkflow,
+      memoryEnabled: form.memoryEnabled,
+      memoryBootstrapEnabled: form.memoryBootstrapEnabled,
+      memoryInjectEnabled: form.memoryInjectEnabled,
+      memoryPatchEnabled: form.memoryEnabled && form.memoryInjectEnabled ? form.memoryPatchEnabled : false,
       memoryIntensity: form.memoryIntensity,
       memoryPreset: memoryPresets.length ? memoryPresets.join(",") : null,
       outputFormat: form.outputFormat,
@@ -1433,25 +1446,32 @@ function TaskWorkspace({
             />
           </label>
         </div>
-        <div className="mt-4 grid grid-cols-[220px_160px_minmax(0,1fr)_120px] items-end gap-4">
-          <label className="tvx-label">
-            {t("memoryWorkflow")}
-            <select className="tvx-input" value={form.memoryWorkflow} onChange={(event) => update("memoryWorkflow", event.target.value as FormState["memoryWorkflow"])}>
-              <option value="auto_bootstrap">{t("memoryWorkflowAutoBootstrap")}</option>
-              <option value="preset_only">{t("memoryWorkflowPresetOnly")}</option>
-              <option value="draft_only">{t("memoryWorkflowDraftOnly")}</option>
-              <option value="experimental_dynamic">{t("memoryWorkflowDynamic")}</option>
-              <option value="off">{t("memoryWorkflowOff")}</option>
-            </select>
-          </label>
+        <div className="mt-4 grid grid-cols-[360px_160px_minmax(0,1fr)_120px] items-end gap-4">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input type="checkbox" checked={form.memoryEnabled} onChange={(event) => update("memoryEnabled", event.target.checked)} />
+              {t("memoryEnabled")}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input type="checkbox" checked={form.memoryBootstrapEnabled} disabled={!form.memoryEnabled} onChange={(event) => update("memoryBootstrapEnabled", event.target.checked)} />
+              {t("memoryBootstrap")}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input type="checkbox" checked={form.memoryInjectEnabled} disabled={!form.memoryEnabled} onChange={(event) => update("memoryInjectEnabled", event.target.checked)} />
+              {t("memoryInject")}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input type="checkbox" checked={form.memoryPatchEnabled} disabled={!form.memoryEnabled || !form.memoryInjectEnabled} onChange={(event) => update("memoryPatchEnabled", event.target.checked)} />
+              {t("memoryPatch")}
+            </label>
+          </div>
           <label className="tvx-label">
             {t("memoryIntensity")}
-            <select className="tvx-input" value={form.memoryIntensity} onChange={(event) => update("memoryIntensity", event.target.value as FormState["memoryIntensity"])}>
+            <select className="tvx-input" value={form.memoryIntensity} disabled={!form.memoryEnabled || !form.memoryInjectEnabled} onChange={(event) => update("memoryIntensity", event.target.value as FormState["memoryIntensity"])}>
               <option value="high">{t("memoryIntensityHigh")}</option>
               <option value="auto">{t("memoryIntensityAuto")}</option>
               <option value="low">{t("memoryIntensityLow")}</option>
               <option value="max">{t("memoryIntensityMax")}</option>
-              <option value="none">{t("memoryIntensityNone")}</option>
             </select>
           </label>
           <label className="tvx-label">

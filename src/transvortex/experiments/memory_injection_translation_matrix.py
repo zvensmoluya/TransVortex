@@ -293,12 +293,12 @@ def _configure_for_case(config: Any, case: InjectionTranslationCase, memory_inte
     config.pipeline.translation.experiment_logging.save_metrics = True
     config.pipeline.translation.experiment_logging.label = case.case_id
     config.pipeline.memory.patch.enabled = False
-    config.pipeline.memory.patch.after_each_window = False
     if case.memory_path is None:
-        config.pipeline.memory.workflow = "off"
+        config.pipeline.memory.enabled = False
         return
-    config.pipeline.memory.workflow = "auto_bootstrap"
+    config.pipeline.memory.enabled = True
     config.pipeline.memory.bootstrap.enabled = False
+    config.pipeline.memory.inject.enabled = True
     config.pipeline.memory.inject.locked = True
     config.pipeline.memory.inject.confirmed = True
     config.pipeline.memory.inject.proposed = True
@@ -333,7 +333,9 @@ def _run_case(
         "translation_chunking_mode": "fixed",
         "translation_experiment_logging_enabled": True,
         "translation_experiment_label": case.case_id,
-        "memory_workflow": "auto_bootstrap" if case.memory_path is not None else "off",
+        "memory_enabled": case.memory_path is not None,
+        "memory_bootstrap_enabled": False,
+        "memory_inject_enabled": case.memory_path is not None,
     }
     task_id, artifacts_dir = create_pipeline_task(
         root_dir=root,

@@ -182,7 +182,7 @@ def test_reflow_batches_multiple_windows_and_injects_memory(monkeypatch, tmp_pat
     BatchReflowClient.calls = []
     monkeypatch.setattr("transvortex.core.subtitle_reflow.build_provider_client", lambda provider: BatchReflowClient(provider))
     config = _config(tmp_path)
-    config.pipeline.memory.workflow = "auto_bootstrap"
+    config.pipeline.memory.inject.enabled = True
     config.pipeline.subtitle.reflow.batch_windows = 10
     config.pipeline.subtitle.reflow.max_window_segments = 2
     config.pipeline.subtitle.reflow.context_before_segments = 2

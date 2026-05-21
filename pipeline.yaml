@@ -55,7 +55,7 @@ translation:
     enabled: true
     max_attempts: 2
 memory:
-  workflow: auto_bootstrap
+  enabled: true
   bootstrap:
     enabled: true
     mode: whole_document
@@ -64,6 +64,7 @@ memory:
     min_initial_chunk_lines: 80
     max_initial_chunks: 24
   inject:
+    enabled: true
     locked: true
     confirmed: true
     proposed: true
@@ -72,8 +73,8 @@ memory:
     max_notes_chars_per_entry: 60
   patch:
     enabled: false
-    after_each_window: false
-    window_chunks: 8
+    mode: serial
+    window_chunks: 1
   merge:
     auto_confirm_high_confidence: false
     conflict_policy: record

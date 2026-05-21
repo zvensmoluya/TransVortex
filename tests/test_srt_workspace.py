@@ -158,10 +158,12 @@ subtitle:
     max_window_segments: 3
     batch_windows: 10
 memory:
-  workflow: preset_only
   presets:
     - reflow_hello
+  bootstrap:
+    enabled: false
   inject:
+    enabled: true
     intensity: high
         """,
         encoding="utf-8",
@@ -250,14 +252,16 @@ def test_srt_translate_memory_artifacts_and_result_summary(tmp_path: Path, monke
         pipeline.read_text(encoding="utf-8")
         + """
 memory:
-  workflow: experimental_dynamic
   presets:
     - subaru
+  bootstrap:
+    enabled: false
   inject:
+    enabled: true
     intensity: high
   patch:
     enabled: true
-    after_each_window: true
+    window_chunks: 1
   consistency_check:
     enabled: true
         """,

@@ -13,7 +13,7 @@ from ..memory.merger import merge_patch
 from ..memory.patcher import generate_memory_patch
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
-from ..memory.workflow import dynamic_updates_enabled, effective_memory_sources, translates_with_memory
+from ..memory.plan import dynamic_updates_enabled, effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .chunking import translation_prompt_overhead_tokens, trim_context_for_budget
 from .translation_validation import (
@@ -139,6 +139,28 @@ def _call_translate_chunk(
             progress_callback=progress_callback,
         )
     return translate_chunk(config, chunk, source_lang, target_lang, memory_prompt)
+
+
+def _call_translate_chunk_or_adaptive(
+    config: AppConfig,
+    chunk: Chunk,
+    source_lang: str,
+    target_lang: str,
+    memory_prompt: str,
+    progress_callback: ProgressCallback | None,
+    already_done: set[str] | None = None,
+    memory_prompt_builder: Callable[[Chunk], str] | None = None,
+) -> dict | list[dict]:
+    if config.pipeline.translation.batching.mode == "adaptive":
+        kwargs: dict[str, Any] = {
+            "memory_prompt": memory_prompt,
+            "already_done": already_done,
+            "memory_prompt_builder": memory_prompt_builder,
+        }
+        if _translate_chunk_adaptive_accepts_progress_callback():
+            kwargs["progress_callback"] = progress_callback
+        return translate_chunk_adaptive(config, chunk, source_lang, target_lang, **kwargs)
+    return _call_translate_chunk(config, chunk, source_lang, target_lang, memory_prompt, progress_callback)
 
 
 def _generate_memory_patch_accepts_progress_callback() -> bool:
@@ -884,13 +906,9 @@ def _iter_translate_window(
         selected = select_memory_entries(document, chunk, config.pipeline.memory.inject)
         return build_memory_prompt(selected, config.pipeline.memory.inject)
 
-    max_workers = max(1, config.pipeline.default_concurrency)
-    if dynamic_updates_enabled(config.pipeline.memory):
-        max_workers = 1
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            _submit_translate_chunk(
-                pool,
+    for chunk in window:
+        try:
+            result = _call_translate_chunk_or_adaptive(
                 config,
                 chunk,
                 source_lang,
@@ -899,19 +917,14 @@ def _iter_translate_window(
                 progress_callback,
                 already_done,
                 memory_prompt_for,
-            ): chunk
-            for chunk in window
-        }
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                future_result = future.result()
-            except AdaptiveTranslationError as exc:
-                for item in exc.partial_results:
-                    yield item
-                raise RuntimeError(str(exc)) from exc
-            result_items = future_result if isinstance(future_result, list) else [future_result]
-            for result in result_items:
-                yield result
+            )
+        except AdaptiveTranslationError as exc:
+            for item in exc.partial_results:
+                yield item
+            raise RuntimeError(str(exc)) from exc
+        result_items = result if isinstance(result, list) else [result]
+        for item in result_items:
+            yield item
 
 
 def _iter_translate_all_chunks_with_static_memory(
@@ -974,43 +987,44 @@ def _update_memory_after_window(
 ) -> None:
     if not results:
         return
-    if dynamic_updates_enabled(config.pipeline.memory):
-        chunks_by_id = {chunk.chunk_id: chunk for chunk in window}
-        successful_window: list[Chunk] = []
-        for result in results:
-            chunk_id = str(result.get("chunk_id") or "")
-            chunk = chunks_by_id.get(chunk_id)
-            if chunk is not None:
-                successful_window.append(chunk)
-                continue
-            rows = result.get("rows") or []
-            if rows:
-                lines = [f"[{item.get('id')}]" for item in rows if isinstance(item, dict)]
-                successful_window.append(
-                    Chunk(
-                        chunk_id=chunk_id,
-                        segment_ids=[int(item.get("id")) for item in rows if isinstance(item, dict) and item.get("id") is not None],
-                        lines=lines,
-                    )
+    if not dynamic_updates_enabled(config.pipeline.memory):
+        return
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in window}
+    successful_window: list[Chunk] = []
+    for result in results:
+        chunk_id = str(result.get("chunk_id") or "")
+        chunk = chunks_by_id.get(chunk_id)
+        if chunk is not None:
+            successful_window.append(chunk)
+            continue
+        rows = result.get("rows") or []
+        if rows:
+            lines = [f"[{item.get('id')}]" for item in rows if isinstance(item, dict)]
+            successful_window.append(
+                Chunk(
+                    chunk_id=chunk_id,
+                    segment_ids=[int(item.get("id")) for item in rows if isinstance(item, dict) and item.get("id") is not None],
+                    lines=lines,
                 )
-        if not successful_window:
-            return
-        patch_kwargs: dict[str, Any] = {"source_lang": source_lang, "target_lang": target_lang}
-        if _generate_memory_patch_accepts_progress_callback():
-            patch_kwargs["progress_callback"] = progress_callback
-        patch, payload = generate_memory_patch(config, successful_window, results, **patch_kwargs)
-        if payload is not None:
-            memory_store.append_patch(payload)
-        if patch is not None:
-            document = memory_store.load_runtime()
-            document, _conflicts = merge_patch(
-                document,
-                patch,
-                store=memory_store,
-                protected_entries=memory_store.load_selected_entries(),
-                auto_confirm_high_confidence=config.pipeline.memory.merge.auto_confirm_high_confidence,
             )
-            memory_store.save(document)
+    if not successful_window:
+        return
+    patch_kwargs: dict[str, Any] = {"source_lang": source_lang, "target_lang": target_lang}
+    if _generate_memory_patch_accepts_progress_callback():
+        patch_kwargs["progress_callback"] = progress_callback
+    patch, payload = generate_memory_patch(config, successful_window, results, **patch_kwargs)
+    if payload is not None:
+        memory_store.append_patch(payload)
+    if patch is not None:
+        document = memory_store.load_runtime()
+        document, _conflicts = merge_patch(
+            document,
+            patch,
+            store=memory_store,
+            protected_entries=memory_store.load_selected_entries(),
+            auto_confirm_high_confidence=config.pipeline.memory.merge.auto_confirm_high_confidence,
+        )
+        memory_store.save(document)
 
 
 def _iter_translate_all_chunks_with_memory(
@@ -1037,72 +1051,54 @@ def _iter_translate_all_chunks_with_memory(
             already_done=already_done,
         )
         return
-    window_size = max(1, config.pipeline.default_concurrency)
-    if dynamic_updates_enabled(config.pipeline.memory):
-        window_size = 1
+    window_size = max(1, int(config.pipeline.memory.patch.window_chunks))
     snapshot_index = 0
-    patch_chunks: list[Chunk] = []
-    patch_results: list[dict] = []
-    patch_window_chunks = max(1, int(config.pipeline.memory.patch.window_chunks))
-    try:
-        for start in range(0, len(chunks), window_size):
-            window = chunks[start : start + window_size]
-            for result in _iter_translate_window(
-                config,
-                window,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                memory_store=memory_store,
-                progress_callback=progress_callback,
-                already_done=already_done,
-            ):
-                matching_chunk = next((chunk for chunk in window if chunk.chunk_id == result.get("chunk_id")), None)
-                if matching_chunk is not None:
-                    patch_chunks.append(matching_chunk)
-                else:
-                    rows = result.get("rows") or []
-                    patch_chunks.append(
-                        Chunk(
-                            chunk_id=str(result.get("chunk_id") or ""),
-                            segment_ids=[
-                                int(item.get("id"))
-                                for item in rows
-                                if isinstance(item, dict) and item.get("id") is not None
-                            ],
-                            lines=[
-                                f"[{item.get('id')}]"
-                                for item in rows
-                                if isinstance(item, dict) and item.get("id") is not None
-                            ],
-                        )
+    for start in range(0, len(chunks), window_size):
+        window = chunks[start : start + window_size]
+        patch_chunks: list[Chunk] = []
+        patch_results: list[dict] = []
+        for result in _iter_translate_window(
+            config,
+            window,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            memory_store=memory_store,
+            progress_callback=progress_callback,
+            already_done=already_done,
+        ):
+            matching_chunk = next((chunk for chunk in window if chunk.chunk_id == result.get("chunk_id")), None)
+            if matching_chunk is not None:
+                patch_chunks.append(matching_chunk)
+            else:
+                rows = result.get("rows") or []
+                patch_chunks.append(
+                    Chunk(
+                        chunk_id=str(result.get("chunk_id") or ""),
+                        segment_ids=[
+                            int(item.get("id"))
+                            for item in rows
+                            if isinstance(item, dict) and item.get("id") is not None
+                        ],
+                        lines=[
+                            f"[{item.get('id')}]"
+                            for item in rows
+                            if isinstance(item, dict) and item.get("id") is not None
+                        ],
                     )
-                patch_results.append(result)
-                yield result
-                if len(patch_results) >= patch_window_chunks:
-                    _update_memory_after_window(
-                        config,
-                        patch_chunks,
-                        patch_results,
-                        source_lang=source_lang,
-                        target_lang=target_lang,
-                        memory_store=memory_store,
-                        progress_callback=progress_callback,
-                    )
-                    patch_chunks = []
-                    patch_results = []
-            snapshot_index += 1
-            memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
-    finally:
-        if patch_results:
-            _update_memory_after_window(
-                config,
-                patch_chunks,
-                patch_results,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                memory_store=memory_store,
-                progress_callback=progress_callback,
-            )
+                )
+            patch_results.append(result)
+            yield result
+        _update_memory_after_window(
+            config,
+            patch_chunks,
+            patch_results,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            memory_store=memory_store,
+            progress_callback=progress_callback,
+        )
+        snapshot_index += 1
+        memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
 
 
 def translate_all_chunks(

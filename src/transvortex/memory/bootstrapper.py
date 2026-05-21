@@ -12,7 +12,7 @@ from .merger import merge_patch, patch_from_payload
 from .patcher import json_from_memory_text
 from .store import MemoryStore
 from .validator import MemoryEvidence, validate_memory_payload
-from .workflow import runs_bootstrap
+from .plan import runs_bootstrap
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]

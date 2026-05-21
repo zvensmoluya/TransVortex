@@ -128,7 +128,7 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
         memory_issues = read_jsonl(memory_issues_file)
     issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
     memory_settings = task.settings.get("memory", {}) if isinstance(task.settings.get("memory"), dict) else {}
-    memory_workflow = str(memory_settings.get("workflow") or "off")
+    memory_enabled = bool(memory_settings.get("enabled", False))
     return {
         "task": {
             **to_plain(task),
@@ -149,8 +149,10 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
         "quality": quality_summary,
         "reflow": reflow_summary,
         "memory": {
-            "enabled": memory_workflow != "off",
-            "workflow": memory_workflow,
+            "enabled": memory_enabled,
+            "bootstrap_enabled": bool((memory_settings.get("bootstrap") or {}).get("enabled", False)) if isinstance(memory_settings.get("bootstrap"), dict) else False,
+            "inject_enabled": bool((memory_settings.get("inject") or {}).get("enabled", False)) if isinstance(memory_settings.get("inject"), dict) else False,
+            "patch_enabled": bool((memory_settings.get("patch") or {}).get("enabled", False)) if isinstance(memory_settings.get("patch"), dict) else False,
             "entries": len(memory_entries) + len(preset_entries),
             "runtime_entries": len(memory_entries),
             "preset_entries": len(preset_entries),

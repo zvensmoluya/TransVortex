@@ -347,6 +347,7 @@ class MemoryBootstrapConfig:
 
 @dataclass
 class MemoryInjectConfig:
+    enabled: bool = True
     locked: bool = True
     confirmed: bool = True
     proposed: bool = True
@@ -358,8 +359,8 @@ class MemoryInjectConfig:
 @dataclass
 class MemoryPatchConfig:
     enabled: bool = False
-    after_each_window: bool = False
-    window_chunks: int = 8
+    mode: str = "serial"
+    window_chunks: int = 1
     system_prompt: str = ""
 
 
@@ -388,7 +389,7 @@ class MemoryPresetRef:
 
 @dataclass
 class MemoryConfig:
-    workflow: str = "auto_bootstrap"
+    enabled: bool = True
     presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
     chunking: MemoryChunkingConfig = field(default_factory=MemoryChunkingConfig)

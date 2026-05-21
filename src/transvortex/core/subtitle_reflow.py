@@ -11,7 +11,7 @@ from ..memory.json_utils import json_object_from_model_text
 from ..memory.injector import build_memory_prompt
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
-from ..memory.workflow import effective_memory_sources, translates_with_memory
+from ..memory.plan import effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_quality import clean_subtitle_text

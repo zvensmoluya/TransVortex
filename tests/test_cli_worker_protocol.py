@@ -570,8 +570,12 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
             "adaptive",
             "--translation-min-chunk-lines",
             "12",
-            "--memory-workflow",
-            "preset_only",
+            "--memory-enabled",
+            "true",
+            "--memory-bootstrap-enabled",
+            "false",
+            "--memory-inject-enabled",
+            "true",
             "--memory-intensity",
             "low",
             "--memory-patch-window-chunks",
@@ -596,8 +600,9 @@ def test_detach_json_forwards_provider_and_memory_patch_overrides(tmp_path: Path
     assert "--provider-read-timeout-seconds" in spawned["cmd"]
     assert "--translation-batching-mode" in spawned["cmd"]
     assert "--translation-min-chunk-lines" in spawned["cmd"]
-    assert "--memory-workflow" in spawned["cmd"]
-    assert "preset_only" in spawned["cmd"]
+    assert "--memory-enabled" in spawned["cmd"]
+    assert "--memory-bootstrap-enabled" in spawned["cmd"]
+    assert "--memory-inject-enabled" in spawned["cmd"]
     assert "--memory-intensity" in spawned["cmd"]
     assert "low" in spawned["cmd"]
     assert "--memory-patch-window-chunks" in spawned["cmd"]

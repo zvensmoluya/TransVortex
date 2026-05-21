@@ -818,7 +818,7 @@ def test_memory_patch_runs_for_successful_results_when_window_later_fails(tmp_pa
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.workflow = "experimental_dynamic"
+    config.pipeline.memory.patch.enabled = True
     chunks = [
         Chunk(chunk_id="c1", segment_ids=[1], lines=["[1] Alpha"]),
         Chunk(chunk_id="c2", segment_ids=[2], lines=["[2] Beta"]),
@@ -1078,7 +1078,7 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.workflow = "experimental_dynamic"
+    config.pipeline.memory.patch.enabled = True
     config.pipeline.memory.patch.window_chunks = 3
     chunks = [Chunk(chunk_id=f"c{i}", segment_ids=[i], lines=[f"[{i}] Term {i}"]) for i in range(5)]
     patch_windows: list[list[str]] = []
@@ -1107,7 +1107,7 @@ def test_memory_patch_batches_by_window_chunks(tmp_path: Path, monkeypatch) -> N
     assert patch_windows == [["c0", "c1", "c2"], ["c3", "c4"]]
 
 
-def test_memory_preset_only_workflow_translates_concurrently_without_patch(tmp_path: Path, monkeypatch) -> None:
+def test_static_memory_translates_concurrently_without_patch(tmp_path: Path, monkeypatch) -> None:
     provider = ProviderConfig(
         name="p1",
         api_type="openai",
@@ -1121,7 +1121,8 @@ def test_memory_preset_only_workflow_translates_concurrently_without_patch(tmp_p
         providers={"p1": provider},
         routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
     )
-    config.pipeline.memory.workflow = "auto_bootstrap"
+    config.pipeline.memory.bootstrap.enabled = False
+    config.pipeline.memory.inject.enabled = True
     store = MemoryStore(tmp_path / "memory")
     store.save(MemoryDocument(entries=[MemoryEntry(id="mem_subaru", source="Subaru", target="斯巴鲁", status="locked")]))
     chunks = [

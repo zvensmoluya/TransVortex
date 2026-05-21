@@ -27,8 +27,7 @@ from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.bootstrapper import bootstrap_memory
 from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
-from ..memory.workflow import (
-    draft_only,
+from ..memory.plan import (
     effective_memory_sources,
     memory_enabled,
     runs_bootstrap,
@@ -2008,33 +2007,6 @@ def _execute_task(
                         "errors": bootstrap_payload.get("errors") or [],
                     },
                 )
-            if draft_only(config.pipeline.memory):
-                checkpoint["status"] = "DONE"
-                checkpoint.pop("error", None)
-                checkpoint.pop("error_info", None)
-                store.save_checkpoint(task_id, checkpoint)
-                output_path = paths["memory"] / "translation_memory.json"
-                output_paths = {
-                    "memory": str(output_path),
-                    "bootstrap": str(paths["memory"] / "bootstrap.json"),
-                }
-                store.update_task_status(
-                    task_id,
-                    "DONE",
-                    output_path=str(output_path),
-                    output_paths=output_paths,
-                    clear_error=True,
-                )
-                store.append_event(
-                    task_id,
-                    "done",
-                    stage="DONE",
-                    message="Memory draft task completed",
-                    progress=1.0,
-                    details={"output_path": str(output_path), "output_paths": output_paths},
-                )
-                return
-
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "SEGMENT", "Preparing translation chunks")
         if config.pipeline.translation.chunking.mode == "capacity_aware":

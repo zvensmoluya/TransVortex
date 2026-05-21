@@ -1194,7 +1194,7 @@ def test_asr_upload_size_estimate_uses_duration_when_file_is_missing() -> None:
     assert round(_asr_item_upload_mb(item), 2) == 1.83
 
 
-def test_auto_bootstrap_memory_workflow_uses_large_capacity_chunk(tmp_path: Path, monkeypatch) -> None:
+def test_default_memory_uses_large_capacity_chunk(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
     input_file = root / "segments.jsonl"
@@ -1233,7 +1233,7 @@ def test_auto_bootstrap_memory_workflow_uses_large_capacity_chunk(tmp_path: Path
         source_lang="en",
         target_lang="zh-CN",
         input_type="segments_translate",
-        cli_overrides={"translation_chunk_lines": 2, "memory_workflow": "auto_bootstrap"},
+        cli_overrides={"translation_chunk_lines": 2},
     )
 
     store = TaskStore(root / "artifacts")

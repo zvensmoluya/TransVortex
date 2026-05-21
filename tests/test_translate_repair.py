@@ -625,9 +625,9 @@ def test_adaptive_serial_scheduler_does_not_shrink_following_chunks(monkeypatch,
     assert [result["chunk_id"] for result in results] == ["c00000s0", "c00000s1", "c00001", "c00002"]
 
 
-def test_auto_bootstrap_memory_workflow_allows_parallel_windows(monkeypatch, tmp_path) -> None:
+def test_static_memory_allows_parallel_windows(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
-    config.pipeline.memory.workflow = "auto_bootstrap"
+    config.pipeline.memory.patch.enabled = False
     config.pipeline.default_concurrency = 2
     chunks = [
         Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),
@@ -662,9 +662,9 @@ def test_auto_bootstrap_memory_workflow_allows_parallel_windows(monkeypatch, tmp
     assert seen == ["c00000", "c00001"]
 
 
-def test_experimental_dynamic_memory_workflow_uses_serial_windows(monkeypatch, tmp_path) -> None:
+def test_patch_enabled_uses_serial_windows(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
-    config.pipeline.memory.workflow = "experimental_dynamic"
+    config.pipeline.memory.patch.enabled = True
     config.pipeline.default_concurrency = 2
     chunks = [
         Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] A"]),

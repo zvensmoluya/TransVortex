@@ -9,7 +9,7 @@ from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQ
 from ..memory.injector import build_memory_prompt
 from ..memory.selector import select_memory_entries
 from ..memory.store import MemoryStore
-from ..memory.workflow import effective_memory_sources, translates_with_memory
+from ..memory.plan import effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import subtitle_cps
 from .translation_validation import strip_numbered_text
