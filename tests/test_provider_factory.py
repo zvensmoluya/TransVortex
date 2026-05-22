@@ -817,6 +817,76 @@ def test_provider_client_streaming_sse_aggregates_openai_chat(tmp_path, monkeypa
     assert response.provider_meta["bytes_received"] > 0
 
 
+def test_vertex_express_streaming_uses_stream_generate_content(tmp_path, monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="vertex",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-3.5-flash"],
+        credential_root_dir=tmp_path,
+        auth=AuthConfig(type="query", query_name="key", prefix=""),
+        endpoint=EndpointConfig(path_template="/publishers/google/models/{model}:generateContent", method="POST"),
+        mapping=MappingConfig(request={"style": "gemini_generate_content"}, response={"text_paths": ["candidates[0].content.parts[].text"]}),
+        capabilities=CapabilityConfig(supports_system_prompt=True),
+        limits=ProviderLimits(streaming_enabled=True),
+    )
+    (tmp_path / ".env").write_text("KEY=from-dotenv\n", encoding="utf-8")
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    "[{",
+                    '  "candidates": [',
+                    "    {",
+                    '      "content": {',
+                    '        "role": "model",',
+                    '        "parts": [',
+                    "          {",
+                    '            "text": "[1] 你好"',
+                    "          }",
+                    "        ]",
+                    "      }",
+                    "    }",
+                    "  ]",
+                    "}]",
+                ]
+            )
+
+    class FakeClient:
+        def stream(self, method, url, json, headers):
+            assert method == "POST"
+            assert url == "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash:streamGenerateContent?key=from-dotenv"
+            assert "stream" not in json
+            assert json["contents"][0]["role"] == "user"
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+    client = ConfigurableProtocolClient(config=cfg, timeout=30)
+
+    response = client.translate_request(
+        NormalizedRequest(model="gemini-3.5-flash", lines=["[1] hello"], source_lang="en", target_lang="zh-CN")
+    )
+
+    assert response.numbered_lines == ["[1] 你好"]
+    assert response.provider_meta["streaming"] is True
+    assert response.provider_meta["transport"] == "httpx"
+    assert response.provider_meta["http_version"] == "HTTP/2"
+
+
 def test_provider_limits_streaming_enabled_by_default() -> None:
     assert ProviderLimits().streaming_enabled is True
 

@@ -292,19 +292,34 @@ def _provider_request_json(
 
 def _extract_sse_json(line: str) -> dict[str, Any] | None:
     stripped = line.strip()
-    if not stripped.startswith("data:"):
+    if not stripped:
         return None
-    data = stripped[5:].strip()
-    if not data or data == "[DONE]":
+    if stripped.startswith("data:"):
+        stripped = stripped[5:].strip()
+        if not stripped or stripped == "[DONE]":
+            return None
+    elif stripped.startswith("event:") or stripped.startswith(":"):
         return None
     try:
-        parsed = json.loads(data)
+        parsed = json.loads(stripped)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
 
 
 def _stream_text_parts(event: dict[str, Any], compat_mode: str) -> tuple[list[str], str | None]:
+    if compat_mode in {"gemini_generate_content", "vertex_express"}:
+        delta_parts: list[str] = []
+        for piece in _get_path_value(event, "candidates[0].content.parts[].text"):
+            if isinstance(piece, (str, int, float)):
+                delta_parts.append(str(piece))
+        if delta_parts:
+            return delta_parts, None
+        if isinstance(event.get("text"), str):
+            return [], event["text"]
+        if isinstance(event.get("output_text"), str):
+            return [], event["output_text"]
+        return [], None
     event_type = str(event.get("type") or "")
     delta_parts: list[str] = []
     final_text: str | None = None
@@ -355,7 +370,19 @@ def _stream_response_payload(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS, **{"Content-Type": "application/json"})
     payload = dict(payload)
-    payload["stream"] = True
+    stream_url = url
+    if config.compat_mode in {"openai_chat", "openai_responses"}:
+        payload["stream"] = True
+    elif config.compat_mode in {"gemini_generate_content", "vertex_express"}:
+        parsed = urllib.parse.urlsplit(url)
+        stream_path = parsed.path
+        if stream_path.endswith(":generateContent"):
+            stream_path = f"{stream_path[:-len(':generateContent')]}:streamGenerateContent"
+        elif stream_path.endswith("generateContent"):
+            stream_path = f"{stream_path[:-len('generateContent')]}streamGenerateContent"
+        elif ":streamGenerateContent" not in stream_path:
+            stream_path = f"{stream_path.rstrip('/')}:streamGenerateContent"
+        stream_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, stream_path, parsed.query, parsed.fragment))
     request_started = time.time()
     first_byte_at: float | None = None
     last_chunk_at: float | None = None
@@ -364,11 +391,13 @@ def _stream_response_payload(
     final_text: str | None = None
     usage: dict[str, Any] = {}
     final_payload: dict[str, Any] | None = None
-    with _get_provider_client(config).stream(method=method, url=url, json=payload, headers=request_headers) as response:
+    raw_lines: list[str] = []
+    with _get_provider_client(config).stream(method=method, url=stream_url, json=payload, headers=request_headers) as response:
         raise_for_status(response, context="provider upstream")
         for line in response.iter_lines():
             if not line:
                 continue
+            raw_lines.append(line)
             now = time.time()
             first_byte_at = first_byte_at or now
             last_chunk_at = now
@@ -377,12 +406,36 @@ def _stream_response_payload(
             if event is None:
                 continue
             final_payload = event
-            if isinstance(event.get("usage"), dict):
-                usage = event["usage"]
+            usage_payload = event.get("usage")
+            if not isinstance(usage_payload, dict):
+                usage_payload = event.get("usageMetadata")
+            if isinstance(usage_payload, dict):
+                usage = usage_payload
             deltas, event_final_text = _stream_text_parts(event, config.compat_mode)
             text_parts.extend(deltas)
             if event_final_text:
                 final_text = event_final_text
+        if config.compat_mode in {"gemini_generate_content", "vertex_express"} and not text_parts and final_text is None:
+            raw_text = "\n".join(raw_lines).strip()
+            if raw_text:
+                try:
+                    parsed = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    parsed = None
+                events = parsed if isinstance(parsed, list) else [parsed] if isinstance(parsed, dict) else []
+                for item in events:
+                    if not isinstance(item, dict):
+                        continue
+                    final_payload = item
+                    usage_payload = item.get("usage")
+                    if not isinstance(usage_payload, dict):
+                        usage_payload = item.get("usageMetadata")
+                    if isinstance(usage_payload, dict):
+                        usage = usage_payload
+                    deltas, event_final_text = _stream_text_parts(item, config.compat_mode)
+                    text_parts.extend(deltas)
+                    if event_final_text:
+                        final_text = event_final_text
         stream_meta = {
             "request_started_at": request_started,
             "first_byte_at": first_byte_at,
@@ -395,6 +448,8 @@ def _stream_response_payload(
             data = {"choices": [{"message": {"content": text}}]}
         elif config.compat_mode == "openai_responses":
             data = {"output_text": text}
+        elif config.compat_mode in {"gemini_generate_content", "vertex_express"}:
+            data = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
         else:
             data = final_payload or {"text": text}
         if usage:
@@ -408,7 +463,12 @@ def _stream_response_payload(
 
 
 def _can_stream(config: ProviderConfig) -> bool:
-    return bool(config.limits.streaming_enabled) and config.compat_mode in {"openai_chat", "openai_responses"}
+    return bool(config.limits.streaming_enabled) and config.compat_mode in {
+        "openai_chat",
+        "openai_responses",
+        "gemini_generate_content",
+        "vertex_express",
+    }
 
 
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, method: str = "POST") -> dict:
