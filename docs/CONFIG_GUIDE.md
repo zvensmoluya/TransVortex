@@ -204,13 +204,13 @@ asr:
   mode: local
   provider: openai_whisper
   local:
-    device: auto
-    model_size: small
-    compute_type: int8
+    device: cuda
+    model_size: large-v3
+    compute_type: int8_float16
     max_initial_timestamp: 30.0
     beam_size: 5
     temperature: 0.0
-    condition_on_previous_text: true
+    condition_on_previous_text: false
     hotwords: ""
   prompt:
     enabled: true
@@ -273,6 +273,7 @@ asr_providers:
 - `silence` ASR 会用 ffmpeg `silencedetect` 寻找静音边界，默认把 cloud ASR 切成最长约 120 秒的自然语音片段；没有合适静音点时按 `max_window_seconds` hard cut。`max_upload_mb` 只作为 OpenAI 上传上限保护，不再作为“尽量单片上传”的目标。
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
 - `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。本地 ASR 还会传入 `beam_size`、`temperature`、`condition_on_previous_text` 和 `hotwords`；`vad_filter` 固定为 `false`，避免 faster-whisper 内部再丢弃无人声区间。
+- 当前本地 ASR 的默认档位是 `large-v3 + cuda + int8_float16`，并默认关闭 `condition_on_previous_text`。这套配置适合有 NVIDIA GPU 的机器；如果要迁回 CPU 或更低显存环境，手动把 `device` 和 `model_size` 降回去即可。
 - `mode: cloud` 使用独立 ASR provider，不复用翻译 provider routing；当前实现 `protocol: openai_transcriptions`。
 - 长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为云端 transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`。
 - `asr.preprocessing.cloud_trim_silence` 只默认作用于 cloud ASR，使用 ffmpeg 分析真实静音并裁剪上传音频，返回时间轴会加回裁剪 offset；它不会识别背景音乐或环境声中的“无人声”。

@@ -151,13 +151,13 @@ class AsrExecutionConfig:
 
 @dataclass
 class AsrLocalConfig:
-    model_size: str = "small"
-    device: str = "auto"
-    compute_type: str = "int8"
+    model_size: str = "large-v3"
+    device: str = "cuda"
+    compute_type: str = "int8_float16"
     max_initial_timestamp: float = 30.0
     beam_size: int = 5
     temperature: float = 0.0
-    condition_on_previous_text: bool = True
+    condition_on_previous_text: bool = False
     hotwords: str = ""
 
 

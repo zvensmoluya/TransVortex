@@ -1778,11 +1778,13 @@ routing:
 
     cfg = load_app_config(root_dir=tmp_path)
 
-    assert cfg.pipeline.asr_local.device == "auto"
+    assert cfg.pipeline.asr_local.model_size == "large-v3"
+    assert cfg.pipeline.asr_local.device == "cuda"
+    assert cfg.pipeline.asr_local.compute_type == "int8_float16"
     assert cfg.pipeline.asr_local.max_initial_timestamp == 30.0
     assert cfg.pipeline.asr_local.beam_size == 5
     assert cfg.pipeline.asr_local.temperature == 0.0
-    assert cfg.pipeline.asr_local.condition_on_previous_text is True
+    assert cfg.pipeline.asr_local.condition_on_previous_text is False
     assert cfg.pipeline.asr_local.hotwords == ""
     assert cfg.pipeline.asr_chunking.mode == "silence"
     assert cfg.pipeline.asr_chunking.window_seconds == 300

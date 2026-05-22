@@ -805,13 +805,13 @@ def load_app_config(
         asr_mode=asr_mode,
         asr_provider=asr_provider_name,
         asr_local=AsrLocalConfig(
-            model_size=_to_str(asr_local_raw.get("model_size"), "small"),
-            device=_to_str(asr_local_raw.get("device"), "auto"),
-            compute_type=_to_str(asr_local_raw.get("compute_type"), "int8"),
+            model_size=_to_str(asr_local_raw.get("model_size"), "large-v3"),
+            device=_to_str(asr_local_raw.get("device"), "cuda"),
+            compute_type=_to_str(asr_local_raw.get("compute_type"), "int8_float16"),
             max_initial_timestamp=_to_float(asr_local_raw.get("max_initial_timestamp"), 30.0),
             beam_size=_to_int(asr_local_raw.get("beam_size"), 5),
             temperature=_to_float(asr_local_raw.get("temperature"), 0.0),
-            condition_on_previous_text=_to_bool(asr_local_raw.get("condition_on_previous_text"), True),
+            condition_on_previous_text=_to_bool(asr_local_raw.get("condition_on_previous_text"), False),
             hotwords=_to_str(asr_local_raw.get("hotwords"), ""),
         ),
         asr_cloud=AsrCloudConfig(

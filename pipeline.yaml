@@ -84,13 +84,13 @@ asr:
   mode: local
   provider: openai_whisper
   local:
-    model_size: small
-    device: auto
-    compute_type: int8
+    model_size: large-v3
+    device: cuda
+    compute_type: int8_float16
     max_initial_timestamp: 30.0
     beam_size: 5
     temperature: 0.0
-    condition_on_previous_text: true
+    condition_on_previous_text: false
     hotwords: ""
   prompt:
     enabled: true
