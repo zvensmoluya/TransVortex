@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -54,27 +56,121 @@ def _load_existing_runs(output_dir: Path) -> list[dict[str, Any]]:
     return [item for item in runs if isinstance(item, dict)]
 
 
-def _provider_without_reasoning(provider: dict[str, Any]) -> dict[str, Any]:
-    out = dict(provider)
-    mapping = dict(out.get("request_mapping") or {})
-    body_overrides = dict(mapping.get("body_overrides") or {})
-    body_overrides.pop("reasoning", None)
-    body_overrides.pop("reasoning_effort", None)
+def _request_mapping(provider: dict[str, Any]) -> dict[str, Any]:
+    mapping = provider.get("request_mapping")
+    return mapping if isinstance(mapping, dict) else {}
+
+
+def _body_overrides(provider: dict[str, Any]) -> dict[str, Any]:
+    mapping = _request_mapping(provider)
+    body_overrides = mapping.get("body_overrides")
+    return body_overrides if isinstance(body_overrides, dict) else {}
+
+
+def _with_body_overrides(provider: dict[str, Any], body_overrides: dict[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(provider)
+    mapping = dict(_request_mapping(out))
     mapping["body_overrides"] = body_overrides
     out["request_mapping"] = mapping
     return out
+
+
+def _primary_model(provider: dict[str, Any]) -> str:
+    models = provider.get("models")
+    if isinstance(models, list) and models:
+        return str(models[0])
+    return ""
+
+
+def _is_gemini_generate_content_provider(provider: dict[str, Any]) -> bool:
+    mapping = _request_mapping(provider)
+    return (
+        provider.get("api_type") == "gemini-compatible"
+        or provider.get("compat_mode") in {"gemini_generate_content", "vertex_express", "vertex_native"}
+        or mapping.get("style") == "gemini_generate_content"
+    )
+
+
+def _is_gemini_3_or_later_model(model: str) -> bool:
+    match = re.search(r"gemini[-_/](\d+)", model)
+    return bool(match and int(match.group(1)) >= 3)
+
+
+def _normalized_thinking(value: str) -> str:
+    return value.strip().lower().replace("_", "-")
+
+
+def _gemini_25_budget(value: str) -> int:
+    normalized = _normalized_thinking(value)
+    if normalized == "auto":
+        return -1
+    if normalized.startswith("budget:"):
+        normalized = normalized.partition(":")[2].strip()
+    if re.fullmatch(r"-?\d+", normalized):
+        return int(normalized)
+    budgets = {
+        "minimal": 0,
+        "off": 0,
+        "low": 1024,
+        "medium": 8192,
+        "high": 24576,
+    }
+    if normalized not in budgets:
+        raise RuntimeError(f"Unsupported Gemini thinking budget value: {value}")
+    return budgets[normalized]
+
+
+def _provider_without_reasoning(provider: dict[str, Any]) -> dict[str, Any]:
+    body_overrides = copy.deepcopy(_body_overrides(provider))
+    body_overrides.pop("reasoning", None)
+    body_overrides.pop("reasoning_effort", None)
+
+    generation_config = body_overrides.get("generationConfig")
+    if isinstance(generation_config, dict):
+        generation_config = dict(generation_config)
+        generation_config.pop("thinkingConfig", None)
+        if generation_config:
+            body_overrides["generationConfig"] = generation_config
+        else:
+            body_overrides.pop("generationConfig", None)
+    body_overrides.pop("thinkingConfig", None)
+
+    return _with_body_overrides(provider, body_overrides)
+
+
+def _provider_with_gemini_thinking(provider: dict[str, Any], thinking: str) -> dict[str, Any]:
+    normalized = _normalized_thinking(thinking)
+    if normalized in {"none", "default"}:
+        return _provider_without_reasoning(provider)
+
+    out = _provider_without_reasoning(provider)
+    body_overrides = copy.deepcopy(_body_overrides(out))
+    generation_config = dict(body_overrides.get("generationConfig") or {})
+    thinking_config = dict(generation_config.get("thinkingConfig") or {})
+
+    if _is_gemini_3_or_later_model(_primary_model(out)):
+        level = normalized.upper()
+        if level not in {"MINIMAL", "LOW", "MEDIUM", "HIGH"}:
+            raise RuntimeError(f"Unsupported Gemini thinking level for Gemini 3+: {thinking}")
+        thinking_config.pop("thinkingBudget", None)
+        thinking_config["thinkingLevel"] = level
+    else:
+        thinking_config.pop("thinkingLevel", None)
+        thinking_config["thinkingBudget"] = _gemini_25_budget(normalized)
+
+    generation_config["thinkingConfig"] = thinking_config
+    body_overrides["generationConfig"] = generation_config
+    return _with_body_overrides(out, body_overrides)
 
 
 def _provider_with_reasoning(provider: dict[str, Any], effort: str) -> dict[str, Any]:
     if effort == "none":
         return _provider_without_reasoning(provider)
-    out = dict(provider)
-    mapping = dict(out.get("request_mapping") or {})
-    body_overrides = dict(mapping.get("body_overrides") or {})
+    if _is_gemini_generate_content_provider(provider):
+        return _provider_with_gemini_thinking(provider, effort)
+    body_overrides = copy.deepcopy(_body_overrides(provider))
     body_overrides["reasoning"] = {"effort": effort}
-    mapping["body_overrides"] = body_overrides
-    out["request_mapping"] = mapping
-    return out
+    return _with_body_overrides(provider, body_overrides)
 
 
 def _apply_case_limits(provider: dict[str, Any], timeout_seconds: int, read_timeout_seconds: int) -> dict[str, Any]:
