@@ -1,2 +1,2 @@
-"""Subtitle format parsing and export helpers."""
+"""Subtitle format parsing, renderer, and delivery helpers."""
 

@@ -1,0 +1,27 @@
+﻿[Script Info]
+ScriptType: v4.00+
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+PlayResX: 1920
+PlayResY: 1080
+YCbCr Matrix: TV.709
+; TransVortex preset: bilingual_clean
+; Target font fallback: Noto Sans CJK SC, Source Han Sans SC, Microsoft YaHei UI, PingFang SC, Hiragino Sans GB, Arial Unicode MS, sans-serif
+; Source font fallback: Noto Sans CJK SC, Source Han Sans SC, Microsoft YaHei UI, PingFang SC, Hiragino Sans GB, Arial Unicode MS, sans-serif
+; Safe area: x=96, y=54
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Target,Noto Sans CJK SC,44,&H00F7F4F2,&H000000FF,&H90000000,&H5C000000,0,0,0,0,100,100,0,0,1,1.8,0.6,2,96,96,58,1
+Style: Source,Noto Sans CJK SC,30,&H00D7D2CC,&H000000FF,&H96000000,&H64000000,0,0,0,0,100,100,0,0,1,1.4,0.4,2,96,96,171,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:01.80,Source,,0,0,0,,Good evening.
+Dialogue: 1,0:00:00.00,0:00:01.80,Target,,0,0,0,,晚上好。
+Dialogue: 0,0:00:02.10,0:00:05.40,Source,,0,0,0,,This is a longer subtitle line for checking bilingual\Nlayout, mixed English words, and the 2026 timestamp.
+Dialogue: 1,0:00:02.10,0:00:05.40,Target,,0,0,0,,这是一条较长的中文字幕，用来检查双语排版、English 混排和\N2026 这种数字不会挤在一起。
+Dialogue: 0,0:00:05.80,0:00:08.60,Source,,0,0,0,,東京タワーの下で、AI team B-12 is still waiting.
+Dialogue: 1,0:00:05.80,0:00:08.60,Target,,0,0,0,,在东京塔下，AI team B-12 还在等待。
+Dialogue: 0,0:00:09.00,0:00:12.50,Source,,0,0,0,,Use this cue to preview subtitles over bright, dark,\Nand busy footage.
+Dialogue: 1,0:00:09.00,0:00:12.50,Target,,0,0,0,,这一条用于预览字幕在明亮、昏暗和复杂画\N面上的可读性。

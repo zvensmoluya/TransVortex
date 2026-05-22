@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.config import load_app_config
-from ..formats.exporter import export_ass, export_srt
+from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
 from ..app.models import Segment
 from ..utils import read_json, read_jsonl, to_plain, write_json
 from .task_store import TaskStore
@@ -81,6 +81,20 @@ def _reflow_summary(paths: dict[str, Path]) -> dict[str, Any]:
     }
 
 
+def _delivery_summary(paths: dict[str, Path]) -> dict[str, Any]:
+    delivery_file = paths["quality"] / "subtitle_delivery.json"
+    if not delivery_file.exists():
+        return {}
+    payload = read_json(delivery_file)
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for fmt, report in payload.items():
+        if isinstance(report, dict):
+            out[str(fmt)] = dict(report.get("summary") or {})
+    return out
+
+
 def _issues_for_segments(segments: list[Segment], max_cps: int) -> dict[int, list[str]]:
     issues: dict[int, list[str]] = {seg.id: [] for seg in segments}
     sorted_segments = sorted(segments, key=lambda item: (item.start, item.end, item.id))
@@ -112,6 +126,7 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     meta_by_id = _translation_meta_by_segment(translated_rows)
     quality_summary, quality_by_id = _quality_by_segment(paths)
     reflow_summary = _reflow_summary(paths)
+    delivery_summary = _delivery_summary(paths)
     memory_file = paths["memory"] / "translation_memory.json"
     selected_presets_file = paths["memory"] / "selected_presets.json"
     memory_issues_file = paths["memory"] / "consistency_issues.jsonl"
@@ -147,6 +162,7 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
             for seg in segments
         ],
         "quality": quality_summary,
+        "delivery": delivery_summary,
         "reflow": reflow_summary,
         "memory": {
             "enabled": memory_enabled,
@@ -207,7 +223,8 @@ def reexport_task(
     final_file = paths["final"] / "segments.final.json"
     segments = [_segment_from_payload(row) for row in read_json(final_file)]
     normalized = str(output_format or task.settings.get("output_format") or config.pipeline.output_format or "srt").lower()
-    normalized = normalized if normalized in {"srt", "ass", "both"} else "srt"
+    normalized = "vtt" if normalized == "webvtt" else normalized
+    normalized = normalized if normalized in {"srt", "ass", "vtt", "both"} else "srt"
     effective_bilingual = _optional_bool(bilingual, task.bilingual)
     stem = Path(task.input_file).stem
     base = paths["output"] / f"{stem}.{task.target_lang}"
@@ -218,8 +235,22 @@ def reexport_task(
     if normalized in {"ass", "both"}:
         output_paths["ass"] = base.parent / f"{base.name}.ass"
         export_ass(segments, output_paths["ass"], bilingual=effective_bilingual, style=config.pipeline.subtitle_ass_style)
+    if normalized == "vtt":
+        output_paths["vtt"] = base.parent / f"{base.name}.vtt"
+        export_vtt(segments, output_paths["vtt"], effective_bilingual)
+    delivery_reports = {
+        fmt: subtitle_delivery_report(
+            segments,
+            output_format=fmt,
+            bilingual=effective_bilingual,
+            style=config.pipeline.subtitle_ass_style,
+        )
+        for fmt in output_paths
+    }
+    if delivery_reports:
+        write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
     output_payload = {key: str(path) for key, path in output_paths.items()}
-    primary = output_payload.get("srt") or output_payload.get("ass")
+    primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt")
     store.update_task_status(task_id, task.status, output_path=primary, output_paths=output_payload)
     task = store.load_task(task_id)
     task.settings["edited"] = bool(task.settings.get("edited", False))

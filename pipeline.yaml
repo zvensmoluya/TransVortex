@@ -25,6 +25,43 @@ subtitle:
   compression:
     enabled: false
     max_attempts: 1
+subtitle_ass_style:
+  preset: bilingual_clean
+  play_res_x: 1920
+  play_res_y: 1080
+  font_name: Noto Sans CJK SC
+  font_fallbacks:
+    - Source Han Sans SC
+    - Microsoft YaHei UI
+    - PingFang SC
+    - Hiragino Sans GB
+    - Arial Unicode MS
+    - sans-serif
+  font_size: 44
+  primary_color: "&H00F7F4F2"
+  outline_color: "&H90000000"
+  back_color: "&H5C000000"
+  outline: 1.8
+  shadow: 0.6
+  margin_l: 96
+  margin_r: 96
+  margin_v: 58
+  safe_margin_x: 96
+  safe_margin_y: 54
+  bilingual_order: source_target
+  target_max_width: 38
+  source_max_width: 52
+  hard_max_width: 56
+  max_target_lines: 2
+  max_source_lines: 2
+  bilingual_gap: 14
+  line_spacing: 1.12
+  source_font_size: 30
+  source_primary_color: "&H00D7D2CC"
+  source_outline_color: "&H96000000"
+  source_outline: 1.4
+  source_shadow: 0.4
+  source_margin_v: 116
 translation:
   chunk_lines: 120
   context_before_lines: 80

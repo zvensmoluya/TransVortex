@@ -164,11 +164,21 @@ transvortex auth set openai_asr
 
 ## 输出格式
 
-TransVortex 可以导出 SRT 或 ASS。
+TransVortex 可以导出 SRT、ASS 或 WebVTT。
 
-- SRT 使用 UTF-8 BOM，兼容部分旧播放器
-- ASS 支持基础样式、字号、描边、阴影和双语顺序
-- 最终文件写入任务目录的 `output/`
+- SRT 是兼容格式，使用 UTF-8 BOM，适合通用播放器、人工审稿和平台交付。
+- ASS 是表现型格式，默认使用 `bilingual_clean` preset，包含 CJK 友好的字体候选说明、主译文/辅原文层级、克制描边阴影、安全区和自动换行。ASS 样式本身只声明一个 `Fontname`，实际缺字替换取决于播放器和系统字体。
+- WebVTT 是网页/HTML5 格式，可通过 `--format vtt` 或 `output_format: vtt` 导出。
+- 导出阶段会生成 `quality/subtitle_delivery.json`，检查样式、换行、双语拥挤、格式兼容和时间轴表现问题。
+- 结构化 `Segment` 始终是唯一真实来源；SRT、ASS、VTT 是不同 renderer，不会互相作为主中间格式。
+- 最终文件写入任务目录的 `output/`。
+
+表现层样例在 `samples/subtitle_delivery/`：
+
+```powershell
+python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format both --output samples\subtitle_delivery\preview --bilingual --json
+python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format vtt --output samples\subtitle_delivery\preview --bilingual --json
+```
 
 ## 参考文档
 

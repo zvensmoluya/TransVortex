@@ -1501,6 +1501,7 @@ function TaskWorkspace({
             <select className="tvx-input" value={form.outputFormat} onChange={(event) => update("outputFormat", event.target.value as FormState["outputFormat"])}>
               <option value="srt">srt</option>
               <option value="ass">ass</option>
+              <option value="vtt">vtt</option>
               <option value="both">both</option>
             </select>
           </label>
@@ -2587,7 +2588,8 @@ function HistoryPanel({
               </button>
               {outputPath(task, "srt") && <button className="tvx-btn" onClick={() => openPath(outputPath(task, "srt"))}>SRT</button>}
               {outputPath(task, "ass") && <button className="tvx-btn" onClick={() => openPath(outputPath(task, "ass"))}>ASS</button>}
-              {!outputPath(task, "srt") && !outputPath(task, "ass") && task.output_path && (
+              {outputPath(task, "vtt") && <button className="tvx-btn" onClick={() => openPath(outputPath(task, "vtt"))}>VTT</button>}
+              {!outputPath(task, "srt") && !outputPath(task, "ass") && !outputPath(task, "vtt") && task.output_path && (
                 <button className="tvx-btn" onClick={() => openPath(task.output_path)}>
                   {t("openOutput")}
                 </button>
@@ -2656,6 +2658,7 @@ function ResultPanel({
             <select className="tvx-input w-28" value={outputFormat} onChange={(event) => updateOutputFormat(event.target.value as FormState["outputFormat"])}>
               <option value="srt">srt</option>
               <option value="ass">ass</option>
+              <option value="vtt">vtt</option>
               <option value="both">both</option>
             </select>
             <button className="tvx-btn" disabled={busy} onClick={saveResultSegments}>

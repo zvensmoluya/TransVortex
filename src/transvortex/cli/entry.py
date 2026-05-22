@@ -22,7 +22,7 @@ from ..app.credentials import (
     write_auth_credential,
 )
 from ..app.doctor import doctor_report, format_doctor_report
-from ..formats.exporter import export_ass, export_srt
+from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
 from ..formats.srt import parse_srt_file
 from ..app.models import Segment
 from ..core.orchestrator import (
@@ -242,7 +242,7 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--asr-prompt-max-chars", type=int, default=None)
     subparser.add_argument("--source-mode", choices=["auto", "asr", "embedded_subtitle"], default=None)
     subparser.add_argument("--subtitle-track", default=None)
-    subparser.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
+    subparser.add_argument("--output-format", choices=["srt", "ass", "vtt", "webvtt", "both"], default=None)
     subparser.add_argument("--translation-style-preset", default=None)
     subparser.add_argument("--translation-style-prompt", default=None)
     subparser.add_argument("--translation-chunk-lines", type=int, default=None)
@@ -787,7 +787,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     reexport_p = sub.add_parser("reexport", help="Re-export subtitles from task final segments")
     reexport_p.add_argument("--task-id", required=True)
-    reexport_p.add_argument("--output-format", choices=["srt", "ass", "both"], default=None)
+    reexport_p.add_argument("--output-format", choices=["srt", "ass", "vtt", "webvtt", "both"], default=None)
     reexport_p.add_argument("--bilingual", choices=["true", "false"], default=None)
     reexport_p.add_argument("--json", action="store_true")
 
@@ -813,7 +813,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     export_p = sub.add_parser("export", help="Export final segments to subtitle files")
     export_p.add_argument("--segments", required=True)
-    export_p.add_argument("--format", choices=["srt", "ass", "both"], required=True)
+    export_p.add_argument("--format", choices=["srt", "ass", "vtt", "webvtt", "both"], required=True)
     export_p.add_argument("--output", required=True)
     export_p.add_argument("--bilingual", action="store_true")
     export_p.add_argument("--json", action="store_true")
@@ -1388,7 +1388,7 @@ def main() -> None:
             rows = read_json(Path(args.segments).resolve())
             segments = [Segment(**row) for row in rows]
             output = Path(args.output).resolve()
-            output_format = args.format
+            output_format = "vtt" if args.format == "webvtt" else args.format
             output_paths: dict[str, str] = {}
             if output_format in {"srt", "both"}:
                 srt_path = output.with_suffix(".srt")
@@ -1398,12 +1398,21 @@ def main() -> None:
                 ass_path = output.with_suffix(".ass")
                 export_ass(segments, ass_path, bilingual=args.bilingual)
                 output_paths["ass"] = str(ass_path)
+            if output_format == "vtt":
+                vtt_path = output.with_suffix(".vtt")
+                export_vtt(segments, vtt_path, args.bilingual)
+                output_paths["vtt"] = str(vtt_path)
+            delivery_reports = {
+                fmt: subtitle_delivery_report(segments, output_format=fmt, bilingual=args.bilingual)
+                for fmt in output_paths
+            }
             return {
                 "ok": True,
                 "capability": "export",
                 "output_format": output_format,
-                "output_path": output_paths.get("srt") or output_paths.get("ass"),
+                "output_path": output_paths.get("srt") or output_paths.get("ass") or output_paths.get("vtt"),
                 "output_paths": output_paths,
+                "delivery": {fmt: report.get("summary", {}) for fmt, report in delivery_reports.items()},
             }
 
         payload = _run_or_exit(do_export, json_mode=args.json, stream_events=False)

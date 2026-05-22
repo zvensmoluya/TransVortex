@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "start": 0.0,
+    "end": 1.8,
+    "text_src": "Good evening.",
+    "text_tgt": "晚上好。"
+  },
+  {
+    "id": 2,
+    "start": 2.1,
+    "end": 5.4,
+    "text_src": "This is a longer subtitle line for checking bilingual layout, mixed English words, and the 2026 timestamp.",
+    "text_tgt": "这是一条较长的中文字幕，用来检查双语排版、English 混排和 2026 这种数字不会挤在一起。"
+  },
+  {
+    "id": 3,
+    "start": 5.8,
+    "end": 8.6,
+    "text_src": "東京タワーの下で、AI team B-12 is still waiting.",
+    "text_tgt": "在东京塔下，AI team B-12 还在等待。"
+  },
+  {
+    "id": 4,
+    "start": 9.0,
+    "end": 12.5,
+    "text_src": "Use this cue to preview subtitles over bright, dark, and busy footage.",
+    "text_tgt": "这一条用于预览字幕在明亮、昏暗和复杂画面上的可读性。"
+  }
+]

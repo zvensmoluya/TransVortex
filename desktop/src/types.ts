@@ -175,6 +175,18 @@ export type TaskResultPayload = {
     max_cps?: number;
     thresholds?: Record<string, number>;
   };
+  delivery?: Record<
+    string,
+    {
+      format?: string;
+      status?: string;
+      preset?: string;
+      renderer?: string;
+      segments?: number;
+      segments_with_issues?: number;
+      issue_counts?: Record<string, number>;
+    }
+  >;
   reflow?: {
     enabled: boolean;
     windows: number;
@@ -274,7 +286,7 @@ export type FormState = {
   subtitleQualityMode: "off" | "conservative" | "balanced";
   subtitleCompressionEnabled: boolean;
   subtitleReflowEnabled: boolean;
-  outputFormat: "srt" | "ass" | "both";
+  outputFormat: "srt" | "ass" | "vtt" | "both";
   concurrency: number;
   apiKey: string;
 };

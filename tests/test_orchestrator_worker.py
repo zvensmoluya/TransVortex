@@ -333,10 +333,12 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     assert task.settings["translation"]["style_preset"] == "localized"
     assert task.settings["translation"]["style_prompt"] == "Use dramatic subtitles."
     assert task.settings["translation"]["chunk_lines"] == 8
+    assert (store.task_dir(task_id) / "quality" / "subtitle_delivery.json").exists()
     events = store.read_events(task_id)
     done = next(event for event in events if event["type"] == "done")
     assert set(done["details"]["output_paths"]) == {"srt", "ass"}
     assert any(event["stage"] == "QUALITY" and event["type"] == "artifact" for event in events)
+    assert any(event["stage"] == "EXPORT" and event["message"] == "Subtitle delivery report ready" for event in events)
 
 
 def test_resume_uses_saved_pipeline_settings_for_asr_mode(tmp_path: Path, monkeypatch) -> None:

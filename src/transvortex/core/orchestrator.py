@@ -14,7 +14,7 @@ from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
 from ..app.credentials import resolve_credential
-from ..formats.exporter import export_ass, export_srt
+from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
 from .media import (
     extract_audio_for_asr,
     extract_subtitle_stream,
@@ -1529,7 +1529,9 @@ def _iter_translation_results(
 
 def _normalize_output_format(value: str) -> str:
     normalized = str(value or "srt").strip().lower()
-    return normalized if normalized in {"srt", "ass", "both"} else "srt"
+    if normalized == "webvtt":
+        normalized = "vtt"
+    return normalized if normalized in {"srt", "ass", "vtt", "both"} else "srt"
 
 
 def _output_paths_for_task(
@@ -1547,12 +1549,16 @@ def _output_paths_for_task(
             return output_format, {"srt": output_file.with_suffix(".srt")}
         if output_format == "ass":
             return output_format, {"ass": output_file.with_suffix(".ass")}
+        if output_format == "vtt":
+            return output_format, {"vtt": output_file.with_suffix(".vtt")}
         return output_format, {"srt": base.with_suffix(".srt"), "ass": base.with_suffix(".ass")}
     base = output_dir / f"{stem}.{task.target_lang}"
     if output_format == "srt":
         return output_format, {"srt": base.parent / f"{base.name}.srt"}
     if output_format == "ass":
         return output_format, {"ass": base.parent / f"{base.name}.ass"}
+    if output_format == "vtt":
+        return output_format, {"vtt": base.parent / f"{base.name}.vtt"}
     return output_format, {"srt": base.parent / f"{base.name}.srt", "ass": base.parent / f"{base.name}.ass"}
 
 
@@ -2266,8 +2272,44 @@ def _execute_task(
                 bilingual=task.bilingual,
                 style=config.pipeline.subtitle_ass_style,
             )
+        if "vtt" in output_paths:
+            export_vtt(final_segments, output_paths["vtt"], task.bilingual)
+        delivery_reports: dict[str, dict] = {}
+        for fmt in output_paths:
+            delivery_reports[fmt] = subtitle_delivery_report(
+                final_segments,
+                output_format=fmt,
+                bilingual=task.bilingual,
+                style=config.pipeline.subtitle_ass_style,
+            )
+        if delivery_reports:
+            write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
+            delivery_summary = {
+                fmt: report.get("summary", {})
+                for fmt, report in delivery_reports.items()
+                if isinstance(report, dict)
+            }
+            store.append_event(
+                task_id,
+                "artifact",
+                stage="EXPORT",
+                message="Subtitle delivery report ready",
+                progress=0.97,
+                details={"path": str(paths["quality"] / "subtitle_delivery.json"), "summary": delivery_summary},
+            )
+            for fmt, report in delivery_reports.items():
+                summary = dict(report.get("summary") or {})
+                if summary.get("status") in {"WARN", "FAIL"}:
+                    store.append_event(
+                        task_id,
+                        "warning",
+                        stage="EXPORT",
+                        level="warning",
+                        message=f"{fmt.upper()} delivery status {summary.get('status')}",
+                        details={"issue_counts": summary.get("issue_counts", {})},
+                    )
         output_paths_payload = {key: str(path) for key, path in output_paths.items()}
-        primary_output = output_paths.get("srt") or output_paths.get("ass")
+        primary_output = output_paths.get("srt") or output_paths.get("ass") or output_paths.get("vtt")
         checkpoint["status"] = "DONE"
         checkpoint.pop("error", None)
         store.save_checkpoint(task_id, checkpoint)

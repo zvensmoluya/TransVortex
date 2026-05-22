@@ -56,7 +56,8 @@ transvortex export --segments segments.final.json --format both --output subtitl
 
 `asr` emits normalized source segments under `source/segments.normalized.jsonl`. `translate` accepts a
 segments JSONL file or SRT and emits translated/final artifacts. `export` writes
-SRT/ASS from final segments.
+SRT/ASS/VTT from final segments and reports delivery checks in JSON output or
+`quality/subtitle_delivery.json` when run through a task.
 
 ## Events
 

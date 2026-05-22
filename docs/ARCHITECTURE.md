@@ -24,7 +24,7 @@ transvortex/
   protocol/     agent protocol, structured errors, redaction, safe output contracts
   artifacts/    task store, checkpoints, events, result workspace
   core/         pipeline orchestration and pipeline stages
-  formats/      subtitle parsing and export formats
+  formats/      subtitle parsing, renderers, and delivery presentation
   providers/    model/provider protocol adapters and provider management
   cli/          parser, commands, detach/output helpers
 ```
@@ -65,6 +65,14 @@ transvortex/
 
 - `srt.py`
 - `exporter.py`
+- `presentation.py`
+
+`formats/presentation.py` is the subtitle delivery and presentation boundary.
+It reads structured `Segment` objects and decides renderer-facing layout,
+style presets, font candidate notes, safe-area metadata, and delivery quality
+checks. ASS itself only names one active font; actual glyph fallback is left to
+the player and operating system. It must not run ASR, translate text, repair prompts, update memory, or
+use SRT as an intermediate representation for ASS/VTT.
 
 `providers/` owns:
 
@@ -115,5 +123,5 @@ Recommended next refactors, each as a separate change:
 - Split `core/orchestrator.py` into smaller pipeline stage controllers.
 - Introduce explicit protocol DTOs when JSON/JSONL schemas grow beyond the
   current helper functions.
-- Add VTT or richer subtitle formats under `formats/` without touching core
-  pipeline code.
+- Add richer subtitle preview/burn-in helpers under `formats/` without
+  changing ASR, translation, prompt, memory, or timing ownership.

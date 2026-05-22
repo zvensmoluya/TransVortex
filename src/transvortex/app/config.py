@@ -775,18 +775,46 @@ def load_app_config(
     )
     ass_raw = pip_yaml.get("subtitle_ass_style") or {}
     subtitle_ass_style = AssStyleConfig(
-        font_name=_to_str(ass_raw.get("font_name"), "Microsoft YaHei"),
-        font_size=_to_int(ass_raw.get("font_size"), 42),
-        primary_color=_to_str(ass_raw.get("primary_color"), "&H00FFFFFF"),
-        outline_color=_to_str(ass_raw.get("outline_color"), "&H00000000"),
-        back_color=_to_str(ass_raw.get("back_color"), "&H64000000"),
-        outline=_to_int(ass_raw.get("outline"), 2),
-        shadow=_to_int(ass_raw.get("shadow"), 1),
-        margin_v=_to_int(ass_raw.get("margin_v"), 48),
-        bilingual_order=_to_str(ass_raw.get("bilingual_order"), "target_source"),
+        preset=_to_str(ass_raw.get("preset"), "bilingual_clean"),
+        play_res_x=_to_int(ass_raw.get("play_res_x"), 1920),
+        play_res_y=_to_int(ass_raw.get("play_res_y"), 1080),
+        font_name=_to_str(ass_raw.get("font_name"), "Noto Sans CJK SC"),
+        font_fallbacks=_to_str_list(
+            ass_raw.get("font_fallbacks"),
+            ["Source Han Sans SC", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", "Arial Unicode MS", "sans-serif"],
+        ),
+        font_size=_to_int(ass_raw.get("font_size"), 44),
+        bold=_to_int(ass_raw.get("bold"), 0),
+        primary_color=_to_str(ass_raw.get("primary_color"), "&H00F7F4F2"),
+        secondary_color=_to_str(ass_raw.get("secondary_color"), "&H000000FF"),
+        outline_color=_to_str(ass_raw.get("outline_color"), "&H90000000"),
+        back_color=_to_str(ass_raw.get("back_color"), "&H5C000000"),
+        outline=_to_float(ass_raw.get("outline"), 1.8),
+        shadow=_to_float(ass_raw.get("shadow"), 0.6),
+        border_style=_to_int(ass_raw.get("border_style"), 1),
+        margin_l=_to_int(ass_raw.get("margin_l"), 96),
+        margin_r=_to_int(ass_raw.get("margin_r"), 96),
+        margin_v=_to_int(ass_raw.get("margin_v"), 58),
+        safe_margin_x=_to_int(ass_raw.get("safe_margin_x"), 96),
+        safe_margin_y=_to_int(ass_raw.get("safe_margin_y"), 54),
+        bilingual_order=_to_str(ass_raw.get("bilingual_order"), "source_target"),
+        max_target_lines=_to_int(ass_raw.get("max_target_lines"), 2),
+        max_source_lines=_to_int(ass_raw.get("max_source_lines"), 2),
+        target_max_width=_to_int(ass_raw.get("target_max_width"), 38),
+        source_max_width=_to_int(ass_raw.get("source_max_width"), 52),
+        hard_max_width=_to_int(ass_raw.get("hard_max_width"), 56),
+        bilingual_gap=_to_int(ass_raw.get("bilingual_gap"), 14),
+        line_spacing=_to_float(ass_raw.get("line_spacing"), 1.12),
+        source_font_name=_to_str(ass_raw.get("source_font_name"), ""),
         source_font_size=_to_int(ass_raw.get("source_font_size"), 30),
-        source_primary_color=_to_str(ass_raw.get("source_primary_color"), "&H00B8B8B8"),
-        source_margin_v=_to_int(ass_raw.get("source_margin_v"), 104),
+        source_bold=_to_int(ass_raw.get("source_bold"), 0),
+        source_primary_color=_to_str(ass_raw.get("source_primary_color"), "&H00D7D2CC"),
+        source_outline_color=_to_str(ass_raw.get("source_outline_color"), "&H96000000"),
+        source_back_color=_to_str(ass_raw.get("source_back_color"), "&H64000000"),
+        source_outline=_to_float(ass_raw.get("source_outline"), 1.4),
+        source_shadow=_to_float(ass_raw.get("source_shadow"), 0.4),
+        source_margin_v=_to_int(ass_raw.get("source_margin_v"), 116),
+        font_file=_to_str(ass_raw.get("font_file"), ""),
     )
     pipeline = PipelineConfig(
         artifacts_dir=(root_dir / artifacts_dir),
@@ -1026,6 +1054,10 @@ def load_app_config(
                     current = getattr(pipeline.subtitle_ass_style, style_key)
                     if isinstance(current, int):
                         setattr(pipeline.subtitle_ass_style, style_key, _to_int(style_value, current))
+                    elif isinstance(current, float):
+                        setattr(pipeline.subtitle_ass_style, style_key, _to_float(style_value, current))
+                    elif isinstance(current, list):
+                        setattr(pipeline.subtitle_ass_style, style_key, _to_str_list(style_value, current))
                     else:
                         setattr(pipeline.subtitle_ass_style, style_key, _to_str(style_value, current))
         elif hasattr(pipeline, key):

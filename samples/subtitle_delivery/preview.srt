@@ -1,0 +1,25 @@
+﻿1
+00:00:00,000 --> 00:00:01,800
+Good evening.
+晚上好。
+
+2
+00:00:02,100 --> 00:00:05,400
+This is a longer subtitle line for
+checking bilingual layout, mixed English
+words, and the 2026 timestamp.
+这是一条较长的中文字幕，用来检查双语排版、
+English 混排和 2026 这种数字不会挤在一起。
+
+3
+00:00:05,800 --> 00:00:08,600
+東京タワーの下で、AI team B-12 is still
+waiting.
+在东京塔下，AI team B-12 还在等待。
+
+4
+00:00:09,000 --> 00:00:12,500
+Use this cue to preview subtitles over
+bright, dark, and busy footage.
+这一条用于预览字幕在明亮、昏暗和复杂画面上
+的可读性。

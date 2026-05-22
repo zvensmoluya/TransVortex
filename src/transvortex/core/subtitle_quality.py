@@ -9,6 +9,7 @@ from ..app.models import Segment
 
 _INLINE_SPACE_RE = re.compile(r"[ \t\f\v]+")
 _NO_LINE_START_CHARS = set("，。！？；：、,.!?;:)]}）】〕〉》」』”’")
+_ASCII_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+#%&'-]*")
 
 
 def clean_subtitle_text(value: str | None) -> str:
@@ -58,6 +59,64 @@ def _split_by_visual_width(text: str, max_width: int) -> list[str]:
     return [line for line in lines if line]
 
 
+def _has_cjk_width(text: str) -> bool:
+    return any(unicodedata.east_asian_width(ch) in {"F", "W"} for ch in text)
+
+
+def _mixed_tokens(line: str) -> list[str]:
+    tokens: list[str] = []
+    idx = 0
+    while idx < len(line):
+        match = _ASCII_WORD_RE.match(line, idx)
+        if match:
+            tokens.append(match.group(0))
+            idx = match.end()
+            continue
+        ch = line[idx]
+        if ch.isspace():
+            if not tokens or tokens[-1] != " ":
+                tokens.append(" ")
+        else:
+            tokens.append(ch)
+        idx += 1
+    return tokens
+
+
+def _wrap_mixed_line(line: str, max_width: int) -> list[str]:
+    if max_width <= 0:
+        return [line]
+    lines: list[str] = []
+    current = ""
+    pending_space = False
+    for token in _mixed_tokens(line):
+        if token == " ":
+            if current:
+                pending_space = True
+            continue
+        prefix = " " if pending_space and current else ""
+        candidate = f"{current}{prefix}{token}"
+        if current and visual_width(candidate) > max_width:
+            if token in _NO_LINE_START_CHARS:
+                current = candidate
+                pending_space = False
+                continue
+            lines.append(current.strip())
+            current = token
+            pending_space = False
+            continue
+        if not current and visual_width(token) > max_width:
+            split = _split_by_visual_width(token, max_width)
+            lines.extend(split[:-1])
+            current = split[-1] if split else ""
+            pending_space = False
+            continue
+        current = candidate
+        pending_space = False
+    if current.strip():
+        lines.append(current.strip())
+    return [item for item in lines if item]
+
+
 def _wrap_words(line: str, max_width: int) -> list[str]:
     lines: list[str] = []
     current = ""
@@ -90,8 +149,10 @@ def wrap_subtitle_text(text: str | None, *, max_line_width: int = 42) -> list[st
     for line in cleaned.splitlines():
         if visual_width(line) <= max_line_width:
             wrapped.append(line)
-        elif " " in line:
+        elif " " in line and not _has_cjk_width(line):
             wrapped.extend(_wrap_words(line, max_line_width))
+        elif " " in line:
+            wrapped.extend(_wrap_mixed_line(line, max_line_width))
         else:
             wrapped.extend(_split_by_visual_width(line, max_line_width))
     return wrapped

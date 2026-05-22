@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.formats.exporter import export_ass, export_srt
+from transvortex.formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
 from transvortex.app.models import AssStyleConfig, Segment
+from transvortex.formats.presentation import build_render_plan, resolve_ass_style
 from transvortex.core.subtitle_quality import (
     clean_subtitle_text,
     format_subtitle_lines,
@@ -43,6 +44,17 @@ def test_wrap_cjk_keeps_closing_punctuation_with_previous_line() -> None:
     )
 
     assert lines == ["\u5c45\u7136\u51fa\u8fd9\u79cd\u4e0d\u77e5\u9053\u548c\u6211\u4e00\u6837\u7684\u661f\u7a7a\u5c31\u89e3\u4e0d\u5f00\u7684\u9898\u3002"]
+
+
+def test_wrap_mixed_cjk_english_keeps_ascii_word_with_context() -> None:
+    lines = wrap_subtitle_text(
+        "这是一条较长的中文字幕，用来检查双语排版、English 混排和 2026 这种数字不会挤在一起。",
+        max_line_width=42,
+    )
+
+    assert all(line != "English" for line in lines)
+    assert all(subtitle_line_width(line) <= 42 for line in lines)
+    assert "".join(line.replace(" ", "") for line in lines) == "这是一条较长的中文字幕，用来检查双语排版、English混排和2026这种数字不会挤在一起。"
 
 
 def test_format_bilingual_lines_source_first() -> None:
@@ -114,8 +126,8 @@ def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Pat
     assert "[V4+ Styles]" in body
     assert "Style: Target,Arial,36" in body
     assert "Style: Source,Arial,30" in body
-    assert "Dialogue: 1,0:00:00.00,0:00:01.25,Target" in body
     assert "Dialogue: 0,0:00:00.00,0:00:01.25,Source" in body
+    assert "Dialogue: 1,0:00:00.00,0:00:01.25,Target" in body
     assert "你好" in body
     assert "Hello \\{world\\}" in body
 
@@ -150,7 +162,115 @@ def test_export_ass_bilingual_order_swaps_visual_margins(tmp_path: Path) -> None
     )
     target_source_body = target_source.read_text(encoding="utf-8-sig")
     source_target_body = source_target.read_text(encoding="utf-8-sig")
-    assert "Style: Target,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,104,1" in target_source_body
-    assert "Style: Source,Arial,30,&H00B8B8B8,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,48,1" in target_source_body
-    assert "Style: Target,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,48,1" in source_target_body
-    assert "Style: Source,Arial,30,&H00B8B8B8,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,60,60,104,1" in source_target_body
+    assert "Style: Target,Arial,44,&H00F7F4F2,&H000000FF,&H90000000,&H5C000000,0,0,0,0,100,100,0,0,1,1.8,0.6,2,96,96,129,1" in target_source_body
+    assert "Style: Source,Arial,30,&H00D7D2CC,&H000000FF,&H96000000,&H64000000,0,0,0,0,100,100,0,0,1,1.4,0.4,2,96,96,48,1" in target_source_body
+    assert "Style: Target,Arial,44,&H00F7F4F2,&H000000FF,&H90000000,&H5C000000,0,0,0,0,100,100,0,0,1,1.8,0.6,2,96,96,48,1" in source_target_body
+    assert "Style: Source,Arial,30,&H00D7D2CC,&H000000FF,&H96000000,&H64000000,0,0,0,0,100,100,0,0,1,1.4,0.4,2,96,96,161,1" in source_target_body
+
+
+def test_ass_presentation_plan_wraps_long_bilingual_text_without_changing_segment_text() -> None:
+    segment = Segment(
+        id=1,
+        start=0.0,
+        end=3.0,
+        text_src="This English source line mixes Tokyo 2026, AI, and a very long explanation for layout.",
+        text_tgt="这是一条用于正式观看的中文字幕，它需要自动换行并保持双语层级清楚。",
+    )
+    plan = build_render_plan(
+        [segment],
+        output_format="ass",
+        bilingual=True,
+        style=AssStyleConfig(target_max_width=28, source_max_width=34),
+    )
+
+    cue = plan.cues[0]
+    assert 1 <= len(cue.target.lines) <= 2
+    assert cue.source is not None
+    assert 1 <= len(cue.source.lines) <= 2
+    assert segment.text_tgt == "这是一条用于正式观看的中文字幕，它需要自动换行并保持双语层级清楚。"
+
+
+def test_ass_presentation_never_clamps_text_content() -> None:
+    target = "这是一条非常非常长的中文字幕，它会超过两行，但表现层必须完整保留每一个字，不能为了样式把语义内容截断。"
+    source = "This is a very long source subtitle that can exceed two rendered lines, but the renderer must keep the full text."
+    plan = build_render_plan(
+        [Segment(id=1, start=0.0, end=4.0, text_src=source, text_tgt=target)],
+        output_format="ass",
+        bilingual=True,
+        style=AssStyleConfig(target_max_width=20, source_max_width=24, hard_max_width=28),
+    )
+
+    cue = plan.cues[0]
+    assert "".join(cue.target.lines) == target
+    assert cue.source is not None
+    assert " ".join(cue.source.lines) == source
+    assert any(issue["code"] == "target_too_many_lines" for issue in cue.issues)
+
+
+def test_ass_default_style_has_cjk_font_candidates_and_delivery_report() -> None:
+    style = resolve_ass_style(AssStyleConfig())
+    report = subtitle_delivery_report(
+        [
+            Segment(
+                id=1,
+                start=0.0,
+                end=2.0,
+                text_src="Hello world",
+                text_tgt="你好，世界",
+            )
+        ],
+        output_format="ass",
+        bilingual=True,
+        style=style,
+    )
+
+    assert style.preset == "bilingual_clean"
+    assert "Microsoft YaHei UI" in style.font_fallbacks
+    assert report["summary"]["renderer"] == "presentation"
+    assert report["summary"]["fonts"]["target"].startswith("Noto Sans CJK SC")
+    assert report["summary"]["status"] == "PASS"
+
+
+def test_ass_preset_keeps_user_overrides() -> None:
+    style = resolve_ass_style(AssStyleConfig(preset="cinematic", font_name="Arial", font_size=52))
+
+    assert style.preset == "cinematic"
+    assert style.font_name == "Arial"
+    assert style.font_size == 52
+    assert style.primary_color == "&H00F8F5EE"
+
+
+def test_delivery_report_flags_invalid_ass_style() -> None:
+    report = subtitle_delivery_report(
+        [Segment(id=1, start=0.0, end=1.0, text_src="Hello", text_tgt="你好")],
+        output_format="ass",
+        bilingual=False,
+        style=AssStyleConfig(primary_color="white"),
+    )
+
+    assert report["summary"]["status"] == "FAIL"
+    assert report["summary"]["issue_counts"]["invalid_ass_color"] == 1
+
+
+def test_export_vtt_writes_webvtt_without_bom_and_escapes_html(tmp_path: Path) -> None:
+    out_file = tmp_path / "out.vtt"
+    export_vtt(
+        [
+            Segment(
+                id=1,
+                start=0.0,
+                end=1.2,
+                text_src="Hello <world>",
+                text_tgt="你好 & 再见",
+            )
+        ],
+        out_file,
+        bilingual=True,
+    )
+
+    body = out_file.read_text(encoding="utf-8")
+    assert body.startswith("WEBVTT\n")
+    assert not out_file.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert "00:00:00.000 --> 00:00:01.200" in body
+    assert "Hello &lt;world&gt;" in body
+    assert "你好 &amp; 再见" in body
