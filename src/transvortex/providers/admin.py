@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from ..app.config import load_app_config, resolve_providers_file
+from ..app.config import VERTEX_EXPRESS_DEFAULT_MODELS, load_app_config, resolve_providers_file
 from ..app.credentials import (
     auth_file_path,
     delete_auth_credential,
@@ -245,7 +245,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
         },
         "response_mapping": {"text_paths": ["candidates[0].content.parts[].text"]},
         "model_list": {"path_template": "", "method": "GET", "response_paths": []},
-        "models": ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+        "models": VERTEX_EXPRESS_DEFAULT_MODELS,
         "capabilities": {
             "supports_system_prompt": True,
             "supports_temperature": True,

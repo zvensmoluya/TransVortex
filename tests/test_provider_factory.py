@@ -686,6 +686,52 @@ def test_build_provider_client_accepts_vertex_express() -> None:
     assert client.config.compat_mode == "vertex_express"
 
 
+def test_vertex_express_url_accepts_bare_and_resource_model_names() -> None:
+    cfg = ProviderConfig(
+        name="vertex",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-3.5-flash"],
+        auth=AuthConfig(type="query", query_name="key", prefix=""),
+        endpoint=EndpointConfig(path_template="/publishers/google/models/{model}:generateContent", method="POST"),
+        limits=ProviderLimits(),
+    )
+
+    bare_url, bare_headers = _build_url_and_headers(cfg, "secret", "gemini-3.5-flash")
+    resource_url, resource_headers = _build_url_and_headers(
+        cfg,
+        "secret",
+        "publishers/google/models/gemini-3.5-flash",
+    )
+    studio_style_url, _headers = _build_url_and_headers(cfg, "secret", "models/gemini-3.5-flash")
+
+    assert bare_url == "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash:generateContent?key=secret"
+    assert resource_url == bare_url
+    assert studio_style_url == bare_url
+    assert bare_headers == {}
+    assert resource_headers == {}
+
+
+def test_vertex_express_url_supports_official_model_path_placeholder() -> None:
+    cfg = ProviderConfig(
+        name="vertex",
+        api_type="gemini-compatible",
+        compat_mode="vertex_express",
+        base_url="https://aiplatform.googleapis.com/v1",
+        env_key="KEY",
+        models=["gemini-3.5-flash"],
+        auth=AuthConfig(type="query", query_name="key", prefix=""),
+        endpoint=EndpointConfig(path_template="/{model}:generateContent", method="POST"),
+        limits=ProviderLimits(),
+    )
+
+    url, _headers = _build_url_and_headers(cfg, "secret", "gemini-3.5-flash")
+
+    assert url == "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash:generateContent?key=secret"
+
+
 def test_custom_json_renders_body_template_and_extracts_text() -> None:
     cfg = ProviderConfig(
         name="custom",

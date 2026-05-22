@@ -528,6 +528,8 @@ routing:
     assert p.auth.type == "query"
     assert p.auth.query_name == "key"
     assert p.models[0] == "gemini-3.5-flash"
+    assert "gemini-3.1-pro-preview" in p.models
+    assert "gemini-2.0-flash-001" not in p.models
     assert p.model_list.path_template == ""
 
 

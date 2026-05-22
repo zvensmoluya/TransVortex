@@ -402,9 +402,20 @@ def _default_model_list_for_mode(compat_mode: str) -> ModelListConfig:
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
 
 
+VERTEX_EXPRESS_DEFAULT_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite-preview-09-2025",
+]
+
+
 def _default_models_for_mode(compat_mode: str) -> list[str]:
     if compat_mode == "vertex_express":
-        return ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
+        return list(VERTEX_EXPRESS_DEFAULT_MODELS)
     return []
 
 

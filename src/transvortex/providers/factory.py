@@ -679,6 +679,34 @@ def _query_params_for_config(config: ProviderConfig, model: str) -> dict[str, ob
     return _render_template_value(raw, {"model": model})
 
 
+_VERTEX_EXPRESS_MODEL_PREFIX = "publishers/google/models/"
+
+
+def _vertex_express_bare_model(model: str) -> str:
+    model = model.strip().lstrip("/")
+    if model.startswith(_VERTEX_EXPRESS_MODEL_PREFIX):
+        return model[len(_VERTEX_EXPRESS_MODEL_PREFIX) :]
+    if model.startswith("models/"):
+        return model[len("models/") :]
+    return model
+
+
+def _model_for_path_template(config: ProviderConfig, model: str, path_template: str) -> str:
+    if config.compat_mode != "vertex_express":
+        return model
+    bare_model = _vertex_express_bare_model(model)
+    normalized_template = path_template.strip()
+    if "{model}" not in normalized_template:
+        return bare_model
+    if normalized_template.startswith("/publishers/google/models/{model}") or normalized_template.startswith(
+        "publishers/google/models/{model}"
+    ):
+        return bare_model
+    if normalized_template.startswith("/{model}") or normalized_template.startswith("{model}"):
+        return f"{_VERTEX_EXPRESS_MODEL_PREFIX}{bare_model}"
+    return model
+
+
 def response_shape_summary(value: object, *, depth: int = 4, max_keys: int = 24) -> object:
     if depth <= 0:
         return type(value).__name__
@@ -707,7 +735,7 @@ def _build_url_and_headers_for_path(
     model: str,
     path_template: str,
 ) -> tuple[str, dict[str, str]]:
-    raw_path = path_template.format(model=model)
+    raw_path = path_template.format(model=_model_for_path_template(config, model, path_template))
     if not raw_path.startswith("/"):
         raw_path = f"/{raw_path}"
     parsed_base = urllib.parse.urlsplit(config.base_url)

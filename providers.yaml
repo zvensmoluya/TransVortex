@@ -86,6 +86,61 @@ providers:
       http2: true
       streaming_enabled: true
 
+  - name: google_vertex_gemini
+    api_type: gemini-compatible
+    compat_mode: vertex_express
+    base_url: https://aiplatform.googleapis.com/v1
+    env_key: VERTEX_API_KEY
+    credential_id: google_vertex_gemini
+    models:
+      - gemini-3.5-flash
+      - gemini-3.1-pro-preview
+      - gemini-3.1-flash-lite-preview
+      - gemini-2.5-flash
+      - gemini-2.5-pro
+      - gemini-2.5-flash-lite
+      - gemini-2.5-flash-lite-preview-09-2025
+    auth:
+      type: query
+      query_name: key
+      prefix: ""
+    endpoint:
+      path_template: /publishers/google/models/{model}:generateContent
+      method: POST
+    request_mapping:
+      style: gemini_generate_content
+      body_overrides:
+        generationConfig:
+          topP: 0.95
+    response_mapping:
+      text_paths:
+        - candidates[0].content.parts[].text
+    model_list:
+      path_template: ""
+      method: GET
+      response_paths: []
+    capabilities:
+      supports_system_prompt: true
+      supports_temperature: true
+      supports_json_mode: false
+      max_batch_lines: 1000
+      max_context_tokens: 0
+      max_output_tokens: 65536
+      recommended_output_tokens: 32768
+      output_token_param: ""
+    limits:
+      concurrency: 8
+      timeout_seconds: 180
+      retry: 3
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 180
+      write_timeout_seconds: 60
+      pool_timeout_seconds: 5
+      max_connections: 20
+      max_keepalive_connections: 10
+      http2: true
+      streaming_enabled: true
+
 routing:
   primary:
     provider: deepseek

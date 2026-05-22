@@ -89,6 +89,8 @@ def test_provider_templates_include_core_compat_modes() -> None:
     assert templates_by_id["vertex_express"]["endpoint"]["path_template"] == "/publishers/google/models/{model}:generateContent"
     assert templates_by_id["vertex_express"]["model_list"]["path_template"] == ""
     assert templates_by_id["vertex_express"]["models"]
+    assert "gemini-3.1-pro-preview" in templates_by_id["vertex_express"]["models"]
+    assert "gemini-2.0-flash-001" not in templates_by_id["vertex_express"]["models"]
     presets_by_id = {row["id"]: row for row in provider_presets_payload()}
     assert presets_by_id["google_vertex_gemini"]["compat_mode"] == "vertex_express"
 
