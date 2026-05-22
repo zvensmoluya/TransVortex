@@ -6,6 +6,9 @@ src/*.egg-info/
 .venv/
 providers.local.yaml
 .env
+.agentonlyenv
+.imagegen.env
+.env.imagegen
 DemoTest/
 desktop/node_modules/
 desktop/dist/
@@ -14,3 +17,8 @@ desktop/src-tauri/gen/
 desktop/*-dev*.log
 desktop/run-tauri-dev*.ps1
 docs/RESEARCH/
+tmp/imagegen/
+output/imagegen/*.png
+output/imagegen/*.jpg
+output/imagegen/*.jpeg
+output/imagegen/*.webp
