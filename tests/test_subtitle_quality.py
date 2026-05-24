@@ -57,6 +57,15 @@ def test_wrap_mixed_cjk_english_keeps_ascii_word_with_context() -> None:
     assert "".join(line.replace(" ", "") for line in lines) == "这是一条较长的中文字幕，用来检查双语排版、English混排和2026这种数字不会挤在一起。"
 
 
+def test_wrap_cjk_balances_two_lines_at_phrase_boundary() -> None:
+    lines = wrap_subtitle_text(
+        "但因为一开始做了普通的忏悔，结果大声说话的部分就变少了。",
+        max_line_width=42,
+    )
+
+    assert lines == ["但因为一开始做了普通的忏悔，", "结果大声说话的部分就变少了。"]
+
+
 def test_format_bilingual_lines_source_first() -> None:
     seg = Segment(
         id=1,
@@ -125,7 +134,7 @@ def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Pat
     body = out_file.read_text(encoding="utf-8-sig")
     assert "[V4+ Styles]" in body
     assert "Style: Target,Arial,36" in body
-    assert "Style: Source,Arial,30" in body
+    assert "Style: Source,Yu Gothic,25" in body
     assert "Dialogue: 0,0:00:00.00,0:00:01.25,Source" in body
     assert "Dialogue: 1,0:00:00.00,0:00:01.25,Target" in body
     assert "你好" in body
@@ -162,10 +171,14 @@ def test_export_ass_bilingual_order_swaps_visual_margins(tmp_path: Path) -> None
     )
     target_source_body = target_source.read_text(encoding="utf-8-sig")
     source_target_body = source_target.read_text(encoding="utf-8-sig")
-    assert "Style: Target,Arial,44,&H00F7F4F2,&H000000FF,&H90000000,&H5C000000,0,0,0,0,100,100,0,0,1,1.8,0.6,2,96,96,129,1" in target_source_body
-    assert "Style: Source,Arial,30,&H00D7D2CC,&H000000FF,&H96000000,&H64000000,0,0,0,0,100,100,0,0,1,1.4,0.4,2,96,96,48,1" in target_source_body
-    assert "Style: Target,Arial,44,&H00F7F4F2,&H000000FF,&H90000000,&H5C000000,0,0,0,0,100,100,0,0,1,1.8,0.6,2,96,96,48,1" in source_target_body
-    assert "Style: Source,Arial,30,&H00D7D2CC,&H000000FF,&H96000000,&H64000000,0,0,0,0,100,100,0,0,1,1.4,0.4,2,96,96,161,1" in source_target_body
+    assert "Style: Target,Arial,39,&H00F6F1EA,&H000000FF,&H8A000000,&H82000000,0,0,0,0,100,100,0,0,1,1.35,0.18,2,120,120,114,1" in target_source_body
+    assert "Style: Source,Yu Gothic,25,&H00D2CBC2,&H000000FF,&H96000000,&H84000000,0,0,0,0,100,100,0,0,1,1.05,0.14,2,120,120,48,1" in target_source_body
+    assert "Dialogue: 1,0:00:00.00,0:00:01.00,Target,,0,0,104,,你好" in target_source_body
+    assert "Dialogue: 0,0:00:00.00,0:00:01.00,Source,,0,0,48,,Hello" in target_source_body
+    assert "Style: Target,Arial,39,&H00F6F1EA,&H000000FF,&H8A000000,&H82000000,0,0,0,0,100,100,0,0,1,1.35,0.18,2,120,120,48,1" in source_target_body
+    assert "Style: Source,Yu Gothic,25,&H00D2CBC2,&H000000FF,&H96000000,&H84000000,0,0,0,0,100,100,0,0,1,1.05,0.14,2,120,120,144,1" in source_target_body
+    assert "Dialogue: 0,0:00:00.00,0:00:01.00,Source,,0,0,104,,Hello" in source_target_body
+    assert "Dialogue: 1,0:00:00.00,0:00:01.00,Target,,0,0,48,,你好" in source_target_body
 
 
 def test_ass_presentation_plan_wraps_long_bilingual_text_without_changing_segment_text() -> None:
@@ -224,10 +237,10 @@ def test_ass_default_style_has_cjk_font_candidates_and_delivery_report() -> None
         style=style,
     )
 
-    assert style.preset == "bilingual_clean"
-    assert "Microsoft YaHei UI" in style.font_fallbacks
+    assert style.preset == "cinematic"
+    assert "Microsoft YaHei" in style.font_fallbacks
     assert report["summary"]["renderer"] == "presentation"
-    assert report["summary"]["fonts"]["target"].startswith("Noto Sans CJK SC")
+    assert report["summary"]["fonts"]["target"].startswith("Noto Sans SC")
     assert report["summary"]["status"] == "PASS"
 
 
@@ -237,7 +250,7 @@ def test_ass_preset_keeps_user_overrides() -> None:
     assert style.preset == "cinematic"
     assert style.font_name == "Arial"
     assert style.font_size == 52
-    assert style.primary_color == "&H00F8F5EE"
+    assert style.primary_color == "&H00F6F1EA"
 
 
 def test_delivery_report_flags_invalid_ass_style() -> None:
@@ -246,6 +259,18 @@ def test_delivery_report_flags_invalid_ass_style() -> None:
         output_format="ass",
         bilingual=False,
         style=AssStyleConfig(primary_color="white"),
+    )
+
+    assert report["summary"]["status"] == "FAIL"
+    assert report["summary"]["issue_counts"]["invalid_ass_color"] == 1
+
+
+def test_delivery_report_requires_eight_digit_ass_colors() -> None:
+    report = subtitle_delivery_report(
+        [Segment(id=1, start=0.0, end=1.0, text_src="Hello", text_tgt="你好")],
+        output_format="ass",
+        bilingual=False,
+        style=AssStyleConfig(primary_color="&HFFFFFF"),
     )
 
     assert report["summary"]["status"] == "FAIL"

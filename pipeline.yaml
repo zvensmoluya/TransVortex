@@ -26,42 +26,46 @@ subtitle:
     enabled: false
     max_attempts: 1
 subtitle_ass_style:
-  preset: bilingual_clean
+  preset: cinematic
   play_res_x: 1920
   play_res_y: 1080
-  font_name: Noto Sans CJK SC
+  font_name: Noto Sans SC
   font_fallbacks:
-    - Source Han Sans SC
+    - Microsoft YaHei
     - Microsoft YaHei UI
+    - Source Han Sans SC
     - PingFang SC
     - Hiragino Sans GB
+    - Yu Gothic
     - Arial Unicode MS
     - sans-serif
-  font_size: 44
-  primary_color: "&H00F7F4F2"
-  outline_color: "&H90000000"
-  back_color: "&H5C000000"
-  outline: 1.8
-  shadow: 0.6
-  margin_l: 96
-  margin_r: 96
-  margin_v: 58
+  font_size: 39
+  primary_color: "&H00F6F1EA"
+  outline_color: "&H8A000000"
+  back_color: "&H82000000"
+  outline: 1.35
+  shadow: 0.18
+  margin_l: 120
+  margin_r: 120
+  margin_v: 76
   safe_margin_x: 96
   safe_margin_y: 54
   bilingual_order: source_target
-  target_max_width: 38
-  source_max_width: 52
-  hard_max_width: 56
+  target_max_width: 40
+  source_max_width: 44
+  hard_max_width: 52
   max_target_lines: 2
   max_source_lines: 2
-  bilingual_gap: 14
-  line_spacing: 1.12
-  source_font_size: 30
-  source_primary_color: "&H00D7D2CC"
+  bilingual_gap: 12
+  line_spacing: 1.08
+  source_font_name: Yu Gothic
+  source_font_size: 25
+  source_primary_color: "&H00D2CBC2"
   source_outline_color: "&H96000000"
-  source_outline: 1.4
-  source_shadow: 0.4
-  source_margin_v: 116
+  source_back_color: "&H84000000"
+  source_outline: 1.05
+  source_shadow: 0.14
+  source_margin_v: 128
 translation:
   chunk_lines: 120
   context_before_lines: 80

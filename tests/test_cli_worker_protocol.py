@@ -801,6 +801,17 @@ def test_asr_json_status_print_failure_keeps_structured_task_error(tmp_path: Pat
 
 def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        "\n".join(
+            [
+                "artifacts_dir: artifacts",
+                "subtitle_ass_style:",
+                "  font_name: Arial",
+                "  font_size: 37",
+            ]
+        ),
+        encoding="utf-8",
+    )
     calls = []
 
     def fake_run_pipeline(**kwargs):
@@ -880,6 +891,8 @@ def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, caps
     assert set(export_payload["output_paths"]) == {"srt", "ass"}
     assert (tmp_path / "out.srt").exists()
     assert (tmp_path / "out.ass").exists()
+    assert "Style: Target,Arial,37" in (tmp_path / "out.ass").read_text(encoding="utf-8-sig")
+    assert export_payload["delivery"]["ass"]["fonts"]["target"].startswith("Arial")
     assert export_payload["delivery"]["ass"]["renderer"] == "presentation"
 
     monkeypatch.setattr(

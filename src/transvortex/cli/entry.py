@@ -1385,6 +1385,7 @@ def main() -> None:
 
     if args.command == "export":
         def do_export():
+            config = load_app_config(root_dir=root, providers_file=providers_file)
             rows = read_json(Path(args.segments).resolve())
             segments = [Segment(**row) for row in rows]
             output = Path(args.output).resolve()
@@ -1396,14 +1397,19 @@ def main() -> None:
                 output_paths["srt"] = str(srt_path)
             if output_format in {"ass", "both"}:
                 ass_path = output.with_suffix(".ass")
-                export_ass(segments, ass_path, bilingual=args.bilingual)
+                export_ass(segments, ass_path, bilingual=args.bilingual, style=config.pipeline.subtitle_ass_style)
                 output_paths["ass"] = str(ass_path)
             if output_format == "vtt":
                 vtt_path = output.with_suffix(".vtt")
                 export_vtt(segments, vtt_path, args.bilingual)
                 output_paths["vtt"] = str(vtt_path)
             delivery_reports = {
-                fmt: subtitle_delivery_report(segments, output_format=fmt, bilingual=args.bilingual)
+                fmt: subtitle_delivery_report(
+                    segments,
+                    output_format=fmt,
+                    bilingual=args.bilingual,
+                    style=config.pipeline.subtitle_ass_style,
+                )
                 for fmt in output_paths
             }
             return {

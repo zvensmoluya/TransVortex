@@ -281,51 +281,53 @@ class TranslationConfig:
 
 @dataclass
 class AssStyleConfig:
-    preset: str = "bilingual_clean"
+    preset: str = "cinematic"
     play_res_x: int = 1920
     play_res_y: int = 1080
-    font_name: str = "Noto Sans CJK SC"
+    font_name: str = "Noto Sans SC"
     font_fallbacks: list[str] = field(
         default_factory=lambda: [
-            "Source Han Sans SC",
+            "Microsoft YaHei",
             "Microsoft YaHei UI",
+            "Source Han Sans SC",
             "PingFang SC",
             "Hiragino Sans GB",
+            "Yu Gothic",
             "Arial Unicode MS",
             "sans-serif",
         ]
     )
-    font_size: int = 44
+    font_size: int = 39
     bold: int = 0
-    primary_color: str = "&H00F7F4F2"
+    primary_color: str = "&H00F6F1EA"
     secondary_color: str = "&H000000FF"
-    outline_color: str = "&H90000000"
-    back_color: str = "&H5C000000"
-    outline: float = 1.8
-    shadow: float = 0.6
+    outline_color: str = "&H8A000000"
+    back_color: str = "&H82000000"
+    outline: float = 1.35
+    shadow: float = 0.18
     border_style: int = 1
-    margin_l: int = 96
-    margin_r: int = 96
-    margin_v: int = 58
+    margin_l: int = 120
+    margin_r: int = 120
+    margin_v: int = 76
     safe_margin_x: int = 96
     safe_margin_y: int = 54
     bilingual_order: str = "source_target"
     max_target_lines: int = 2
     max_source_lines: int = 2
-    target_max_width: int = 38
-    source_max_width: int = 52
-    hard_max_width: int = 56
-    bilingual_gap: int = 14
-    line_spacing: float = 1.12
-    source_font_name: str = ""
-    source_font_size: int = 30
+    target_max_width: int = 40
+    source_max_width: int = 44
+    hard_max_width: int = 52
+    bilingual_gap: int = 12
+    line_spacing: float = 1.08
+    source_font_name: str = "Yu Gothic"
+    source_font_size: int = 25
     source_bold: int = 0
-    source_primary_color: str = "&H00D7D2CC"
+    source_primary_color: str = "&H00D2CBC2"
     source_outline_color: str = "&H96000000"
-    source_back_color: str = "&H64000000"
-    source_outline: float = 1.4
-    source_shadow: float = 0.4
-    source_margin_v: int = 116
+    source_back_color: str = "&H84000000"
+    source_outline: float = 1.05
+    source_shadow: float = 0.14
+    source_margin_v: int = 128
     font_file: str = ""
 
 

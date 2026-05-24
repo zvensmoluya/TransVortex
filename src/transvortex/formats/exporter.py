@@ -102,6 +102,26 @@ def _visual_margins(style: AssStyleConfig, *, bilingual: bool) -> tuple[int, int
     return max(style.source_margin_v, style.margin_v + source_height + style.bilingual_gap), style.margin_v
 
 
+def _block_height(line_count: int, font_size: int, line_spacing: float) -> int:
+    if line_count <= 0:
+        return 0
+    return int(round(line_count * max(1, font_size) * max(1.0, float(line_spacing))))
+
+
+def _cue_visual_margins(cue, style: AssStyleConfig, *, bilingual: bool) -> tuple[int, int]:
+    target_margin = style.margin_v
+    source_margin = style.margin_v
+    if not bilingual or cue.source is None:
+        return target_margin, source_margin
+    target_height = _block_height(len(cue.target.lines), style.font_size, style.line_spacing)
+    source_height = _block_height(len(cue.source.lines), style.source_font_size, style.line_spacing)
+    if style.bilingual_order == "source_target":
+        source_margin = max(style.source_margin_v, target_margin + target_height + style.bilingual_gap)
+    else:
+        target_margin = max(style.source_margin_v, source_margin + source_height + style.bilingual_gap)
+    return target_margin, source_margin
+
+
 def export_ass(
     segments: list[Segment],
     output: Path,
@@ -170,13 +190,14 @@ def export_ass(
     for cue in plan.cues:
         target = ass_text(cue.target.text)
         source = ass_text(cue.source.text) if cue.source else ""
+        cue_target_margin_v, cue_source_margin_v = _cue_visual_margins(cue, style, bilingual=bilingual)
         if bilingual and style.bilingual_order == "source_target" and source:
-            lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Source,,0,0,0,,{source}")
-            lines.append(f"Dialogue: 1,{_ass_time(cue.start)},{_ass_time(cue.end)},Target,,0,0,0,,{target}")
+            lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Source,,0,0,{cue_source_margin_v},,{source}")
+            lines.append(f"Dialogue: 1,{_ass_time(cue.start)},{_ass_time(cue.end)},Target,,0,0,{cue_target_margin_v},,{target}")
         else:
-            lines.append(f"Dialogue: 1,{_ass_time(cue.start)},{_ass_time(cue.end)},Target,,0,0,0,,{target}")
+            lines.append(f"Dialogue: 1,{_ass_time(cue.start)},{_ass_time(cue.end)},Target,,0,0,{cue_target_margin_v},,{target}")
             if bilingual and source:
-                lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Source,,0,0,0,,{source}")
+                lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Source,,0,0,{cue_source_margin_v},,{source}")
     output.write_text("\n".join(lines), encoding="utf-8-sig")
     return output
 

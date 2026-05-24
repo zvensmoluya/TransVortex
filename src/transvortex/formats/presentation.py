@@ -61,14 +61,24 @@ ASS_STYLE_PRESETS: dict[str, dict[str, Any]] = {
     "default": {},
     "bilingual_clean": {},
     "cinematic": {
-        "font_size": 46,
-        "source_font_size": 30,
-        "primary_color": "&H00F8F5EE",
-        "source_primary_color": "&H00CCC7BF",
-        "outline": 1.7,
-        "shadow": 0.5,
-        "margin_v": 62,
-        "bilingual_gap": 16,
+        "font_size": 39,
+        "source_font_size": 25,
+        "primary_color": "&H00F6F1EA",
+        "source_primary_color": "&H00D2CBC2",
+        "outline_color": "&H8A000000",
+        "source_outline_color": "&H96000000",
+        "back_color": "&H82000000",
+        "source_back_color": "&H84000000",
+        "outline": 1.35,
+        "source_outline": 1.05,
+        "shadow": 0.18,
+        "source_shadow": 0.14,
+        "margin_v": 76,
+        "source_margin_v": 128,
+        "bilingual_gap": 12,
+        "target_max_width": 40,
+        "source_max_width": 44,
+        "hard_max_width": 52,
     },
     "documentary": {
         "font_size": 42,
@@ -139,26 +149,31 @@ ASS_STYLE_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-_ASS_COLOR_RE = re.compile(r"^&H[0-9A-Fa-f]{6,8}$")
+_ASS_COLOR_RE = re.compile(r"^&H[0-9A-Fa-f]{8}$")
 _STYLE_NAME_RE = re.compile(r"^[A-Za-z0-9_ -]+$")
 _WEBVTT_TIMESTAMP_CHARS = re.compile(r"[\r\n\t]")
 
 
 def resolve_ass_style(style: AssStyleConfig | None = None) -> AssStyleConfig:
     base = style or AssStyleConfig()
-    preset_id = str(base.preset or "bilingual_clean").strip().lower()
-    overrides = ASS_STYLE_PRESETS.get(preset_id, ASS_STYLE_PRESETS["bilingual_clean"])
-    resolved = replace(AssStyleConfig(), preset=preset_id if preset_id in ASS_STYLE_PRESETS else "bilingual_clean")
+    preset_id = str(base.preset or "cinematic").strip().lower()
+    overrides = ASS_STYLE_PRESETS.get(preset_id, ASS_STYLE_PRESETS["cinematic"])
+    resolved = replace(AssStyleConfig(), preset=preset_id if preset_id in ASS_STYLE_PRESETS else "cinematic")
     for key, value in overrides.items():
         if hasattr(resolved, key):
             resolved = replace(resolved, **{key: value})
+    explicit_fields = getattr(base, "_explicit_fields", None)
     default_style = AssStyleConfig()
     for field in fields(AssStyleConfig):
         if field.name == "preset":
             continue
+        if explicit_fields is not None:
+            if field.name not in explicit_fields:
+                continue
+        elif getattr(base, field.name) == getattr(default_style, field.name):
+            continue
         value = getattr(base, field.name)
-        if value != getattr(default_style, field.name):
-            resolved = replace(resolved, **{field.name: value})
+        resolved = replace(resolved, **{field.name: value})
     if not resolved.source_font_name:
         resolved = replace(resolved, source_font_name=resolved.font_name)
     return resolved

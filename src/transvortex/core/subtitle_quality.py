@@ -9,6 +9,8 @@ from ..app.models import Segment
 
 _INLINE_SPACE_RE = re.compile(r"[ \t\f\v]+")
 _NO_LINE_START_CHARS = set("，。！？；：、,.!?;:)]}）】〕〉》」』”’")
+_NO_LINE_END_CHARS = set("([{（【〔〈《「『“‘")
+_PREFERRED_LINE_END_CHARS = set("，。！？；：、,.!?;:")
 _ASCII_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+#%&'-]*")
 
 
@@ -141,6 +143,43 @@ def _wrap_words(line: str, max_width: int) -> list[str]:
     return lines
 
 
+def _balanced_two_line_split(line: str, max_width: int) -> list[str] | None:
+    if max_width <= 0 or visual_width(line) > max_width * 2:
+        return None
+    best: tuple[float, str, str] | None = None
+    for idx in range(1, len(line)):
+        left = line[:idx].strip()
+        right = line[idx:].strip()
+        if not left or not right:
+            continue
+        if right[0] in _NO_LINE_START_CHARS or left[-1] in _NO_LINE_END_CHARS:
+            continue
+        if line[idx - 1].isalnum() and line[idx].isalnum():
+            continue
+        left_width = visual_width(left)
+        right_width = visual_width(right)
+        if left_width > max_width or right_width > max_width:
+            continue
+        score = abs(left_width - right_width)
+        if left[-1] in _PREFERRED_LINE_END_CHARS:
+            score -= 6
+        if min(left_width, right_width) < max_width * 0.45:
+            score += 10
+        score += abs(idx - (len(line) / 2)) * 0.05
+        if best is None or score < best[0]:
+            best = (score, left, right)
+    if best is None:
+        return None
+    return [best[1], best[2]]
+
+
+def _rebalance_two_line_wrap(original: str, lines: list[str], max_width: int) -> list[str]:
+    if len(lines) != 2 or not _has_cjk_width(original):
+        return lines
+    balanced = _balanced_two_line_split(original, max_width)
+    return balanced or lines
+
+
 def wrap_subtitle_text(text: str | None, *, max_line_width: int = 42) -> list[str]:
     cleaned = clean_subtitle_text(text)
     if not cleaned:
@@ -152,9 +191,9 @@ def wrap_subtitle_text(text: str | None, *, max_line_width: int = 42) -> list[st
         elif " " in line and not _has_cjk_width(line):
             wrapped.extend(_wrap_words(line, max_line_width))
         elif " " in line:
-            wrapped.extend(_wrap_mixed_line(line, max_line_width))
+            wrapped.extend(_rebalance_two_line_wrap(line, _wrap_mixed_line(line, max_line_width), max_line_width))
         else:
-            wrapped.extend(_split_by_visual_width(line, max_line_width))
+            wrapped.extend(_rebalance_two_line_wrap(line, _split_by_visual_width(line, max_line_width), max_line_width))
     return wrapped
 
 
