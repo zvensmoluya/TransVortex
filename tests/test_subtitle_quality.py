@@ -238,6 +238,8 @@ def test_ass_default_style_has_cjk_font_candidates_and_delivery_report() -> None
     )
 
     assert style.preset == "cinematic"
+    assert style.bilingual_order == "target_source"
+    assert style.prefer_single_line is True
     assert "Microsoft YaHei" in style.font_fallbacks
     assert report["summary"]["renderer"] == "presentation"
     assert report["summary"]["fonts"]["target"].startswith("Noto Sans SC")
@@ -251,6 +253,27 @@ def test_ass_preset_keeps_user_overrides() -> None:
     assert style.font_name == "Arial"
     assert style.font_size == 52
     assert style.primary_color == "&H00F6F1EA"
+
+
+def test_ass_prefer_single_line_uses_hard_width_before_wrapping() -> None:
+    target = "这是一条长度适中的中文字幕，默认应该尽量保持单行。"
+    segment = Segment(id=1, start=0.0, end=2.0, text_src="short source", text_tgt=target)
+
+    prefer_plan = build_render_plan(
+        [segment],
+        output_format="ass",
+        bilingual=False,
+        style=AssStyleConfig(target_max_width=28, hard_max_width=64, prefer_single_line=True),
+    )
+    conservative_plan = build_render_plan(
+        [segment],
+        output_format="ass",
+        bilingual=False,
+        style=AssStyleConfig(target_max_width=28, hard_max_width=64, prefer_single_line=False),
+    )
+
+    assert prefer_plan.cues[0].target.lines == [target]
+    assert len(conservative_plan.cues[0].target.lines) > 1
 
 
 def test_delivery_report_flags_invalid_ass_style() -> None:

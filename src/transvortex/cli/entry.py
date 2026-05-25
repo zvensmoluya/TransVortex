@@ -100,6 +100,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "source_mode": getattr(args, "source_mode", None),
         "subtitle_track": getattr(args, "subtitle_track", None),
         "output_format": getattr(args, "output_format", None),
+        "subtitle_ass_style": _subtitle_ass_style_overrides(args),
         "translation_style_preset": getattr(args, "translation_style_preset", None),
         "translation_style_prompt": getattr(args, "translation_style_prompt", None),
         "translation_chunk_lines": getattr(args, "translation_chunk_lines", None),
@@ -144,6 +145,17 @@ def _parse_memory_preset_arg(raw: str | None) -> list[dict[str, str]] | None:
         else:
             out.append({"id": token})
     return out
+
+
+def _subtitle_ass_style_overrides(args: argparse.Namespace) -> dict[str, object] | None:
+    out: dict[str, object] = {}
+    bilingual_order = getattr(args, "subtitle_bilingual_order", None)
+    if bilingual_order is not None:
+        out["bilingual_order"] = bilingual_order
+    prefer_single_line = getattr(args, "subtitle_prefer_single_line", None)
+    if prefer_single_line is not None:
+        out["prefer_single_line"] = prefer_single_line
+    return out or None
 
 
 def _load_cli_segments_input(path: Path) -> list[Segment]:
@@ -263,6 +275,8 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--subtitle-quality-mode", choices=["off", "conservative", "balanced"], default=None)
     subparser.add_argument("--subtitle-compression-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--subtitle-reflow-enabled", choices=["true", "false"], default=None)
+    subparser.add_argument("--subtitle-bilingual-order", choices=["target_source", "source_target"], default=None)
+    subparser.add_argument("--subtitle-prefer-single-line", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-bootstrap-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-inject-enabled", choices=["true", "false"], default=None)
@@ -446,6 +460,8 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--source-mode", getattr(ns, "source_mode", None)),
         ("--subtitle-track", getattr(ns, "subtitle_track", None)),
         ("--output-format", getattr(ns, "output_format", None)),
+        ("--subtitle-bilingual-order", getattr(ns, "subtitle_bilingual_order", None)),
+        ("--subtitle-prefer-single-line", getattr(ns, "subtitle_prefer_single_line", None)),
         ("--translation-style-preset", getattr(ns, "translation_style_preset", None)),
         ("--translation-style-prompt", getattr(ns, "translation_style_prompt", None)),
         ("--translation-chunk-lines", getattr(ns, "translation_chunk_lines", None)),
@@ -789,6 +805,8 @@ def _build_parser() -> argparse.ArgumentParser:
     reexport_p.add_argument("--task-id", required=True)
     reexport_p.add_argument("--output-format", choices=["srt", "ass", "vtt", "webvtt", "both"], default=None)
     reexport_p.add_argument("--bilingual", choices=["true", "false"], default=None)
+    reexport_p.add_argument("--subtitle-bilingual-order", choices=["target_source", "source_target"], default=None)
+    reexport_p.add_argument("--subtitle-prefer-single-line", choices=["true", "false"], default=None)
     reexport_p.add_argument("--json", action="store_true")
 
     asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments")
@@ -816,6 +834,8 @@ def _build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--format", choices=["srt", "ass", "vtt", "webvtt", "both"], required=True)
     export_p.add_argument("--output", required=True)
     export_p.add_argument("--bilingual", action="store_true")
+    export_p.add_argument("--subtitle-bilingual-order", choices=["target_source", "source_target"], default=None)
+    export_p.add_argument("--subtitle-prefer-single-line", choices=["true", "false"], default=None)
     export_p.add_argument("--json", action="store_true")
 
     worker_p = sub.add_parser("_worker", help=argparse.SUPPRESS)
@@ -1263,6 +1283,8 @@ def main() -> None:
                     task_id=args.task_id,
                     output_format=args.output_format,
                     bilingual=args.bilingual,
+                    subtitle_bilingual_order=args.subtitle_bilingual_order,
+                    subtitle_prefer_single_line=args.subtitle_prefer_single_line,
                 ),
                 json_mode=True,
                 stream_events=False,
@@ -1385,7 +1407,13 @@ def main() -> None:
 
     if args.command == "export":
         def do_export():
-            config = load_app_config(root_dir=root, providers_file=providers_file)
+            config = load_app_config(
+                root_dir=root,
+                providers_file=providers_file,
+                cli_overrides={"subtitle_ass_style": _subtitle_ass_style_overrides(args)}
+                if _subtitle_ass_style_overrides(args)
+                else None,
+            )
             rows = read_json(Path(args.segments).resolve())
             segments = [Segment(**row) for row in rows]
             output = Path(args.output).resolve()

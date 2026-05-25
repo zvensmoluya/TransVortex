@@ -311,12 +311,13 @@ class AssStyleConfig:
     margin_v: int = 76
     safe_margin_x: int = 96
     safe_margin_y: int = 54
-    bilingual_order: str = "source_target"
+    bilingual_order: str = "target_source"
     max_target_lines: int = 2
     max_source_lines: int = 2
-    target_max_width: int = 40
-    source_max_width: int = 44
-    hard_max_width: int = 52
+    target_max_width: int = 48
+    source_max_width: int = 58
+    hard_max_width: int = 64
+    prefer_single_line: bool = True
     bilingual_gap: int = 12
     line_spacing: float = 1.08
     source_font_name: str = "Yu Gothic"

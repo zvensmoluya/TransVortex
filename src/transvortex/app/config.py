@@ -797,12 +797,13 @@ def load_app_config(
         margin_v=_to_int(ass_raw.get("margin_v"), 76),
         safe_margin_x=_to_int(ass_raw.get("safe_margin_x"), 96),
         safe_margin_y=_to_int(ass_raw.get("safe_margin_y"), 54),
-        bilingual_order=_to_str(ass_raw.get("bilingual_order"), "source_target"),
+        bilingual_order=_to_str(ass_raw.get("bilingual_order"), "target_source"),
         max_target_lines=_to_int(ass_raw.get("max_target_lines"), 2),
         max_source_lines=_to_int(ass_raw.get("max_source_lines"), 2),
-        target_max_width=_to_int(ass_raw.get("target_max_width"), 40),
-        source_max_width=_to_int(ass_raw.get("source_max_width"), 44),
-        hard_max_width=_to_int(ass_raw.get("hard_max_width"), 52),
+        target_max_width=_to_int(ass_raw.get("target_max_width"), 48),
+        source_max_width=_to_int(ass_raw.get("source_max_width"), 58),
+        hard_max_width=_to_int(ass_raw.get("hard_max_width"), 64),
+        prefer_single_line=_to_bool(ass_raw.get("prefer_single_line"), True),
         bilingual_gap=_to_int(ass_raw.get("bilingual_gap"), 12),
         line_spacing=_to_float(ass_raw.get("line_spacing"), 1.08),
         source_font_name=_to_str(ass_raw.get("source_font_name"), "Yu Gothic"),
@@ -1050,10 +1051,13 @@ def load_app_config(
         elif key == "subtitle_reflow_enabled":
             pipeline.subtitle.reflow.enabled = _to_bool(value, pipeline.subtitle.reflow.enabled)
         elif key == "subtitle_ass_style" and isinstance(value, dict):
+            explicit_fields = set(getattr(pipeline.subtitle_ass_style, "_explicit_fields", set()) or set())
             for style_key, style_value in value.items():
                 if hasattr(pipeline.subtitle_ass_style, style_key):
                     current = getattr(pipeline.subtitle_ass_style, style_key)
-                    if isinstance(current, int):
+                    if isinstance(current, bool):
+                        setattr(pipeline.subtitle_ass_style, style_key, _to_bool(style_value, current))
+                    elif isinstance(current, int):
                         setattr(pipeline.subtitle_ass_style, style_key, _to_int(style_value, current))
                     elif isinstance(current, float):
                         setattr(pipeline.subtitle_ass_style, style_key, _to_float(style_value, current))
@@ -1061,6 +1065,8 @@ def load_app_config(
                         setattr(pipeline.subtitle_ass_style, style_key, _to_str_list(style_value, current))
                     else:
                         setattr(pipeline.subtitle_ass_style, style_key, _to_str(style_value, current))
+                    explicit_fields.add(style_key)
+            setattr(pipeline.subtitle_ass_style, "_explicit_fields", explicit_fields)
         elif hasattr(pipeline, key):
             setattr(pipeline, key, value)
             if key == "max_cps":

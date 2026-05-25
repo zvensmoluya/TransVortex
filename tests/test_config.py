@@ -1677,7 +1677,12 @@ routing:
             "translation_context_before_lines": 3,
             "translation_context_after_lines": 4,
             "translation_repair_enabled": "false",
-            "subtitle_ass_style": {"font_name": "Arial", "font_size": 36, "bilingual_order": "source_target"},
+            "subtitle_ass_style": {
+                "font_name": "Arial",
+                "font_size": 36,
+                "bilingual_order": "source_target",
+                "prefer_single_line": "false",
+            },
         },
     )
     assert cfg.pipeline.output_format == "both"
@@ -1691,6 +1696,13 @@ routing:
     assert cfg.pipeline.subtitle_ass_style.font_name == "Arial"
     assert cfg.pipeline.subtitle_ass_style.font_size == 36
     assert cfg.pipeline.subtitle_ass_style.bilingual_order == "source_target"
+    assert cfg.pipeline.subtitle_ass_style.prefer_single_line is False
+    assert getattr(cfg.pipeline.subtitle_ass_style, "_explicit_fields") >= {
+        "font_name",
+        "font_size",
+        "bilingual_order",
+        "prefer_single_line",
+    }
 
 
 def test_cli_asr_overrides_parse(tmp_path: Path) -> None:

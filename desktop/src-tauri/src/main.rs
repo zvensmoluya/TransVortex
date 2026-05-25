@@ -61,6 +61,8 @@ struct StartTaskRequest {
     subtitle_quality_mode: Option<String>,
     subtitle_compression_enabled: Option<bool>,
     subtitle_reflow_enabled: Option<bool>,
+    subtitle_bilingual_order: Option<String>,
+    subtitle_prefer_single_line: Option<bool>,
     memory_enabled: Option<bool>,
     memory_bootstrap_enabled: Option<bool>,
     memory_inject_enabled: Option<bool>,
@@ -109,6 +111,8 @@ struct ResumeTaskRequest {
     subtitle_quality_mode: Option<String>,
     subtitle_compression_enabled: Option<bool>,
     subtitle_reflow_enabled: Option<bool>,
+    subtitle_bilingual_order: Option<String>,
+    subtitle_prefer_single_line: Option<bool>,
     memory_enabled: Option<bool>,
     memory_bootstrap_enabled: Option<bool>,
     memory_inject_enabled: Option<bool>,
@@ -573,6 +577,8 @@ fn reexport_task(
     task_id: String,
     output_format: String,
     bilingual: Option<bool>,
+    subtitle_bilingual_order: Option<String>,
+    subtitle_prefer_single_line: Option<bool>,
 ) -> Result<Value, String> {
     let root = repo_root(&app)?;
     let mut args = vec![
@@ -583,6 +589,16 @@ fn reexport_task(
         output_format,
     ];
     push_bool_arg(&mut args, "--bilingual", bilingual);
+    push_arg(
+        &mut args,
+        "--subtitle-bilingual-order",
+        &subtitle_bilingual_order,
+    );
+    push_bool_arg(
+        &mut args,
+        "--subtitle-prefer-single-line",
+        subtitle_prefer_single_line,
+    );
     args.push("--json".into());
     run_worker_json(&root, &args)
 }
@@ -665,6 +681,16 @@ fn start_task(
         request.translation_repair_enabled,
     );
     push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
+    push_arg(
+        &mut args,
+        "--subtitle-bilingual-order",
+        &request.subtitle_bilingual_order,
+    );
+    push_bool_arg(
+        &mut args,
+        "--subtitle-prefer-single-line",
+        request.subtitle_prefer_single_line,
+    );
     push_bool_arg(
         &mut args,
         "--subtitle-compression-enabled",
@@ -743,6 +769,16 @@ fn resume_task(
         request.translation_repair_enabled,
     );
     push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
+    push_arg(
+        &mut args,
+        "--subtitle-bilingual-order",
+        &request.subtitle_bilingual_order,
+    );
+    push_bool_arg(
+        &mut args,
+        "--subtitle-prefer-single-line",
+        request.subtitle_prefer_single_line,
+    );
     push_bool_arg(
         &mut args,
         "--subtitle-compression-enabled",

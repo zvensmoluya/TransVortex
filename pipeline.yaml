@@ -50,10 +50,11 @@ subtitle_ass_style:
   margin_v: 76
   safe_margin_x: 96
   safe_margin_y: 54
-  bilingual_order: source_target
-  target_max_width: 40
-  source_max_width: 44
-  hard_max_width: 52
+  bilingual_order: target_source
+  target_max_width: 48
+  source_max_width: 58
+  hard_max_width: 64
+  prefer_single_line: true
   max_target_lines: 2
   max_source_lines: 2
   bilingual_gap: 12

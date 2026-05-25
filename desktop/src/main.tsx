@@ -275,6 +275,7 @@ function App() {
       const providerConfig = payload.providers.find((item) => item.name === provider);
       const memory = objectValue(payload.pipeline.memory);
       const subtitle = objectValue(payload.pipeline.subtitle);
+      const subtitleAssStyle = objectValue(payload.pipeline.subtitle_ass_style);
       const asrLocal = objectValue(payload.pipeline.asr_local);
       const asrCloud = objectValue(payload.pipeline.asr_cloud);
       const asrChunking = objectValue(payload.pipeline.asr_chunking);
@@ -335,6 +336,12 @@ function App() {
         subtitleCompressionEnabled:
           (objectValue(subtitle.compression).enabled as boolean | undefined) ?? current.subtitleCompressionEnabled,
         subtitleReflowEnabled: (reflow.enabled as boolean | undefined) ?? current.subtitleReflowEnabled,
+        subtitleBilingualOrder: textValue(
+          subtitleAssStyle.bilingual_order,
+          current.subtitleBilingualOrder,
+        ) as FormState["subtitleBilingualOrder"],
+        subtitlePreferSingleLine:
+          (subtitleAssStyle.prefer_single_line as boolean | undefined) ?? current.subtitlePreferSingleLine,
         outputFormat: textValue(payload.pipeline.output_format, current.outputFormat) as FormState["outputFormat"],
         concurrency: numberValue(payload.pipeline.default_concurrency, current.concurrency),
       };
@@ -928,6 +935,8 @@ function App() {
       subtitleQualityMode: form.subtitleQualityMode,
       subtitleCompressionEnabled: form.subtitleCompressionEnabled,
       subtitleReflowEnabled: form.subtitleReflowEnabled,
+      subtitleBilingualOrder: form.subtitleBilingualOrder,
+      subtitlePreferSingleLine: form.subtitlePreferSingleLine,
       memoryEnabled: form.memoryEnabled,
       memoryBootstrapEnabled: form.memoryBootstrapEnabled,
       memoryInjectEnabled: form.memoryInjectEnabled,
@@ -1075,6 +1084,8 @@ function App() {
         taskId: taskResult.task.task_id,
         outputFormat: form.outputFormat,
         bilingual: form.bilingual,
+        subtitleBilingualOrder: form.subtitleBilingualOrder,
+        subtitlePreferSingleLine: form.subtitlePreferSingleLine,
       });
       setNotice(t("reexported"));
       const payload = await invoke<TaskResultPayload>("open_task_result", { taskId: taskResult.task.task_id });
@@ -1515,10 +1526,33 @@ function TaskWorkspace({
             </div>
           </label>
         </div>
-        <label className="mt-4 inline-flex items-center gap-2 text-sm text-ink">
-          <input className="h-4 w-4" type="checkbox" checked={form.bilingual} onChange={(event) => update("bilingual", event.target.checked)} />
-          {t("bilingual")}
-        </label>
+        <div className="mt-4 grid grid-cols-[160px_220px_minmax(0,1fr)] items-end gap-4">
+          <label className="inline-flex items-center gap-2 text-sm text-ink">
+            <input className="h-4 w-4" type="checkbox" checked={form.bilingual} onChange={(event) => update("bilingual", event.target.checked)} />
+            {t("bilingual")}
+          </label>
+          <label className="tvx-label">
+            {t("subtitleBilingualOrder")}
+            <select
+              className="tvx-input"
+              value={form.subtitleBilingualOrder}
+              disabled={!form.bilingual}
+              onChange={(event) => update("subtitleBilingualOrder", event.target.value as FormState["subtitleBilingualOrder"])}
+            >
+              <option value="target_source">{t("subtitleTargetSource")}</option>
+              <option value="source_target">{t("subtitleSourceTarget")}</option>
+            </select>
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-ink">
+            <input
+              className="h-4 w-4"
+              type="checkbox"
+              checked={form.subtitlePreferSingleLine}
+              onChange={(event) => update("subtitlePreferSingleLine", event.target.checked)}
+            />
+            {t("subtitlePreferSingleLine")}
+          </label>
+        </div>
       </Panel>
 
       <Panel title={t("advanced")}>

@@ -215,8 +215,20 @@ def reexport_task(
     task_id: str,
     output_format: str | None = None,
     bilingual: bool | str | None = None,
+    subtitle_bilingual_order: str | None = None,
+    subtitle_prefer_single_line: bool | str | None = None,
 ) -> dict[str, Any]:
-    config = load_app_config(root_dir=root_dir, cli_overrides={"output_format": output_format} if output_format else None)
+    cli_overrides: dict[str, Any] = {}
+    if output_format:
+        cli_overrides["output_format"] = output_format
+    subtitle_style: dict[str, Any] = {}
+    if subtitle_bilingual_order:
+        subtitle_style["bilingual_order"] = subtitle_bilingual_order
+    if subtitle_prefer_single_line is not None:
+        subtitle_style["prefer_single_line"] = _optional_bool(subtitle_prefer_single_line, True)
+    if subtitle_style:
+        cli_overrides["subtitle_ass_style"] = subtitle_style
+    config = load_app_config(root_dir=root_dir, cli_overrides=cli_overrides or None)
     store = TaskStore(config.pipeline.artifacts_dir)
     task = store.load_task(task_id)
     paths = _task_paths(store, task_id)
@@ -256,6 +268,10 @@ def reexport_task(
     task.settings["edited"] = bool(task.settings.get("edited", False))
     task.settings["output_format"] = normalized
     task.settings["reexport_bilingual"] = effective_bilingual
+    task.settings["reexport_subtitle_ass_style"] = {
+        "bilingual_order": config.pipeline.subtitle_ass_style.bilingual_order,
+        "prefer_single_line": config.pipeline.subtitle_ass_style.prefer_single_line,
+    }
     store.save_task(task)
     store.append_event(
         task_id,

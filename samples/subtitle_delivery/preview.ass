@@ -12,16 +12,16 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Target,Noto Sans SC,39,&H00F6F1EA,&H000000FF,&H8A000000,&H82000000,0,0,0,0,100,100,0,0,1,1.35,0.18,2,120,120,76,1
-Style: Source,Yu Gothic,25,&H00D2CBC2,&H000000FF,&H96000000,&H84000000,0,0,0,0,100,100,0,0,1,1.05,0.14,2,120,120,172,1
+Style: Target,Noto Sans SC,39,&H00F6F1EA,&H000000FF,&H8A000000,&H82000000,0,0,0,0,100,100,0,0,1,1.35,0.18,2,120,120,142,1
+Style: Source,Yu Gothic,25,&H00D2CBC2,&H000000FF,&H96000000,&H84000000,0,0,0,0,100,100,0,0,1,1.05,0.14,2,120,120,76,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:01.80,Source,,0,0,130,,Good evening.
-Dialogue: 1,0:00:00.00,0:00:01.80,Target,,0,0,76,,晚上好。
-Dialogue: 0,0:00:02.10,0:00:05.40,Source,,0,0,172,,This is a longer subtitle line for checking\Nbilingual layout, mixed English words, and the 2026\Ntimestamp.
-Dialogue: 1,0:00:02.10,0:00:05.40,Target,,0,0,76,,这是一条较长的中文字幕，用来检查双语排版、\NEnglish 混排和 2026 这种数字不会挤在一起。
-Dialogue: 0,0:00:05.80,0:00:08.60,Source,,0,0,130,,東京タワーの下で、AI team\NB-12 is still waiting.
-Dialogue: 1,0:00:05.80,0:00:08.60,Target,,0,0,76,,在东京塔下，AI team B-12 还在等待。
-Dialogue: 0,0:00:09.00,0:00:12.50,Source,,0,0,172,,Use this cue to preview subtitles over\Nbright, dark, and busy footage.
-Dialogue: 1,0:00:09.00,0:00:12.50,Target,,0,0,76,,这一条用于预览字幕在明亮、\N昏暗和复杂画面上的可读性。
+Dialogue: 1,0:00:00.00,0:00:01.80,Target,,0,0,128,,晚上好。
+Dialogue: 0,0:00:00.00,0:00:01.80,Source,,0,0,76,,Good evening.
+Dialogue: 1,0:00:02.10,0:00:05.40,Target,,0,0,142,,这是一条较长的中文字幕，用来检查双语排版、\NEnglish 混排和 2026 这种数字不会挤在一起。
+Dialogue: 0,0:00:02.10,0:00:05.40,Source,,0,0,76,,This is a longer subtitle line for checking bilingual\Nlayout, mixed English words, and the 2026 timestamp.
+Dialogue: 1,0:00:05.80,0:00:08.60,Target,,0,0,128,,在东京塔下，AI team B-12 还在等待。
+Dialogue: 0,0:00:05.80,0:00:08.60,Source,,0,0,76,,東京タワーの下で、AI team B-12 is still waiting.
+Dialogue: 1,0:00:09.00,0:00:12.50,Target,,0,0,142,,这一条用于预览字幕在明亮、昏暗和复杂画面上的可读性。
+Dialogue: 0,0:00:09.00,0:00:12.50,Source,,0,0,76,,Use this cue to preview subtitles over bright, dark, and\Nbusy footage.

@@ -76,9 +76,11 @@ ASS_STYLE_PRESETS: dict[str, dict[str, Any]] = {
         "margin_v": 76,
         "source_margin_v": 128,
         "bilingual_gap": 12,
-        "target_max_width": 40,
-        "source_max_width": 44,
-        "hard_max_width": 52,
+        "bilingual_order": "target_source",
+        "target_max_width": 48,
+        "source_max_width": 58,
+        "hard_max_width": 64,
+        "prefer_single_line": True,
     },
     "documentary": {
         "font_size": 42,
@@ -204,8 +206,13 @@ def _block(
     max_width: int,
     hard_max_width: int,
     max_lines: int,
+    prefer_single_line: bool,
 ) -> SubtitleTextBlock:
     lines = wrap_subtitle_text(text, max_line_width=max_width)
+    if prefer_single_line and hard_max_width > max_width:
+        wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
+        if wider_lines and len(wider_lines) < len(lines):
+            lines = wider_lines
     if len(lines) > max_lines and hard_max_width > max_width:
         wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
         if len(wider_lines) <= len(lines):
@@ -248,6 +255,7 @@ def build_render_plan(
             max_width=max(8, int(resolved.target_max_width or 38)),
             hard_max_width=max(8, int(resolved.hard_max_width or 56)),
             max_lines=max(1, int(resolved.max_target_lines or 2)),
+            prefer_single_line=bool(resolved.prefer_single_line),
         )
         source = None
         if bilingual and clean_subtitle_text(segment.text_src):
@@ -257,6 +265,7 @@ def build_render_plan(
                 max_width=max(8, int(resolved.source_max_width or resolved.target_max_width or 42)),
                 hard_max_width=max(8, int(resolved.hard_max_width or 56)),
                 max_lines=max(1, int(resolved.max_source_lines or 2)),
+                prefer_single_line=bool(resolved.prefer_single_line),
             )
         cues.append(
             SubtitleCueLayout(

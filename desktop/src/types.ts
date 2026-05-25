@@ -286,6 +286,8 @@ export type FormState = {
   subtitleQualityMode: "off" | "conservative" | "balanced";
   subtitleCompressionEnabled: boolean;
   subtitleReflowEnabled: boolean;
+  subtitleBilingualOrder: "target_source" | "source_target";
+  subtitlePreferSingleLine: boolean;
   outputFormat: "srt" | "ass" | "vtt" | "both";
   concurrency: number;
   apiKey: string;
@@ -338,6 +340,8 @@ export const emptyForm: FormState = {
   subtitleQualityMode: "balanced",
   subtitleCompressionEnabled: false,
   subtitleReflowEnabled: false,
+  subtitleBilingualOrder: "target_source",
+  subtitlePreferSingleLine: true,
   outputFormat: "srt",
   concurrency: 8,
   apiKey: "",
