@@ -208,16 +208,21 @@ def _block(
     hard_max_width: int,
     max_lines: int,
     prefer_single_line: bool,
+    wrap: bool = True,
 ) -> SubtitleTextBlock:
-    lines = wrap_subtitle_text(text, max_line_width=max_width)
-    if prefer_single_line and hard_max_width > max_width:
-        wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
-        if wider_lines and len(wider_lines) < len(lines):
-            lines = wider_lines
-    if len(lines) > max_lines and hard_max_width > max_width:
-        wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
-        if len(wider_lines) <= len(lines):
-            lines = wider_lines
+    if wrap:
+        lines = wrap_subtitle_text(text, max_line_width=max_width)
+        if prefer_single_line and hard_max_width > max_width:
+            wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
+            if wider_lines and len(wider_lines) < len(lines):
+                lines = wider_lines
+        if len(lines) > max_lines and hard_max_width > max_width:
+            wider_lines = wrap_subtitle_text(text, max_line_width=hard_max_width)
+            if len(wider_lines) <= len(lines):
+                lines = wider_lines
+    else:
+        line = _single_line_text(text)
+        lines = [line] if line else []
     overflow_lines = max(0, len(lines) - max_lines)
     max_line_width = max((subtitle_line_width(line) for line in lines), default=0)
     overflow_width = max(0, max_line_width - max_width)
@@ -232,6 +237,10 @@ def _block(
 
 def _target_text(segment: Segment) -> str:
     return clean_subtitle_text(segment.text_tgt or segment.text_src)
+
+
+def _single_line_text(value: str | None) -> str:
+    return " ".join(clean_subtitle_text(value).splitlines())
 
 
 def build_render_plan(
@@ -262,11 +271,12 @@ def build_render_plan(
         if bilingual and clean_subtitle_text(segment.text_src):
             source = _block(
                 "source",
-                segment.text_src,
+                _single_line_text(segment.text_src),
                 max_width=max(8, int(resolved.source_max_width or resolved.target_max_width or 42)),
                 hard_max_width=max(8, int(resolved.hard_max_width or 56)),
                 max_lines=max(1, int(resolved.max_source_lines or 2)),
                 prefer_single_line=bool(resolved.prefer_single_line),
+                wrap=False,
             )
         cues.append(
             SubtitleCueLayout(
@@ -520,15 +530,11 @@ def plain_srt_lines(
     prefer_single_line = False
     if resolved:
         target_width = max(8, int(resolved.target_max_width or max_line_width))
-        source_width = max(8, int(resolved.source_max_width or resolved.target_max_width or max_line_width))
         hard_width = max(8, int(resolved.hard_max_width or max_line_width))
         prefer_single_line = bool(resolved.prefer_single_line)
-    source_lines = wrap_subtitle_text(
-        segment.text_src,
-        max_line_width=source_width,
-        hard_max_line_width=hard_width,
-        prefer_single_line=prefer_single_line,
-    )
+        source_first = resolved.bilingual_order == "source_target"
+    source_text = _single_line_text(segment.text_src)
+    source_lines = [source_text] if source_text else []
     target_lines = wrap_subtitle_text(
         segment.text_tgt or segment.text_src,
         max_line_width=target_width,
