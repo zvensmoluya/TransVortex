@@ -1122,12 +1122,13 @@ def test_memory_bootstrap_input_view_soft_cleans_noise_and_keeps_evidence() -> N
         Segment(id=2, start=1.2, end=1.6, text_src="um, Subaru"),
         Segment(id=3, start=5.0, end=5.2, text_src="[music]"),
         Segment(id=4, start=5.4, end=5.6, text_src="Subaru enters", confidence=-1.3),
+        Segment(id=5, start=6.0, end=6.8, text_src="（掏耳声）"),
     ]
 
     view = build_bootstrap_input_view(segments)
     rendered = render_bootstrap_input_text(view)
 
-    assert view.stats["segments"] == 4
+    assert view.stats["segments"] == 5
     assert view.lines[0].raw == "Subaru enters"
     assert view.lines[0].clean == "Subaru enters"
     assert "possible_term" in view.lines[0].flags
@@ -1136,6 +1137,8 @@ def test_memory_bootstrap_input_view_soft_cleans_noise_and_keeps_evidence() -> N
     assert view.lines[2].clean == ""
     assert {"scene_gap", "sound_effect", "noise", "low_info"}.issubset(set(view.lines[2].flags))
     assert {"low_confidence", "uncertain", "duplicate"}.issubset(set(view.lines[3].flags))
+    assert view.lines[4].clean == ""
+    assert {"sound_effect", "noise", "low_info"}.issubset(set(view.lines[4].flags))
     assert "raw: [music]" in rendered
     assert "clean: " in rendered
 

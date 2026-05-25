@@ -8,6 +8,7 @@ from typing import Any, Literal
 from ..app.models import AssStyleConfig, Segment
 from ..core.subtitle_quality import (
     clean_subtitle_text,
+    subtitle_line_break_issues,
     subtitle_line_width,
     visual_width,
     wrap_subtitle_text,
@@ -301,6 +302,29 @@ def _layout_issues(
     canvas: SubtitleCanvas,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
+    for break_issue in subtitle_line_break_issues(
+        target.lines,
+        max_line_width=max(8, int(style.target_max_width or 38)),
+    ):
+        issues.append(
+            {
+                "code": f"target_{break_issue['code']}",
+                "level": "WARN",
+                "message": break_issue["message"],
+            }
+        )
+    if source:
+        for break_issue in subtitle_line_break_issues(
+            source.lines,
+            max_line_width=max(8, int(style.source_max_width or style.target_max_width or 42)),
+        ):
+            issues.append(
+                {
+                    "code": f"source_{break_issue['code']}",
+                    "level": "WARN",
+                    "message": break_issue["message"],
+                }
+            )
     if target.overflow_lines:
         issues.append(
             {
@@ -344,6 +368,36 @@ def _layout_issues(
     return issues
 
 
+def _line_layout_summary(blocks: list[SubtitleTextBlock]) -> dict[str, Any]:
+    total = len(blocks)
+    one_line = sum(1 for block in blocks if len(block.lines) == 1)
+    two_lines = sum(1 for block in blocks if len(block.lines) == 2)
+    over_two_lines = sum(1 for block in blocks if len(block.lines) > 2)
+    empty = sum(1 for block in blocks if not block.lines)
+    return {
+        "blocks": total,
+        "empty": empty,
+        "one_line": one_line,
+        "two_lines": two_lines,
+        "over_two_lines": over_two_lines,
+        "one_line_ratio": one_line / total if total else 0.0,
+        "two_line_ratio": two_lines / total if total else 0.0,
+        "over_two_line_ratio": over_two_lines / total if total else 0.0,
+    }
+
+
+_TARGET_BREAK_ISSUE_CODES = {
+    "target_unbalanced_two_line_break",
+    "target_awkward_line_start",
+    "target_awkward_line_end",
+}
+_SOURCE_BREAK_ISSUE_CODES = {
+    "source_unbalanced_two_line_break",
+    "source_awkward_line_start",
+    "source_awkward_line_end",
+}
+
+
 def delivery_quality_report(plan: SubtitleRenderPlan) -> dict[str, Any]:
     issue_counts: dict[str, int] = {}
     style_issues = _style_issues(plan.style)
@@ -372,6 +426,18 @@ def delivery_quality_report(plan: SubtitleRenderPlan) -> dict[str, Any]:
         status = "FAIL"
     elif issue_counts:
         status = "WARN"
+    target_line_layout = _line_layout_summary([cue.target for cue in plan.cues])
+    source_line_layout = _line_layout_summary([cue.source for cue in plan.cues if cue.source])
+    target_line_layout["awkward_breaks"] = sum(
+        count
+        for code, count in issue_counts.items()
+        if code in _TARGET_BREAK_ISSUE_CODES
+    )
+    source_line_layout["awkward_breaks"] = sum(
+        count
+        for code, count in issue_counts.items()
+        if code in _SOURCE_BREAK_ISSUE_CODES
+    )
     return {
         "summary": {
             "format": plan.format,
@@ -390,6 +456,10 @@ def delivery_quality_report(plan: SubtitleRenderPlan) -> dict[str, Any]:
                 "target": format_font_stack_for_notes(plan.style),
                 "source": format_font_stack_for_notes(plan.style, source=True),
                 "font_file": plan.style.font_file,
+            },
+            "line_layout": {
+                "target": target_line_layout,
+                "source": source_line_layout,
             },
         },
         "style_issues": style_issues,
@@ -435,9 +505,36 @@ def vtt_text(value: str) -> str:
     return "\n".join(_WEBVTT_TIMESTAMP_CHARS.sub(" ", html.escape(line, quote=False)) for line in value.splitlines())
 
 
-def plain_srt_lines(segment: Segment, *, bilingual: bool, max_line_width: int = 42, source_first: bool = True) -> list[str]:
-    source_lines = wrap_subtitle_text(segment.text_src, max_line_width=max_line_width)
-    target_lines = wrap_subtitle_text(segment.text_tgt or segment.text_src, max_line_width=max_line_width)
+def plain_srt_lines(
+    segment: Segment,
+    *,
+    bilingual: bool,
+    max_line_width: int = 42,
+    source_first: bool = True,
+    style: AssStyleConfig | None = None,
+) -> list[str]:
+    resolved = resolve_ass_style(style) if style else None
+    target_width = max_line_width
+    source_width = max_line_width
+    hard_width: int | None = None
+    prefer_single_line = False
+    if resolved:
+        target_width = max(8, int(resolved.target_max_width or max_line_width))
+        source_width = max(8, int(resolved.source_max_width or resolved.target_max_width or max_line_width))
+        hard_width = max(8, int(resolved.hard_max_width or max_line_width))
+        prefer_single_line = bool(resolved.prefer_single_line)
+    source_lines = wrap_subtitle_text(
+        segment.text_src,
+        max_line_width=source_width,
+        hard_max_line_width=hard_width,
+        prefer_single_line=prefer_single_line,
+    )
+    target_lines = wrap_subtitle_text(
+        segment.text_tgt or segment.text_src,
+        max_line_width=target_width,
+        hard_max_line_width=hard_width,
+        prefer_single_line=prefer_single_line,
+    )
     if not bilingual:
         return target_lines
     return source_lines + target_lines if source_first else target_lines + source_lines

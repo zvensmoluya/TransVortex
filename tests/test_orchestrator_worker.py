@@ -189,6 +189,18 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
     assert (task_dir / "translate" / "segments.translated.jsonl").exists()
     assert (task_dir / "translate" / "validation.jsonl").exists()
     assert (task_dir / "final" / "segments.aligned.json").exists()
+    source_raw_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.raw.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    source_clean_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_raw_rows] == ["Hello", "World", "Again"]
+    assert [row["text_src"] for row in source_clean_rows] == ["Hello", "World", "Again"]
+    source_cleaning = json.loads((task_dir / "quality" / "source_cleaning.json").read_text(encoding="utf-8"))
+    assert source_cleaning["dropped_segments"] == 0
     quality = json.loads((task_dir / "quality" / "subtitle_quality.json").read_text(encoding="utf-8"))
     assert quality["summary"]["segments"] >= 1
     assert len(FakeAsrEngine.calls) == 2
@@ -862,6 +874,12 @@ providers:
                     "rows": [
                         {"start": segment_start_offset, "end": segment_start_offset + 1, "text": "♪♪", "meta": {"source": "asr"}},
                         {"start": segment_start_offset + 1, "end": segment_start_offset + 2, "text": "やったわ", "meta": {"source": "asr"}},
+                        {
+                            "start": segment_start_offset + 2,
+                            "end": segment_start_offset + 3,
+                            "text": "耳かき音、耳かき音、耳かき音、耳かき音",
+                            "meta": {"source": "asr"},
+                        },
                     ],
                     "raw_response": {"segments": []},
                 },
@@ -883,14 +901,22 @@ providers:
 
     task_dir = TaskStore(root / "artifacts").task_dir(task_id)
     rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
-    assert [row["text"] for row in rows] == ["やったわ"]
+    assert [row["text"] for row in rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音"]
     quality = json.loads((task_dir / "source" / "asr" / "quality" / "segment_00000.json").read_text(encoding="utf-8"))
     assert quality["dropped_rows"] == 1
+    source_raw_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.raw.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["text_src"] for row in source_raw_rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音"]
     source_rows = [
         json.loads(line)
         for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [row["text_src"] for row in source_rows] == ["やったわ"]
+    source_cleaning = json.loads((task_dir / "quality" / "source_cleaning.json").read_text(encoding="utf-8"))
+    assert source_cleaning["dropped_segments"] == 1
+    assert source_cleaning["dropped"][0]["reasons"] == ["repeated_sound_effect", "sound_effect"]
 
 
 def test_cloud_asr_concurrent_segments_merge_in_manifest_order(tmp_path: Path, monkeypatch) -> None:

@@ -403,7 +403,9 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["commands"]["memory bootstrap"]["supports_dry_run"] is True
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
+    assert "source/segments.raw.jsonl" in payload["artifact_contract"]
     assert "source/segments.normalized.jsonl" in payload["artifact_contract"]
+    assert "quality/source_cleaning.json" in payload["artifact_contract"]
     assert "quality/subtitle_delivery.json" in payload["artifact_contract"]
     assert "output/*.vtt" in payload["artifact_contract"]
     assert "memory/rejected_memory_candidates.jsonl" in payload["artifact_contract"]

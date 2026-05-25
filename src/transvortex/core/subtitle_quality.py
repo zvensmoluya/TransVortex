@@ -11,6 +11,12 @@ _INLINE_SPACE_RE = re.compile(r"[ \t\f\v]+")
 _NO_LINE_START_CHARS = set("，。！？；：、,.!?;:)]}）】〕〉》」』”’")
 _NO_LINE_END_CHARS = set("([{（【〔〈《「『“‘")
 _PREFERRED_LINE_END_CHARS = set("，。！？；：、,.!?;:")
+_STRONG_LINE_END_CHARS = set("。！？.!?")
+_WEAK_LINE_START_CHARS = set(
+    "你我他她它您咱俺谁这那哪"
+    "把被让给和与及或的地得了着过在是有很也都就还又再"
+)
+_WEAK_LINE_END_CHARS = set("把被让给向和与及或的地得了着过在是有很也都就还又再")
 _ASCII_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+#%&'-]*")
 
 
@@ -63,6 +69,10 @@ def _split_by_visual_width(text: str, max_width: int) -> list[str]:
 
 def _has_cjk_width(text: str) -> bool:
     return any(unicodedata.east_asian_width(ch) in {"F", "W"} for ch in text)
+
+
+def _is_ascii_alnum(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
 
 
 def _mixed_tokens(line: str) -> list[str]:
@@ -143,6 +153,33 @@ def _wrap_words(line: str, max_width: int) -> list[str]:
     return lines
 
 
+def _break_score(line: str, idx: int, left: str, right: str, max_width: int) -> float:
+    left_width = visual_width(left)
+    right_width = visual_width(right)
+    score = abs(left_width - right_width)
+    min_width = min(left_width, right_width)
+
+    if left[-1] in _STRONG_LINE_END_CHARS:
+        score -= 10
+    elif left[-1] in _PREFERRED_LINE_END_CHARS:
+        score -= 7
+    if idx < len(line) and line[idx].isspace():
+        score -= 2
+    if line[idx - 1].isspace():
+        score -= 2
+
+    if min_width < max_width * 0.30:
+        score += 24
+    elif min_width < max_width * 0.42:
+        score += 10
+    if right[0] in _WEAK_LINE_START_CHARS:
+        score += 5
+    if left[-1] in _WEAK_LINE_END_CHARS:
+        score += 5
+    score += abs(idx - (len(line) / 2)) * 0.04
+    return score
+
+
 def _balanced_two_line_split(line: str, max_width: int) -> list[str] | None:
     if max_width <= 0 or visual_width(line) > max_width * 2:
         return None
@@ -154,18 +191,13 @@ def _balanced_two_line_split(line: str, max_width: int) -> list[str] | None:
             continue
         if right[0] in _NO_LINE_START_CHARS or left[-1] in _NO_LINE_END_CHARS:
             continue
-        if line[idx - 1].isalnum() and line[idx].isalnum():
+        if _is_ascii_alnum(line[idx - 1]) and _is_ascii_alnum(line[idx]):
             continue
         left_width = visual_width(left)
         right_width = visual_width(right)
         if left_width > max_width or right_width > max_width:
             continue
-        score = abs(left_width - right_width)
-        if left[-1] in _PREFERRED_LINE_END_CHARS:
-            score -= 6
-        if min(left_width, right_width) < max_width * 0.45:
-            score += 10
-        score += abs(idx - (len(line) / 2)) * 0.05
+        score = _break_score(line, idx, left, right, max_width)
         if best is None or score < best[0]:
             best = (score, left, right)
     if best is None:
@@ -180,21 +212,56 @@ def _rebalance_two_line_wrap(original: str, lines: list[str], max_width: int) ->
     return balanced or lines
 
 
-def wrap_subtitle_text(text: str | None, *, max_line_width: int = 42) -> list[str]:
+def _wrap_single_line(line: str, max_line_width: int) -> list[str]:
+    if visual_width(line) <= max_line_width:
+        return [line]
+    if " " in line and not _has_cjk_width(line):
+        return _wrap_words(line, max_line_width)
+    if " " in line:
+        return _rebalance_two_line_wrap(line, _wrap_mixed_line(line, max_line_width), max_line_width)
+    return _rebalance_two_line_wrap(line, _split_by_visual_width(line, max_line_width), max_line_width)
+
+
+def wrap_subtitle_text(
+    text: str | None,
+    *,
+    max_line_width: int = 42,
+    hard_max_line_width: int | None = None,
+    prefer_single_line: bool = False,
+) -> list[str]:
     cleaned = clean_subtitle_text(text)
     if not cleaned:
         return []
+    max_line_width = max(1, int(max_line_width or 1))
+    hard_width = max_line_width
+    if hard_max_line_width is not None:
+        hard_width = max(max_line_width, int(hard_max_line_width or max_line_width))
     wrapped: list[str] = []
     for line in cleaned.splitlines():
-        if visual_width(line) <= max_line_width:
-            wrapped.append(line)
-        elif " " in line and not _has_cjk_width(line):
-            wrapped.extend(_wrap_words(line, max_line_width))
-        elif " " in line:
-            wrapped.extend(_rebalance_two_line_wrap(line, _wrap_mixed_line(line, max_line_width), max_line_width))
-        else:
-            wrapped.extend(_rebalance_two_line_wrap(line, _split_by_visual_width(line, max_line_width), max_line_width))
+        lines = _wrap_single_line(line, max_line_width)
+        if hard_width > max_line_width and (prefer_single_line or len(lines) > 2):
+            wider_lines = _wrap_single_line(line, hard_width)
+            if wider_lines and len(wider_lines) < len(lines):
+                lines = wider_lines
+        wrapped.extend(lines)
     return wrapped
+
+
+def subtitle_line_break_issues(lines: list[str], *, max_line_width: int) -> list[dict[str, str]]:
+    rendered = [line.strip() for line in lines if line.strip()]
+    if len(rendered) != 2:
+        return []
+    first, second = rendered
+    issues: list[dict[str, str]] = []
+    first_width = visual_width(first)
+    second_width = visual_width(second)
+    if min(first_width, second_width) < max(6, int(max_line_width * 0.30)):
+        issues.append({"code": "unbalanced_two_line_break", "message": "one rendered line is very short"})
+    if second[0] in _WEAK_LINE_START_CHARS:
+        issues.append({"code": "awkward_line_start", "message": f"second rendered line starts with {second[0]}"})
+    if first[-1] in _WEAK_LINE_END_CHARS:
+        issues.append({"code": "awkward_line_end", "message": f"first rendered line ends with {first[-1]}"})
+    return issues
 
 
 def format_subtitle_lines(
@@ -202,10 +269,22 @@ def format_subtitle_lines(
     *,
     bilingual: bool,
     max_line_width: int = 42,
+    hard_max_line_width: int | None = None,
+    prefer_single_line: bool = False,
     source_first: bool = True,
 ) -> list[str]:
-    source_lines = wrap_subtitle_text(segment.text_src, max_line_width=max_line_width)
-    target_lines = wrap_subtitle_text(segment.text_tgt, max_line_width=max_line_width)
+    source_lines = wrap_subtitle_text(
+        segment.text_src,
+        max_line_width=max_line_width,
+        hard_max_line_width=hard_max_line_width,
+        prefer_single_line=prefer_single_line,
+    )
+    target_lines = wrap_subtitle_text(
+        segment.text_tgt,
+        max_line_width=max_line_width,
+        hard_max_line_width=hard_max_line_width,
+        prefer_single_line=prefer_single_line,
+    )
     if not bilingual:
         return target_lines
     return source_lines + target_lines if source_first else target_lines + source_lines

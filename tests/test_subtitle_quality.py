@@ -66,6 +66,13 @@ def test_wrap_cjk_balances_two_lines_at_phrase_boundary() -> None:
     assert lines == ["但因为一开始做了普通的忏悔，", "结果大声说话的部分就变少了。"]
 
 
+def test_wrap_cjk_avoids_orphaned_pronoun_line_start() -> None:
+    lines = wrap_subtitle_text("今天晚上我想让你慢慢放松下来", max_line_width=20)
+
+    assert lines == ["今天晚上我想让你", "慢慢放松下来"]
+    assert all(subtitle_line_width(line) <= 20 for line in lines)
+
+
 def test_format_bilingual_lines_source_first() -> None:
     seg = Segment(
         id=1,
@@ -113,6 +120,21 @@ def test_export_srt_wraps_text_and_normalizes_timestamps(tmp_path: Path) -> None
     assert "1\n00:00:00,000 --> 00:00:00,099" in body
     assert "2\n00:00:00,100 --> 00:00:00,450" in body
     assert "This is a long subtitle line that should\nwrap cleanly at word boundaries" in body
+
+
+def test_export_srt_style_prefers_single_line_when_within_hard_width(tmp_path: Path) -> None:
+    out_file = tmp_path / "single.srt"
+    target = "这是一条长度适中的中文字幕，默认应该尽量保持单行。"
+
+    export_srt(
+        [Segment(id=1, start=0.0, end=2.0, text_src="short source", text_tgt=target)],
+        out_file,
+        bilingual=False,
+        style=AssStyleConfig(target_max_width=28, hard_max_width=64, prefer_single_line=True),
+    )
+
+    cue_lines = out_file.read_text(encoding="utf-8").splitlines()[2:]
+    assert cue_lines == [target]
 
 
 def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Path) -> None:
@@ -244,6 +266,25 @@ def test_ass_default_style_has_cjk_font_candidates_and_delivery_report() -> None
     assert report["summary"]["renderer"] == "presentation"
     assert report["summary"]["fonts"]["target"].startswith("Noto Sans SC")
     assert report["summary"]["status"] == "PASS"
+
+
+def test_delivery_report_summarizes_line_layout() -> None:
+    report = subtitle_delivery_report(
+        [
+            Segment(id=1, start=0.0, end=1.0, text_src="short", text_tgt="短句"),
+            Segment(id=2, start=1.2, end=3.2, text_src="longer", text_tgt="今天晚上我想让你慢慢放松下来"),
+        ],
+        output_format="srt",
+        bilingual=False,
+        style=AssStyleConfig(target_max_width=20, hard_max_width=20, prefer_single_line=False),
+    )
+
+    target_layout = report["summary"]["line_layout"]["target"]
+    assert target_layout["one_line"] == 1
+    assert target_layout["two_lines"] == 1
+    assert target_layout["over_two_lines"] == 0
+    assert target_layout["awkward_breaks"] == 0
+    assert report["segments"][1]["target_lines"] == 2
 
 
 def test_ass_preset_keeps_user_overrides() -> None:

@@ -27,14 +27,20 @@ def _srt_time(seconds: float) -> str:
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
 
-def export_srt(segments: list[Segment], output: Path, bilingual: bool) -> Path:
+def export_srt(
+    segments: list[Segment],
+    output: Path,
+    bilingual: bool,
+    *,
+    style: AssStyleConfig | None = None,
+) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     prepared_segments = prepare_segments_for_export(segments)
     for idx, seg in enumerate(prepared_segments, start=1):
         lines.append(str(idx))
         lines.append(f"{_srt_time(seg.start)} --> {_srt_time(seg.end)}")
-        lines.extend(plain_srt_lines(seg, bilingual=bilingual))
+        lines.extend(plain_srt_lines(seg, bilingual=bilingual, style=style))
         lines.append("")
     output.write_text("\n".join(lines), encoding="utf-8-sig")
     return output
@@ -202,14 +208,20 @@ def export_ass(
     return output
 
 
-def export_vtt(segments: list[Segment], output: Path, bilingual: bool) -> Path:
+def export_vtt(
+    segments: list[Segment],
+    output: Path,
+    bilingual: bool,
+    *,
+    style: AssStyleConfig | None = None,
+) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     prepared_segments = prepare_segments_for_export(segments)
     lines = ["WEBVTT", "Kind: captions", "Language: und", ""]
     for idx, seg in enumerate(prepared_segments, start=1):
         lines.append(str(idx))
         lines.append(f"{_vtt_time(seg.start)} --> {_vtt_time(seg.end)} align:center position:50% line:90%")
-        lines.extend(vtt_text(line) for line in plain_srt_lines(seg, bilingual=bilingual))
+        lines.extend(vtt_text(line) for line in plain_srt_lines(seg, bilingual=bilingual, style=style))
         lines.append("")
     output.write_text("\n".join(lines), encoding="utf-8")
     return output

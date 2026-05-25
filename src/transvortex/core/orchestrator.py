@@ -42,6 +42,7 @@ from ..http import is_retryable_http_error
 from .subtitle_compression import compress_overlong_subtitles
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_reflow import reflow_subtitles
+from .source_cleaner import clean_source_segments
 from .translate import (
     _adaptive_chunk_by_id,
     _source_chunk_completed_count,
@@ -1228,12 +1229,22 @@ def _source_segments_path(paths: dict[str, Path]) -> Path:
     return paths["source"] / "segments.normalized.jsonl"
 
 
+def _raw_source_segments_path(paths: dict[str, Path]) -> Path:
+    return paths["source"] / "segments.raw.jsonl"
+
+
 def _legacy_asr_segments_path(paths: dict[str, Path]) -> Path:
     return paths["asr"] / "segments.raw.jsonl"
 
 
 def persist_source_segments(paths: dict[str, Path], segments: list[Segment]) -> Path:
     path = _source_segments_path(paths)
+    _persist_segments_jsonl(path, segments)
+    return path
+
+
+def persist_raw_source_segments(paths: dict[str, Path], segments: list[Segment]) -> Path:
+    path = _raw_source_segments_path(paths)
     _persist_segments_jsonl(path, segments)
     return path
 
@@ -1248,6 +1259,38 @@ def load_source_segments(paths: dict[str, Path]) -> list[Segment]:
         persist_source_segments(paths, segments)
         return segments
     return []
+
+
+def _clean_asr_source_segments(
+    *,
+    paths: dict[str, Path],
+    segments: list[Segment],
+    store: TaskStore | None = None,
+    task_id: str = "",
+    stage: str = "ASR",
+) -> list[Segment]:
+    result = clean_source_segments(segments, only_asr=True, renumber=True)
+    paths["quality"].mkdir(parents=True, exist_ok=True)
+    report_path = paths["quality"] / "source_cleaning.json"
+    write_json(report_path, result.report)
+    if result.report.get("dropped_segments") or result.report.get("warning_segments"):
+        if store is not None and task_id:
+            store.append_event(
+                task_id,
+                "warning",
+                stage=stage,
+                level="warning",
+                message="Cleaned ASR source segments before normalization",
+                details={
+                    "path": str(report_path),
+                    "input_segments": result.report.get("input_segments", 0),
+                    "output_segments": result.report.get("output_segments", 0),
+                    "dropped_segments": result.report.get("dropped_segments", 0),
+                    "warning_segments": result.report.get("warning_segments", 0),
+                    "reason_counts": result.report.get("reason_counts", {}),
+                },
+            )
+    return result.segments
 
 
 def _translation_route_providers(config: AppConfig) -> list:
@@ -1938,6 +1981,14 @@ def _execute_task(
                         details={"before": len(all_segments), "after": len(deduped_segments)},
                     )
                 all_segments = deduped_segments
+                persist_raw_source_segments(paths, all_segments)
+                all_segments = _clean_asr_source_segments(
+                    paths=paths,
+                    segments=all_segments,
+                    store=store,
+                    task_id=task_id,
+                    stage="ASR",
+                )
                 quality_dir = paths["source"] / "asr" / "quality"
                 if quality_dir.exists():
                     quality_rows = [read_json(path) for path in sorted(quality_dir.glob("segment_*.json"))]
@@ -2264,7 +2315,12 @@ def _execute_task(
         )
         _emit_stage(store, task_id, "EXPORT", f"Exporting {output_format.upper()} subtitles")
         if "srt" in output_paths:
-            export_srt(final_segments, output_paths["srt"], task.bilingual)
+            export_srt(
+                final_segments,
+                output_paths["srt"],
+                task.bilingual,
+                style=config.pipeline.subtitle_ass_style,
+            )
         if "ass" in output_paths:
             export_ass(
                 final_segments,
@@ -2273,7 +2329,12 @@ def _execute_task(
                 style=config.pipeline.subtitle_ass_style,
             )
         if "vtt" in output_paths:
-            export_vtt(final_segments, output_paths["vtt"], task.bilingual)
+            export_vtt(
+                final_segments,
+                output_paths["vtt"],
+                task.bilingual,
+                style=config.pipeline.subtitle_ass_style,
+            )
         delivery_reports: dict[str, dict] = {}
         for fmt in output_paths:
             delivery_reports[fmt] = subtitle_delivery_report(

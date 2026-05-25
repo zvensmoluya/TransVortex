@@ -7,16 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from ..app.models import Segment
+from ..core.source_cleaner import classify_source_text
 from ..utils import write_json
 
 
-_SOUND_EFFECT_RE = re.compile(
-    r"^\s*[\[\(（【]?\s*"
-    r"(music|applause|clapping|laughter|laughs?|silence|noise|inaudible|crosstalk|"
-    r"speaking foreign language|sighs?|gasps?|breath(?:ing)?|thunder|footsteps?)"
-    r"\s*[\]\)）】]?\s*$",
-    re.IGNORECASE,
-)
 _PUNCT_ONLY_RE = re.compile(r"^[\W_]+$", re.UNICODE)
 _LEADING_FILLER_RE = re.compile(r"^(?:(?:uh+|um+|er+|ah+|hmm+|mm+|mhm+)[,\s.?!-]+)+", re.IGNORECASE)
 _FILLER_TOKEN_RE = re.compile(r"\b(?:uh+|um+|er+|ah+|hmm+|mm+|mhm+)\b", re.IGNORECASE)
@@ -141,7 +135,8 @@ def build_bootstrap_input_view(segments: list[Segment]) -> BootstrapInputView:
         duration = max(0.0, float(segment.end) - float(segment.start))
         gap_before = None if previous_end is None else max(0.0, float(segment.start) - previous_end)
         previous_end = float(segment.end)
-        is_sound_effect = bool(_SOUND_EFFECT_RE.match(raw)) or bool(raw and set(raw) <= {"♪", "♫", "♬", " ", "\t"})
+        source_classification = classify_source_text(raw)
+        is_sound_effect = "sound_effect" in source_classification.flags and source_classification.action == "drop"
         clean = _clean_text(raw, is_sound_effect=is_sound_effect)
         flags: list[str] = []
         if gap_before is not None and gap_before >= 2.0:
