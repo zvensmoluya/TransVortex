@@ -378,7 +378,7 @@ export const mockServiceConnections: ServiceConnection[] = [
 export const mockEnvironmentChecks: EnvironmentCheck[] = [
   {
     id: "python",
-    label: "Python worker",
+    label: "任务运行环境",
     status: "pass",
     category: "blocking",
     impact: "可以启动字幕任务。",

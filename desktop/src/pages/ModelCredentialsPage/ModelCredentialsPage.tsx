@@ -19,7 +19,7 @@ export function ModelCredentialsPage({ connections, credentialBoundary }: ModelC
         description="翻译服务和 ASR 服务分开接入，凭据只显示保存状态。"
       />
 
-      <SectionPanel title="凭据保存边界" subtitle="用户级凭据文件 · provider YAML 无密钥">
+      <SectionPanel title="凭据保存边界" subtitle="用户级凭据文件 · 服务配置不保存密钥">
         <div className="security-strip">
           <ShieldCheck size={18} />
           <div>

@@ -26,7 +26,7 @@ export function ServiceConnectionList({ connections, kind }: ServiceConnectionLi
                 {connection.displayName}
                 {connection.isDefault ? <span className="inline-tag">默认</span> : null}
               </strong>
-              <span>{connection.model ? `${connection.providerName} · ${connection.model}` : connection.providerName}</span>
+              <span>{connection.model ? `模型 ${connection.model}` : "未选择模型"}</span>
             </div>
             <StatusBadge tone={credentialTone(connection.credentialStatus.state)} label={connection.credentialStatus.label} />
             <StatusBadge tone={connectionTone(connection.connectionStatus.state)} label={connection.connectionStatus.label} />
