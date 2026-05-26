@@ -7,6 +7,10 @@ export async function openTaskResult(taskId: string): Promise<Segment[]> {
   return resultWorkspaceToSegments(payload);
 }
 
+export async function openTaskResultDetails(taskId: string): Promise<unknown> {
+  return invokeCommand<unknown>("open_task_result", { taskId });
+}
+
 export async function saveTaskSegments(taskId: string, segments: Segment[]): Promise<{ saved: boolean }> {
   return invokeCommand<{ saved: boolean }>("save_task_segments", {
     taskId,

@@ -21,10 +21,12 @@ export type ProgressState = {
 
 export type TimelineEvent = {
   id: string;
+  taskId?: string;
   at: string;
   phase: TaskPhase;
   title: string;
   detail?: string;
+  progressPercent?: number;
   severity: "info" | "success" | "warning" | "error";
 };
 

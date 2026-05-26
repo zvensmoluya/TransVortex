@@ -125,6 +125,7 @@ struct ResumeTaskRequest {
 #[serde(rename_all = "camelCase")]
 struct StartTaskResponse {
     started: bool,
+    task_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -354,7 +355,14 @@ fn spawn_streaming_worker(
     });
 
     *state.child.lock().map_err(|err| err.to_string())? = Some(child);
-    Ok(StartTaskResponse { started: true })
+    Ok(StartTaskResponse {
+        started: true,
+        task_id: state
+            .task_id
+            .lock()
+            .map_err(|err| err.to_string())?
+            .clone(),
+    })
 }
 
 #[tauri::command]

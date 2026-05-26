@@ -5,6 +5,7 @@ import { invokeCommand } from "./tauriClient";
 
 export type StartTaskResponse = {
   started: boolean;
+  taskId?: string;
 };
 
 export async function listTasks(): Promise<Task[]> {

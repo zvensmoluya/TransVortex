@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { Captions, Download, FileText, Gauge, Save, Search, SkipBack, SkipForward, Tags } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { ExportFormat } from "../../domain/export";
 import type { Segment } from "../../domain/segment";
 import type { Task } from "../../domain/task";
+import type { TaskRun } from "../../domain/taskRun";
 import type { TermEntry } from "../../domain/term";
 import type { ResultWorkspaceState } from "../../state/resultWorkspaceStore";
 import { SegmentList, formatMs } from "../../components/subtitle/SegmentList";
@@ -14,13 +16,15 @@ type ResultReviewPageProps = {
   task: Task;
   workspace: ResultWorkspaceState;
   terms: TermEntry[];
+  taskRun?: TaskRun;
 };
 
-export function ResultReviewPage({ task, workspace, terms }: ResultReviewPageProps) {
+export function ResultReviewPage({ task, workspace, terms, taskRun }: ResultReviewPageProps) {
   const [selectedSegmentId, setSelectedSegmentId] = useState(workspace.selectedSegmentId);
   const selectedSegment = workspace.segments.find((segment) => segment.id === selectedSegmentId) ?? workspace.segments[0];
   const issueCount = workspace.segments.reduce((total, segment) => total + segment.issues.length, 0);
   const dirtyCount = workspace.segments.filter((segment) => segment.dirtyState !== "clean").length;
+  const exportFormats = useMemo<ExportFormat[]>(() => (task.outputs.map((file) => file.format).length > 0 ? task.outputs.map((file) => file.format) : ["srt"]), [task.outputs]);
 
   return (
     <div className="page-stack review-page">
@@ -30,11 +34,11 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
         description={`${workspace.segments.length} 行字幕 · ${issueCount} 个质量问题 · ${dirtyCount} 行尚未交付到输出文件`}
         actions={
           <>
-            <button className="tvx-btn" type="button">
+            <button className="tvx-btn" type="button" onClick={() => void workspace.save()}>
               <Save size={15} />
               保存修改
             </button>
-            <button className="tvx-btn tvx-btn-primary" type="button">
+            <button className="tvx-btn tvx-btn-primary" type="button" onClick={() => void workspace.reexport(exportFormats)}>
               <Download size={15} />
               重新导出
             </button>
@@ -55,8 +59,17 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
           <SkipForward size={15} />
           下一条问题
         </button>
-        <StatusBadge tone={workspace.saveState === "savedPendingExport" ? "warning" : "success"} label={workspace.saveState === "savedPendingExport" ? "已保存，待重新导出" : "保存状态正常"} />
+        <StatusBadge tone={workspace.saveState === "savedPendingExport" ? "warning" : workspace.saveState === "error" ? "danger" : "success"} label={saveStateLabel(workspace.saveState)} />
       </div>
+
+      {taskRun?.error ? (
+        <div className="error-panel">
+          <div>
+            <strong>{taskRun.error.title}</strong>
+            <p>{taskRun.error.impact}</p>
+          </div>
+        </div>
+      ) : null}
 
       <div className="review-signal-strip">
         <SignalItem icon={<Captions size={16} />} label="字幕行" value={`${workspace.segments.length} 行`} />
@@ -73,7 +86,7 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
 
         <aside className="review-side">
           <SectionPanel title="当前行">
-            {selectedSegment ? <SegmentEditor segment={selectedSegment} /> : <div className="empty-state">请选择字幕行。</div>}
+            {selectedSegment ? <SegmentEditor segment={selectedSegment} onPatch={(patch) => workspace.updateSegment(selectedSegment.id, patch)} /> : <div className="empty-state">请选择字幕行。</div>}
           </SectionPanel>
 
           <SectionPanel title="质量与术语">
@@ -112,7 +125,7 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
   );
 }
 
-function SegmentEditor({ segment }: { segment: Segment }) {
+function SegmentEditor({ segment, onPatch }: { segment: Segment; onPatch: (patch: Partial<Pick<Segment, "sourceText" | "translatedText" | "startMs" | "endMs">>) => void }) {
   return (
     <div className="segment-editor">
       <div className="segment-meter">
@@ -131,11 +144,11 @@ function SegmentEditor({ segment }: { segment: Segment }) {
       </div>
       <label>
         <span>原文</span>
-        <textarea className="tvx-textarea" value={segment.sourceText} readOnly />
+        <textarea className="tvx-textarea" value={segment.sourceText} onChange={(event) => onPatch({ sourceText: event.target.value })} />
       </label>
       <label>
         <span>译文</span>
-        <textarea className="tvx-textarea" value={segment.translatedText} readOnly />
+        <textarea className="tvx-textarea" value={segment.translatedText} onChange={(event) => onPatch({ translatedText: event.target.value })} />
       </label>
     </div>
   );
@@ -176,4 +189,23 @@ function TimelineOverview({ segments, selectedSegmentId }: { segments: Segment[]
       <FileText size={14} />
     </div>
   );
+}
+
+function saveStateLabel(state: ResultWorkspaceState["saveState"]): string {
+  switch (state) {
+    case "loading":
+      return "正在读取";
+    case "dirty":
+      return "有未保存修改";
+    case "saving":
+      return "正在保存";
+    case "savedPendingExport":
+      return "已保存，待重新导出";
+    case "error":
+      return "保存或导出失败";
+    case "clean":
+      return "保存状态正常";
+    default:
+      return "未打开结果";
+  }
 }

@@ -17,15 +17,17 @@ export function resultSegmentToSegment(segment: unknown, index = 0): Segment {
   const raw = (segment ?? {}) as RawSegment;
   const startMs = secondsToMs(numberValue(raw.start));
   const endMs = secondsToMs(numberValue(raw.end));
+  const segmentId = stringValue(raw.id) || `segment-${index + 1}`;
+  const qualityIssues = normalizeQualityIssueList(raw.quality_issues, segmentId);
 
   return {
-    id: stringValue(raw.id) || `segment-${index + 1}`,
+    id: segmentId,
     index: numberValue(raw.index) ?? index + 1,
     startMs,
     endMs,
     sourceText: stringValue(raw.text_src) || stringValue(raw.sourceText) || "",
     translatedText: stringValue(raw.text_tgt) || stringValue(raw.translatedText) || "",
-    issues: normalizeIssueList(raw.issues, stringValue(raw.id) || `segment-${index + 1}`),
+    issues: [...normalizeIssueList(raw.issues, segmentId), ...qualityIssues],
     termMatches: [],
     diagnostics: {
       charactersPerSecond: calculateCps(stringValue(raw.text_tgt), startMs, endMs),
@@ -59,6 +61,46 @@ function normalizeIssueList(value: unknown, segmentId: string): SubtitleIssue[] 
     segmentId,
     nextActions: [{ id: "review", label: "检查这一行", target: "segment" }],
   }));
+}
+
+function normalizeQualityIssueList(value: unknown, segmentId: string): SubtitleIssue[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((issue, index) => {
+    const raw = issue && typeof issue === "object" ? (issue as RawSegment) : {};
+    const code = stringValue(raw.code) || `quality-${index + 1}`;
+    return {
+      id: `${segmentId}-quality-${index + 1}`,
+      code,
+      severity: mapIssueSeverity(stringValue(raw.level)),
+      title: issueTitle(code, stringValue(raw.message)),
+      description: stringValue(raw.message),
+      segmentId,
+      nextActions: [{ id: "review", label: "检查这一行", target: "segment" }],
+    };
+  });
+}
+
+function mapIssueSeverity(level?: string): SubtitleIssue["severity"] {
+  if (level === "error" || level === "blocking") return "blocking";
+  if (level === "info") return "info";
+  return "warning";
+}
+
+function issueTitle(code: string, fallback?: string): string {
+  const titles: Record<string, string> = {
+    empty_translation: "译文为空",
+    invalid_time: "时间轴异常",
+    overlap: "时间轴重叠",
+    cps_high: "阅读速度过快",
+    reading_speed_high: "阅读速度过快",
+    line_too_long: "单行过长",
+    too_many_lines: "行数过多",
+    duration_too_short: "显示时间过短",
+  };
+  return titles[code] ?? fallback ?? code;
 }
 
 function secondsToMs(value: number | undefined): number {

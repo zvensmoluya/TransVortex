@@ -7,6 +7,18 @@ export async function listServiceConnections(kind: ServiceKind = "translation"):
   return providerConfigsToServiceConnections(payload, kind);
 }
 
+export async function listAllServiceConnections(): Promise<ServiceConnection[]> {
+  const payload = await invokeCommand<unknown>("get_config");
+  return [
+    ...providerConfigsToServiceConnections(payload, "translation"),
+    ...providerConfigsToServiceConnections(payload, "asr"),
+  ];
+}
+
+export async function getProviderConfig(): Promise<unknown> {
+  return invokeCommand<unknown>("get_config");
+}
+
 export async function probeProvider(providerDraft: unknown): Promise<unknown> {
   return invokeCommand<unknown>("probe_provider", { providerDraft });
 }

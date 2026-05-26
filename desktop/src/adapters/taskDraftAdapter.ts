@@ -34,7 +34,7 @@ export function taskDraftToStartTaskPayload(draft: TaskDraft): StartTaskPayload 
 
   return {
     input: draft.input.path ?? "",
-    inputType: draft.input.kind,
+    inputType: mapInputType(draft),
     outputDir: draft.output.outputDirectory,
     sourceLang: draft.languages.sourceLanguage,
     targetLang: draft.languages.targetLanguage,
@@ -64,18 +64,26 @@ export function taskDraftToStartTaskPayload(draft: TaskDraft): StartTaskPayload 
 }
 
 function mapSubtitleSource(draft: TaskDraft): { sourceMode?: string; subtitleTrack?: string } {
+  if (draft.input.kind === "subtitle") {
+    return { sourceMode: undefined };
+  }
+
   switch (draft.subtitleSource.mode) {
     case "auto":
       return { sourceMode: "auto" };
     case "embedded":
-      return { sourceMode: "embedded", subtitleTrack: draft.subtitleSource.streamId };
+      return { sourceMode: "embedded_subtitle", subtitleTrack: draft.subtitleSource.streamId };
     case "localAsr":
       return { sourceMode: "asr" };
     case "cloudAsr":
-      return { sourceMode: "asr_cloud" };
+      return { sourceMode: "asr" };
     case "existingSubtitle":
-      return { sourceMode: "subtitle_file" };
+      return { sourceMode: undefined };
   }
+}
+
+function mapInputType(draft: TaskDraft): "video" | "srt" {
+  return draft.input.kind === "subtitle" ? "srt" : "video";
 }
 
 function mapAsrMode(draft: TaskDraft): string | undefined {

@@ -1,34 +1,65 @@
 import type { ReactNode } from "react";
-import { Captions, CheckCircle2, FileText, FileVideo, FolderOpen, Gauge, Languages, Play, ShieldCheck, Tags } from "lucide-react";
+import { Captions, CheckCircle2, FileText, FileVideo, FolderOpen, Gauge, Languages, Play, RefreshCw, ShieldCheck, Tags } from "lucide-react";
 import type { EnvironmentCheck } from "../../domain/environment";
+import type { UserFacingError } from "../../domain/error";
 import type { ServiceConnection } from "../../domain/serviceConnection";
 import type { TaskDraft } from "../../domain/task";
 import { StatusBadge } from "../../components/feedback/StatusBadge";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { SectionPanel } from "../../components/layout/SectionPanel";
+import { pickInputFile, pickOutputDirectory } from "../../services/fileService";
 
 type NewTaskPageProps = {
-  draft: TaskDraft;
+  draft?: TaskDraft;
+  loading: boolean;
+  starting: boolean;
   serviceConnections: ServiceConnection[];
   environmentChecks: EnvironmentCheck[];
+  providerError?: UserFacingError;
+  environmentError?: UserFacingError;
+  taskError?: UserFacingError;
+  onPickInput: (path: string) => void;
+  onPickOutputDirectory: (path: string) => void;
+  onStartTask: () => Promise<void>;
+  onRefresh: () => Promise<void>;
 };
 
-export function NewTaskPage({ draft, serviceConnections, environmentChecks }: NewTaskPageProps) {
+export function NewTaskPage({
+  draft,
+  loading,
+  starting,
+  serviceConnections,
+  environmentChecks,
+  providerError,
+  environmentError,
+  taskError,
+  onPickInput,
+  onPickOutputDirectory,
+  onStartTask,
+  onRefresh,
+}: NewTaskPageProps) {
   const translationConnection = serviceConnections.find((connection) => connection.kind === "translation" && connection.isDefault);
   const asrConnection = serviceConnections.find((connection) => connection.kind === "asr" && connection.isDefault);
   const blockingChecks = environmentChecks.filter((check) => check.status === "fail");
+  const canStart = Boolean(draft?.input.path) && blockingChecks.length === 0 && !starting;
 
   return (
     <div className="page-stack">
       <PageHeader
         eyebrow="制作台"
         title="准备字幕任务"
-        description={`${draft.input.displayName} · ${draft.languages.sourceLanguage} → ${draft.languages.targetLanguage} · 输出 ${draft.output.formats.map((format) => format.toUpperCase()).join(" / ")}`}
+        description={draft ? `${draft.input.displayName} · ${draft.languages.sourceLanguage} → ${draft.languages.targetLanguage} · 输出 ${draft.output.formats.map((format) => format.toUpperCase()).join(" / ")}` : "正在读取真实配置与任务状态"}
         actions={
-          <button className="tvx-btn tvx-btn-primary" type="button">
-            <Play size={15} />
-            开始任务
-          </button>
+          <>
+            <button className="tvx-btn" type="button" onClick={() => void onRefresh()}>
+              <RefreshCw size={15} />
+              刷新
+            </button>
+            <button className="tvx-btn tvx-btn-primary" type="button" disabled={!canStart} onClick={() => void onStartTask()}>
+              <Play size={15} />
+              {starting ? "正在启动" : "开始任务"}
+            </button>
+          </>
         }
       />
 
@@ -37,10 +68,17 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
           <div className="input-dock">
             <FileVideo size={24} />
             <div>
-              <strong>{draft.input.displayName}</strong>
-              <span>{draft.input.path}</span>
+              <strong>{draft?.input.displayName ?? "未选择素材"}</strong>
+              <span>{draft?.input.path ?? "选择本地音视频或字幕文件"}</span>
             </div>
-            <button className="tvx-btn" type="button">
+            <button
+              className="tvx-btn"
+              type="button"
+              onClick={async () => {
+                const path = await pickInputFile();
+                if (path) onPickInput(path);
+              }}
+            >
               <FolderOpen size={15} />
               选择文件
             </button>
@@ -54,24 +92,34 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
               <span />
             </div>
             <div className="subtitle-sample-lines">
-              <span>今日は、字幕制作の流れを確認します。</span>
-              <strong>今天我们先确认字幕制作的整体流程。</strong>
+              <span>今天我们先确认字幕制作的整体流程。</span>
+              <strong>先选择素材，再检查服务状态，然后开始任务。</strong>
             </div>
           </div>
           <div className="form-grid">
             <label>
               <span>源语言</span>
-              <input className="tvx-input" value={draft.languages.sourceLanguage} readOnly />
+              <input className="tvx-input" value={draft?.languages.sourceLanguage ?? "—"} readOnly />
             </label>
             <label>
               <span>目标语言</span>
-              <input className="tvx-input" value={draft.languages.targetLanguage} readOnly />
+              <input className="tvx-input" value={draft?.languages.targetLanguage ?? "—"} readOnly />
+            </label>
+          </div>
+          <div className="form-grid">
+            <label>
+              <span>输出目录</span>
+              <input className="tvx-input" value={draft?.output.outputDirectory ?? "自动保存到任务目录"} readOnly />
+            </label>
+            <label>
+              <span>字幕格式</span>
+              <input className="tvx-input" value={draft ? draft.output.formats.map((format) => format.toUpperCase()).join(" / ") : "SRT"} readOnly />
             </label>
           </div>
           <div className="segmented-control" aria-label="任务类型">
             <button className="is-selected" type="button">转写并翻译</button>
-            <button type="button">翻译已有字幕</button>
-            <button type="button">重新导出</button>
+            <button type="button" disabled>翻译已有字幕</button>
+            <button type="button" disabled>重新导出</button>
           </div>
         </SectionPanel>
 
@@ -80,14 +128,14 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
             <ReadinessRow
               icon={<Languages size={18} />}
               label="翻译服务"
-              detail={translationConnection ? `${translationConnection.displayName} · ${translationConnection.model}` : "未配置"}
+              detail={translationConnection ? `${translationConnection.displayName} · ${translationConnection.model ?? "未选择模型"}` : "未配置"}
               ok={translationConnection?.connectionStatus.state === "connected"}
             />
             <ReadinessRow
               icon={<ShieldCheck size={18} />}
               label="ASR 服务"
-              detail={asrConnection ? `${asrConnection.displayName} · ${asrConnection.model}` : "未配置"}
-              ok={asrConnection?.connectionStatus.state === "connected"}
+              detail={asrConnection ? `${asrConnection.displayName} · ${asrConnection.model ?? "未选择模型"}` : "未配置"}
+              ok={asrConnection?.connectionStatus.state === "connected" || asrConnection?.connectionStatus.state === "untested"}
             />
             <ReadinessRow
               icon={<CheckCircle2 size={18} />}
@@ -96,29 +144,61 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
               ok={blockingChecks.length === 0}
             />
           </div>
+          <ErrorList error={taskError || providerError || environmentError} />
         </SectionPanel>
       </div>
 
       <div className="workspace-grid is-wide-left">
         <SectionPanel title="制作流水线" subtitle="输入素材 → 源字幕 → 翻译 → 术语 → 质量 → 导出">
           <div className="production-lane">
-            <FlowStep icon={<FileVideo size={16} />} label="输入素材" detail={draft.input.displayName} active />
-            <FlowStep icon={<Captions size={16} />} label="获取源字幕" detail="生成 Segment" />
+            <FlowStep icon={<FileVideo size={16} />} label="输入素材" detail={draft?.input.displayName ?? "等待选择"} active />
+            <FlowStep icon={<Captions size={16} />} label="获取源字幕" detail={draft?.subtitleSource.mode === "embedded" ? "使用内置字幕" : "自动选择或识别"} />
             <FlowStep icon={<Languages size={16} />} label="翻译字幕" detail={translationConnection?.model ?? "待选择模型"} />
-            <FlowStep icon={<Tags size={16} />} label="术语一致性" detail={draft.terms.selectedTermBaseId ?? "未选择"} />
-            <FlowStep icon={<Gauge size={16} />} label="质量检查" detail={draft.advanced.qualityMode === "balanced" ? "均衡处理" : "保守处理"} />
-            <FlowStep icon={<FileText size={16} />} label="导出交付" detail={draft.output.formats.map((format) => format.toUpperCase()).join(" / ")} />
+            <FlowStep icon={<Tags size={16} />} label="术语一致性" detail={draft?.terms.selectedTermBaseId ?? "未选择"} />
+            <FlowStep icon={<Gauge size={16} />} label="质量检查" detail={draft?.advanced.qualityMode === "balanced" ? "均衡处理" : "保守处理"} />
+            <FlowStep icon={<FileText size={16} />} label="导出交付" detail={draft ? draft.output.formats.map((format) => format.toUpperCase()).join(" / ") : "SRT"} />
           </div>
         </SectionPanel>
 
         <SectionPanel title="交付托盘" subtitle="输出文件 · 字幕类型 · 项目术语 · 质量模式">
           <div className="delivery-tray">
-            <SummaryItem label="输出格式" value={draft.output.formats.map((format) => format.toUpperCase()).join(" / ")} icon={<FileText size={16} />} />
-            <SummaryItem label="字幕类型" value={draft.output.bilingual ? "双语字幕" : "单语字幕"} icon={<Captions size={16} />} />
-            <SummaryItem label="术语表" value={draft.terms.selectedTermBaseId ?? "未选择"} icon={<Tags size={16} />} />
-            <SummaryItem label="质量模式" value={draft.advanced.qualityMode === "balanced" ? "均衡处理" : "保守处理"} icon={<Gauge size={16} />} />
+            <SummaryItem label="输出格式" value={draft ? draft.output.formats.map((format) => format.toUpperCase()).join(" / ") : "SRT"} icon={<FileText size={16} />} />
+            <SummaryItem label="字幕类型" value={draft?.output.bilingual ? "双语字幕" : "单语字幕"} icon={<Captions size={16} />} />
+            <SummaryItem label="术语表" value={draft?.terms.selectedTermBaseId ?? "未选择"} icon={<Tags size={16} />} />
+            <SummaryItem label="质量模式" value={draft?.advanced.qualityMode === "balanced" ? "均衡处理" : "保守处理"} icon={<Gauge size={16} />} />
+          </div>
+          <div className="inline-actions">
+            <button
+              className="tvx-btn"
+              type="button"
+              onClick={async () => {
+                const dir = await pickOutputDirectory();
+                if (dir) {
+                  onPickOutputDirectory(dir);
+                }
+              }}
+              disabled={!draft}
+            >
+              <FolderOpen size={15} />
+              选择输出目录
+            </button>
           </div>
         </SectionPanel>
+      </div>
+    </div>
+  );
+}
+
+function ErrorList({ error }: { error?: UserFacingError }) {
+  if (!error) {
+    return null;
+  }
+
+  return (
+    <div className="error-panel">
+      <div>
+        <strong>{error.title}</strong>
+        <p>{error.impact}</p>
       </div>
     </div>
   );

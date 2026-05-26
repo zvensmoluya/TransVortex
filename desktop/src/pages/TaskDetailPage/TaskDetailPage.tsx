@@ -1,4 +1,5 @@
 import { AlertTriangle, FileSearch, PauseCircle, RotateCcw } from "lucide-react";
+import type { UserFacingError } from "../../domain/error";
 import type { Task } from "../../domain/task";
 import type { TaskRun } from "../../domain/taskRun";
 import { ExportFilesPanel } from "../../components/export/ExportFilesPanel";
@@ -11,10 +12,13 @@ import { ProgressBar } from "../../components/task/ProgressBar";
 type TaskDetailPageProps = {
   task: Task;
   taskRun?: TaskRun;
+  loading: boolean;
+  error?: UserFacingError;
+  onRefresh: () => Promise<void>;
   onOpenReview: () => void;
 };
 
-export function TaskDetailPage({ task, taskRun, onOpenReview }: TaskDetailPageProps) {
+export function TaskDetailPage({ task, taskRun, loading, error, onRefresh, onOpenReview }: TaskDetailPageProps) {
   return (
     <div className="page-stack">
       <PageHeader
@@ -23,6 +27,10 @@ export function TaskDetailPage({ task, taskRun, onOpenReview }: TaskDetailPagePr
         description={`${task.input.displayName} · ${task.languages.sourceLanguage} → ${task.languages.targetLanguage} · ${task.recoverability.resumeLabel ?? "当前任务可查看工件和输出"}`}
         actions={
           <>
+            <button className="tvx-btn" type="button" onClick={() => void onRefresh()}>
+              <RotateCcw size={15} />
+              刷新
+            </button>
             <button className="tvx-btn" type="button" disabled={!task.recoverability.canResume}>
               <RotateCcw size={15} />
               恢复任务
@@ -45,7 +53,9 @@ export function TaskDetailPage({ task, taskRun, onOpenReview }: TaskDetailPagePr
 
       <div className="workspace-grid is-wide-left">
         <SectionPanel title="当前制作状态">
-          {taskRun ? (
+          {loading ? (
+            <div className="empty-state">正在读取真实任务状态。</div>
+          ) : taskRun ? (
             <div className="status-panel">
               <div className="status-panel-title">
                 <StatusBadge tone="info" label="运行中" />
@@ -58,15 +68,24 @@ export function TaskDetailPage({ task, taskRun, onOpenReview }: TaskDetailPagePr
                   <span>{warning.title}</span>
                 </div>
               ))}
+              {taskRun.error ? (
+                <div className="error-panel">
+                  <AlertTriangle size={18} />
+                  <div>
+                    <strong>{taskRun.error.title}</strong>
+                    <p>{taskRun.error.impact}</p>
+                  </div>
+                </div>
+              ) : null}
             </div>
-          ) : task.error ? (
+          ) : task.error || error ? (
             <div className="error-panel">
               <AlertTriangle size={18} />
               <div>
-                <strong>{task.error.title}</strong>
-                <p>{task.error.impact}</p>
+                <strong>{task.error?.title ?? error?.title}</strong>
+                <p>{task.error?.impact ?? error?.impact}</p>
                 <div className="inline-actions">
-                  {task.error.nextActions.map((action) => (
+                  {(task.error?.nextActions ?? error?.nextActions ?? []).map((action) => (
                     <button className="tvx-btn" type="button" key={action.id}>{action.label}</button>
                   ))}
                 </div>
