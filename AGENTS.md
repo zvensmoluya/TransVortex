@@ -110,17 +110,16 @@ Short English title
 - 不要在日志、提交信息、文档或回复中暴露 token、API key、认证文件内容或其他 secret。
 - 示例配置必须使用明显占位符，例如 `YOUR_API_KEY` 或 `example-token`。
 
-## Frontend Work
+## Frontend Baselines
 
-- 处理 TransVortex desktop/frontend 相关任务前，必须先阅读 `docs/FRONTEND/FRONTEND_AGENT_BRIEF.md`。
-- `FRONTEND_AGENT_BRIEF.md` 是前端开发入口说明，用来判断当前策略、架构边界、阅读顺序、禁止事项和验证要求。
-- 前端产品方向冲突时，查阅 `docs/FRONTEND/核心方向.md`。
-- 视觉和交互风格问题，查阅 `docs/FRONTEND/FRONTEND_DESIGN_STYLE.md`。
-- 能力范围和落地顺序问题，查阅 `docs/FRONTEND/FRONTEND_DEVELOPMENT_PLAN.md`。
-- 代码架构、领域模型、service、adapter、状态边界问题，查阅 `docs/FRONTEND/FRONTEND_IMPLEMENTATION_ARCHITECTURE.md`。
-- 不要继续扩大旧 `desktop/src/main.tsx` 结构；当前 desktop 只作为能力验证和临时参考入口，不代表目标前端架构。
-- 前端实现不得让 React 表单直接绑定 CLI/worker 参数，不得在 UI 组件中散落 Tauri `invoke(...)` 调用。
-- 结果检查、术语表、Provider/凭据、任务状态和环境诊断必须作为一等产品概念处理。
+- 前端界面必须服务于字幕生产工作流，不要做成通用参数表、admin dashboard、SaaS 控制台或开发调试面板。
+- 普通用户界面应使用产品语言，不直接暴露 worker/CLI 参数名。
+- 不要使用 emoji 作为 UI 元素、状态图标或装饰。
+- 不要使用赛博风、霓虹风、黑客风、多颜色渐变、彩虹渐变、发光字效或营销页式 hero。
+- 不要用说明书式段落、代码注释式提示或“这里用于...”这类文字代替界面结构。
+- 状态色必须小面积使用，并配合文字或图标；不要用状态色做大面积背景装饰。
+- 前端实现不要让 React 表单直接绑定 CLI/worker 参数；需要通过前端领域模型和 adapter 转换。
+- 不要在 UI 组件中散落 Tauri `invoke(...)` 调用；应通过 service 层封装。
 
 ## PowerShell
 
