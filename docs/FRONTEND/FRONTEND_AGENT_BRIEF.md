@@ -46,6 +46,7 @@
 
 - 产品方向冲突：`docs/FRONTEND/核心方向.md`
 - 视觉和交互风格：`docs/FRONTEND/FRONTEND_DESIGN_STYLE.md`
+- 前端生图提示模板：`docs/FRONTEND/FRONTEND_IMAGE_PROMPTS.md`
 - 能力范围和落地顺序：`docs/FRONTEND/FRONTEND_DEVELOPMENT_PLAN.md`
 - 代码架构、领域模型、service、adapter、状态边界：`docs/FRONTEND/FRONTEND_IMPLEMENTATION_ARCHITECTURE.md`
 
@@ -90,6 +91,7 @@
 - 不要做营销页式 hero、大面积玻璃拟态、强透明、强模糊、强发光按钮。
 - 不要用注释性文字、说明书式段落或代码注释式提示代替界面设计。
 - 普通界面不要出现类似“这里用于...”“该字段会传给...”“// ...”的实现说明。
+- 如需为前端生成视觉探索图或辅助资产，使用 `$zven-imagegen`，并遵守 `docs/FRONTEND/FRONTEND_IMAGE_PROMPTS.md`。
 - 高密度区域要稳定、清晰、适合长时间工作。
 - 状态色必须配文字或图标，不只靠颜色表达。
 - 图标按钮必须有 tooltip。
