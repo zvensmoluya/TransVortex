@@ -2,64 +2,85 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    color: #14201c;
-    background: #f4f7f6;
-    font-family:
-      Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-      "Microsoft YaHei", "PingFang SC", sans-serif;
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-  }
-
-  * {
-    box-sizing: border-box;
-  }
-
-  body {
-    margin: 0;
-    min-width: 980px;
-  }
-
-  button,
-  input,
-  select,
-  textarea {
-    font: inherit;
-  }
-
-  textarea {
-    resize: vertical;
-  }
-}
-
 @layer components {
   .tvx-input {
-    @apply min-h-10 w-full rounded-md border border-line bg-white px-3 text-sm text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15;
+    width: 100%;
+    min-height: 40px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    background: var(--color-field);
+    color: var(--color-text);
+    padding: 0 12px;
+    outline: none;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      background 160ms ease;
+  }
+
+  .tvx-input:focus {
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
   }
 
   .tvx-textarea {
-    @apply min-h-32 w-full rounded-md border border-line bg-white px-3 py-2 text-sm leading-relaxed text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15;
+    width: 100%;
+    min-height: 128px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    background: var(--color-field);
+    color: var(--color-text);
+    padding: 10px 12px;
+    line-height: 1.65;
+    outline: none;
+    resize: vertical;
+  }
+
+  .tvx-textarea:focus {
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
   }
 
   .tvx-btn {
-    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    background: var(--color-button);
+    color: var(--color-text);
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 650;
+    transition:
+      border-color 160ms ease,
+      background 160ms ease,
+      color 160ms ease;
+  }
+
+  .tvx-btn:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+    background: var(--color-button-hover);
+  }
+
+  .tvx-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   .tvx-btn-primary {
-    @apply border-brand bg-brand text-white hover:bg-brand/90;
+    border-color: color-mix(in srgb, var(--color-accent) 58%, transparent);
+    background: var(--color-accent);
+    color: #12100c;
   }
 
-  .tvx-btn-danger {
-    @apply border-danger bg-danger text-white hover:bg-danger/90;
+  .tvx-btn-primary:hover:not(:disabled) {
+    background: var(--color-accent-strong);
   }
 
-  .tvx-panel {
-    @apply rounded-lg border border-line bg-white shadow-panel;
-  }
-
-  .tvx-label {
-    @apply grid gap-1.5 text-xs font-medium text-muted;
+  .tvx-btn-quiet {
+    background: transparent;
   }
 }

@@ -1,0 +1,71 @@
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-width: 1120px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(214, 160, 79, 0.06), transparent 220px),
+    linear-gradient(90deg, rgba(111, 96, 71, 0.05) 0 1px, transparent 1px 100%),
+    var(--color-canvas);
+  background-size: auto, 84px 100%, auto;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+}
+
+button {
+  cursor: pointer;
+}
+
+button,
+input,
+select,
+textarea {
+  font-size: 14px;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::selection {
+  background: rgba(214, 160, 79, 0.28);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-field);
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid var(--color-field);
+  border-radius: 999px;
+  background: #3a473f;
+}
