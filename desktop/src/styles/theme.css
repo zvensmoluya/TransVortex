@@ -15,7 +15,7 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    linear-gradient(180deg, rgba(197, 139, 69, 0.025), transparent 180px),
+    linear-gradient(180deg, rgba(198, 139, 67, 0.032), transparent 190px),
     var(--color-canvas);
 }
 
@@ -46,7 +46,7 @@ textarea:focus-visible {
 }
 
 ::selection {
-  background: rgba(197, 139, 69, 0.24);
+  background: rgba(198, 139, 67, 0.24);
 }
 
 #root {
@@ -65,5 +65,5 @@ textarea:focus-visible {
 ::-webkit-scrollbar-thumb {
   border: 3px solid var(--color-field);
   border-radius: 999px;
-  background: #3c403a;
+  background: #403a32;
 }

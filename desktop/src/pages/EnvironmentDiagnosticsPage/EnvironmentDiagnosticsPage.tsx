@@ -15,8 +15,8 @@ export function EnvironmentDiagnosticsPage({ checks }: EnvironmentDiagnosticsPag
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="运行环境"
-        title="制作环境检查"
+        eyebrow="修复面板"
+        title="制作环境"
         description={`${blocking} 个阻塞项 · ${warnings} 个质量风险或可选项 · 影响素材读取、识别和导出`}
         actions={
           <button className="tvx-btn tvx-btn-primary" type="button">
@@ -26,7 +26,7 @@ export function EnvironmentDiagnosticsPage({ checks }: EnvironmentDiagnosticsPag
         }
       />
 
-      <SectionPanel title="检查灯面板" subtitle="阻塞项 · 质量风险 · 可选能力">
+      <SectionPanel title="检查灯" subtitle="阻塞项 · 质量风险 · 可选能力">
         <EnvironmentCheckList checks={checks} />
       </SectionPanel>
     </div>

@@ -14,12 +14,12 @@ export function ModelCredentialsPage({ connections, credentialBoundary }: ModelC
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="服务连接"
+        eyebrow="接入台"
         title="模型服务接入台"
-        description="翻译服务和 ASR 服务分开接入，凭据只显示保存状态。"
+        description="翻译服务和 ASR 服务分开接入，凭据只显示保存状态"
       />
 
-      <SectionPanel title="凭据保存边界" subtitle="用户级凭据文件 · 服务配置不保存密钥">
+      <SectionPanel title="凭据边界" subtitle="用户级凭据文件 · 服务配置不保存密钥">
         <div className="security-strip">
           <ShieldCheck size={18} />
           <div>
@@ -30,10 +30,10 @@ export function ModelCredentialsPage({ connections, credentialBoundary }: ModelC
       </SectionPanel>
 
       <div className="page-stack">
-        <SectionPanel title="翻译服务接入口">
+        <SectionPanel title="翻译服务插口">
           <ServiceConnectionList connections={connections} kind="translation" />
         </SectionPanel>
-        <SectionPanel title="ASR 服务接入口">
+        <SectionPanel title="ASR 服务插口">
           <ServiceConnectionList connections={connections} kind="asr" />
         </SectionPanel>
       </div>

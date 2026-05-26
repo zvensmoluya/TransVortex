@@ -9,13 +9,13 @@ type PageHeaderProps = {
 
 export function PageHeader({ eyebrow, title, description, actions }: PageHeaderProps) {
   return (
-    <header className="page-header">
-      <div>
-        {eyebrow ? <div className="page-eyebrow">{eyebrow}</div> : null}
+    <header className="context-bar">
+      <div className="context-title">
+        {eyebrow ? <div className="context-eyebrow">{eyebrow}</div> : null}
         <h1>{title}</h1>
         {description ? <p>{description}</p> : null}
       </div>
-      {actions ? <div className="page-actions">{actions}</div> : null}
+      {actions ? <div className="context-actions">{actions}</div> : null}
     </header>
   );
 }

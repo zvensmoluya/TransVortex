@@ -21,9 +21,9 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="创建字幕任务"
-        title="低光字幕制作台"
-        description={`${draft.input.displayName} · ${draft.languages.sourceLanguage} → ${draft.languages.targetLanguage} · ${draft.output.formats.map((format) => format.toUpperCase()).join(" / ")}`}
+        eyebrow="制作台"
+        title="准备字幕任务"
+        description={`${draft.input.displayName} · ${draft.languages.sourceLanguage} → ${draft.languages.targetLanguage} · 输出 ${draft.output.formats.map((format) => format.toUpperCase()).join(" / ")}`}
         actions={
           <button className="tvx-btn tvx-btn-primary" type="button">
             <Play size={15} />
@@ -33,7 +33,7 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
       />
 
       <div className="workspace-grid">
-        <SectionPanel title="素材入口" subtitle="输入素材 · 字幕来源 · 语言">
+        <SectionPanel title="素材台面" subtitle="输入素材 · 字幕来源 · 语言">
           <div className="input-dock">
             <FileVideo size={24} />
             <div>
@@ -75,7 +75,7 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
           </div>
         </SectionPanel>
 
-        <SectionPanel title="启动前接线" subtitle="翻译服务 · ASR 服务 · 环境检查">
+        <SectionPanel title="启动前接线" subtitle="翻译服务 · ASR 服务 · 运行环境">
           <div className="connection-rack">
             <ReadinessRow
               icon={<Languages size={18} />}
@@ -100,7 +100,7 @@ export function NewTaskPage({ draft, serviceConnections, environmentChecks }: Ne
       </div>
 
       <div className="workspace-grid is-wide-left">
-        <SectionPanel title="制作流程" subtitle="输入素材 → 源字幕 → 翻译 → 术语 → 质量 → 导出">
+        <SectionPanel title="制作流水线" subtitle="输入素材 → 源字幕 → 翻译 → 术语 → 质量 → 导出">
           <div className="production-lane">
             <FlowStep icon={<FileVideo size={16} />} label="输入素材" detail={draft.input.displayName} active />
             <FlowStep icon={<Captions size={16} />} label="获取源字幕" detail="生成 Segment" />

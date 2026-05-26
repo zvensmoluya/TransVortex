@@ -32,6 +32,10 @@ export function TopTaskStatus({ currentRun }: TopTaskStatusProps) {
         {isFailed ? <CircleAlert size={16} /> : <Activity size={16} />}
         <span>{currentRun.currentAction}</span>
       </div>
+      <div className="top-status-meta">
+        <span>本地任务</span>
+        <span>可恢复</span>
+      </div>
       <div className="top-status-progress">
         <ProgressBar value={currentRun.progress.percent} label={currentRun.progress.label} compact />
       </div>

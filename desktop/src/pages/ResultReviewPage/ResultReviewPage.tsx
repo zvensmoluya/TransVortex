@@ -25,7 +25,7 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
   return (
     <div className="page-stack review-page">
       <PageHeader
-        eyebrow="结果检查"
+        eyebrow="审片台"
         title={task.title}
         description={`${workspace.segments.length} 行字幕 · ${issueCount} 个质量问题 · ${dirtyCount} 行尚未交付到输出文件`}
         actions={
@@ -66,7 +66,7 @@ export function ResultReviewPage({ task, workspace, terms }: ResultReviewPagePro
       </div>
 
       <div className="review-layout">
-        <SectionPanel title="字幕审片台" subtitle="字幕行 · 时间轴 · 问题定位">
+        <SectionPanel title="字幕行工作区" subtitle="字幕行 · 时间轴 · 问题定位">
           <SegmentList segments={workspace.segments} selectedSegmentId={selectedSegment?.id} onSelect={setSelectedSegmentId} />
           <TimelineOverview segments={workspace.segments} selectedSegmentId={selectedSegment?.id} />
         </SectionPanel>

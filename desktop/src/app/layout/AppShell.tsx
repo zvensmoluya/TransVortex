@@ -27,6 +27,11 @@ export function AppShell({ activeRouteId, currentRun, recentReviewTaskId, onNavi
             <div className="brand-subtitle">低光字幕制作工作台</div>
           </div>
         </div>
+        <div className="sidebar-project-strip" aria-label="当前工作台">
+          <span>当前项目</span>
+          <strong>访谈样片字幕制作</strong>
+          <small>素材 · 字幕 · 质量 · 输出</small>
+        </div>
         <MainNavigation
           activeRouteId={activeRouteId}
           recentReviewTaskId={recentReviewTaskId}
