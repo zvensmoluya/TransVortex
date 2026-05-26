@@ -14,9 +14,6 @@ dependencies = [
 asr = [
   "faster-whisper>=1.0.2",
 ]
-imagegen = [
-  "openai>=2.38.0",
-]
 test = [
   "pytest>=8.0.0",
 ]

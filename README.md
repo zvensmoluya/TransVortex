@@ -184,7 +184,6 @@ python -m transvortex.cli --root . export --segments samples\subtitle_delivery\s
 
 - `docs/CONFIG_GUIDE.md`：配置、凭据和 provider 约定
 - `docs/运行与测试指南.md`：运行、验证和桌面端的简化说明
-- `docs/IMAGEGEN_GUIDE.md`：用本地流式 imagegen helper 生成产品插画和空状态图的约定
 - `docs/PRODUCT_DIRECTION.md`：长期产品方向
 - `docs/ARCHITECTURE.md`：代码结构与边界
 - `docs/KNOWN_ISSUES_AND_VALIDATION.md`：低优先级待验证问题和优化观察
