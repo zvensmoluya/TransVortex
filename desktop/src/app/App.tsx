@@ -11,6 +11,7 @@ import { TaskDetailPage } from "../pages/TaskDetailPage/TaskDetailPage";
 import { TaskHistoryPage } from "../pages/TaskHistoryPage/TaskHistoryPage";
 import { TermsPage } from "../pages/TermsPage/TermsPage";
 import { openPath } from "../services/fileService";
+import { probeSubtitleStreams } from "../services/environmentService";
 import { useEnvironmentStore } from "../state/environmentStore";
 import { useProviderStore } from "../state/providerStore";
 import { useResultWorkspaceStore } from "../state/resultWorkspaceStore";
@@ -59,6 +60,8 @@ export function App() {
             taskError={taskStore.error}
             onPickInput={taskStore.updateInputPath}
             onPickOutputDirectory={taskStore.updateOutputDirectory}
+            onDraftChange={taskStore.updateDraft}
+            onProbeSubtitleStreams={probeSubtitleStreams}
             onStartTask={async () => {
               const taskId = await taskStore.startDraftTask();
               if (taskId) {
@@ -96,6 +99,13 @@ export function App() {
               }
             }}
             onOpenPath={openTaskPath}
+            onErrorAction={(action) => {
+              if (action.id === "resume") {
+                void taskStore.resumeStoredTask(selectedTask.id);
+              } else if (action.target) {
+                navigate(action.target);
+              }
+            }}
             onReexport={() => navigate(getTaskReviewPath(selectedTask.id))}
             onOpenReview={() => navigate(getTaskReviewPath(selectedTask.id))}
           />
@@ -130,11 +140,53 @@ export function App() {
           />
         );
       case "terms":
-        return <TermsPage terms={termStore.terms} loading={termStore.loading} error={termStore.error} onRefresh={termStore.refresh} />;
+        return (
+          <TermsPage
+            terms={termStore.terms}
+            loading={termStore.loading}
+            savingTermId={termStore.savingTermId}
+            exportPath={termStore.exportResult?.path}
+            error={termStore.error}
+            onRefresh={termStore.refresh}
+            onConfirm={(term) => termStore.updateStatus({ termId: term.id, status: "confirmed" })}
+            onLock={(term) => termStore.updateStatus({ termId: term.id, status: "locked" })}
+            onExportPreset={termStore.exportPreset}
+          />
+        );
       case "services":
-        return <ModelCredentialsPage connections={providerStore.connections} credentialBoundary={providerStore.credentialBoundary} loading={providerStore.loading} error={providerStore.error} onRefresh={providerStore.refresh} />;
+        return (
+          <ModelCredentialsPage
+            connections={providerStore.connections}
+            credentialBoundary={providerStore.credentialBoundary}
+            loading={providerStore.loading}
+            workingConnectionId={providerStore.workingConnectionId}
+            reports={providerStore.connectionReports}
+            error={providerStore.error}
+            onRefresh={providerStore.refresh}
+            onSaveApiKey={providerStore.saveApiKey}
+            onTestConnection={providerStore.testConnection}
+            onFetchModels={providerStore.fetchModels}
+            onSaveRouting={providerStore.saveRouting}
+          />
+        );
       case "diagnostics":
-        return <EnvironmentDiagnosticsPage checks={environmentStore.checks} loading={environmentStore.loading} error={environmentStore.error} onRefresh={environmentStore.refresh} />;
+        return (
+          <EnvironmentDiagnosticsPage
+            checks={environmentStore.checks}
+            loading={environmentStore.loading}
+            error={environmentStore.error}
+            onRefresh={environmentStore.refresh}
+            onAction={(action) => {
+              if (action.kind === "refresh") {
+                void environmentStore.refresh();
+              } else if (action.kind === "openPath" && action.target) {
+                openTaskPath(action.target);
+              } else if (action.target) {
+                navigate(action.target);
+              }
+            }}
+          />
+        );
       case "settings":
         return <SettingsPage />;
     }

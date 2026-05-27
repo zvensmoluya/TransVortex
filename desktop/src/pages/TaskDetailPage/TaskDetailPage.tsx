@@ -1,6 +1,6 @@
 import { AlertTriangle, FolderOpen, FileSearch, PauseCircle, PlayCircle, RotateCcw } from "lucide-react";
 import type { TaskPresentation } from "../../adapters/taskPresentationAdapter";
-import type { UserFacingError } from "../../domain/error";
+import type { ErrorAction, UserFacingError } from "../../domain/error";
 import type { Task } from "../../domain/task";
 import type { TaskRun } from "../../domain/taskRun";
 import { ExportFilesPanel } from "../../components/export/ExportFilesPanel";
@@ -20,6 +20,7 @@ type TaskDetailPageProps = {
   onCancel: () => Promise<void>;
   onResume: () => Promise<void>;
   onOpenPath: (path: string) => void;
+  onErrorAction: (action: ErrorAction) => void;
   onReexport: () => void;
   onOpenReview: () => void;
 };
@@ -34,6 +35,7 @@ export function TaskDetailPage({
   onCancel,
   onResume,
   onOpenPath,
+  onErrorAction,
   onReexport,
   onOpenReview,
 }: TaskDetailPageProps) {
@@ -114,7 +116,7 @@ export function TaskDetailPage({
                 <p>{task.error?.impact ?? error?.impact}</p>
                 <div className="inline-actions">
                   {(task.error?.nextActions ?? error?.nextActions ?? []).map((action) => (
-                    <button className="tvx-btn" type="button" key={action.id}>{action.label}</button>
+                    <button className="tvx-btn" type="button" key={action.id} onClick={() => onErrorAction(action)}>{action.label}</button>
                   ))}
                 </div>
               </div>

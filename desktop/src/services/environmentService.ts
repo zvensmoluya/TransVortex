@@ -1,5 +1,7 @@
 import { doctorPayloadToEnvironmentChecks } from "../adapters/environmentAdapter";
+import { subtitleStreamsToDomain } from "../adapters/subtitleStreamAdapter";
 import type { EnvironmentCheck } from "../domain/environment";
+import type { SubtitleStream } from "../domain/task";
 import { invokeCommand } from "./tauriClient";
 
 export async function runEnvironmentDoctor(): Promise<EnvironmentCheck[]> {
@@ -7,6 +9,7 @@ export async function runEnvironmentDoctor(): Promise<EnvironmentCheck[]> {
   return doctorPayloadToEnvironmentChecks(payload);
 }
 
-export async function probeSubtitleStreams(input: string): Promise<unknown> {
-  return invokeCommand<unknown>("probe_subtitle_streams", { input });
+export async function probeSubtitleStreams(input: string): Promise<SubtitleStream[]> {
+  const payload = await invokeCommand<unknown>("probe_subtitle_streams", { input });
+  return subtitleStreamsToDomain(payload);
 }

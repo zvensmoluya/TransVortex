@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import type { UserFacingError } from "../../domain/error";
-import type { EnvironmentCheck } from "../../domain/environment";
+import type { DiagnosticAction, EnvironmentCheck } from "../../domain/environment";
 import { EnvironmentCheckList } from "../../components/diagnostics/EnvironmentCheckList";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { SectionPanel } from "../../components/layout/SectionPanel";
@@ -10,9 +10,10 @@ type EnvironmentDiagnosticsPageProps = {
   loading: boolean;
   error?: UserFacingError;
   onRefresh: () => Promise<void>;
+  onAction: (action: DiagnosticAction) => void;
 };
 
-export function EnvironmentDiagnosticsPage({ checks, loading, error, onRefresh }: EnvironmentDiagnosticsPageProps) {
+export function EnvironmentDiagnosticsPage({ checks, loading, error, onRefresh, onAction }: EnvironmentDiagnosticsPageProps) {
   const blocking = checks.filter((check) => check.status === "fail").length;
   const warnings = checks.filter((check) => check.status === "warn").length;
 
@@ -31,7 +32,7 @@ export function EnvironmentDiagnosticsPage({ checks, loading, error, onRefresh }
       />
 
       <SectionPanel title="检查灯" subtitle="阻塞项 · 质量风险 · 可选能力">
-        {loading ? <div className="empty-state">正在读取真实环境检查。</div> : <EnvironmentCheckList checks={checks} />}
+        {loading ? <div className="empty-state">正在读取真实环境检查。</div> : <EnvironmentCheckList checks={checks} onAction={onAction} />}
         {error ? <div className="empty-state">{error.impact}</div> : null}
       </SectionPanel>
     </div>

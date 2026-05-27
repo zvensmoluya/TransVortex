@@ -5,6 +5,7 @@ export type DiagnosticAction = {
   id: string;
   label: string;
   target?: string;
+  kind?: "navigate" | "openPath" | "refresh";
 };
 
 export type EnvironmentCheck = {

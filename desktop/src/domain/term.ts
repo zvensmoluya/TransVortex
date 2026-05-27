@@ -9,8 +9,24 @@ export type TermEntry = {
   type: TermEntryType;
   status: TermEntryStatus;
   scope: TermEntryScope;
+  origin: "runtime" | "preset" | "suggestion";
+  editable: boolean;
   note?: string;
   relatedSegmentIds: string[];
+};
+
+export type TermStatusUpdate = {
+  termId: string;
+  status: Extract<TermEntryStatus, "confirmed" | "locked">;
+};
+
+export type TermPresetExportRequest = {
+  taskId: string;
+  presetId: string;
+  name?: string;
+  description?: string;
+  defaultStatus: TermEntryStatus;
+  overwrite?: boolean;
 };
 
 export type TermMatch = {

@@ -10,7 +10,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
+from ..artifacts.result_workspace import (
+    open_task_result,
+    reexport_task,
+    save_task_segments,
+    update_task_memory_entry,
+)
 from ..artifacts.task_store import TaskStore
 from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
 from ..app.credentials import (
@@ -18,6 +23,7 @@ from ..app.credentials import (
     delete_auth_credential,
     provider_credential_id,
     read_auth_credentials,
+    resolve_credential,
     resolve_provider_credential,
     write_auth_credential,
 )
@@ -336,6 +342,19 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
                 "capabilities": to_plain(provider.capabilities),
             }
         )
+    asr_providers = {}
+    for name, provider in sorted(config.asr_providers.items(), key=lambda item: item[0]):
+        credential = resolve_credential(
+            env_key=provider.env_key,
+            credential_id=provider.credential_id,
+            provider_name=provider.name,
+            root_dir=root,
+        )
+        asr_providers[name] = {
+            **to_plain(provider),
+            "credential_source": credential.source,
+            "has_key": credential.found,
+        }
     return {
         "root_dir": str(root),
         "auth_file": str(auth_file_path()),
@@ -352,6 +371,7 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         "custom_adapter_template": custom_adapter_template_payload(),
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
+        "asr_providers": asr_providers,
     }
 
 
@@ -776,6 +796,11 @@ def _build_parser() -> argparse.ArgumentParser:
     result_save_p.add_argument("--task-id", required=True)
     result_save_p.add_argument("--json-payload", required=True)
     result_save_p.add_argument("--json", action="store_true")
+    result_memory_p = result_sub.add_parser("memory-entry", help="Update a task runtime memory entry")
+    result_memory_p.add_argument("--task-id", required=True)
+    result_memory_p.add_argument("--entry-id", required=True)
+    result_memory_p.add_argument("--status", choices=["proposed", "confirmed", "locked"], required=True)
+    result_memory_p.add_argument("--json", action="store_true")
 
     memory_p = sub.add_parser("memory", help="Manage translation memory presets")
     memory_sub = memory_p.add_subparsers(dest="memory_command", required=True)
@@ -1219,6 +1244,22 @@ def main() -> None:
             return save_task_segments(root_dir=root, task_id=args.task_id, segments_payload=segments)
 
         _print_json(_run_or_exit(do_result_save, json_mode=True, stream_events=False, task_id_hint=args.task_id))
+        return
+
+    if args.command == "result" and args.result_command == "memory-entry":
+        _print_json(
+            _run_or_exit(
+                lambda: update_task_memory_entry(
+                    root_dir=root,
+                    task_id=args.task_id,
+                    entry_id=args.entry_id,
+                    status=args.status,
+                ),
+                json_mode=True,
+                stream_events=False,
+                task_id_hint=args.task_id,
+            )
+        )
         return
 
     if args.command == "memory" and args.memory_command == "export-preset":

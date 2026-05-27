@@ -19,7 +19,10 @@ export function configToTaskDraft(config: unknown, connections: ServiceConnectio
   const memoryPatch = isRecord(memory.patch) ? memory.patch : {};
   const subtitleStyle = isRecord(pipeline.subtitle_ass_style) ? pipeline.subtitle_ass_style : {};
   const defaultConnection = connections.find((connection) => connection.kind === "translation" && connection.isDefault);
+  const defaultAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.isDefault && connection.providerName !== "faster-whisper");
+  const localAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.providerName === "faster-whisper");
   const outputFormats = outputFormatToList(stringValue(pipeline.output_format) ?? "srt");
+  const asrMode = asrModeToDraft(stringValue(pipeline.asr_mode));
 
   return {
     input: previousDraft?.input ?? {
@@ -42,10 +45,14 @@ export function configToTaskDraft(config: unknown, connections: ServiceConnectio
       stylePrompt: previousDraft?.translation.stylePrompt ?? stringValue(translation.style_prompt) ?? "",
     },
     speechRecognition: {
-      mode: asrModeToDraft(stringValue(pipeline.asr_mode)),
+      mode: previousDraft?.speechRecognition.mode ?? asrMode,
       target: {
-        providerName: "faster-whisper",
-        model: stringValue(asrLocal.model_size) ?? "small",
+        providerName: previousDraft?.speechRecognition.target?.providerName
+          ?? (asrMode === "cloud" ? defaultAsrConnection?.providerName : localAsrConnection?.providerName)
+          ?? "faster-whisper",
+        model: previousDraft?.speechRecognition.target?.model
+          ?? (asrMode === "cloud" ? defaultAsrConnection?.model : stringValue(asrLocal.model_size) ?? localAsrConnection?.model)
+          ?? "small",
       },
     },
     terms: {

@@ -5,7 +5,7 @@ from pathlib import Path
 from transvortex.app.models import NormalizedResponse
 from transvortex.core.orchestrator import run_pipeline
 from transvortex.providers.admin import save_provider_routing
-from transvortex.artifacts.result_workspace import open_task_result, reexport_task, save_task_segments
+from transvortex.artifacts.result_workspace import open_task_result, reexport_task, save_task_segments, update_task_memory_entry
 from transvortex.formats.srt import parse_srt_text
 from transvortex.artifacts.task_store import TaskStore
 
@@ -352,6 +352,17 @@ Subaru arrives
     result = open_task_result(root_dir=root, task_id=task_id)
     assert result["memory"]["enabled"] is True
     assert result["memory"]["entries"] >= 1
+    runtime_entry = result["memory"]["entry_items"][0]
+
+    updated = update_task_memory_entry(
+        root_dir=root,
+        task_id=task_id,
+        entry_id=runtime_entry["id"],
+        status="locked",
+    )
+
+    assert updated["memory"]["entry_items"][0]["status"] == "locked"
+    assert "memory_updated" in (task_dir / "events.jsonl").read_text(encoding="utf-8")
 
 
 def test_save_provider_routing_writes_primary_and_fallback(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ export type TaskStoreState = {
   starting: boolean;
   error?: UserFacingError;
   setDraft: (draft: TaskDraft) => void;
+  updateDraft: (updater: (draft: TaskDraft) => TaskDraft) => void;
   updateInputPath: (path: string) => void;
   updateOutputDirectory: (path: string) => void;
   refreshTasks: () => Promise<Task[]>;
@@ -71,6 +72,10 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
 
   const updateInputPath = useCallback((path: string) => {
     setDraft((current) => current ? updateDraftInput(current, path) : current);
+  }, []);
+
+  const updateDraft = useCallback((updater: (draft: TaskDraft) => TaskDraft) => {
+    setDraft((current) => current ? updater(current) : current);
   }, []);
 
   const updateOutputDirectory = useCallback((path: string) => {
@@ -151,6 +156,7 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
     starting,
     error,
     setDraft,
+    updateDraft,
     updateInputPath,
     updateOutputDirectory,
     refreshTasks,

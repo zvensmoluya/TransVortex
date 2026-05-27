@@ -1,5 +1,6 @@
 import { resultWorkspaceToSegments, segmentsToSavePayload } from "../adapters/resultWorkspaceAdapter";
 import type { Segment } from "../domain/segment";
+import type { TermEntryStatus } from "../domain/term";
 import { invokeCommand } from "./tauriClient";
 
 export async function openTaskResult(taskId: string): Promise<Segment[]> {
@@ -15,5 +16,17 @@ export async function saveTaskSegments(taskId: string, segments: Segment[]): Pro
   return invokeCommand<{ saved: boolean }>("save_task_segments", {
     taskId,
     segments: segmentsToSavePayload(segments),
+  });
+}
+
+export async function updateTaskMemoryEntryStatus(
+  taskId: string,
+  entryId: string,
+  status: Extract<TermEntryStatus, "confirmed" | "locked">,
+): Promise<unknown> {
+  return invokeCommand<unknown>("update_task_memory_entry", {
+    taskId,
+    entryId,
+    status,
   });
 }

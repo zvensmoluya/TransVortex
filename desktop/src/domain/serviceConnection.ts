@@ -24,6 +24,10 @@ export type ServiceConnection = {
   providerName: string;
   displayName: string;
   model?: string;
+  models: string[];
+  credentialId?: string;
+  envKey?: string;
+  rawConfig?: unknown;
   credentialStatus: CredentialStatus;
   connectionStatus: ConnectionStatus;
   isDefault: boolean;

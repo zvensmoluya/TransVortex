@@ -11,6 +11,9 @@ export type StartTaskPayload = {
   provider?: string;
   model?: string;
   asrMode?: string;
+  asrProvider?: string;
+  asrCloudCredentialId?: string;
+  asrCloudEnvKey?: string;
   asrModel?: string;
   sourceMode?: string;
   subtitleTrack?: string;
@@ -42,6 +45,9 @@ export function taskDraftToStartTaskPayload(draft: TaskDraft): StartTaskPayload 
     provider: draft.translation.target.providerName,
     model: draft.translation.target.model,
     asrMode: mapAsrMode(draft),
+    asrProvider: draft.speechRecognition.mode === "cloud" ? draft.speechRecognition.target?.providerName : undefined,
+    asrCloudCredentialId: undefined,
+    asrCloudEnvKey: undefined,
     asrModel: draft.speechRecognition.target?.model,
     sourceMode: subtitleMapping.sourceMode,
     subtitleTrack: subtitleMapping.subtitleTrack,

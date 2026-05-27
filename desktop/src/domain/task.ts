@@ -39,6 +39,17 @@ export type SubtitleSourceChoice =
   | { mode: "cloudAsr" }
   | { mode: "existingSubtitle"; path?: string };
 
+export type SubtitleStream = {
+  id: string;
+  index: number;
+  codecName: string;
+  language: string;
+  title: string;
+  default: boolean;
+  forced: boolean;
+  supported: boolean;
+};
+
 export type TranslationSettings = {
   target: ServiceTarget;
   style: "natural" | "literal" | "localized" | "learning";

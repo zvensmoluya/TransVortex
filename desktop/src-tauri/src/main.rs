@@ -28,6 +28,7 @@ struct StartTaskRequest {
     provider: Option<String>,
     model: Option<String>,
     asr_mode: Option<String>,
+    asr_provider: Option<String>,
     asr_device: Option<String>,
     asr_model_size: Option<String>,
     asr_compute_type: Option<String>,
@@ -78,6 +79,7 @@ struct ResumeTaskRequest {
     provider: Option<String>,
     model: Option<String>,
     asr_mode: Option<String>,
+    asr_provider: Option<String>,
     asr_device: Option<String>,
     asr_model_size: Option<String>,
     asr_compute_type: Option<String>,
@@ -548,6 +550,109 @@ fn save_provider_routing(app: AppHandle, routing: Value) -> Result<Value, String
 }
 
 #[tauri::command]
+fn save_auth_credential(app: AppHandle, credential_id: String, api_key: String) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "auth".into(),
+            "set".into(),
+            credential_id,
+            "--api-key".into(),
+            api_key,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn list_auth_credentials(app: AppHandle) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(&root, &["auth".into(), "list".into(), "--json".into()])
+}
+
+#[tauri::command]
+fn update_task_memory_entry(
+    app: AppHandle,
+    task_id: String,
+    entry_id: String,
+    status: String,
+) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    run_worker_json(
+        &root,
+        &[
+            "result".into(),
+            "memory-entry".into(),
+            "--task-id".into(),
+            task_id,
+            "--entry-id".into(),
+            entry_id,
+            "--status".into(),
+            status,
+            "--json".into(),
+        ],
+    )
+}
+
+#[tauri::command]
+fn export_memory_preset(app: AppHandle, options: Value) -> Result<Value, String> {
+    let root = repo_root(&app)?;
+    let task_id = options
+        .get("taskId")
+        .and_then(Value::as_str)
+        .or_else(|| options.get("task_id").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+    let preset_id = options
+        .get("presetId")
+        .and_then(Value::as_str)
+        .or_else(|| options.get("preset_id").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+    let name = options
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let description = options
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let default_status = options
+        .get("defaultStatus")
+        .and_then(Value::as_str)
+        .or_else(|| options.get("default_status").and_then(Value::as_str))
+        .unwrap_or("confirmed")
+        .to_string();
+    let overwrite = options
+        .get("overwrite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let mut args = vec![
+        "memory".into(),
+        "export-preset".into(),
+        "--task-id".into(),
+        task_id,
+        "--preset-id".into(),
+        preset_id,
+        "--name".into(),
+        name,
+        "--description".into(),
+        description,
+        "--default-status".into(),
+        default_status,
+        "--json".into(),
+    ];
+    if overwrite {
+        args.push("--overwrite".into());
+    }
+    run_worker_json(&root, &args)
+}
+
+#[tauri::command]
 fn open_task_result(app: AppHandle, task_id: String) -> Result<Value, String> {
     let root = repo_root(&app)?;
     run_worker_json(
@@ -657,6 +762,7 @@ fn start_task(
     push_arg(&mut args, "--provider", &request.provider);
     push_arg(&mut args, "--model", &request.model);
     push_arg(&mut args, "--asr-mode", &request.asr_mode);
+    push_arg(&mut args, "--asr-provider", &request.asr_provider);
     push_arg(&mut args, "--asr-device", &request.asr_device);
     push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
@@ -745,6 +851,7 @@ fn resume_task(
     push_arg(&mut args, "--provider", &request.provider);
     push_arg(&mut args, "--model", &request.model);
     push_arg(&mut args, "--asr-mode", &request.asr_mode);
+    push_arg(&mut args, "--asr-provider", &request.asr_provider);
     push_arg(&mut args, "--asr-device", &request.asr_device);
     push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
     push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
@@ -862,6 +969,10 @@ fn main() {
             fetch_provider_models,
             test_provider_connection,
             save_provider_routing,
+            save_auth_credential,
+            list_auth_credentials,
+            update_task_memory_entry,
+            export_memory_preset,
             open_task_result,
             save_task_segments,
             reexport_task,

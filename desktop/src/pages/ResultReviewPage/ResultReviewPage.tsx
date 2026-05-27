@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Captions, Download, ExternalLink, FileText, Gauge, RotateCcw, Save, Search, SkipBack, SkipForward, Tags } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PresentationTone, TaskPresentation } from "../../adapters/taskPresentationAdapter";
 import type { Segment } from "../../domain/segment";
 import type { TaskRun } from "../../domain/taskRun";
@@ -22,9 +22,47 @@ type ResultReviewPageProps = {
 
 export function ResultReviewPage({ workspace, presentation, terms, taskRun, onRefreshTask, onOpenPath }: ResultReviewPageProps) {
   const [selectedSegmentId, setSelectedSegmentId] = useState(workspace.selectedSegmentId);
-  const selectedSegment = workspace.segments.find((segment) => segment.id === selectedSegmentId) ?? workspace.segments[0];
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "issues" | "dirty">("all");
+  useEffect(() => {
+    setSelectedSegmentId(workspace.selectedSegmentId);
+  }, [workspace.selectedSegmentId]);
+  const filteredSegments = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return workspace.segments.filter((segment) => {
+      const matchesFilter =
+        filter === "all" ||
+        (filter === "issues" && segment.issues.length > 0) ||
+        (filter === "dirty" && segment.dirtyState !== "clean");
+      if (!matchesFilter) return false;
+      if (!normalized) return true;
+      return [
+        segment.sourceText,
+        segment.translatedText,
+        String(segment.index),
+        ...segment.issues.map((issue) => issue.title),
+        ...segment.termMatches.map((match) => `${match.source} ${match.expectedTarget}`),
+      ].some((value) => value.toLocaleLowerCase().includes(normalized));
+    });
+  }, [filter, query, workspace.segments]);
+  const selectedSegment = workspace.segments.find((segment) => segment.id === selectedSegmentId) ?? filteredSegments[0] ?? workspace.segments[0];
   const workspaceView = presentation.workspace;
   const primaryOutput = presentation.delivery.primaryOutput;
+  const issueSegments = filteredSegments.filter((segment) => segment.issues.length > 0);
+
+  const selectSegment = (segmentId: string) => {
+    setSelectedSegmentId(segmentId);
+    workspace.setSelectedSegmentId(segmentId);
+  };
+
+  const jumpIssue = (direction: "previous" | "next") => {
+    if (issueSegments.length === 0) return;
+    const currentIndex = issueSegments.findIndex((segment) => segment.id === selectedSegment?.id);
+    const nextIndex = direction === "next"
+      ? currentIndex < 0 ? 0 : (currentIndex + 1) % issueSegments.length
+      : currentIndex <= 0 ? issueSegments.length - 1 : currentIndex - 1;
+    selectSegment(issueSegments[nextIndex].id);
+  };
 
   return (
     <div className="page-stack review-page">
@@ -66,13 +104,18 @@ export function ResultReviewPage({ workspace, presentation, terms, taskRun, onRe
       <div className="review-toolbar">
         <div className="search-box">
           <Search size={15} />
-          <input value="" readOnly placeholder="搜索字幕或术语" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索字幕或术语" />
         </div>
-        <button className="tvx-btn" type="button">
+        <select className="tvx-input compact-select" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
+          <option value="all">全部字幕</option>
+          <option value="issues">只看问题</option>
+          <option value="dirty">只看已修改</option>
+        </select>
+        <button className="tvx-btn" type="button" disabled={issueSegments.length === 0} onClick={() => jumpIssue("previous")}>
           <SkipBack size={15} />
           上一条问题
         </button>
-        <button className="tvx-btn" type="button">
+        <button className="tvx-btn" type="button" disabled={issueSegments.length === 0} onClick={() => jumpIssue("next")}>
           <SkipForward size={15} />
           下一条问题
         </button>
@@ -112,8 +155,8 @@ export function ResultReviewPage({ workspace, presentation, terms, taskRun, onRe
             <div className="empty-state">当前任务还没有可检查的字幕结果。</div>
           ) : (
             <>
-              <SegmentList segments={workspace.segments} selectedSegmentId={selectedSegment?.id} onSelect={setSelectedSegmentId} />
-              <TimelineOverview segments={workspace.segments} selectedSegmentId={selectedSegment?.id} />
+              <SegmentList segments={filteredSegments} selectedSegmentId={selectedSegment?.id} onSelect={selectSegment} />
+              <TimelineOverview segments={filteredSegments} selectedSegmentId={selectedSegment?.id} />
             </>
           )}
         </SectionPanel>
@@ -146,10 +189,13 @@ export function ResultReviewPage({ workspace, presentation, terms, taskRun, onRe
           <SectionPanel title="相关术语">
             <div className="compact-list">
               {terms.slice(0, 4).map((term) => (
-                <div className="compact-row" key={term.id}>
+                <button className="compact-row" type="button" key={term.id} onClick={() => {
+                  const match = workspace.segments.find((segment) => segment.termMatches.some((item) => item.termId === term.id));
+                  if (match) selectSegment(match.id);
+                }}>
                   <strong>{term.source}</strong>
                   <span>{term.target}</span>
-                </div>
+                </button>
               ))}
             </div>
           </SectionPanel>

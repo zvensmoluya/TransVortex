@@ -24,7 +24,7 @@ export function doctorCheckToEnvironmentCheck(check: unknown, index = 0): Enviro
     status,
     category: categoryForCheck(name, status),
     impact: stringValue(raw.hint_zh) || stringValue(raw.message) || "该项会影响任务运行前检查。",
-    nextActions: [{ id: "review", label: status === "pass" ? "保持当前配置" : "查看处理方式", target: "/diagnostics" }],
+    nextActions: actionsForCheck(name, status, raw),
     technicalDetail: stringValue(raw.code),
   };
 }
@@ -37,6 +37,10 @@ function mapStatus(status?: string): EnvironmentCheck["status"] {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function labelForCheck(name: string): string {
@@ -60,4 +64,25 @@ function categoryForCheck(name: string, status: EnvironmentCheck["status"]): Env
   if (name === "faster_whisper" || name.includes("asr")) return "quality_risk";
   if (status === "warn") return "quality_risk";
   return "optional";
+}
+
+function actionsForCheck(name: string, status: EnvironmentCheck["status"], raw: RawDoctorCheck): EnvironmentCheck["nextActions"] {
+  const details = isRecord(raw.details) ? raw.details : {};
+  const path = stringValue(details.path) || stringValue(details.auth_file) || stringValue(details.providers_file);
+  if (status === "pass") {
+    return path ? [{ id: "open-path", label: "打开位置", kind: "openPath", target: path }] : [];
+  }
+  if (name === "provider_env_key" || name === "provider_protocol" || name === "routing" || name === "asr_env_key" || name === "asr_provider") {
+    return [{ id: "services", label: "打开模型与凭据", kind: "navigate", target: "/services" }];
+  }
+  if (name === "providers_file" || name === "config_load") {
+    return [
+      { id: "settings", label: "打开设置", kind: "navigate", target: "/settings" },
+      ...(path ? [{ id: "open-path", label: "打开配置位置", kind: "openPath" as const, target: path }] : []),
+    ];
+  }
+  if (name === "artifacts" && path) {
+    return [{ id: "open-path", label: "打开任务目录", kind: "openPath", target: path }];
+  }
+  return [{ id: "refresh", label: "重新检测", kind: "refresh" }];
 }

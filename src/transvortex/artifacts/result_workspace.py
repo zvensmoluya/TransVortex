@@ -8,6 +8,8 @@ from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_deli
 from ..app.models import Segment
 from ..utils import read_json, read_jsonl, to_plain, write_json
 from .task_store import TaskStore
+from ..memory.schema import entry_from_dict, normalize_status
+from ..memory.store import MemoryStore
 
 
 def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
@@ -196,6 +198,46 @@ def save_task_segments(*, root_dir: Path, task_id: str, segments_payload: list[d
     task.settings["edited"] = True
     store.save_task(task)
     store.append_event(task_id, "edited", stage="EDIT", message="Task result segments edited", details={"segments": len(segments)})
+    return open_task_result(root_dir=root_dir, task_id=task_id)
+
+
+def update_task_memory_entry(
+    *,
+    root_dir: Path,
+    task_id: str,
+    entry_id: str,
+    status: str,
+) -> dict[str, Any]:
+    normalized_status = normalize_status(status)
+    if normalized_status not in {"proposed", "confirmed", "locked"}:
+        raise ValueError("status must be one of: proposed, confirmed, locked")
+
+    config = load_app_config(root_dir=root_dir)
+    store = TaskStore(config.pipeline.artifacts_dir)
+    memory_store = MemoryStore(store.task_dir(task_id) / "memory")
+    document = memory_store.load_runtime()
+    updated = False
+    next_entries = []
+    for entry in document.entries:
+        if str(entry.id) == str(entry_id):
+            row = to_plain(entry)
+            row["status"] = normalized_status
+            entry = entry_from_dict(row)
+            updated = True
+        next_entries.append(entry)
+
+    if not updated:
+        raise ValueError(f"runtime memory entry not found: {entry_id}")
+
+    document.entries = next_entries
+    memory_store.save(document)
+    store.append_event(
+        task_id,
+        "memory_updated",
+        stage="EDIT",
+        message="Task memory entry status updated",
+        details={"entry_id": entry_id, "status": normalized_status},
+    )
     return open_task_result(root_dir=root_dir, task_id=task_id)
 
 

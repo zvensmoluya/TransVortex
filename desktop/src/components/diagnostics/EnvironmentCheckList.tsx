@@ -1,12 +1,13 @@
 import { Wrench } from "lucide-react";
-import type { EnvironmentCheck } from "../../domain/environment";
+import type { DiagnosticAction, EnvironmentCheck } from "../../domain/environment";
 import { StatusBadge, type StatusTone } from "../feedback/StatusBadge";
 
 type EnvironmentCheckListProps = {
   checks: EnvironmentCheck[];
+  onAction?: (action: DiagnosticAction) => void;
 };
 
-export function EnvironmentCheckList({ checks }: EnvironmentCheckListProps) {
+export function EnvironmentCheckList({ checks, onAction }: EnvironmentCheckListProps) {
   return (
     <div className="diagnostics-list">
       {checks.map((check) => (
@@ -21,7 +22,7 @@ export function EnvironmentCheckList({ checks }: EnvironmentCheckListProps) {
           </div>
           <div className="diagnostic-actions">
             {check.nextActions.map((action) => (
-              <button className="tvx-btn tvx-btn-quiet" type="button" key={action.id}>
+              <button className="tvx-btn tvx-btn-quiet" type="button" key={action.id} onClick={() => onAction?.(action)}>
                 {action.label}
               </button>
             ))}

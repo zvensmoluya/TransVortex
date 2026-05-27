@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Captions, CheckCircle2, FileText, FileVideo, FolderOpen, Gauge, Languages, Play, RefreshCw, ShieldCheck, Tags } from "lucide-react";
 import type { EnvironmentCheck } from "../../domain/environment";
+import type { ExportFormat } from "../../domain/export";
 import type { UserFacingError } from "../../domain/error";
 import type { ServiceConnection } from "../../domain/serviceConnection";
-import type { TaskDraft } from "../../domain/task";
+import type { SubtitleStream, TaskDraft } from "../../domain/task";
 import { StatusBadge } from "../../components/feedback/StatusBadge";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { SectionPanel } from "../../components/layout/SectionPanel";
@@ -20,6 +22,8 @@ type NewTaskPageProps = {
   taskError?: UserFacingError;
   onPickInput: (path: string) => void;
   onPickOutputDirectory: (path: string) => void;
+  onDraftChange: (updater: (draft: TaskDraft) => TaskDraft) => void;
+  onProbeSubtitleStreams: (input: string) => Promise<SubtitleStream[]>;
   onStartTask: () => Promise<void>;
   onRefresh: () => Promise<void>;
 };
@@ -35,13 +39,45 @@ export function NewTaskPage({
   taskError,
   onPickInput,
   onPickOutputDirectory,
+  onDraftChange,
+  onProbeSubtitleStreams,
   onStartTask,
   onRefresh,
 }: NewTaskPageProps) {
+  const [subtitleStreams, setSubtitleStreams] = useState<SubtitleStream[]>([]);
+  const [probingStreams, setProbingStreams] = useState(false);
+  const [streamProbeMessage, setStreamProbeMessage] = useState("");
   const translationConnection = serviceConnections.find((connection) => connection.kind === "translation" && connection.isDefault);
   const asrConnection = serviceConnections.find((connection) => connection.kind === "asr" && connection.isDefault);
+  const translationConnections = serviceConnections.filter((connection) => connection.kind === "translation");
+  const asrConnections = serviceConnections.filter((connection) => connection.kind === "asr");
   const blockingChecks = environmentChecks.filter((check) => check.status === "fail");
   const canStart = Boolean(draft?.input.path) && blockingChecks.length === 0 && !starting;
+  const supportedStreams = subtitleStreams.filter((stream) => stream.supported);
+
+  useEffect(() => {
+    setSubtitleStreams([]);
+    setStreamProbeMessage("");
+  }, [draft?.input.path]);
+
+  const probeStreams = async () => {
+    if (!draft?.input.path) return;
+    setProbingStreams(true);
+    try {
+      const streams = await onProbeSubtitleStreams(draft.input.path);
+      setSubtitleStreams(streams);
+      const supported = streams.filter((stream) => stream.supported);
+      setStreamProbeMessage(supported.length > 0 ? `检测到 ${supported.length} 条可用文本字幕轨。` : "没有可用文本字幕轨，可以切换到 ASR。");
+      if (supported.length > 0) {
+        onDraftChange((current) => ({ ...current, subtitleSource: { mode: "embedded", streamId: String(supported[0].index) } }));
+      }
+    } catch (err) {
+      setSubtitleStreams([]);
+      setStreamProbeMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProbingStreams(false);
+    }
+  };
 
   return (
     <div className="page-stack">
@@ -99,11 +135,21 @@ export function NewTaskPage({
           <div className="form-grid">
             <label>
               <span>源语言</span>
-              <input className="tvx-input" value={draft?.languages.sourceLanguage ?? "—"} readOnly />
+              <input
+                className="tvx-input"
+                value={draft?.languages.sourceLanguage ?? ""}
+                onChange={(event) => onDraftChange((current) => ({ ...current, languages: { ...current.languages, sourceLanguage: event.target.value } }))}
+                placeholder="ja"
+              />
             </label>
             <label>
               <span>目标语言</span>
-              <input className="tvx-input" value={draft?.languages.targetLanguage ?? "—"} readOnly />
+              <input
+                className="tvx-input"
+                value={draft?.languages.targetLanguage ?? ""}
+                onChange={(event) => onDraftChange((current) => ({ ...current, languages: { ...current.languages, targetLanguage: event.target.value } }))}
+                placeholder="zh-CN"
+              />
             </label>
           </div>
           <div className="form-grid">
@@ -113,17 +159,140 @@ export function NewTaskPage({
             </label>
             <label>
               <span>字幕格式</span>
-              <input className="tvx-input" value={draft ? draft.output.formats.map((format) => format.toUpperCase()).join(" / ") : "SRT"} readOnly />
+              <div className="checkbox-row">
+                {(["srt", "ass", "vtt"] as ExportFormat[]).map((format) => (
+                  <label key={format}>
+                    <input
+                      type="checkbox"
+                      checked={draft?.output.formats.includes(format) ?? false}
+                      onChange={(event) => {
+                        onDraftChange((current) => {
+                          const next = event.target.checked
+                            ? [...current.output.formats, format]
+                            : current.output.formats.filter((item) => item !== format);
+                          return { ...current, output: { ...current.output, formats: next.length > 0 ? next : ["srt"] } };
+                        });
+                      }}
+                    />
+                    {format.toUpperCase()}
+                  </label>
+                ))}
+              </div>
             </label>
           </div>
-          <div className="segmented-control" aria-label="任务类型">
-            <button className="is-selected" type="button">转写并翻译</button>
-            <button type="button" disabled>翻译已有字幕</button>
-            <button type="button" disabled>重新导出</button>
+          <div className="form-grid">
+            <label>
+              <span>字幕来源</span>
+              <select
+                className="tvx-input"
+                value={draft?.subtitleSource.mode ?? "auto"}
+                onChange={(event) => {
+                  const mode = event.target.value as TaskDraft["subtitleSource"]["mode"];
+                  onDraftChange((current) => ({ ...current, subtitleSource: mode === "embedded" ? { mode, streamId: supportedStreams[0] ? String(supportedStreams[0].index) : undefined } : { mode } as TaskDraft["subtitleSource"] }));
+                }}
+              >
+                <option value="auto">自动选择</option>
+                <option value="embedded" disabled={supportedStreams.length === 0}>使用内置字幕轨</option>
+                <option value="localAsr">本地识别</option>
+                <option value="cloudAsr">云端识别</option>
+              </select>
+            </label>
+            <label>
+              <span>内置字幕轨</span>
+              <select
+                className="tvx-input"
+                disabled={supportedStreams.length === 0 || draft?.subtitleSource.mode !== "embedded"}
+                value={draft?.subtitleSource.mode === "embedded" ? draft.subtitleSource.streamId ?? "" : ""}
+                onChange={(event) => onDraftChange((current) => ({ ...current, subtitleSource: { mode: "embedded", streamId: event.target.value } }))}
+              >
+                <option value="">{supportedStreams.length ? "选择字幕轨" : "未检测到可用文本字幕轨"}</option>
+                {supportedStreams.map((stream) => (
+                  <option key={stream.id} value={String(stream.index)}>
+                    #{stream.index} {stream.language || "und"} {stream.title || stream.codecName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="inline-actions">
+            <button className="tvx-btn" type="button" disabled={!draft?.input.path || probingStreams} onClick={() => void probeStreams()}>
+              <Captions size={15} />
+              {probingStreams ? "正在检测" : "检测内置字幕"}
+            </button>
+            {streamProbeMessage ? <span className="helper-text">{streamProbeMessage}</span> : null}
           </div>
         </SectionPanel>
 
         <SectionPanel title="启动前接线" subtitle="翻译服务 · ASR 服务 · 运行环境">
+          {draft ? (
+            <div className="form-grid">
+              <label>
+                <span>翻译 provider</span>
+                <select
+                  className="tvx-input"
+                  value={draft.translation.target.providerName}
+                  onChange={(event) => {
+                    const next = translationConnections.find((connection) => connection.providerName === event.target.value);
+                    onDraftChange((current) => ({ ...current, translation: { ...current.translation, target: { providerName: event.target.value, model: next?.model ?? next?.models[0] } } }));
+                  }}
+                >
+                  {translationConnections.map((connection) => (
+                    <option key={connection.id} value={connection.providerName}>{connection.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>翻译模型</span>
+                <select
+                  className="tvx-input"
+                  value={draft.translation.target.model ?? ""}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, translation: { ...current.translation, target: { ...current.translation.target, model: event.target.value } } }))}
+                >
+                  {(translationConnections.find((connection) => connection.providerName === draft.translation.target.providerName)?.models ?? []).map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {draft ? (
+            <div className="form-grid">
+              <label>
+                <span>ASR 模式</span>
+                <select
+                  className="tvx-input"
+                  value={draft.speechRecognition.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as TaskDraft["speechRecognition"]["mode"];
+                    const target = mode === "cloud"
+                      ? asrConnections.find((connection) => connection.providerName !== "faster-whisper")
+                      : asrConnections.find((connection) => connection.providerName === "faster-whisper");
+                    onDraftChange((current) => ({ ...current, speechRecognition: { ...current.speechRecognition, mode, target: target ? { providerName: target.providerName, model: target.model ?? target.models[0] } : current.speechRecognition.target } }));
+                  }}
+                >
+                  <option value="auto">自动</option>
+                  <option value="local">本地识别</option>
+                  <option value="cloud">云端识别</option>
+                  <option value="none">不识别</option>
+                </select>
+              </label>
+              <label>
+                <span>ASR 服务/模型</span>
+                <select
+                  className="tvx-input"
+                  value={draft.speechRecognition.target?.providerName ?? ""}
+                  onChange={(event) => {
+                    const target = asrConnections.find((connection) => connection.providerName === event.target.value);
+                    onDraftChange((current) => ({ ...current, speechRecognition: { ...current.speechRecognition, target: target ? { providerName: target.providerName, model: target.model ?? target.models[0] } : undefined } }));
+                  }}
+                >
+                  {asrConnections.map((connection) => (
+                    <option key={connection.id} value={connection.providerName}>{connection.displayName} · {connection.model ?? connection.models[0] ?? "默认"}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
           <div className="connection-rack">
             <ReadinessRow
               icon={<Languages size={18} />}
@@ -167,6 +336,69 @@ export function NewTaskPage({
             <SummaryItem label="术语表" value={draft?.terms.selectedTermBaseId ?? "未选择"} icon={<Tags size={16} />} />
             <SummaryItem label="质量模式" value={draft?.advanced.qualityMode === "balanced" ? "均衡处理" : "保守处理"} icon={<Gauge size={16} />} />
           </div>
+          {draft ? (
+            <div className="form-grid">
+              <label>
+                <span>双语设置</span>
+                <select
+                  className="tvx-input"
+                  value={draft.output.bilingual ? draft.output.bilingualOrder : "off"}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    onDraftChange((current) => ({
+                      ...current,
+                      output: {
+                        ...current.output,
+                        bilingual: value !== "off",
+                        bilingualOrder: value === "source_first" ? "source_first" : "target_first",
+                      },
+                    }));
+                  }}
+                >
+                  <option value="off">单语字幕</option>
+                  <option value="target_first">双语 · 译文在上</option>
+                  <option value="source_first">双语 · 原文在上</option>
+                </select>
+              </label>
+              <label>
+                <span>术语表</span>
+                <input
+                  className="tvx-input"
+                  value={draft.terms.selectedTermBaseId ?? ""}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, terms: { ...current.terms, selectedTermBaseId: event.target.value || undefined } }))}
+                  placeholder="preset id，例如 nold 或 rezero:locked"
+                />
+              </label>
+            </div>
+          ) : null}
+          {draft ? (
+            <div className="checkbox-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.terms.useProjectTerms}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, terms: { ...current.terms, useProjectTerms: event.target.checked } }))}
+                />
+                使用项目术语
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.terms.allowSystemSuggestions}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, terms: { ...current.terms, allowSystemSuggestions: event.target.checked } }))}
+                />
+                允许系统建议
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.output.preferSingleLine}
+                  onChange={(event) => onDraftChange((current) => ({ ...current, output: { ...current.output, preferSingleLine: event.target.checked } }))}
+                />
+                尽量单行
+              </label>
+            </div>
+          ) : null}
           <div className="inline-actions">
             <button
               className="tvx-btn"
