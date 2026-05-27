@@ -18,7 +18,9 @@ export function taskRecordsToTasks(payload: unknown): Task[] {
 export function taskRecordToTask(record: unknown, index = 0): Task {
   const raw = (record ?? {}) as RawTaskRecord;
   const id = stringValue(raw.task_id) || stringValue(raw.id) || `task-${index + 1}`;
-  const title = stringValue(raw.title) || stringValue(raw.input_name) || `字幕任务 ${index + 1}`;
+  const inputPath = stringValue(raw.input_file) || stringValue(raw.input);
+  const inputName = stringValue(raw.input_name) || fileNameFromPath(inputPath);
+  const title = stringValue(raw.title) || inputName || `字幕任务 ${index + 1}`;
   const status = mapTaskStatus(stringValue(raw.status));
   const outputPaths = raw.output_paths && typeof raw.output_paths === "object" ? (raw.output_paths as Record<string, unknown>) : {};
   const outputs = outputFilesFromRecord(outputPaths, stringValue(raw.output_path), stringValue(raw.updated_at));
@@ -29,9 +31,9 @@ export function taskRecordToTask(record: unknown, index = 0): Task {
     title,
     status,
     input: {
-      kind: "video",
-      path: stringValue(raw.input),
-      displayName: stringValue(raw.input_name) || title,
+      kind: mapInputKind(raw),
+      path: inputPath,
+      displayName: inputName || title,
     },
     languages: {
       sourceLanguage: stringValue(raw.source_lang) || "auto",
@@ -41,8 +43,13 @@ export function taskRecordToTask(record: unknown, index = 0): Task {
     outputs,
     taskDirectory: stringValue(raw.task_dir),
     recoverability: {
-      canResume: status === "failedRecoverable" || status === "running" || status === "starting",
-      resumeLabel: status === "failedRecoverable" ? "从上次完成的步骤继续" : status === "running" ? "任务运行中" : undefined,
+      canResume: status === "failedRecoverable" || status === "cancelled",
+      resumeLabel:
+        status === "failedRecoverable"
+          ? "从上次完成的步骤继续"
+          : status === "cancelled"
+            ? "从取消点继续"
+            : undefined,
     },
     error: taskErrorToUserFacingError(errorInfo, raw.error),
     createdAt: stringValue(raw.created_at) || new Date().toISOString(),
@@ -125,6 +132,20 @@ function outputFilesFromRecord(outputPaths: Record<string, unknown>, outputPath?
   }
 
   return files;
+}
+
+function mapInputKind(raw: RawTaskRecord): Task["input"]["kind"] {
+  const inputType = stringValue(raw.input_type) || stringValue(raw.settings && typeof raw.settings === "object" ? (raw.settings as RawTaskRecord).input_type : undefined);
+  if (inputType === "srt" || inputType === "srt_translate") return "subtitle";
+  if (inputType === "segments" || inputType === "segments_translate") return "segments";
+  const inputPath = stringValue(raw.input_file) || stringValue(raw.input);
+  return inputPath?.toLowerCase().endsWith(".srt") ? "subtitle" : "video";
+}
+
+function fileNameFromPath(path?: string): string | undefined {
+  if (!path) return undefined;
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() || path;
 }
 
 function inferFormatFromPath(path: string): ExportedFile["format"] {

@@ -26,7 +26,7 @@ export function normalizeWorkerEvents(taskId: string, payload: unknown): TaskRun
     timeline,
     warnings: [],
     error: taskErrorToUserFacingError(errorInfo, stringValue(lastRawEvent?.message)),
-    canCancel: false,
+    canCancel: canCancelFromLastEvent(lastEvent, lastRawEvent),
     canResume: lastEvent?.phase === "failed" || lastEvent?.phase === "translation" || lastEvent?.phase === "asr",
     lastEventAt: lastEvent?.at,
   };
@@ -38,15 +38,16 @@ export function workerEventToTimelineEvent(event: unknown, index = 0): TimelineE
   const stage = stringValue(raw.stage);
   const phase = mapEventPhase(type, stage);
   const taskId = stringValue(raw.task_id) || stringValue(raw.taskId);
+  const progress = numberValue(raw.progress);
 
   return {
     id: stringValue(raw.id) || `event-${index}`,
-    at: stringValue(raw.at) || stringValue(raw.timestamp) || new Date().toISOString(),
+    at: stringValue(raw.at) || stringValue(raw.created_at) || stringValue(raw.timestamp) || new Date().toISOString(),
     taskId,
     phase,
     title: mapEventTitle(type, stage),
     detail: stringValue(raw.message) || stringValue(raw.detail),
-    progressPercent: numberValue(raw.progress) !== undefined ? Math.round((numberValue(raw.progress) ?? 0) * 100) : undefined,
+    progressPercent: progress !== undefined ? Math.round(progress * 10000) / 100 : undefined,
     severity: mapEventSeverity(type),
   };
 }
@@ -71,8 +72,11 @@ function mapEventPhase(type: string, stage?: string): TaskPhase {
     case "DONE":
       return "completed";
     case "FAILED":
+    case "CANCELLED":
       return "failed";
   }
+  if (type.includes("cancelled")) return "failed";
+  if (type.includes("cancel_requested")) return "input";
   if (type.includes("asr")) return "asr";
   if (type.includes("translate")) return "translation";
   if (type.includes("quality")) return "qualityReview";
@@ -103,7 +107,11 @@ function mapEventTitle(type: string, stage?: string): string {
       return "任务已完成";
     case "FAILED":
       return "任务遇到问题";
+    case "CANCELLED":
+      return "任务已取消";
   }
+  if (type.includes("cancel_requested")) return "正在取消任务";
+  if (type.includes("cancelled")) return "任务已取消";
   if (type.includes("asr")) return "正在识别音频";
   if (type.includes("translate")) return "正在翻译字幕";
   if (type.includes("progress")) return "任务推进中";
@@ -117,6 +125,7 @@ function mapEventTitle(type: string, stage?: string): string {
 
 function mapEventSeverity(type: string): TimelineEvent["severity"] {
   if (type.includes("fail") || type.includes("error")) return "error";
+  if (type.includes("cancel")) return "warning";
   if (type.includes("warn")) return "warning";
   if (type.includes("complete")) return "success";
   if (type.includes("progress")) return "info";
@@ -133,6 +142,16 @@ function numberValue(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function canCancelFromLastEvent(lastEvent: TimelineEvent | undefined, raw: RawWorkerEvent | undefined): boolean {
+  if (!lastEvent || !raw) return false;
+  const type = (stringValue(raw.type) || stringValue(raw.event) || "").toLowerCase();
+  const stage = (stringValue(raw.stage) || "").toUpperCase();
+  if (type.includes("cancel") || stage === "CANCELLED" || stage === "DONE" || stage === "FAILED") {
+    return false;
+  }
+  return lastEvent.phase !== "completed" && lastEvent.phase !== "failed";
 }
 
 function progressLabel(progress: number | undefined, phase: TaskPhase | undefined): string {

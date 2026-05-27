@@ -19,15 +19,13 @@ export async function startTask(draft: TaskDraft): Promise<StartTaskResponse> {
   });
 }
 
-export async function resumeTask(taskId: string, draft?: Partial<TaskDraft>): Promise<StartTaskResponse> {
+export async function resumeTask(taskId: string): Promise<StartTaskResponse> {
   return invokeCommand<StartTaskResponse>("resume_task", {
-    request: {
-      taskId,
-      ...(draft ? taskDraftToStartTaskPayload(draft as TaskDraft) : {}),
-    },
+    request: { taskId },
   });
 }
 
-export async function cancelTask(): Promise<{ cancelled: boolean }> {
-  return invokeCommand<{ cancelled: boolean }>("cancel_task");
+export async function cancelTask(taskId: string): Promise<Task> {
+  const payload = await invokeCommand<unknown>("cancel_task", { taskId });
+  return taskRecordsToTasks([payload])[0];
 }

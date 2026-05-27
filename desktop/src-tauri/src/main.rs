@@ -811,14 +811,9 @@ fn resume_task(
 }
 
 #[tauri::command]
-fn cancel_task(app: AppHandle, state: State<WorkerState>) -> Result<Value, String> {
+fn cancel_task(app: AppHandle, state: State<WorkerState>, task_id: String) -> Result<Value, String> {
     let root = repo_root(&app)?;
-    let task_id = state
-        .task_id
-        .lock()
-        .map_err(|err| err.to_string())?
-        .clone()
-        .ok_or("No running task id is known yet")?;
+    *state.task_id.lock().map_err(|err| err.to_string())? = Some(task_id.clone());
     run_worker_json(&root, &["cancel".into(), "--task-id".into(), task_id, "--json".into()])
 }
 

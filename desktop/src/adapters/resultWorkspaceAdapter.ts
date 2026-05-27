@@ -17,7 +17,7 @@ export function resultSegmentToSegment(segment: unknown, index = 0): Segment {
   const raw = (segment ?? {}) as RawSegment;
   const startMs = secondsToMs(numberValue(raw.start));
   const endMs = secondsToMs(numberValue(raw.end));
-  const segmentId = stringValue(raw.id) || `segment-${index + 1}`;
+  const segmentId = idValue(raw.id) || `segment-${index + 1}`;
   const qualityIssues = normalizeQualityIssueList(raw.quality_issues, segmentId);
 
   return {
@@ -41,7 +41,7 @@ export function resultSegmentToSegment(segment: unknown, index = 0): Segment {
 
 export function segmentsToSavePayload(segments: Segment[]): unknown[] {
   return segments.map((segment) => ({
-    id: segment.id,
+    id: payloadSegmentId(segment.id),
     start: segment.startMs / 1000,
     end: segment.endMs / 1000,
     text_src: segment.sourceText,
@@ -118,4 +118,15 @@ function numberValue(value: unknown): number | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function idValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function payloadSegmentId(id: string): string | number {
+  const numeric = Number(id);
+  return Number.isInteger(numeric) && String(numeric) === id ? numeric : id;
 }

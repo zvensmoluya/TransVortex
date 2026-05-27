@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { configToTaskDraft, updateDraftInput } from "../adapters/taskDraftDefaults";
 import type { Task, TaskDraft } from "../domain/task";
 import { getProviderConfig } from "../services/providerService";
-import { listTasks, startTask } from "../services/taskService";
+import { cancelTask, listTasks, resumeTask, startTask } from "../services/taskService";
 import { technicalErrorToUserFacingError } from "../adapters/errorAdapter";
 import type { UserFacingError } from "../domain/error";
 import type { ServiceConnection } from "../domain/serviceConnection";
@@ -20,6 +20,8 @@ export type TaskStoreState = {
   updateOutputDirectory: (path: string) => void;
   refreshTasks: () => Promise<Task[]>;
   startDraftTask: () => Promise<string | undefined>;
+  resumeStoredTask: (taskId: string) => Promise<string | undefined>;
+  cancelStoredTask: (taskId: string) => Promise<void>;
 };
 
 export function useTaskStore(serviceConnections: ServiceConnection[] = []): TaskStoreState {
@@ -87,23 +89,53 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
       return undefined;
     }
 
+    const knownTaskIds = new Set(tasks.map((task) => task.id));
     setStarting(true);
     try {
       const response = await startTask(draft);
       setError(undefined);
-      const taskId = response.taskId;
+      const taskId = response.taskId ?? await waitForNewTaskId(knownTaskIds);
       if (taskId) {
         setActiveTaskId(taskId);
       }
       const latest = await refreshTasks();
-      return taskId || latest[0]?.id;
+      return taskId ?? latest.find((task) => !knownTaskIds.has(task.id))?.id;
     } catch (err) {
       setError(technicalErrorToUserFacingError(err, "worker"));
       return undefined;
     } finally {
       setStarting(false);
     }
-  }, [draft, refreshTasks]);
+  }, [draft, refreshTasks, tasks]);
+
+  const resumeStoredTask = useCallback(async (taskId: string) => {
+    setStarting(true);
+    try {
+      const response = await resumeTask(taskId);
+      setError(undefined);
+      setActiveTaskId(response.taskId ?? taskId);
+      await refreshTasks();
+      return response.taskId ?? taskId;
+    } catch (err) {
+      setError(technicalErrorToUserFacingError(err, "worker"));
+      return undefined;
+    } finally {
+      setStarting(false);
+    }
+  }, [refreshTasks]);
+
+  const cancelStoredTask = useCallback(async (taskId: string) => {
+    setStarting(true);
+    try {
+      await cancelTask(taskId);
+      setError(undefined);
+      await refreshTasks();
+    } catch (err) {
+      setError(technicalErrorToUserFacingError(err, "worker"));
+    } finally {
+      setStarting(false);
+    }
+  }, [refreshTasks]);
 
   const recentReviewTask = useMemo(
     () => tasks.find((task) => task.outputs.length > 0 && task.status === "completed") ?? tasks.find((task) => task.outputs.length > 0),
@@ -123,5 +155,21 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
     updateOutputDirectory,
     refreshTasks,
     startDraftTask,
+    resumeStoredTask,
+    cancelStoredTask,
   };
+}
+
+async function waitForNewTaskId(knownTaskIds: Set<string>): Promise<string | undefined> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const latest = await listTasks();
+    const created = latest.find((task) => !knownTaskIds.has(task.id));
+    if (created) return created.id;
+    await delay(250);
+  }
+  return undefined;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

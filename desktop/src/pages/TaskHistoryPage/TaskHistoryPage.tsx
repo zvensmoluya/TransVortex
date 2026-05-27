@@ -1,7 +1,8 @@
 import { FileSearch, FolderOpen, RefreshCw } from "lucide-react";
+import { taskToPresentation } from "../../adapters/taskPresentationAdapter";
 import type { UserFacingError } from "../../domain/error";
-import type { Task, TaskStatus } from "../../domain/task";
-import { StatusBadge, type StatusTone } from "../../components/feedback/StatusBadge";
+import type { Task } from "../../domain/task";
+import { StatusBadge } from "../../components/feedback/StatusBadge";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { SectionPanel } from "../../components/layout/SectionPanel";
 
@@ -33,56 +34,41 @@ export function TaskHistoryPage({ tasks, loading, error, onRefresh, onOpenTask, 
         {loading ? <div className="empty-state">正在读取真实任务列表。</div> : null}
         {error ? <div className="empty-state">{error.impact}</div> : null}
         <div className="task-list">
-          {tasks.map((task) => (
-            <article className="task-row" key={task.id}>
-              <div className="task-rail" aria-hidden="true">
-                {task.pipeline.map((step) => (
-                  <span className={`is-${step.status}`} key={step.id} />
-                ))}
-              </div>
-              <div className="task-row-main">
-                <div className="task-title-line">
-                  <h3>{task.title}</h3>
-                  <StatusBadge tone={taskTone(task.status)} label={taskLabel(task.status)} />
+          {tasks.map((task) => {
+            const presentation = taskToPresentation({ task });
+            return (
+              <article className="task-row" key={task.id}>
+                <div className="task-rail" aria-hidden="true">
+                  {task.pipeline.map((step) => (
+                    <span className={`is-${step.status}`} key={step.id} />
+                  ))}
                 </div>
-                <div className="task-meta">
-                  <span>{task.input.displayName}</span>
-                  <span>{task.languages.sourceLanguage} → {task.languages.targetLanguage}</span>
-                  <span>{task.updatedAt}</span>
+                <div className="task-row-main">
+                  <div className="task-title-line">
+                    <h3>{presentation.title}</h3>
+                    <StatusBadge tone={presentation.statusTone} label={presentation.statusLabel} />
+                  </div>
+                  <div className="task-meta">
+                    <span>{task.input.displayName}</span>
+                    <span>{task.languages.sourceLanguage} → {task.languages.targetLanguage}</span>
+                    <span>{task.updatedAt}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="task-actions">
-                <button className="tvx-btn" type="button" onClick={() => onOpenTask(task.id)}>
-                  <FolderOpen size={15} />
-                  查看任务
-                </button>
-                <button className="tvx-btn" type="button" disabled={task.outputs.length === 0} onClick={() => onOpenReview(task.id)}>
-                  <FileSearch size={15} />
-                  结果检查
-                </button>
-              </div>
-            </article>
-          ))}
+                <div className="task-actions">
+                  <button className="tvx-btn" type="button" onClick={() => onOpenTask(task.id)}>
+                    <FolderOpen size={15} />
+                    查看任务
+                  </button>
+                  <button className="tvx-btn" type="button" disabled={!presentation.actions.reviewResult.enabled} onClick={() => onOpenReview(task.id)}>
+                    <FileSearch size={15} />
+                    {presentation.actions.reviewResult.label}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </SectionPanel>
     </div>
   );
-}
-
-function taskTone(status: TaskStatus): StatusTone {
-  if (status === "completed") return "success";
-  if (status === "running" || status === "starting") return "info";
-  if (status === "failedRecoverable" || status === "cancelled") return "warning";
-  if (status === "failedFatal") return "danger";
-  return "neutral";
-}
-
-function taskLabel(status: TaskStatus): string {
-  if (status === "completed") return "已完成";
-  if (status === "running") return "运行中";
-  if (status === "starting") return "启动中";
-  if (status === "failedRecoverable") return "可恢复失败";
-  if (status === "failedFatal") return "失败";
-  if (status === "cancelled") return "已取消";
-  return "待处理";
 }

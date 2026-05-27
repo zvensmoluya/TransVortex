@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:adapters": "node scripts/run-adapter-tests.mjs",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri"
   },

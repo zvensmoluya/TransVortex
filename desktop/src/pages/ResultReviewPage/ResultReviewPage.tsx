@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
-import { Captions, Download, FileText, Gauge, Save, Search, SkipBack, SkipForward, Tags } from "lucide-react";
-import { useMemo, useState } from "react";
-import type { ExportFormat } from "../../domain/export";
+import { Captions, Download, ExternalLink, FileText, Gauge, RotateCcw, Save, Search, SkipBack, SkipForward, Tags } from "lucide-react";
+import { useState } from "react";
+import type { PresentationTone, TaskPresentation } from "../../adapters/taskPresentationAdapter";
 import type { Segment } from "../../domain/segment";
-import type { Task } from "../../domain/task";
 import type { TaskRun } from "../../domain/taskRun";
 import type { TermEntry } from "../../domain/term";
 import type { ResultWorkspaceState } from "../../state/resultWorkspaceStore";
@@ -13,35 +12,53 @@ import { PageHeader } from "../../components/layout/PageHeader";
 import { SectionPanel } from "../../components/layout/SectionPanel";
 
 type ResultReviewPageProps = {
-  task: Task;
   workspace: ResultWorkspaceState;
+  presentation: TaskPresentation;
   terms: TermEntry[];
   taskRun?: TaskRun;
+  onRefreshTask: () => Promise<void>;
+  onOpenPath: (path: string) => void;
 };
 
-export function ResultReviewPage({ task, workspace, terms, taskRun }: ResultReviewPageProps) {
+export function ResultReviewPage({ workspace, presentation, terms, taskRun, onRefreshTask, onOpenPath }: ResultReviewPageProps) {
   const [selectedSegmentId, setSelectedSegmentId] = useState(workspace.selectedSegmentId);
   const selectedSegment = workspace.segments.find((segment) => segment.id === selectedSegmentId) ?? workspace.segments[0];
-  const issueCount = workspace.segments.reduce((total, segment) => total + segment.issues.length, 0);
-  const dirtyCount = workspace.segments.filter((segment) => segment.dirtyState !== "clean").length;
-  const exportFormats = useMemo<ExportFormat[]>(() => (task.outputs.map((file) => file.format).length > 0 ? task.outputs.map((file) => file.format) : ["srt"]), [task.outputs]);
+  const workspaceView = presentation.workspace;
+  const primaryOutput = presentation.delivery.primaryOutput;
 
   return (
     <div className="page-stack review-page">
       <PageHeader
         eyebrow="审片台"
-        title={task.title}
-        description={`${workspace.segments.length} 行字幕 · ${issueCount} 个质量问题 · ${dirtyCount} 行尚未交付到输出文件`}
+        title={presentation.title}
+        description={workspaceView?.description ?? presentation.subtitle}
         actions={
           <>
-            <button className="tvx-btn" type="button" onClick={() => void workspace.save()}>
+            <button className="tvx-btn" type="button" onClick={() => void workspace.refresh()}>
+              <RotateCcw size={15} />
+              刷新结果
+            </button>
+            <button className="tvx-btn" type="button" disabled={!presentation.actions.saveResult.enabled} onClick={() => void workspace.save()}>
               <Save size={15} />
-              保存修改
+              {presentation.actions.saveResult.label}
             </button>
-            <button className="tvx-btn tvx-btn-primary" type="button" onClick={() => void workspace.reexport(exportFormats)}>
+            <button
+              className="tvx-btn tvx-btn-primary"
+              type="button"
+              disabled={!presentation.actions.reexport.enabled}
+              onClick={() => {
+                void workspace.reexport(presentation.delivery.formatsForReexport).then(() => onRefreshTask());
+              }}
+            >
               <Download size={15} />
-              重新导出
+              {presentation.actions.reexport.label}
             </button>
+            {presentation.actions.openPrimaryOutput.visible && primaryOutput ? (
+              <button className="tvx-btn" type="button" disabled={!presentation.actions.openPrimaryOutput.enabled} onClick={() => onOpenPath(primaryOutput.path)}>
+                <ExternalLink size={15} />
+                {presentation.actions.openPrimaryOutput.label}
+              </button>
+            ) : null}
           </>
         }
       />
@@ -59,7 +76,7 @@ export function ResultReviewPage({ task, workspace, terms, taskRun }: ResultRevi
           <SkipForward size={15} />
           下一条问题
         </button>
-        <StatusBadge tone={workspace.saveState === "savedPendingExport" ? "warning" : workspace.saveState === "error" ? "danger" : "success"} label={saveStateLabel(workspace.saveState)} />
+        <StatusBadge tone={workspaceView?.saveStateTone ?? "neutral"} label={workspaceView?.saveStateLabel ?? "未打开结果"} />
       </div>
 
       {taskRun?.error ? (
@@ -71,17 +88,34 @@ export function ResultReviewPage({ task, workspace, terms, taskRun }: ResultRevi
         </div>
       ) : null}
 
+      {workspace.error ? (
+        <div className="error-panel">
+          <div>
+            <strong>{workspace.error.title}</strong>
+            <p>{workspace.error.impact}</p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="review-signal-strip">
-        <SignalItem icon={<Captions size={16} />} label="字幕行" value={`${workspace.segments.length} 行`} />
-        <SignalItem icon={<Gauge size={16} />} label="质量问题" value={`${issueCount} 个`} tone={issueCount > 0 ? "warning" : "success"} />
+        <SignalItem icon={<Captions size={16} />} label="字幕行" value={`${workspaceView?.segmentCount ?? 0} 行`} />
+        <SignalItem icon={<Gauge size={16} />} label="质量问题" value={`${workspaceView?.issueCount ?? 0} 个`} tone={(workspaceView?.issueCount ?? 0) > 0 ? "warning" : "success"} />
         <SignalItem icon={<Tags size={16} />} label="术语命中" value={`${selectedSegment?.termMatches.length ?? 0} 条`} />
-        <SignalItem icon={<FileText size={16} />} label="输出状态" value={dirtyCount > 0 ? "待重新导出" : "已交付"} tone={dirtyCount > 0 ? "warning" : "success"} />
+        <SignalItem icon={<FileText size={16} />} label="输出状态" value={workspaceView?.outputStateLabel ?? presentation.delivery.stateLabel} tone={workspaceView?.outputStateTone ?? presentation.delivery.stateTone} />
       </div>
 
       <div className="review-layout">
         <SectionPanel title="字幕行工作区" subtitle="字幕行 · 时间轴 · 问题定位">
-          <SegmentList segments={workspace.segments} selectedSegmentId={selectedSegment?.id} onSelect={setSelectedSegmentId} />
-          <TimelineOverview segments={workspace.segments} selectedSegmentId={selectedSegment?.id} />
+          {workspaceView?.isLoading ? (
+            <div className="empty-state">正在读取任务结果。</div>
+          ) : workspace.segments.length === 0 ? (
+            <div className="empty-state">当前任务还没有可检查的字幕结果。</div>
+          ) : (
+            <>
+              <SegmentList segments={workspace.segments} selectedSegmentId={selectedSegment?.id} onSelect={setSelectedSegmentId} />
+              <TimelineOverview segments={workspace.segments} selectedSegmentId={selectedSegment?.id} />
+            </>
+          )}
         </SectionPanel>
 
         <aside className="review-side">
@@ -154,7 +188,7 @@ function SegmentEditor({ segment, onPatch }: { segment: Segment; onPatch: (patch
   );
 }
 
-function SignalItem({ icon, label, value, tone = "neutral" }: { icon: ReactNode; label: string; value: string; tone?: "success" | "warning" | "neutral" }) {
+function SignalItem({ icon, label, value, tone = "neutral" }: { icon: ReactNode; label: string; value: string; tone?: PresentationTone }) {
   return (
     <div className={`signal-item is-${tone}`}>
       <span>{icon}</span>
@@ -167,6 +201,10 @@ function SignalItem({ icon, label, value, tone = "neutral" }: { icon: ReactNode;
 }
 
 function TimelineOverview({ segments, selectedSegmentId }: { segments: Segment[]; selectedSegmentId?: string }) {
+  if (segments.length === 0) {
+    return null;
+  }
+
   const lastEnd = Math.max(...segments.map((segment) => segment.endMs), 1);
 
   return (
@@ -189,23 +227,4 @@ function TimelineOverview({ segments, selectedSegmentId }: { segments: Segment[]
       <FileText size={14} />
     </div>
   );
-}
-
-function saveStateLabel(state: ResultWorkspaceState["saveState"]): string {
-  switch (state) {
-    case "loading":
-      return "正在读取";
-    case "dirty":
-      return "有未保存修改";
-    case "saving":
-      return "正在保存";
-    case "savedPendingExport":
-      return "已保存，待重新导出";
-    case "error":
-      return "保存或导出失败";
-    case "clean":
-      return "保存状态正常";
-    default:
-      return "未打开结果";
-  }
 }

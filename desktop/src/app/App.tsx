@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { taskToPresentation } from "../adapters/taskPresentationAdapter";
 import { AppShell } from "./layout/AppShell";
 import { getTaskDetailPath, getTaskReviewPath, useAppRouter } from "./router";
 import { EnvironmentDiagnosticsPage } from "../pages/EnvironmentDiagnosticsPage/EnvironmentDiagnosticsPage";
@@ -9,6 +10,7 @@ import { SettingsPage } from "../pages/SettingsPage/SettingsPage";
 import { TaskDetailPage } from "../pages/TaskDetailPage/TaskDetailPage";
 import { TaskHistoryPage } from "../pages/TaskHistoryPage/TaskHistoryPage";
 import { TermsPage } from "../pages/TermsPage/TermsPage";
+import { openPath } from "../services/fileService";
 import { useEnvironmentStore } from "../state/environmentStore";
 import { useProviderStore } from "../state/providerStore";
 import { useResultWorkspaceStore } from "../state/resultWorkspaceStore";
@@ -22,10 +24,25 @@ export function App() {
   const taskStore = useTaskStore(providerStore.connections);
   const environmentStore = useEnvironmentStore();
   const recentReviewTask = taskStore.recentReviewTask ?? taskStore.tasks[0];
-  const selectedTask = taskStore.tasks.find((task) => task.id === route.params.taskId) ?? recentReviewTask;
+  const selectedTask = route.params.taskId
+    ? taskStore.tasks.find((task) => task.id === route.params.taskId)
+    : recentReviewTask;
   const taskRunStore = useTaskRunStore(selectedTask?.id);
   const resultWorkspace = useResultWorkspaceStore(selectedTask?.id);
   const termStore = useTermStore(selectedTask?.id);
+  const selectedTaskPresentation = useMemo(
+    () => selectedTask
+      ? taskToPresentation({
+        task: selectedTask,
+        taskRun: taskRunStore.currentRun,
+        workspace: resultWorkspace,
+      })
+      : undefined,
+    [resultWorkspace, selectedTask, taskRunStore.currentRun],
+  );
+  const openTaskPath = (path: string) => {
+    void openPath(path);
+  };
 
   const page = useMemo(() => {
     switch (route.id) {
@@ -67,9 +84,19 @@ export function App() {
           <TaskDetailPage
             task={selectedTask}
             taskRun={taskRunStore.currentRun}
+            presentation={selectedTaskPresentation ?? taskToPresentation({ task: selectedTask, taskRun: taskRunStore.currentRun })}
             loading={taskRunStore.loading}
             error={taskRunStore.error}
-            onRefresh={taskRunStore.refresh}
+            onRefresh={() => Promise.all([taskRunStore.refresh(), taskStore.refreshTasks()]).then(() => undefined)}
+            onCancel={() => taskStore.cancelStoredTask(selectedTask.id).then(() => taskRunStore.refresh())}
+            onResume={async () => {
+              const taskId = await taskStore.resumeStoredTask(selectedTask.id);
+              if (taskId) {
+                navigate(getTaskDetailPath(taskId));
+              }
+            }}
+            onOpenPath={openTaskPath}
+            onReexport={() => navigate(getTaskReviewPath(selectedTask.id))}
             onOpenReview={() => navigate(getTaskReviewPath(selectedTask.id))}
           />
         ) : (
@@ -85,10 +112,12 @@ export function App() {
       case "result-review":
         return selectedTask ? (
           <ResultReviewPage
-            task={selectedTask}
             workspace={resultWorkspace}
+            presentation={selectedTaskPresentation ?? taskToPresentation({ task: selectedTask, taskRun: taskRunStore.currentRun, workspace: resultWorkspace })}
             terms={termStore.terms}
             taskRun={taskRunStore.currentRun}
+            onRefreshTask={() => taskStore.refreshTasks().then(() => undefined)}
+            onOpenPath={openTaskPath}
           />
         ) : (
           <TaskHistoryPage
@@ -109,7 +138,7 @@ export function App() {
       case "settings":
         return <SettingsPage />;
     }
-  }, [environmentStore, navigate, providerStore, resultWorkspace, route.id, selectedTask, taskRunStore, taskStore, termStore]);
+  }, [environmentStore, navigate, providerStore, resultWorkspace, route.id, selectedTask, selectedTaskPresentation, taskRunStore, taskStore, termStore]);
 
   return (
     <AppShell

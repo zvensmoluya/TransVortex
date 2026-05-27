@@ -15,9 +15,9 @@ export type ResultWorkspaceState = {
   error?: UserFacingError;
   setSelectedSegmentId: (segmentId: string) => void;
   updateSegment: (segmentId: string, patch: Partial<Pick<Segment, "sourceText" | "translatedText" | "startMs" | "endMs">>) => void;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<Segment[]>;
   save: () => Promise<void>;
-  reexport: (formats: ExportFormat[]) => Promise<void>;
+  reexport: (formats: ExportFormat[]) => Promise<ExportJob | undefined>;
 };
 
 const idleExportJob: ExportJob = {
@@ -34,12 +34,12 @@ export function useResultWorkspaceStore(taskId?: string): ResultWorkspaceState {
   const [exportJob, setExportJob] = useState<ExportJob>(idleExportJob);
   const [error, setError] = useState<UserFacingError>();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<Segment[]> => {
     if (!taskId) {
       setSegments([]);
       setSelectedSegmentId(undefined);
       setSaveState("notOpened");
-      return;
+      return [];
     }
     setSaveState("loading");
     try {
@@ -48,9 +48,11 @@ export function useResultWorkspaceStore(taskId?: string): ResultWorkspaceState {
       setSelectedSegmentId((current) => current && loaded.some((segment) => segment.id === current) ? current : loaded[0]?.id);
       setSaveState("clean");
       setError(undefined);
+      return loaded;
     } catch (err) {
       setSaveState("error");
       setError(technicalErrorToUserFacingError(err, "worker"));
+      return [];
     }
   }, [taskId]);
 
@@ -82,7 +84,7 @@ export function useResultWorkspaceStore(taskId?: string): ResultWorkspaceState {
   }, [segments, taskId]);
 
   const reexport = useCallback(async (formats: ExportFormat[]) => {
-    if (!taskId) return;
+    if (!taskId) return undefined;
     setExportJob({
       id: `export-${taskId}`,
       taskId,
@@ -93,9 +95,12 @@ export function useResultWorkspaceStore(taskId?: string): ResultWorkspaceState {
     try {
       const job = await reexportTask(taskId, { formats });
       setExportJob(job);
-      setSegments((current) => current.map((segment) => ({ ...segment, dirtyState: "clean" })));
+      const refreshed = await openTaskResult(taskId);
+      setSegments(refreshed.map((segment) => ({ ...segment, dirtyState: "clean" })));
+      setSelectedSegmentId((current) => current && refreshed.some((segment) => segment.id === current) ? current : refreshed[0]?.id);
       setSaveState("clean");
       setError(undefined);
+      return job;
     } catch (err) {
       setExportJob({
         id: `export-${taskId}`,
@@ -105,7 +110,9 @@ export function useResultWorkspaceStore(taskId?: string): ResultWorkspaceState {
         error: err instanceof Error ? err.message : String(err),
         updatedAt: new Date().toISOString(),
       });
+      setSaveState("error");
       setError(technicalErrorToUserFacingError(err, "worker"));
+      return undefined;
     }
   }, [taskId]);
 

@@ -1,4 +1,5 @@
-import { AlertTriangle, FileSearch, PauseCircle, RotateCcw } from "lucide-react";
+import { AlertTriangle, FolderOpen, FileSearch, PauseCircle, PlayCircle, RotateCcw } from "lucide-react";
+import type { TaskPresentation } from "../../adapters/taskPresentationAdapter";
 import type { UserFacingError } from "../../domain/error";
 import type { Task } from "../../domain/task";
 import type { TaskRun } from "../../domain/taskRun";
@@ -12,36 +13,63 @@ import { ProgressBar } from "../../components/task/ProgressBar";
 type TaskDetailPageProps = {
   task: Task;
   taskRun?: TaskRun;
+  presentation: TaskPresentation;
   loading: boolean;
   error?: UserFacingError;
   onRefresh: () => Promise<void>;
+  onCancel: () => Promise<void>;
+  onResume: () => Promise<void>;
+  onOpenPath: (path: string) => void;
+  onReexport: () => void;
   onOpenReview: () => void;
 };
 
-export function TaskDetailPage({ task, taskRun, loading, error, onRefresh, onOpenReview }: TaskDetailPageProps) {
+export function TaskDetailPage({
+  task,
+  taskRun,
+  presentation,
+  loading,
+  error,
+  onRefresh,
+  onCancel,
+  onResume,
+  onOpenPath,
+  onReexport,
+  onOpenReview,
+}: TaskDetailPageProps) {
   return (
     <div className="page-stack">
       <PageHeader
         eyebrow="任务详情"
-        title={task.title}
-        description={`${task.input.displayName} · ${task.languages.sourceLanguage} → ${task.languages.targetLanguage} · ${task.recoverability.resumeLabel ?? "当前任务可查看工件和输出"}`}
+        title={presentation.title}
+        description={presentation.subtitle}
         actions={
           <>
             <button className="tvx-btn" type="button" onClick={() => void onRefresh()}>
               <RotateCcw size={15} />
               刷新
             </button>
-            <button className="tvx-btn" type="button" disabled={!task.recoverability.canResume}>
-              <RotateCcw size={15} />
-              恢复任务
-            </button>
-            <button className="tvx-btn" type="button" disabled={!taskRun?.canCancel}>
-              <PauseCircle size={15} />
-              取消
-            </button>
-            <button className="tvx-btn tvx-btn-primary" type="button" disabled={task.outputs.length === 0} onClick={onOpenReview}>
+            {presentation.actions.openTaskDirectory.visible ? (
+              <button className="tvx-btn" type="button" onClick={() => task.taskDirectory ? onOpenPath(task.taskDirectory) : undefined}>
+                <FolderOpen size={15} />
+                {presentation.actions.openTaskDirectory.label}
+              </button>
+            ) : null}
+            {presentation.actions.resume.visible ? (
+              <button className="tvx-btn" type="button" disabled={!presentation.actions.resume.enabled} onClick={() => void onResume()}>
+                <PlayCircle size={15} />
+                {presentation.actions.resume.label}
+              </button>
+            ) : null}
+            {presentation.actions.cancel.visible ? (
+              <button className="tvx-btn" type="button" disabled={!presentation.actions.cancel.enabled} onClick={() => void onCancel()}>
+                <PauseCircle size={15} />
+                {presentation.actions.cancel.label}
+              </button>
+            ) : null}
+            <button className="tvx-btn tvx-btn-primary" type="button" disabled={!presentation.actions.reviewResult.enabled} onClick={onOpenReview}>
               <FileSearch size={15} />
-              结果检查
+              {presentation.actions.reviewResult.label}
             </button>
           </>
         }
@@ -58,10 +86,10 @@ export function TaskDetailPage({ task, taskRun, loading, error, onRefresh, onOpe
           ) : taskRun ? (
             <div className="status-panel">
               <div className="status-panel-title">
-                <StatusBadge tone="info" label="运行中" />
-                <strong>{taskRun.currentAction}</strong>
+                <StatusBadge tone={presentation.stage.tone} label={presentation.statusLabel} />
+                <strong>{presentation.stage.label}</strong>
               </div>
-              <ProgressBar value={taskRun.progress.percent} label={taskRun.progress.label} />
+              <ProgressBar value={presentation.stage.progress.percent} label={presentation.stage.progress.label} />
               {taskRun.warnings.map((warning) => (
                 <div className="warning-strip" key={warning.title}>
                   <AlertTriangle size={16} />
@@ -112,7 +140,12 @@ export function TaskDetailPage({ task, taskRun, loading, error, onRefresh, onOpe
         </SectionPanel>
       </div>
 
-      <ExportFilesPanel files={task.outputs} />
+      <ExportFilesPanel
+        delivery={presentation.delivery}
+        canReexport={presentation.actions.reexport.enabled}
+        onOpenFile={onOpenPath}
+        onReexport={onReexport}
+      />
     </div>
   );
 }
