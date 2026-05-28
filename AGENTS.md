@@ -110,17 +110,6 @@ Short English title
 - 不要在日志、提交信息、文档或回复中暴露 token、API key、认证文件内容或其他 secret。
 - 示例配置必须使用明显占位符，例如 `YOUR_API_KEY` 或 `example-token`。
 
-## Frontend Baselines
-
-- 前端界面必须服务于字幕生产工作流，不要做成通用参数表、admin dashboard、SaaS 控制台或开发调试面板。
-- 普通用户界面应使用产品语言，不直接暴露 worker/CLI 参数名。
-- 不要使用 emoji 作为 UI 元素、状态图标或装饰。
-- 不要使用赛博风、霓虹风、黑客风、多颜色渐变、彩虹渐变、发光字效或营销页式 hero。
-- 不要用说明书式段落、代码注释式提示或“这里用于...”这类文字代替界面结构。
-- 状态色必须小面积使用，并配合文字或图标；不要用状态色做大面积背景装饰。
-- 前端实现不要让 React 表单直接绑定 CLI/worker 参数；需要通过前端领域模型和 adapter 转换。
-- 不要在 UI 组件中散落 Tauri `invoke(...)` 调用；应通过 service 层封装。
-
 ## PowerShell
 
 - 当前 shell 是 PowerShell 时，优先使用 PowerShell 原生命令。

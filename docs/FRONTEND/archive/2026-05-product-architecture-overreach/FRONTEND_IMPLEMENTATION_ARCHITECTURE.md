@@ -1,8 +1,12 @@
 # TransVortex 前端开发架构
 
-本文档定义 TransVortex 前端实现架构。它服务于 `核心方向.md` 和 `FRONTEND_DESIGN_STYLE.md`，不重新定义产品方向。
+> 归档说明：本文档属于 2026-05 产品方向与架构治理过载阶段。它可作为已有代码分层参考，但不再是当前有效规范。后续前端重建优先遵守 `../../rules/FRONTEND_FAILURE_RECOVERY_RULES.md`。
 
-当前 desktop 已经验证了 Tauri 可以调用 Python worker、接收 JSONL 事件、管理 provider、打开任务结果并重新导出。但当前实现主要是实验性工作台，`desktop/src/main.tsx` 承担了过多页面、状态、转换和调用职责。后续前端重设计不应继续扩大单文件页面，也不应让 React 表单字段直接绑定 CLI/worker 参数。
+本文档定义 TransVortex 前端实现架构。它服务于 `核心方向.md` 和 `../rules/FRONTEND_FAILURE_RECOVERY_RULES.md`，不重新定义产品方向，也不规定视觉结构。
+
+当前 desktop 已经验证了 Tauri 可以调用 Python worker、接收 JSONL 事件、管理 provider、打开任务结果并重新导出。但当前实现主要是实验性工作台。它的后端对接有参考价值，视觉和页面骨架没有参考价值。
+
+后续前端重设计不应继续扩大旧页面，也不应让 React 表单字段直接绑定 CLI/worker 参数。更重要的是，不能把旧实现中的左栏、顶栏、面板墙和卡片式布局当作可延续基础。
 
 本架构的目标是：
 
@@ -13,6 +17,21 @@
 - 让 provider、凭据、ASR、术语和工件访问通过统一 service/adapter 管理。
 
 ## 1. 架构原则
+
+### 1.0 架构服务设计意向
+
+本文件只定义代码边界，不定义界面长相。
+
+`domain/`、`services/`、`adapters/`、`state/`、`pages/` 和 `components/` 都是工程组织方式，不是视觉系统。任何工程抽象都必须服从已经成立的设计意向。
+
+禁止从代码架构反推页面结构，例如：
+
+- 有 `pages/` 就必须做 Web 多页面。
+- 有 `components/layout/` 就必须做通用面板。
+- 有 `state/` 就必须做 dashboard 状态块。
+- 有 `ServiceConnection` 就必须做服务配置卡片。
+
+视觉和交互开发必须先遵守 `../rules/FRONTEND_FAILURE_RECOVERY_RULES.md`。
 
 ### 1.1 UI 不直接绑定 CLI 参数
 
@@ -175,7 +194,9 @@ desktop/src/
 
 ## 3. 页面路由和职责
 
-推荐路由：
+以下路由是逻辑入口，不是视觉骨架。它们可以映射成主工作面、浮层、抽屉、命令面板或任务级 modal，不要求做成常驻左栏导航下的 Web 页面。
+
+逻辑入口：
 
 ```text
 /new-task
@@ -188,7 +209,7 @@ desktop/src/
 /settings
 ```
 
-页面职责：
+职责：
 
 - `NewTaskPage`：创建任务草稿，完成启动前摘要和阻塞检查。
 - `TaskHistoryPage`：展示历史任务，支持继续检查、恢复、打开输出。
@@ -199,7 +220,7 @@ desktop/src/
 - `EnvironmentDiagnosticsPage`：展示阻塞问题、质量风险和可选增强。
 - `SettingsPage`：承载不属于任务主流程的全局设置。
 
-结果检查归属任务，但可以有导航快捷入口。导航中的“结果检查”应打开最近一个可检查任务，或引导用户从任务历史选择。
+结果检查归属任务，但可以有快捷入口。快捷入口不应被理解为必须放入常驻导航栏；它可以是最近任务切换、命令面板、任务打开器或其他桌面应用交互。
 
 ## 4. 领域模型
 
@@ -593,6 +614,10 @@ export type EnvironmentCheck = {
 
 组件实现应遵守：
 
+- 不使用有完整视觉风格的通用组件库作为视觉基础。
+- 不从 `Card`、`Panel`、`Badge`、`DashboardGrid` 这类后台抽象开始设计页面。
+- 可复用组件只能从已经成立的界面中提取，不能预先发明组件系统再让设计服从它。
+- 新设计里的核心图形不能由通用线性图标库决定。
 - 高密度列表必须有稳定行高和虚拟化方案。
 - 图标按钮必须有 tooltip。
 - 状态色必须配文字或图标，不能只靠颜色表达。

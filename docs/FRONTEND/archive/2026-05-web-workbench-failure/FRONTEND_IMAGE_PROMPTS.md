@@ -1,5 +1,7 @@
 # TransVortex 前端生图提示构造指南
 
+> 归档说明：本文档属于 2026-05 Web workbench 失败实验。它只能作为历史材料或反例参考，不再约束当前视觉探索。后续实现必须优先遵守 `../../rules/FRONTEND_FAILURE_RECOVERY_RULES.md`。
+
 本文档定义 TransVortex 前端视觉探索和辅助资产的生图边界、硬约束和提示构造方法。
 
 它不是固定 prompt 集合。不要机械复制本文档里的示例，也不要把示例当成唯一正确的视觉方向。Agent 应根据具体任务生成新的 prompt，只继承项目语义和禁用项。
