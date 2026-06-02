@@ -108,6 +108,7 @@ V1 先做 CLI 单机版和开发工作台，核心目标是：**低内存、可�
    - 错误解释、任务详情、artifact/log viewer、字幕预览和编辑体验。
 4. 后续增强
    - Translation Memory、Subtitle Refine Agent、Visual Context、多厂商 ASR Gateway。
+   - 本地 ASR 路线对照：`large-v3-turbo` 与 FunASR local server / `SenseVoice-Small` 先作为低优先级验证，不替换默认 `faster-whisper` / `large-v3`。
 
 ## 测试与验收
 - 单元：

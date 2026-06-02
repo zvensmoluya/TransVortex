@@ -32,32 +32,14 @@ export function providerConfigsToServiceConnections(payload: unknown, kind: Serv
   const rawAsrProviders = isRecord((payload as { asr_providers?: unknown })?.asr_providers)
     ? Object.values((payload as { asr_providers: Record<string, unknown> }).asr_providers)
     : [];
-  const cloudConnections = rawAsrProviders.filter(isRecord).map((provider, index) =>
+  const asrConnections = rawAsrProviders.filter(isRecord).map((provider, index) =>
     asrProviderConfigToServiceConnection(
       provider,
       activeAsrProvider ? stringValue(provider.name) === activeAsrProvider : index === 0,
     ),
   );
 
-  return [
-    {
-      id: "asr-local",
-      kind: "asr",
-      providerName: "faster-whisper",
-      displayName: "本地识别",
-      model: "small",
-      models: ["tiny", "base", "small", "medium", "large-v3"],
-      credentialId: undefined,
-      envKey: undefined,
-      rawConfig: undefined,
-      credentialStatus: { state: "notRequired", label: "无需凭据" },
-      connectionStatus: { state: "untested", label: "由环境诊断确认" },
-      isDefault: cloudConnections.length === 0,
-      fallbackTargets: [],
-      expertConfigAvailable: false,
-    },
-    ...cloudConnections,
-  ];
+  return asrConnections;
 }
 
 export function providerConfigToServiceConnection(
@@ -103,24 +85,27 @@ export function providerConfigToServiceConnection(
 }
 
 function asrProviderConfigToServiceConnection(provider: RawProvider, isDefault: boolean): ServiceConnection {
-  const name = stringValue(provider.name) || "cloud-asr";
-  const hasKey = provider.has_key === true || stringValue(provider.credential_source) !== "missing";
+  const name = stringValue(provider.name) || "asr-provider";
+  const rawAuth = isRecord(provider.auth) ? provider.auth : {};
+  const authType = stringValue(rawAuth.type) || "bearer";
+  const hasKey = authType === "none" || provider.has_key === true || stringValue(provider.credential_source) !== "missing";
   const credentialSource = stringValue(provider.credential_source);
   const model = stringValue(provider.model);
+  const providerKind = stringValue(provider.kind) || "remote";
   return {
     id: `asr-${name}`,
     kind: "asr",
     providerName: name,
-    displayName: stringValue(provider.display_name) || name,
+    displayName: stringValue(provider.display_name) || asrDisplayName(name, providerKind),
     model,
     models: model ? [model] : [],
-    credentialId: stringValue(provider.credential_id) || name,
-    envKey: stringValue(provider.env_key),
+    credentialId: stringValue(rawAuth.credential_id) || stringValue(provider.credential_id) || name,
+    envKey: stringValue(rawAuth.env_key) || stringValue(provider.env_key),
     rawConfig: provider,
     credentialStatus: {
-      state: hasKey ? "saved" : "missing",
-      source: hasKey ? mapCredentialSource(credentialSource) : undefined,
-      label: hasKey ? "凭据已保存" : "缺少凭据",
+      state: authType === "none" ? "notRequired" : hasKey ? "saved" : "missing",
+      source: hasKey && authType !== "none" ? mapCredentialSource(credentialSource) : undefined,
+      label: authType === "none" ? "无需凭据" : hasKey ? "凭据已保存" : "缺少凭据",
     },
     connectionStatus: {
       state: hasKey ? "untested" : "failed",
@@ -130,6 +115,13 @@ function asrProviderConfigToServiceConnection(provider: RawProvider, isDefault: 
     fallbackTargets: [],
     expertConfigAvailable: false,
   };
+}
+
+function asrDisplayName(name: string, kind: string): string {
+  if (kind === "local_inprocess") return `${name} · 本地进程`;
+  if (kind === "local_server") return `${name} · 本地服务`;
+  if (kind === "remote") return `${name} · 远端服务`;
+  return name;
 }
 
 function firstString(value: unknown): string | undefined {

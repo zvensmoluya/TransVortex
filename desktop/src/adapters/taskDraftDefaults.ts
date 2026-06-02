@@ -9,7 +9,6 @@ export function configToTaskDraft(config: unknown, connections: ServiceConnectio
   const pipeline = isRecord(raw.pipeline) ? raw.pipeline : {};
   const routing = isRecord(raw.routing) ? raw.routing : {};
   const primary = isRecord(routing.primary) ? routing.primary : {};
-  const asrLocal = isRecord(pipeline.asr_local) ? pipeline.asr_local : {};
   const translation = isRecord(pipeline.translation) ? pipeline.translation : {};
   const subtitle = isRecord(pipeline.subtitle) ? pipeline.subtitle : {};
   const quality = isRecord(subtitle.quality) ? subtitle.quality : {};
@@ -19,10 +18,14 @@ export function configToTaskDraft(config: unknown, connections: ServiceConnectio
   const memoryPatch = isRecord(memory.patch) ? memory.patch : {};
   const subtitleStyle = isRecord(pipeline.subtitle_ass_style) ? pipeline.subtitle_ass_style : {};
   const defaultConnection = connections.find((connection) => connection.kind === "translation" && connection.isDefault);
-  const defaultAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.isDefault && connection.providerName !== "faster-whisper");
-  const localAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.providerName === "faster-whisper");
+  const activeAsrProvider = stringValue(pipeline.asr_provider);
+  const defaultAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.isDefault)
+    ?? connections.find((connection) => connection.kind === "asr");
+  const selectedAsrConnection = connections.find((connection) => connection.kind === "asr" && connection.providerName === activeAsrProvider)
+    ?? defaultAsrConnection;
   const outputFormats = outputFormatToList(stringValue(pipeline.output_format) ?? "srt");
-  const asrMode = asrModeToDraft(stringValue(pipeline.asr_mode));
+  const selectedAsrRaw = isRecord(selectedAsrConnection?.rawConfig) ? selectedAsrConnection.rawConfig : {};
+  const asrMode = asrKindToDraft(stringValue(selectedAsrRaw.kind));
 
   return {
     input: previousDraft?.input ?? {
@@ -48,11 +51,11 @@ export function configToTaskDraft(config: unknown, connections: ServiceConnectio
       mode: previousDraft?.speechRecognition.mode ?? asrMode,
       target: {
         providerName: previousDraft?.speechRecognition.target?.providerName
-          ?? (asrMode === "cloud" ? defaultAsrConnection?.providerName : localAsrConnection?.providerName)
-          ?? "faster-whisper",
+          ?? selectedAsrConnection?.providerName
+          ?? "",
         model: previousDraft?.speechRecognition.target?.model
-          ?? (asrMode === "cloud" ? defaultAsrConnection?.model : stringValue(asrLocal.model_size) ?? localAsrConnection?.model)
-          ?? "small",
+          ?? selectedAsrConnection?.model
+          ?? selectedAsrConnection?.models[0],
       },
     },
     terms: {
@@ -102,9 +105,9 @@ function sourceModeToDraft(mode?: string): TaskDraft["subtitleSource"]["mode"] {
   return "auto";
 }
 
-function asrModeToDraft(mode?: string): TaskDraft["speechRecognition"]["mode"] {
-  if (mode === "cloud") return "cloud";
-  if (mode === "local") return "local";
+function asrKindToDraft(kind?: string): TaskDraft["speechRecognition"]["mode"] {
+  if (kind === "remote") return "cloud";
+  if (kind === "local_inprocess" || kind === "local_server") return "local";
   return "auto";
 }
 

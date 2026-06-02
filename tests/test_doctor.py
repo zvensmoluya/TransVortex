@@ -11,7 +11,12 @@ def _write_config(root: Path) -> None:
         """
 artifacts_dir: artifacts
 asr:
-  mode: local
+  provider: faster_whisper_large_v3
+asr_providers:
+  - name: faster_whisper_large_v3
+    kind: local_inprocess
+    protocol: faster_whisper
+    model: large-v3
         """.strip(),
         encoding="utf-8",
     )
@@ -116,22 +121,24 @@ def test_doctor_reports_missing_binary_and_asr_dependency(tmp_path: Path, monkey
     assert statuses["faster_whisper"] == "FAIL"
 
 
-def test_doctor_reports_cloud_asr_provider_and_key(tmp_path: Path, monkeypatch) -> None:
+def test_doctor_reports_remote_asr_provider_and_key(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
 asr:
-  mode: cloud
   provider: openai_asr
 asr_providers:
   - name: openai_asr
+    kind: remote
     protocol: openai_transcriptions
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: ASR_KEY
-    credential_id: openai_asr
+    auth:
+      type: bearer
+      env_key: ASR_KEY
+      credential_id: openai_asr
         """.strip(),
         encoding="utf-8",
     )

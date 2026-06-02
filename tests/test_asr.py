@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from transvortex.app.models import AsrProviderConfig
+from transvortex.app.models import AsrExecutionConfig, AsrLocalConfig, AsrProviderConfig
 from transvortex.core.asr import (
     AsrEngine,
     OpenAITranscriptionsAsrClient,
@@ -61,7 +61,7 @@ def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch)
             name="openai",
             base_url="https://api.example.com/v1",
             endpoint="/v1/audio/transcriptions",
-            timeout_seconds=12,
+            execution=AsrExecutionConfig(timeout_seconds=12, retry=2),
             http2=True,
         )
     )
@@ -175,7 +175,9 @@ def test_cloud_asr_retries_retryable_request_errors(tmp_path, monkeypatch) -> No
 
     monkeypatch.setattr("transvortex.http.build_httpx_client", fake_build_httpx_client)
     monkeypatch.setattr("transvortex.http.time.sleep", lambda _seconds: None)
-    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", timeout_seconds=12, retry=2))
+    client = OpenAITranscriptionsAsrClient(
+        AsrProviderConfig(name="openai", execution=AsrExecutionConfig(timeout_seconds=12, retry=2))
+    )
 
     payload, meta = client._call_openai_transcriptions(audio, api_key="secret")
 
@@ -194,7 +196,9 @@ def test_cloud_asr_does_not_retry_non_retryable_request_errors(tmp_path, monkeyp
         raise ValueError("bad request body")
 
     monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
-    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", timeout_seconds=12, retry=3))
+    client = OpenAITranscriptionsAsrClient(
+        AsrProviderConfig(name="openai", execution=AsrExecutionConfig(timeout_seconds=12, retry=3))
+    )
 
     try:
         client._call_openai_transcriptions(audio, api_key="secret")
@@ -223,7 +227,9 @@ def test_cloud_asr_retries_remote_protocol_upload_failure(tmp_path, monkeypatch)
 
     monkeypatch.setattr("transvortex.http.build_httpx_client", fake_build_httpx_client)
     monkeypatch.setattr("transvortex.http.time.sleep", lambda _seconds: None)
-    client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai", retry=2))
+    client = OpenAITranscriptionsAsrClient(
+        AsrProviderConfig(name="openai", execution=AsrExecutionConfig(retry=2))
+    )
 
     payload, meta = client._call_openai_transcriptions(audio, api_key="secret")
 
@@ -392,20 +398,28 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
             captured["kwargs"] = kwargs
             return [SimpleNamespace(start=3.2, end=4.4, text="やったわ", avg_logprob=-0.1)], object()
 
+    provider = AsrProviderConfig(
+        name="faster_whisper_test",
+        kind="local_inprocess",
+        protocol="faster_whisper",
+        model="small",
+        local=AsrLocalConfig(
+            model_size="small",
+            device="cpu",
+            compute_type="int8",
+            max_initial_timestamp=30.0,
+            beam_size=7,
+            temperature=0.2,
+            condition_on_previous_text=False,
+            hotwords="Subaru, Emilia",
+        ),
+    )
     engine = AsrEngine(
-        model_size="small",
-        device="cpu",
-        compute_type="int8",
-        mode="local",
+        asr_provider=provider,
         source_lang="ja-JP",
-        local_max_initial_timestamp=30.0,
-        local_beam_size=7,
-        local_temperature=0.2,
-        local_condition_on_previous_text=False,
-        local_hotwords="Subaru, Emilia",
         prompt="Names: Subaru, Emilia",
     )
-    engine._model = FakeModel()
+    engine._adapter._model = FakeModel()
 
     rows = engine.transcribe_segment(audio, 10.0)
 
@@ -426,7 +440,7 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
             "end": 14.4,
             "text": "やったわ",
             "confidence": -0.1,
-            "meta": {"source": "asr", "provider": "local", "protocol": "faster_whisper"},
+            "meta": {"source": "asr", "provider": "faster_whisper_test", "protocol": "faster_whisper"},
         }
     ]
 

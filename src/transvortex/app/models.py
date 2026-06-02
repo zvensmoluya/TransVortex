@@ -142,11 +142,13 @@ class AsrChunkingConfig:
 
 @dataclass
 class AsrExecutionConfig:
-    cloud_concurrency: int = 8
-    adaptive_concurrency: bool = True
-    min_cloud_concurrency: int = 1
-    max_cloud_concurrency: int = 8
+    concurrency: int = 1
+    adaptive_concurrency: bool = False
+    min_concurrency: int = 1
+    max_concurrency: int = 1
     max_inflight_upload_mb: float = 128.0
+    timeout_seconds: int = 300
+    retry: int = 2
 
 
 @dataclass
@@ -162,13 +164,10 @@ class AsrLocalConfig:
 
 
 @dataclass
-class AsrCloudConfig:
-    base_url: str = "https://api.openai.com"
-    endpoint: str = "/v1/audio/transcriptions"
-    model: str = "whisper-1"
+class AsrAuthConfig:
+    type: str = "bearer"  # none | bearer
     env_key: str = "TVX_MODEL_API_KEY"
     credential_id: str = "TVX_MODEL_API_KEY"
-    timeout_seconds: int = 300
 
 
 @dataclass
@@ -206,20 +205,38 @@ class AsrPromptConfig:
 @dataclass
 class AsrProviderConfig:
     name: str
+    kind: str = "remote"  # local_inprocess | local_server | remote
     protocol: str = "openai_transcriptions"
     base_url: str = "https://api.openai.com"
     endpoint: str = "/v1/audio/transcriptions"
     model: str = "whisper-1"
-    env_key: str = "TVX_MODEL_API_KEY"
-    credential_id: str = "TVX_MODEL_API_KEY"
-    timeout_seconds: int = 300
-    retry: int = 2
+    auth: AsrAuthConfig = field(default_factory=AsrAuthConfig)
+    local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
+    execution: AsrExecutionConfig = field(default_factory=AsrExecutionConfig)
+    chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
+    preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())
     http2: bool = True
     request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
 
+    @property
+    def env_key(self) -> str:
+        return self.auth.env_key
+
+    @property
+    def credential_id(self) -> str:
+        return self.auth.credential_id
+
+    @property
+    def timeout_seconds(self) -> int:
+        return self.execution.timeout_seconds
+
+    @property
+    def retry(self) -> int:
+        return self.execution.retry
+
 
 @dataclass
-class AsrCloudTrimSilenceConfig:
+class AsrTrimSilenceConfig:
     enabled: bool = True
     backend: str = "ffmpeg_silencedetect"
     noise_db: float = -35.0
@@ -232,7 +249,7 @@ class AsrCloudTrimSilenceConfig:
 
 @dataclass
 class AsrPreprocessingConfig:
-    cloud_trim_silence: AsrCloudTrimSilenceConfig = field(default_factory=AsrCloudTrimSilenceConfig)
+    trim_silence: AsrTrimSilenceConfig = field(default_factory=AsrTrimSilenceConfig)
 
 
 @dataclass
@@ -456,14 +473,8 @@ class PipelineConfig:
     timeout_seconds: int = 30
     retry: int = 3
     max_cps: int = 20
-    asr_mode: str = "local"
-    asr_provider: str = ""
-    asr_local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
-    asr_cloud: AsrCloudConfig = field(default_factory=AsrCloudConfig)
+    asr_provider: str = "faster_whisper_large_v3"
     asr_audio_track: str = "auto"
-    asr_chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
-    asr_execution: AsrExecutionConfig = field(default_factory=AsrExecutionConfig)
-    asr_preprocessing: AsrPreprocessingConfig = field(default_factory=AsrPreprocessingConfig)
     asr_prompt: AsrPromptConfig = field(default_factory=AsrPromptConfig)
     source_mode: str = "auto"
     subtitle_track: str = "auto"

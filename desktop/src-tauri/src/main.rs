@@ -27,29 +27,15 @@ struct StartTaskRequest {
     bilingual: bool,
     provider: Option<String>,
     model: Option<String>,
-    asr_mode: Option<String>,
     asr_provider: Option<String>,
-    asr_device: Option<String>,
-    asr_model_size: Option<String>,
-    asr_compute_type: Option<String>,
-    asr_cloud_base_url: Option<String>,
-    asr_cloud_endpoint: Option<String>,
     asr_model: Option<String>,
-    asr_cloud_env_key: Option<String>,
-    asr_cloud_credential_id: Option<String>,
-    asr_cloud_timeout_seconds: Option<u32>,
     asr_prompt_profile: Option<String>,
     asr_prompt_text: Option<String>,
     asr_prompt_enabled: Option<bool>,
     asr_prompt_include_previous_text: Option<bool>,
     asr_prompt_max_chars: Option<u32>,
-    asr_chunking_mode: Option<String>,
-    asr_window_seconds: Option<u32>,
-    asr_overlap_seconds: Option<u32>,
     source_mode: Option<String>,
     subtitle_track: Option<String>,
-    chunk_seconds: Option<u32>,
-    chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
     concurrency: Option<u32>,
     output_format: Option<String>,
@@ -78,29 +64,15 @@ struct ResumeTaskRequest {
     task_id: String,
     provider: Option<String>,
     model: Option<String>,
-    asr_mode: Option<String>,
     asr_provider: Option<String>,
-    asr_device: Option<String>,
-    asr_model_size: Option<String>,
-    asr_compute_type: Option<String>,
-    asr_cloud_base_url: Option<String>,
-    asr_cloud_endpoint: Option<String>,
     asr_model: Option<String>,
-    asr_cloud_env_key: Option<String>,
-    asr_cloud_credential_id: Option<String>,
-    asr_cloud_timeout_seconds: Option<u32>,
     asr_prompt_profile: Option<String>,
     asr_prompt_text: Option<String>,
     asr_prompt_enabled: Option<bool>,
     asr_prompt_include_previous_text: Option<bool>,
     asr_prompt_max_chars: Option<u32>,
-    asr_chunking_mode: Option<String>,
-    asr_window_seconds: Option<u32>,
-    asr_overlap_seconds: Option<u32>,
     source_mode: Option<String>,
     subtitle_track: Option<String>,
-    chunk_seconds: Option<u32>,
-    chunk_overlap_seconds: Option<u32>,
     translation_batch_size: Option<u32>,
     concurrency: Option<u32>,
     output_format: Option<String>,
@@ -271,9 +243,6 @@ fn subtitle_streams_from_probe(payload: Value) -> Vec<SubtitleStream> {
 }
 
 fn push_asr_source_args(args: &mut Vec<String>, request: &StartTaskRequest) {
-    push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
-    push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
-    push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
     push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
     push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
     push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
@@ -288,9 +257,6 @@ fn push_asr_source_args(args: &mut Vec<String>, request: &StartTaskRequest) {
 }
 
 fn push_resume_asr_source_args(args: &mut Vec<String>, request: &ResumeTaskRequest) {
-    push_arg(args, "--asr-chunking-mode", &request.asr_chunking_mode);
-    push_num_arg(args, "--asr-window-seconds", request.asr_window_seconds.or(request.chunk_seconds));
-    push_num_arg(args, "--asr-overlap-seconds", request.asr_overlap_seconds.or(request.chunk_overlap_seconds));
     push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
     push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
     push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
@@ -761,17 +727,8 @@ fn start_task(
     }
     push_arg(&mut args, "--provider", &request.provider);
     push_arg(&mut args, "--model", &request.model);
-    push_arg(&mut args, "--asr-mode", &request.asr_mode);
     push_arg(&mut args, "--asr-provider", &request.asr_provider);
-    push_arg(&mut args, "--asr-device", &request.asr_device);
-    push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
-    push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
-    push_arg(&mut args, "--asr-cloud-base-url", &request.asr_cloud_base_url);
-    push_arg(&mut args, "--asr-cloud-endpoint", &request.asr_cloud_endpoint);
     push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_arg(&mut args, "--asr-cloud-env-key", &request.asr_cloud_env_key);
-    push_arg(&mut args, "--asr-cloud-credential-id", &request.asr_cloud_credential_id);
-    push_num_arg(&mut args, "--asr-cloud-timeout-seconds", request.asr_cloud_timeout_seconds);
     push_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);
@@ -850,17 +807,8 @@ fn resume_task(
     ];
     push_arg(&mut args, "--provider", &request.provider);
     push_arg(&mut args, "--model", &request.model);
-    push_arg(&mut args, "--asr-mode", &request.asr_mode);
     push_arg(&mut args, "--asr-provider", &request.asr_provider);
-    push_arg(&mut args, "--asr-device", &request.asr_device);
-    push_arg(&mut args, "--asr-model-size", &request.asr_model_size);
-    push_arg(&mut args, "--asr-compute-type", &request.asr_compute_type);
-    push_arg(&mut args, "--asr-cloud-base-url", &request.asr_cloud_base_url);
-    push_arg(&mut args, "--asr-cloud-endpoint", &request.asr_cloud_endpoint);
     push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_arg(&mut args, "--asr-cloud-env-key", &request.asr_cloud_env_key);
-    push_arg(&mut args, "--asr-cloud-credential-id", &request.asr_cloud_credential_id);
-    push_num_arg(&mut args, "--asr-cloud-timeout-seconds", request.asr_cloud_timeout_seconds);
     push_resume_asr_source_args(&mut args, &request);
     push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
     push_num_arg(&mut args, "--concurrency", request.concurrency);

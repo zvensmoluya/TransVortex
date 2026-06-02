@@ -408,9 +408,11 @@ pipeline.yaml
 ### V1.x / V2 可选：ASR Provider Gateway 与 Agent/MCP 接口
 
 - 将当前 OpenAI Transcriptions 云端 ASR 支持扩展为独立 ASR provider gateway。
+- Gateway 不应只覆盖云端厂商，也应能表达本地自托管 ASR 服务，例如 FunASR local server + `SenseVoice-Small`。这类 provider 通过 localhost HTTP 调用，但产品语义仍是本地 ASR，不应在 UI 中称为云端 ASR。
 - 支持 direct upload、submit/query async job、URL-based transcription、streaming transcription 等调用形态。
 - 抽象 `segments/utterances/words/speaker/confidence` 等响应结构。
 - 优先评估 `whisper-1` 稳定性，再考虑火山豆包语音、腾讯云、阿里云、Google Chirp、Deepgram、AssemblyAI 等 provider。
+- FunASR / `SenseVoice-Small` 支持先作为低优先级对照实验推进：优先走本地服务 provider，不直接把 FunASR Python 依赖塞进当前 worker；详细验证条件见 `docs/KNOWN_ISSUES_AND_VALIDATION.md`。
 - 为 Codex/agent 提供 skill 或 MCP 工具，让 agent 调用 TransVortex 的稳定 worker，而不是临时拼 FFmpeg/ASR/翻译脚本。
 - 详细方向见 `docs/ASR_PROVIDER_DIRECTION.md`。
 

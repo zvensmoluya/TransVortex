@@ -123,63 +123,120 @@ memory:
   consistency_check:
     enabled: true
 asr:
-  mode: local
-  provider: openai_whisper
-  local:
-    model_size: large-v3
-    device: cuda
-    compute_type: int8_float16
-    max_initial_timestamp: 30.0
-    beam_size: 5
-    temperature: 0.0
-    condition_on_previous_text: false
-    hotwords: ""
+  provider: faster_whisper_large_v3
+  audio_track: auto
   prompt:
     enabled: true
     active_profile: ""
     profiles: []
     include_previous_text: false
     max_chars: 800
-  preprocessing:
-    cloud_trim_silence:
-      enabled: true
-      backend: ffmpeg_silencedetect
-      noise_db: -35
-      min_silence_seconds: 0.2
-      keep_preroll_seconds: 0.25
-      trim_trailing: true
-      keep_postroll_seconds: 0.1
-      min_upload_seconds: 0.5
-  execution:
-    cloud_concurrency: 8
-    adaptive_concurrency: true
-    min_cloud_concurrency: 1
-    max_cloud_concurrency: 8
-    max_inflight_upload_mb: 128
-  chunking:
-    mode: silence
-    window_seconds: 300
-    max_window_seconds: 120
-    min_window_seconds: 12
-    overlap_seconds: 5
-    short_audio_seconds: 300
-    max_upload_mb: 24
-    silence:
-      noise_db: -35
-      min_silence_seconds: 0.25
-      cut_padding_seconds: 0.15
-      fallback_mode: hard_cut
-    fuzzy_dedupe: true
 asr_providers:
-  - name: openai_whisper
+  - name: faster_whisper_large_v3
+    kind: local_inprocess
+    protocol: faster_whisper
+    model: large-v3
+    local:
+      device: cuda
+      compute_type: int8_float16
+      max_initial_timestamp: 30.0
+      beam_size: 5
+      temperature: 0.0
+      condition_on_previous_text: false
+      hotwords: ""
+    execution:
+      concurrency: 1
+      timeout_seconds: 300
+      retry: 1
+    chunking:
+      mode: silence
+      window_seconds: 300
+      max_window_seconds: 120
+      min_window_seconds: 12
+      overlap_seconds: 5
+      short_audio_seconds: 300
+      max_upload_mb: 24
+      silence:
+        noise_db: -35
+        min_silence_seconds: 0.25
+        cut_padding_seconds: 0.15
+        fallback_mode: hard_cut
+      fuzzy_dedupe: true
+    preprocessing:
+      trim_silence:
+        enabled: false
+  - name: funasr_sensevoice_local
+    kind: local_server
+    protocol: openai_transcriptions
+    base_url: http://127.0.0.1:8899
+    endpoint: /v1/audio/transcriptions
+    model: SenseVoiceSmall
+    auth:
+      type: none
+    http2: false
+    execution:
+      concurrency: 1
+      timeout_seconds: 300
+      retry: 1
+    chunking:
+      mode: silence
+      window_seconds: 600
+      max_window_seconds: 600
+      min_window_seconds: 12
+      overlap_seconds: 0
+      short_audio_seconds: 600
+      max_upload_mb: 256
+      silence:
+        noise_db: -35
+        min_silence_seconds: 0.25
+        cut_padding_seconds: 0.15
+        fallback_mode: hard_cut
+      fuzzy_dedupe: false
+    preprocessing:
+      trim_silence:
+        enabled: false
+  - name: openai_whisper_remote
+    kind: remote
     protocol: openai_transcriptions
     base_url: https://api.vectorengine.ai/v1
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: TVX_MODEL_API_KEY
-    credential_id: TVX_MODEL_API_KEY
-    timeout_seconds: 300
-    retry: 2
+    auth:
+      type: bearer
+      env_key: TVX_MODEL_API_KEY
+      credential_id: TVX_MODEL_API_KEY
+    execution:
+      concurrency: 8
+      adaptive_concurrency: true
+      min_concurrency: 1
+      max_concurrency: 8
+      max_inflight_upload_mb: 128
+      timeout_seconds: 300
+      retry: 2
+    preprocessing:
+      trim_silence:
+        enabled: true
+        backend: ffmpeg_silencedetect
+        noise_db: -35
+        min_silence_seconds: 0.2
+        keep_preroll_seconds: 0.25
+        trim_trailing: true
+        keep_postroll_seconds: 0.1
+        min_upload_seconds: 0.5
+    chunking:
+      mode: silence
+      window_seconds: 300
+      max_window_seconds: 120
+      min_window_seconds: 12
+      overlap_seconds: 5
+      short_audio_seconds: 300
+      max_upload_mb: 24
+      silence:
+        noise_db: -35
+        min_silence_seconds: 0.25
+        cut_padding_seconds: 0.15
+        fallback_mode: hard_cut
+      fuzzy_dedupe: true
     http2: true
     request:
       response_format: verbose_json

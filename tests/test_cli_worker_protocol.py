@@ -336,18 +336,10 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
             "p1",
             "--model",
             "m1",
-            "--asr-mode",
-            "cloud",
-            "--asr-device",
-            "cpu",
-            "--asr-model-size",
-            "tiny",
-            "--asr-compute-type",
-            "int8",
+            "--asr-provider",
+            "faster_whisper_large_v3",
             "--asr-model",
-            "whisper-1",
-            "--asr-max-upload-mb",
-            "16",
+            "large-v3-turbo",
             "--stream-events",
         ],
     )
@@ -356,9 +348,8 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
     assert [event["type"] for event in events] == ["task_created", "done"]
     assert captured["provider_name"] == "p1"
     assert captured["model"] == "m1"
-    assert captured["cli_overrides"]["asr_mode"] == "cloud"
-    assert captured["cli_overrides"]["asr_cloud_model"] == "whisper-1"
-    assert captured["cli_overrides"]["asr_max_upload_mb"] == 16.0
+    assert captured["cli_overrides"]["asr_provider"] == "faster_whisper_large_v3"
+    assert captured["cli_overrides"]["asr_model"] == "large-v3-turbo"
 
 
 def test_stream_events_and_json_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:

@@ -93,7 +93,7 @@ function ConnectionRow({
           {connection.displayName}
           {connection.isDefault ? <span className="inline-tag">默认</span> : null}
         </strong>
-        <span>{connection.model ? `模型 ${connection.model}` : connection.kind === "asr" && connection.providerName === "faster-whisper" ? "本地识别模型 small" : "未选择模型"}</span>
+        <span>{connection.model ? `模型 ${connection.model}` : connection.kind === "asr" ? "未选择 ASR 模型" : "未选择模型"}</span>
         <div className="connection-controls">
           {models.length > 0 ? (
             <select className="tvx-input" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>

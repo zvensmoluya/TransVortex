@@ -76,28 +76,9 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "chunk_overlap_seconds": args.chunk_overlap_seconds,
         "translation_batch_size": args.translation_batch_size,
         "default_concurrency": args.concurrency,
-        "asr_mode": args.asr_mode,
-        "asr_device": args.asr_device,
-        "asr_model_size": args.asr_model_size,
-        "asr_compute_type": args.asr_compute_type,
-        "asr_max_initial_timestamp": getattr(args, "asr_max_initial_timestamp", None),
-        "asr_beam_size": getattr(args, "asr_beam_size", None),
-        "asr_temperature": getattr(args, "asr_temperature", None),
-        "asr_condition_on_previous_text": getattr(args, "asr_condition_on_previous_text", None),
-        "asr_hotwords": getattr(args, "asr_hotwords", None),
         "asr_provider": getattr(args, "asr_provider", None),
-        "asr_cloud_base_url": getattr(args, "asr_cloud_base_url", None),
-        "asr_cloud_endpoint": getattr(args, "asr_cloud_endpoint", None),
-        "asr_cloud_model": args.asr_model,
-        "asr_cloud_env_key": getattr(args, "asr_cloud_env_key", None),
-        "asr_cloud_credential_id": getattr(args, "asr_cloud_credential_id", None),
-        "asr_cloud_timeout_seconds": getattr(args, "asr_cloud_timeout_seconds", None),
-        "asr_chunking_mode": getattr(args, "asr_chunking_mode", None),
-        "asr_window_seconds": getattr(args, "asr_window_seconds", None),
-        "asr_overlap_seconds": getattr(args, "asr_overlap_seconds", None),
-        "asr_max_upload_mb": getattr(args, "asr_max_upload_mb", None),
+        "asr_model": args.asr_model,
         "asr_audio_track": getattr(args, "asr_audio_track", None),
-        "asr_cloud_concurrency": getattr(args, "asr_cloud_concurrency", None),
         "asr_prompt_profile": getattr(args, "asr_prompt_profile", None),
         "asr_prompt_text": getattr(args, "asr_prompt_text", None),
         "asr_prompt_enabled": getattr(args, "asr_prompt_enabled", None),
@@ -231,28 +212,9 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--chunk-overlap-seconds", type=int, default=None)
     subparser.add_argument("--translation-batch-size", type=int, default=None)
     subparser.add_argument("--concurrency", type=int, default=None)
-    subparser.add_argument("--asr-mode", choices=["local", "cloud"], default=None)
-    subparser.add_argument("--asr-device", default=None)
-    subparser.add_argument("--asr-model-size", default=None)
-    subparser.add_argument("--asr-compute-type", default=None)
-    subparser.add_argument("--asr-max-initial-timestamp", type=float, default=None)
-    subparser.add_argument("--asr-beam-size", type=int, default=None)
-    subparser.add_argument("--asr-temperature", type=float, default=None)
-    subparser.add_argument("--asr-condition-on-previous-text", choices=["true", "false"], default=None)
-    subparser.add_argument("--asr-hotwords", default=None)
     subparser.add_argument("--asr-provider", default=None)
-    subparser.add_argument("--asr-cloud-base-url", default=None)
-    subparser.add_argument("--asr-cloud-endpoint", default=None)
-    subparser.add_argument("--asr-model", default=None, help="Cloud ASR model override")
-    subparser.add_argument("--asr-cloud-env-key", default=None)
-    subparser.add_argument("--asr-cloud-credential-id", default=None)
-    subparser.add_argument("--asr-cloud-timeout-seconds", type=int, default=None)
-    subparser.add_argument("--asr-chunking-mode", choices=["auto", "fixed", "none", "silence"], default=None)
-    subparser.add_argument("--asr-window-seconds", type=int, default=None)
-    subparser.add_argument("--asr-overlap-seconds", type=int, default=None)
-    subparser.add_argument("--asr-max-upload-mb", type=float, default=None)
+    subparser.add_argument("--asr-model", default=None, help="ASR model override for the selected ASR provider")
     subparser.add_argument("--asr-audio-track", default=None)
-    subparser.add_argument("--asr-cloud-concurrency", type=int, default=None)
     subparser.add_argument("--asr-prompt-profile", default=None)
     subparser.add_argument("--asr-prompt-text", default=None)
     subparser.add_argument("--asr-prompt-enabled", choices=["true", "false"], default=None)
@@ -344,16 +306,22 @@ def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, A
         )
     asr_providers = {}
     for name, provider in sorted(config.asr_providers.items(), key=lambda item: item[0]):
-        credential = resolve_credential(
-            env_key=provider.env_key,
-            credential_id=provider.credential_id,
-            provider_name=provider.name,
-            root_dir=root,
-        )
+        if provider.auth.type == "none":
+            credential_source = "not_required"
+            has_key = True
+        else:
+            credential = resolve_credential(
+                env_key=provider.env_key,
+                credential_id=provider.credential_id,
+                provider_name=provider.name,
+                root_dir=root,
+            )
+            credential_source = credential.source
+            has_key = credential.found
         asr_providers[name] = {
             **to_plain(provider),
-            "credential_source": credential.source,
-            "has_key": credential.found,
+            "credential_source": credential_source,
+            "has_key": has_key,
         }
     return {
         "root_dir": str(root),
@@ -450,28 +418,9 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--chunk-overlap-seconds", getattr(ns, "chunk_overlap_seconds", None)),
         ("--translation-batch-size", getattr(ns, "translation_batch_size", None)),
         ("--concurrency", getattr(ns, "concurrency", None)),
-        ("--asr-mode", getattr(ns, "asr_mode", None)),
-        ("--asr-device", getattr(ns, "asr_device", None)),
-        ("--asr-model-size", getattr(ns, "asr_model_size", None)),
-        ("--asr-compute-type", getattr(ns, "asr_compute_type", None)),
-        ("--asr-max-initial-timestamp", getattr(ns, "asr_max_initial_timestamp", None)),
-        ("--asr-beam-size", getattr(ns, "asr_beam_size", None)),
-        ("--asr-temperature", getattr(ns, "asr_temperature", None)),
-        ("--asr-condition-on-previous-text", bool_text(getattr(ns, "asr_condition_on_previous_text", None))),
-        ("--asr-hotwords", getattr(ns, "asr_hotwords", None)),
         ("--asr-provider", getattr(ns, "asr_provider", None)),
-        ("--asr-cloud-base-url", getattr(ns, "asr_cloud_base_url", None)),
-        ("--asr-cloud-endpoint", getattr(ns, "asr_cloud_endpoint", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),
-        ("--asr-cloud-env-key", getattr(ns, "asr_cloud_env_key", None)),
-        ("--asr-cloud-credential-id", getattr(ns, "asr_cloud_credential_id", None)),
-        ("--asr-cloud-timeout-seconds", getattr(ns, "asr_cloud_timeout_seconds", None)),
-        ("--asr-chunking-mode", getattr(ns, "asr_chunking_mode", None)),
-        ("--asr-window-seconds", getattr(ns, "asr_window_seconds", None)),
-        ("--asr-overlap-seconds", getattr(ns, "asr_overlap_seconds", None)),
-        ("--asr-max-upload-mb", getattr(ns, "asr_max_upload_mb", None)),
         ("--asr-audio-track", getattr(ns, "asr_audio_track", None)),
-        ("--asr-cloud-concurrency", getattr(ns, "asr_cloud_concurrency", None)),
         ("--asr-prompt-profile", getattr(ns, "asr_prompt_profile", None)),
         ("--asr-prompt-text", getattr(ns, "asr_prompt_text", None)),
         ("--asr-prompt-enabled", bool_text(getattr(ns, "asr_prompt_enabled", None))),

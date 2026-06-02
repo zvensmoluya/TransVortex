@@ -95,21 +95,20 @@ def _transcribe_asr_segment(
 
 
 def _build_asr_engine(config: AppConfig, *, task: TaskRecord, root_dir: Path) -> AsrEngine:
+    provider = _active_asr_provider(config)
     return AsrEngine(
-        model_size=config.pipeline.asr_local.model_size,
-        device=config.pipeline.asr_local.device,
-        compute_type=config.pipeline.asr_local.compute_type,
-        mode=config.pipeline.asr_mode,
         source_lang=task.source_lang,
-        local_max_initial_timestamp=config.pipeline.asr_local.max_initial_timestamp,
-        local_beam_size=config.pipeline.asr_local.beam_size,
-        local_temperature=config.pipeline.asr_local.temperature,
-        local_condition_on_previous_text=config.pipeline.asr_local.condition_on_previous_text,
-        local_hotwords=config.pipeline.asr_local.hotwords,
         prompt=_asr_prompt_text(config),
-        asr_provider=config.asr_providers.get(config.pipeline.asr_provider),
+        asr_provider=provider,
         root_dir=root_dir,
     )
+
+
+def _active_asr_provider(config: AppConfig):
+    provider = config.asr_providers.get(config.pipeline.asr_provider)
+    if provider is None:
+        raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
+    return provider
 
 
 def _is_retryable_asr_exception(exc: Exception) -> bool:
@@ -160,7 +159,7 @@ def _apply_audio_preprocess_meta(rows: list[dict], preprocess_meta: dict[str, An
     return out
 
 
-def _should_retry_cloud_asr_without_preprocess(rows: list[dict]) -> bool:
+def _should_retry_asr_without_preprocess(rows: list[dict]) -> bool:
     texts = [str(row.get("text", "")).strip() for row in rows if str(row.get("text", "")).strip()]
     if not texts:
         return True
@@ -348,8 +347,9 @@ def _process_asr_manifest_item(
     transcribe_path = audio_path
     transcribe_offset = float(item["start"])
     preprocess_meta: dict[str, Any] | None = None
-    if config.pipeline.asr_mode == "cloud":
-        trim_config = config.pipeline.asr_preprocessing.cloud_trim_silence
+    provider = _active_asr_provider(config)
+    trim_config = provider.preprocessing.trim_silence
+    if trim_config.enabled:
         preprocess_meta = prepare_cloud_asr_audio_upload(
             audio_path,
             artifact_paths["upload"],
@@ -385,11 +385,11 @@ def _process_asr_manifest_item(
     except Exception as exc:
         if (
             allow_split_retry
-            and config.pipeline.asr_mode == "cloud"
+            and provider.protocol == "openai_transcriptions"
             and _is_retryable_asr_exception(exc)
             and task is not None
             and root_dir is not None
-            and float(item.get("duration", 0.0)) > max(float(config.pipeline.asr_chunking.min_window_seconds) * 2.0, 20.0)
+            and float(item.get("duration", 0.0)) > max(float(provider.chunking.min_window_seconds) * 2.0, 20.0)
         ):
             return _retry_asr_manifest_item_with_subsegments(
                 item=item,
@@ -401,14 +401,14 @@ def _process_asr_manifest_item(
             )
         raise
     if preprocess_meta is not None:
-        if preprocess_meta.get("reason") == "trimmed" and _should_retry_cloud_asr_without_preprocess(rows):
+        if preprocess_meta.get("reason") == "trimmed" and _should_retry_asr_without_preprocess(rows):
             fallback_rows, fallback_raw_response, fallback_transport_meta = _transcribe_asr_segment(
                 asr,
                 audio_path,
                 float(item["start"]),
                 prompt=segment_prompt,
             )
-            if not _should_retry_cloud_asr_without_preprocess(fallback_rows):
+            if not _should_retry_asr_without_preprocess(fallback_rows):
                 preprocess_meta["fallback_used"] = True
                 preprocess_meta["fallback_reason"] = "preprocessed_asr_looked_empty_or_nonspeech"
                 preprocess_meta["upload_path"] = str(audio_path)
@@ -447,9 +447,10 @@ def _retry_asr_manifest_item_with_subsegments(
     artifact_paths = _asr_artifact_paths(paths, idx)
     duration = float(item.get("duration", 0.0))
     retry_dir = paths["media"] / "segments_retry" / f"segment_{idx:05d}"
+    chunking = _active_asr_provider(config).chunking
     max_child_window = max(
-        float(config.pipeline.asr_chunking.min_window_seconds),
-        min(float(config.pipeline.asr_chunking.max_window_seconds), duration / 2.0),
+        float(chunking.min_window_seconds),
+        min(float(chunking.max_window_seconds), duration / 2.0),
     )
     source_audio_path_raw = item.get("source_audio_path")
     source_audio_path = Path(str(source_audio_path_raw or item.get("path")))
@@ -457,16 +458,16 @@ def _retry_asr_manifest_item_with_subsegments(
     child_manifest = split_audio_for_asr(
         source_audio_path,
         retry_dir,
-        mode=config.pipeline.asr_chunking.mode,
+        mode=chunking.mode,
         window_seconds=int(max_child_window),
         max_window_seconds=int(max_child_window),
-        min_window_seconds=config.pipeline.asr_chunking.min_window_seconds,
-        overlap_seconds=config.pipeline.asr_chunking.overlap_seconds,
+        min_window_seconds=chunking.min_window_seconds,
+        overlap_seconds=chunking.overlap_seconds,
         short_audio_seconds=0,
-        max_upload_mb=config.pipeline.asr_chunking.max_upload_mb,
-        silence_noise_db=config.pipeline.asr_chunking.silence.noise_db,
-        silence_min_seconds=config.pipeline.asr_chunking.silence.min_silence_seconds,
-        silence_cut_padding_seconds=config.pipeline.asr_chunking.silence.cut_padding_seconds,
+        max_upload_mb=chunking.max_upload_mb,
+        silence_noise_db=chunking.silence.noise_db,
+        silence_min_seconds=chunking.silence.min_silence_seconds,
+        silence_cut_padding_seconds=chunking.silence.cut_padding_seconds,
         duration_seconds=duration,
         source_start_seconds=source_start_seconds,
     )
@@ -593,7 +594,7 @@ def _run_asr_segments_serial(
                 "warning",
                 stage="ASR",
                 level="warning",
-                message="Retried cloud ASR without silence trim",
+                message="Retried ASR without silence trim",
                 details={"segment_index": result["idx"], "reason": preprocess_meta.get("fallback_reason", "")},
             )
         _complete_asr_segment(
@@ -656,8 +657,9 @@ def _run_asr_segments_concurrent(
     task: TaskRecord,
     root_dir: Path,
 ) -> None:
-    max_workers = max(1, int(config.pipeline.asr_execution.cloud_concurrency))
-    max_workers = min(max_workers, max(1, int(config.pipeline.asr_execution.max_cloud_concurrency)))
+    execution = _active_asr_provider(config).execution
+    max_workers = max(1, int(execution.concurrency))
+    max_workers = min(max_workers, max(1, int(execution.max_concurrency)))
     current_limit = max_workers
     pending = list(items)
     while pending:
@@ -665,7 +667,7 @@ def _run_asr_segments_concurrent(
         batch, pending = _take_asr_upload_batch(
             pending,
             max_items=current_limit,
-            max_upload_mb=config.pipeline.asr_execution.max_inflight_upload_mb,
+            max_upload_mb=execution.max_inflight_upload_mb,
         )
         retryable_failure = False
         successes = 0
@@ -692,9 +694,9 @@ def _run_asr_segments_concurrent(
                     result = future.result()
                 except Exception as exc:
                     if (
-                        config.pipeline.asr_execution.adaptive_concurrency
+                        execution.adaptive_concurrency
                         and _is_retryable_asr_exception(exc)
-                        and current_limit > int(config.pipeline.asr_execution.min_cloud_concurrency)
+                        and current_limit > int(execution.min_concurrency)
                     ):
                         retryable_failure = True
                         pending = [item] + pending
@@ -707,7 +709,7 @@ def _run_asr_segments_concurrent(
                         "warning",
                         stage="ASR",
                         level="warning",
-                        message="Retried cloud ASR without silence trim",
+                        message="Retried ASR without silence trim",
                         details={"segment_index": result["idx"], "reason": preprocess_meta.get("fallback_reason", "")},
                     )
                 if result.get("split_retry"):
@@ -716,7 +718,7 @@ def _run_asr_segments_concurrent(
                         "warning",
                         stage="ASR",
                         level="warning",
-                        message="Retried cloud ASR segment as smaller subsegments",
+                        message="Retried ASR segment as smaller subsegments",
                         details={"segment_index": result["idx"]},
                     )
                 _complete_asr_segment(
@@ -729,9 +731,9 @@ def _run_asr_segments_concurrent(
                     skipped=bool(result.get("skipped")),
                 )
                 successes += 1
-        if config.pipeline.asr_execution.adaptive_concurrency:
+        if execution.adaptive_concurrency:
             if retryable_failure:
-                current_limit = max(int(config.pipeline.asr_execution.min_cloud_concurrency), max(1, current_limit // 2))
+                current_limit = max(int(execution.min_concurrency), max(1, current_limit // 2))
             elif successes >= current_limit:
                 current_limit = min(max_workers, current_limit + 1)
 
@@ -1003,21 +1005,28 @@ def _preflight(
     finally:
         probe_file.unlink(missing_ok=True)
     needs_asr = _video_needs_asr(config, task)
-    if needs_asr and config.pipeline.asr_mode == "local" and importlib.util.find_spec("faster_whisper") is None:
-        raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
-    if needs_asr and config.pipeline.asr_mode == "cloud":
-        asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
-        if asr_provider is None:
-            raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
-        if asr_provider.protocol != "openai_transcriptions":
-            raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
-        credential = resolve_credential(
-            env_key=asr_provider.env_key,
-            credential_id=asr_provider.credential_id,
-            root_dir=root_dir,
-        )
-        if not credential.found:
-            raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+    if needs_asr:
+        asr_provider = _active_asr_provider(config)
+        if asr_provider.kind == "local_inprocess":
+            if asr_provider.protocol != "faster_whisper":
+                raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
+            if importlib.util.find_spec("faster_whisper") is None:
+                raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
+        elif asr_provider.kind in {"local_server", "remote"}:
+            if asr_provider.protocol != "openai_transcriptions":
+                raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
+            if asr_provider.auth.type == "bearer":
+                credential = resolve_credential(
+                    env_key=asr_provider.env_key,
+                    credential_id=asr_provider.credential_id,
+                    root_dir=root_dir,
+                )
+                if not credential.found:
+                    raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+            elif asr_provider.auth.type != "none":
+                raise RuntimeError(f"unsupported_asr_auth_type: {asr_provider.auth.type}")
+        else:
+            raise RuntimeError(f"unsupported_asr_provider_kind: {asr_provider.kind}")
     if input_type != "video_asr":
         route = config.routing.primary
         provider = config.providers.get(route.provider)
@@ -1879,19 +1888,21 @@ def _execute_task(
                         source_lang=task.source_lang,
                         audio_track=config.pipeline.asr_audio_track,
                     )
+                    asr_provider = _active_asr_provider(config)
+                    chunking = asr_provider.chunking
                     segments_manifest = split_audio_for_asr(
                         audio_full,
                         paths["media"] / "segments",
-                        mode=config.pipeline.asr_chunking.mode,
-                        window_seconds=config.pipeline.asr_chunking.window_seconds,
-                        max_window_seconds=config.pipeline.asr_chunking.max_window_seconds,
-                        min_window_seconds=config.pipeline.asr_chunking.min_window_seconds,
-                        overlap_seconds=config.pipeline.asr_chunking.overlap_seconds,
-                        short_audio_seconds=config.pipeline.asr_chunking.short_audio_seconds,
-                        max_upload_mb=config.pipeline.asr_chunking.max_upload_mb,
-                        silence_noise_db=config.pipeline.asr_chunking.silence.noise_db,
-                        silence_min_seconds=config.pipeline.asr_chunking.silence.min_silence_seconds,
-                        silence_cut_padding_seconds=config.pipeline.asr_chunking.silence.cut_padding_seconds,
+                        mode=chunking.mode,
+                        window_seconds=chunking.window_seconds,
+                        max_window_seconds=chunking.max_window_seconds,
+                        min_window_seconds=chunking.min_window_seconds,
+                        overlap_seconds=chunking.overlap_seconds,
+                        short_audio_seconds=chunking.short_audio_seconds,
+                        max_upload_mb=chunking.max_upload_mb,
+                        silence_noise_db=chunking.silence.noise_db,
+                        silence_min_seconds=chunking.silence.min_silence_seconds,
+                        silence_cut_padding_seconds=chunking.silence.cut_padding_seconds,
                         duration_seconds=float(media_meta["duration_seconds"]),
                     )
                     write_json(paths["media"] / "media_meta.json", media_meta)
@@ -1924,7 +1935,8 @@ def _execute_task(
                     if idx in asr_done and _is_valid_json_list(artifact_paths["rows"]):
                         continue
                     pending_asr_items.append(item)
-                if config.pipeline.asr_mode == "cloud" and not _asr_uses_previous_text(config):
+                asr_provider = _active_asr_provider(config)
+                if asr_provider.execution.concurrency > 1 and not _asr_uses_previous_text(config):
                     _run_asr_segments_concurrent(
                         items=pending_asr_items,
                         asr=asr,
@@ -1969,7 +1981,7 @@ def _execute_task(
                     next_id = all_segments[-1].id + 1 if all_segments else next_id
                 deduped_segments = merge_asr_window_segments(
                     window_segments,
-                    fuzzy_dedupe=config.pipeline.asr_chunking.fuzzy_dedupe,
+                    fuzzy_dedupe=_active_asr_provider(config).chunking.fuzzy_dedupe,
                 )
                 if len(deduped_segments) != len(all_segments):
                     store.append_event(

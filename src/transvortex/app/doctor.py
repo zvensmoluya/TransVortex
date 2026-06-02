@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .config import load_app_config, resolve_providers_file
 from .credentials import resolve_credential
 from ..providers.probe import probe_provider
@@ -194,6 +196,29 @@ def _env_key_check(
     )
 
 
+def _local_server_reachability_check(provider) -> dict[str, Any]:
+    try:
+        response = httpx.get(provider.base_url, timeout=2.0, follow_redirects=False)
+    except Exception as exc:  # noqa: BLE001 - doctor should report availability, not fail hard
+        return _check(
+            "asr_local_server",
+            "FAIL",
+            "asr_local_server_unreachable",
+            f"local ASR server is not reachable: {exc}",
+            "本地 ASR 服务不可达。请确认 FunASR server 已启动，且 base_url 指向 localhost 服务。",
+            details={"provider": provider.name, "base_url": provider.base_url},
+        )
+    status = "PASS" if response.status_code < 500 else "WARN"
+    return _check(
+        "asr_local_server",
+        status,
+        "asr_local_server_reachable",
+        f"local ASR server responded with HTTP {response.status_code}",
+        "本地 ASR 服务端口可达。doctor 不会上传音频做真实识别。",
+        details={"provider": provider.name, "base_url": provider.base_url, "status_code": response.status_code},
+    )
+
+
 def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict[str, Any]:
     root_dir = root_dir.resolve()
     resolved_providers_file = resolve_providers_file(root_dir, providers_file)
@@ -262,7 +287,31 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
 
     checks.append(_artifacts_check(config.pipeline.artifacts_dir))
 
-    if config.pipeline.asr_mode == "local":
+    asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
+    if asr_provider is None:
+        checks.append(
+            _check(
+                "asr_provider",
+                "FAIL",
+                "asr_provider_missing",
+                f"ASR provider not found: {config.pipeline.asr_provider}",
+                f"ASR provider 不存在：{config.pipeline.asr_provider}。",
+                details={"provider": config.pipeline.asr_provider},
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "asr_provider",
+                "PASS",
+                "asr_provider_valid",
+                "ASR provider configuration is valid",
+                "ASR provider 配置有效。",
+                details={"provider": asr_provider.name, "kind": asr_provider.kind, "protocol": asr_provider.protocol},
+            )
+        )
+
+    if asr_provider is not None and asr_provider.kind == "local_inprocess":
         installed_version = _faster_whisper_version()
         if installed_version is None:
             checks.append(
@@ -270,9 +319,9 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     "faster_whisper",
                     "FAIL",
                     "faster_whisper_missing",
-                    "faster-whisper is required for local ASR",
-                    "本地 ASR 需要 faster-whisper。请执行 python -m pip install -e .[asr]。",
-                    details={"asr_mode": config.pipeline.asr_mode},
+                    "faster-whisper is required for local in-process ASR",
+                    "本地进程内 ASR 需要 faster-whisper。请执行 python -m pip install -e .[asr]。",
+                    details={"provider": asr_provider.name, "kind": asr_provider.kind},
                 )
             )
         elif _version_lt(installed_version, FASTER_WHISPER_MIN_VERSION):
@@ -284,7 +333,8 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     f"faster-whisper {installed_version} is installed, but {FASTER_WHISPER_MIN_VERSION}+ is required",
                     f"本地 ASR 需要 faster-whisper {FASTER_WHISPER_MIN_VERSION} 或更高版本，当前安装的是 {installed_version}。",
                     details={
-                        "asr_mode": config.pipeline.asr_mode,
+                        "provider": asr_provider.name,
+                        "kind": asr_provider.kind,
                         "installed_version": installed_version,
                         "required_version": FASTER_WHISPER_MIN_VERSION,
                     },
@@ -298,20 +348,68 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     "faster_whisper_found",
                     "faster-whisper is available",
                     "faster-whisper 已可用。",
-                    details={"asr_mode": config.pipeline.asr_mode},
+                    details={"provider": asr_provider.name, "kind": asr_provider.kind},
                 )
             )
-    else:
+    elif asr_provider is not None:
         checks.append(
             _check(
                 "faster_whisper",
                 "WARN",
                 "faster_whisper_not_required",
-                "faster-whisper is not required for current ASR mode",
-                "当前 ASR 模式不依赖 faster-whisper。",
-                details={"asr_mode": config.pipeline.asr_mode},
+                "faster-whisper is not required for the active ASR provider",
+                "当前 ASR provider 不依赖 faster-whisper。",
+                details={"provider": asr_provider.name, "kind": asr_provider.kind},
             )
         )
+
+    if asr_provider is not None and asr_provider.kind == "local_server":
+        if asr_provider.auth.type != "none":
+            checks.append(
+                _check(
+                    "asr_auth",
+                    "FAIL",
+                    "asr_local_server_auth_not_none",
+                    "local ASR server provider must use auth.type none",
+                    "本地 ASR 服务应使用 auth.type: none，不应要求 API key。",
+                    details={"provider": asr_provider.name, "auth_type": asr_provider.auth.type},
+                )
+            )
+        else:
+            checks.append(
+                _check(
+                    "asr_auth",
+                    "PASS",
+                    "asr_auth_not_required",
+                    "local ASR server does not require credentials",
+                    "本地 ASR 服务不需要凭据。",
+                    details={"provider": asr_provider.name},
+                )
+            )
+        checks.append(_local_server_reachability_check(asr_provider))
+    elif asr_provider is not None and asr_provider.kind == "remote":
+        if asr_provider.auth.type == "bearer":
+            checks.append(
+                _env_key_check(
+                    root_dir=root_dir,
+                    env_key=asr_provider.env_key,
+                    credential_id=asr_provider.credential_id,
+                    provider_name="",
+                    name="asr_env_key",
+                    message_subject="ASR",
+                )
+            )
+        else:
+            checks.append(
+                _check(
+                    "asr_auth",
+                    "FAIL",
+                    "asr_remote_auth_not_bearer",
+                    "remote ASR provider must use bearer auth in the first provider gateway version",
+                    "远端 ASR provider 当前只支持 bearer 凭据。",
+                    details={"provider": asr_provider.name, "auth_type": asr_provider.auth.type},
+                )
+            )
 
     route = config.routing.primary
     provider = config.providers.get(route.provider)
@@ -453,52 +551,6 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     "provider_protocol_error",
                     f"provider protocol preflight failed: {exc}",
                     "provider 协议预检异常。请检查 provider 配置。",
-                )
-            )
-
-    if config.pipeline.asr_mode == "cloud":
-        asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
-        if asr_provider is None:
-            checks.append(
-                _check(
-                    "asr_provider",
-                    "FAIL",
-                    "asr_provider_missing",
-                    f"ASR provider not found: {config.pipeline.asr_provider}",
-                    f"ASR provider 不存在：{config.pipeline.asr_provider}。",
-                    details={"provider": config.pipeline.asr_provider},
-                )
-            )
-        elif asr_provider.protocol != "openai_transcriptions":
-            checks.append(
-                _check(
-                    "asr_provider",
-                    "FAIL",
-                    "unsupported_asr_protocol",
-                    f"unsupported ASR protocol: {asr_provider.protocol}",
-                    f"暂不支持 ASR protocol：{asr_provider.protocol}。",
-                    details={"provider": asr_provider.name, "protocol": asr_provider.protocol},
-                )
-            )
-        else:
-            checks.append(
-                _check(
-                    "asr_provider",
-                    "PASS",
-                    "asr_provider_valid",
-                    "ASR provider is valid",
-                    "ASR provider 配置有效。",
-                    details={"provider": asr_provider.name, "protocol": asr_provider.protocol},
-                )
-            )
-            checks.append(
-                _env_key_check(
-                    root_dir=root_dir,
-                    env_key=asr_provider.env_key,
-                    credential_id=asr_provider.credential_id,
-                    provider_name="",
-                    name="asr_env_key",
-                    message_subject="ASR",
                 )
             )
 

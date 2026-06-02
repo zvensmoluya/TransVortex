@@ -50,50 +50,16 @@ class AsrEngine:
     def __init__(
         self,
         *,
-        model_size: str,
-        device: str,
-        compute_type: str,
-        mode: str = "local",
+        asr_provider: AsrProviderConfig,
         source_lang: str | None = None,
-        local_max_initial_timestamp: float = 30.0,
-        local_beam_size: int = 5,
-        local_temperature: float = 0.0,
-        local_condition_on_previous_text: bool = True,
-        local_hotwords: str = "",
         prompt: str = "",
-        asr_provider: AsrProviderConfig | None = None,
         root_dir: Path | None = None,
     ) -> None:
-        self.model_size = model_size
-        self.device = device
-        self.compute_type = compute_type
-        self.mode = mode
-        self.source_lang = source_lang
-        self.local_max_initial_timestamp = max(float(local_max_initial_timestamp), 0.0)
-        self.local_beam_size = max(int(local_beam_size), 1)
-        self.local_temperature = float(local_temperature)
-        self.local_condition_on_previous_text = bool(local_condition_on_previous_text)
-        self.local_hotwords = str(local_hotwords or "").strip()
-        self.prompt = prompt
         self.asr_provider = asr_provider
+        self.source_lang = source_lang
+        self.prompt = prompt
         self.root_dir = root_dir
-        self._model = None
-
-    def _ensure_model(self) -> Any:
-        if self._model is None:
-            _prepare_local_cuda_runtime(self.device)
-            try:
-                from faster_whisper import WhisperModel
-            except Exception as exc:  # pragma: no cover - runtime dependency
-                raise RuntimeError(
-                    "faster-whisper is required for ASR. Install with: pip install -e .[asr]"
-                ) from exc
-            self._model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-            )
-        return self._model
+        self._adapter = build_asr_client(asr_provider)
 
     def transcribe_segment(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
         return self.transcribe_segment_result(audio_path, segment_start_offset).rows
@@ -105,48 +71,65 @@ class AsrEngine:
         *,
         prompt: str | None = None,
     ) -> AsrTranscriptionResult:
-        if self.mode == "local":
-            return AsrTranscriptionResult(
-                rows=self._transcribe_segment_local(
-                    audio_path,
-                    segment_start_offset,
-                    prompt=self.prompt if prompt is None else prompt,
-                )
-            )
-        if self.mode == "cloud":
-            client = build_asr_client(self.asr_provider)
-            return client.transcribe_segment(
-                audio_path,
-                segment_start_offset,
-                source_lang=self.source_lang,
-                prompt=self.prompt if prompt is None else prompt,
-                root_dir=self.root_dir,
-            )
-        raise RuntimeError(f"Unsupported ASR mode: {self.mode}")
+        return self._adapter.transcribe_segment(
+            audio_path,
+            segment_start_offset,
+            source_lang=self.source_lang,
+            prompt=self.prompt if prompt is None else prompt,
+            root_dir=self.root_dir,
+        )
 
-    def _transcribe_segment_local(
+
+class FasterWhisperAsrAdapter:
+    def __init__(self, config: AsrProviderConfig) -> None:
+        self.config = config
+        self._model = None
+
+    def _ensure_model(self) -> Any:
+        local = self.config.local
+        if self._model is None:
+            _prepare_local_cuda_runtime(local.device)
+            try:
+                from faster_whisper import WhisperModel
+            except Exception as exc:  # pragma: no cover - runtime dependency
+                raise RuntimeError(
+                    "faster-whisper is required for ASR. Install with: pip install -e .[asr]"
+                ) from exc
+            self._model = WhisperModel(
+                self.config.model or local.model_size,
+                device=local.device,
+                compute_type=local.compute_type,
+            )
+        return self._model
+
+    def transcribe_segment(
         self,
         audio_path: Path,
         segment_start_offset: float,
         *,
         prompt: str = "",
-    ) -> list[dict]:
+        source_lang: str | None = None,
+        root_dir: Path | None = None,
+    ) -> AsrTranscriptionResult:
+        del root_dir
+        local = self.config.local
         model = self._ensure_model()
         transcribe_kwargs: dict[str, Any] = {
             "vad_filter": False,
-            "beam_size": self.local_beam_size,
-            "temperature": self.local_temperature,
-            "condition_on_previous_text": self.local_condition_on_previous_text,
+            "beam_size": max(int(local.beam_size), 1),
+            "temperature": float(local.temperature),
+            "condition_on_previous_text": bool(local.condition_on_previous_text),
         }
-        language = _normalize_whisper_language(self.source_lang)
+        language = _normalize_whisper_language(source_lang)
         if language:
             transcribe_kwargs["language"] = language
-        transcribe_kwargs["max_initial_timestamp"] = self.local_max_initial_timestamp
+        transcribe_kwargs["max_initial_timestamp"] = max(float(local.max_initial_timestamp), 0.0)
         prompt = str(prompt or "").strip()
         if prompt:
             transcribe_kwargs["initial_prompt"] = prompt
-        if self.local_hotwords:
-            transcribe_kwargs["hotwords"] = self.local_hotwords
+        hotwords = str(local.hotwords or "").strip()
+        if hotwords:
+            transcribe_kwargs["hotwords"] = hotwords
         segments, _info = model.transcribe(str(audio_path), **transcribe_kwargs)
         rows = []
         for item in segments:
@@ -156,22 +139,10 @@ class AsrEngine:
                     "end": float(item.end) + segment_start_offset,
                     "text": str(item.text).strip(),
                     "confidence": getattr(item, "avg_logprob", None),
-                    "meta": {"source": "asr", "provider": "local", "protocol": "faster_whisper"},
+                    "meta": {"source": "asr", "provider": self.config.name, "protocol": "faster_whisper"},
                 }
             )
-        return rows
-
-    def _transcribe_segment_openai(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
-        if self.asr_provider is None:
-            raise RuntimeError("Missing ASR provider config")
-        client = OpenAITranscriptionsAsrClient(self.asr_provider)
-        return client.transcribe_segment(
-            audio_path,
-            segment_start_offset,
-            source_lang=self.source_lang,
-            prompt=self.prompt,
-            root_dir=self.root_dir,
-        ).rows
+        return AsrTranscriptionResult(rows=rows)
 
 
 class OpenAITranscriptionsAsrClient:
@@ -187,14 +158,19 @@ class OpenAITranscriptionsAsrClient:
         prompt: str = "",
         root_dir: Path | None = None,
     ) -> AsrTranscriptionResult:
-        credential = resolve_credential(
-            env_key=self.config.env_key,
-            credential_id=self.config.credential_id,
-            provider_name="",
-            root_dir=root_dir,
-        )
-        if not credential.found:
-            raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+        api_key = ""
+        if self.config.auth.type == "bearer":
+            credential = resolve_credential(
+                env_key=self.config.env_key,
+                credential_id=self.config.credential_id,
+                provider_name="",
+                root_dir=root_dir,
+            )
+            if not credential.found:
+                raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+            api_key = credential.key
+        elif self.config.auth.type != "none":
+            raise RuntimeError(f"unsupported_asr_auth_type: {self.config.auth.type}")
         if self.config.request.response_format != "verbose_json":
             raise RuntimeError(
                 f"unsupported_asr_response_format_for_segments: {self.config.request.response_format}"
@@ -202,7 +178,7 @@ class OpenAITranscriptionsAsrClient:
         _validate_extra_form_fields(self.config.request.extra_form_fields)
         response, transport_meta = self._call_openai_transcriptions(
             audio_path,
-            api_key=credential.key,
+            api_key=api_key,
             source_lang=source_lang,
             prompt=prompt,
         )
@@ -265,20 +241,20 @@ class OpenAITranscriptionsAsrClient:
             prompt=prompt,
         )
         url = _build_cloud_asr_url(self.config.base_url, self.config.endpoint)
-        auth_headers = {"Authorization": f"Bearer {api_key}"}
+        auth_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         payload, transport_meta = request_json_with_retry(
             "POST",
             url,
             data=data,
             files=files,
             headers=merge_default_headers(auth_headers, **DEFAULT_JSON_HEADERS),
-            timeout=float(self.config.timeout_seconds),
+            timeout=float(self.config.execution.timeout_seconds),
             http2=bool(getattr(self.config, "http2", True)),
-            retry=max(1, int(getattr(self.config, "retry", 1) or 1)),
-            context="cloud ASR upstream",
+            retry=max(1, int(getattr(self.config.execution, "retry", 1) or 1)),
+            context="ASR upstream",
         )
         if not isinstance(payload, dict):
-            raise RuntimeError("bad_schema: unexpected cloud ASR response")
+            raise RuntimeError("bad_schema: unexpected ASR response")
         return payload, transport_meta
 
     def _build_multipart_fields(
@@ -339,12 +315,14 @@ class OpenAITranscriptionsAsrClient:
         return data, files
 
 
-def build_asr_client(config: AsrProviderConfig | None) -> OpenAITranscriptionsAsrClient:
+def build_asr_client(config: AsrProviderConfig | None) -> FasterWhisperAsrAdapter | OpenAITranscriptionsAsrClient:
     if config is None:
         raise RuntimeError("Missing ASR provider config")
-    if config.protocol == "openai_transcriptions":
+    if config.kind == "local_inprocess" and config.protocol == "faster_whisper":
+        return FasterWhisperAsrAdapter(config)
+    if config.kind in {"local_server", "remote"} and config.protocol == "openai_transcriptions":
         return OpenAITranscriptionsAsrClient(config)
-    raise RuntimeError(f"unsupported_asr_protocol: {config.protocol}")
+    raise RuntimeError(f"unsupported_asr_provider: {config.kind}/{config.protocol}")
 
 
 def _prepare_local_cuda_runtime(device: str) -> None:

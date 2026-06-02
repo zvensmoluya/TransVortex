@@ -732,7 +732,7 @@ routing:
     assert os.getenv("TVX_MODEL_API_KEY") == "from-env"
 
 
-def test_asr_cloud_config_parse(tmp_path: Path) -> None:
+def test_remote_asr_provider_config_parse(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -749,28 +749,35 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 asr:
-  mode: cloud
-  cloud:
+  provider: openai_asr
+asr_providers:
+  - name: openai_asr
+    kind: remote
+    protocol: openai_transcriptions
     base_url: https://api.openai.com
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: OPENAI_API_KEY
-    credential_id: openai_asr
-    timeout_seconds: 180
+    auth:
+      type: bearer
+      env_key: OPENAI_API_KEY
+      credential_id: openai_asr
+    execution:
+        timeout_seconds: 180
         """.strip(),
         encoding="utf-8",
     )
     cfg = load_app_config(root_dir=tmp_path)
-    assert cfg.pipeline.asr_mode == "cloud"
-    assert cfg.pipeline.asr_cloud.base_url == "https://api.openai.com"
-    assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
-    assert cfg.pipeline.asr_cloud.model == "whisper-1"
-    assert cfg.pipeline.asr_cloud.env_key == "OPENAI_API_KEY"
-    assert cfg.pipeline.asr_cloud.credential_id == "openai_asr"
-    assert cfg.pipeline.asr_cloud.timeout_seconds == 180
-    assert cfg.pipeline.asr_provider == "openai_whisper_legacy"
-    assert cfg.asr_providers["openai_whisper_legacy"].base_url == "https://api.openai.com"
-    assert cfg.asr_providers["openai_whisper_legacy"].credential_id == "openai_asr"
+    assert cfg.pipeline.asr_provider == "openai_asr"
+    provider = cfg.asr_providers["openai_asr"]
+    assert provider.kind == "remote"
+    assert provider.protocol == "openai_transcriptions"
+    assert provider.base_url == "https://api.openai.com"
+    assert provider.endpoint == "/v1/audio/transcriptions"
+    assert provider.model == "whisper-1"
+    assert provider.auth.type == "bearer"
+    assert provider.env_key == "OPENAI_API_KEY"
+    assert provider.credential_id == "openai_asr"
+    assert provider.execution.timeout_seconds == 180
 
 
 def test_asr_providers_parse_new_schema(tmp_path: Path) -> None:
@@ -793,25 +800,8 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 asr:
-  mode: cloud
   provider: openai_whisper
   audio_track: "2"
-  execution:
-    cloud_concurrency: 12
-    adaptive_concurrency: true
-    min_cloud_concurrency: 2
-    max_cloud_concurrency: 12
-    max_inflight_upload_mb: 256
-  chunking:
-    mode: silence
-    max_window_seconds: 45
-    min_window_seconds: 10
-    overlap_seconds: 3
-    max_upload_mb: 20
-    silence:
-      noise_db: -38
-      min_silence_seconds: 0.3
-      cut_padding_seconds: 0.2
   prompt:
     enabled: true
     active_profile: show
@@ -824,13 +814,32 @@ asr:
     max_chars: 120
 asr_providers:
   - name: openai_whisper
+    kind: remote
     protocol: openai_transcriptions
     base_url: https://api.openai.com/v1
     endpoint: /v1/audio/transcriptions
     model: whisper-1
-    env_key: OPENAI_API_KEY
-    credential_id: openai_asr
-    timeout_seconds: 180
+    auth:
+      type: bearer
+      env_key: OPENAI_API_KEY
+      credential_id: openai_asr
+    execution:
+      concurrency: 12
+      adaptive_concurrency: true
+      min_concurrency: 2
+      max_concurrency: 12
+      max_inflight_upload_mb: 256
+      timeout_seconds: 180
+    chunking:
+      mode: silence
+      max_window_seconds: 45
+      min_window_seconds: 10
+      overlap_seconds: 3
+      max_upload_mb: 20
+      silence:
+        noise_db: -38
+        min_silence_seconds: 0.3
+        cut_padding_seconds: 0.2
     http2: false
     request:
       response_format: verbose_json
@@ -847,29 +856,29 @@ asr_providers:
 
     cfg = load_app_config(root_dir=tmp_path)
 
-    assert cfg.pipeline.asr_mode == "cloud"
     assert cfg.pipeline.asr_provider == "openai_whisper"
     assert cfg.pipeline.asr_audio_track == "2"
-    assert cfg.pipeline.asr_execution.cloud_concurrency == 12
-    assert cfg.pipeline.asr_execution.min_cloud_concurrency == 2
-    assert cfg.pipeline.asr_execution.max_cloud_concurrency == 12
-    assert cfg.pipeline.asr_execution.max_inflight_upload_mb == 256
-    assert cfg.pipeline.asr_chunking.mode == "silence"
-    assert cfg.pipeline.asr_chunking.max_window_seconds == 45
-    assert cfg.pipeline.asr_chunking.min_window_seconds == 10
-    assert cfg.pipeline.asr_chunking.overlap_seconds == 3
-    assert cfg.pipeline.asr_chunking.max_upload_mb == 20
-    assert cfg.pipeline.asr_chunking.silence.noise_db == -38
-    assert cfg.pipeline.asr_chunking.silence.min_silence_seconds == 0.3
-    assert cfg.pipeline.asr_chunking.silence.cut_padding_seconds == 0.2
     provider = cfg.asr_providers["openai_whisper"]
+    assert provider.kind == "remote"
     assert provider.protocol == "openai_transcriptions"
     assert provider.base_url == "https://api.openai.com/v1"
     assert provider.endpoint == "/v1/audio/transcriptions"
     assert provider.model == "whisper-1"
     assert provider.env_key == "OPENAI_API_KEY"
     assert provider.credential_id == "openai_asr"
-    assert provider.timeout_seconds == 180
+    assert provider.execution.concurrency == 12
+    assert provider.execution.min_concurrency == 2
+    assert provider.execution.max_concurrency == 12
+    assert provider.execution.max_inflight_upload_mb == 256
+    assert provider.execution.timeout_seconds == 180
+    assert provider.chunking.mode == "silence"
+    assert provider.chunking.max_window_seconds == 45
+    assert provider.chunking.min_window_seconds == 10
+    assert provider.chunking.overlap_seconds == 3
+    assert provider.chunking.max_upload_mb == 20
+    assert provider.chunking.silence.noise_db == -38
+    assert provider.chunking.silence.min_silence_seconds == 0.3
+    assert provider.chunking.silence.cut_padding_seconds == 0.2
     assert provider.http2 is False
     assert provider.request.response_format == "verbose_json"
     assert provider.request.temperature == 0.25
@@ -1021,22 +1030,27 @@ routing:
     (tmp_path / "pipeline.yaml").write_text(
         """
 asr:
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-      backend: ffmpeg_silencedetect
-      noise_db: -42
-      min_silence_seconds: 0.4
-      keep_preroll_seconds: 0.5
-      trim_trailing: false
-      keep_postroll_seconds: 0.2
-      min_upload_seconds: 1.2
+  provider: remote_asr
+asr_providers:
+  - name: remote_asr
+    kind: remote
+    protocol: openai_transcriptions
+    preprocessing:
+      trim_silence:
+        enabled: false
+        backend: ffmpeg_silencedetect
+        noise_db: -42
+        min_silence_seconds: 0.4
+        keep_preroll_seconds: 0.5
+        trim_trailing: false
+        keep_postroll_seconds: 0.2
+        min_upload_seconds: 1.2
         """.strip(),
         encoding="utf-8",
     )
 
     cfg = load_app_config(root_dir=tmp_path)
-    trim = cfg.pipeline.asr_preprocessing.cloud_trim_silence
+    trim = cfg.asr_providers["remote_asr"].preprocessing.trim_silence
     assert trim.enabled is False
     assert trim.backend == "ffmpeg_silencedetect"
     assert trim.noise_db == -42
@@ -1047,7 +1061,7 @@ asr:
     assert trim.min_upload_seconds == 1.2
 
 
-def test_asr_mode_rejects_legacy_openai_value(tmp_path: Path) -> None:
+def test_legacy_asr_mode_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -1069,7 +1083,7 @@ asr:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Unsupported asr.mode: openai"):
+    with pytest.raises(ValueError, match="Unsupported legacy ASR field"):
         load_app_config(root_dir=tmp_path)
 
 
@@ -1719,55 +1733,41 @@ routing:
         """.strip(),
         encoding="utf-8",
     )
-    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  provider: remote_asr
+asr_providers:
+  - name: remote_asr
+    kind: remote
+    protocol: openai_transcriptions
+    model: whisper-1
+    base_url: https://asr.example.com
+    auth:
+      type: bearer
+      env_key: ASR_API_KEY
+      credential_id: asr
+    execution:
+      concurrency: 2
+      max_concurrency: 2
+      timeout_seconds: 120
+        """.strip(),
+        encoding="utf-8",
+    )
     cfg = load_app_config(
         root_dir=tmp_path,
         cli_overrides={
-            "asr_mode": "cloud",
-            "asr_device": "cuda",
-            "asr_model_size": "medium",
-            "asr_compute_type": "float16",
-            "asr_max_initial_timestamp": 8.5,
-            "asr_beam_size": 7,
-            "asr_temperature": 0.2,
-            "asr_condition_on_previous_text": "false",
-            "asr_hotwords": "Subaru, Emilia",
-            "asr_cloud_model": "whisper-large",
-            "asr_cloud_base_url": "https://asr.example.com",
-            "asr_cloud_endpoint": "/v1/audio/transcriptions",
-            "asr_cloud_env_key": "ASR_API_KEY",
-            "asr_cloud_credential_id": "asr",
-            "asr_cloud_timeout_seconds": 240,
-            "asr_chunking_mode": "fixed",
-            "asr_window_seconds": 420,
-            "asr_overlap_seconds": 45,
-            "asr_max_upload_mb": 16,
+            "asr_provider": "remote_asr",
+            "asr_model": "whisper-large",
             "source_mode": "embedded_subtitle",
             "subtitle_track": "3",
         },
     )
-    assert cfg.pipeline.asr_mode == "cloud"
-    assert cfg.pipeline.asr_local.device == "cuda"
-    assert cfg.pipeline.asr_local.model_size == "medium"
-    assert cfg.pipeline.asr_local.compute_type == "float16"
-    assert cfg.pipeline.asr_local.max_initial_timestamp == 8.5
-    assert cfg.pipeline.asr_local.beam_size == 7
-    assert cfg.pipeline.asr_local.temperature == 0.2
-    assert cfg.pipeline.asr_local.condition_on_previous_text is False
-    assert cfg.pipeline.asr_local.hotwords == "Subaru, Emilia"
-    assert cfg.pipeline.asr_cloud.model == "whisper-large"
-    assert cfg.pipeline.asr_cloud.base_url == "https://asr.example.com"
-    assert cfg.pipeline.asr_cloud.endpoint == "/v1/audio/transcriptions"
-    assert cfg.pipeline.asr_cloud.env_key == "ASR_API_KEY"
-    assert cfg.pipeline.asr_cloud.credential_id == "asr"
-    assert cfg.pipeline.asr_cloud.timeout_seconds == 240
+    assert cfg.pipeline.asr_provider == "remote_asr"
+    assert cfg.asr_providers[cfg.pipeline.asr_provider].kind == "remote"
     assert cfg.asr_providers[cfg.pipeline.asr_provider].model == "whisper-large"
     assert cfg.asr_providers[cfg.pipeline.asr_provider].base_url == "https://asr.example.com"
     assert cfg.asr_providers[cfg.pipeline.asr_provider].credential_id == "asr"
-    assert cfg.pipeline.asr_chunking.mode == "fixed"
-    assert cfg.pipeline.asr_chunking.window_seconds == 420
-    assert cfg.pipeline.asr_chunking.overlap_seconds == 45
-    assert cfg.pipeline.asr_chunking.max_upload_mb == 16.0
     assert cfg.pipeline.source_mode == "embedded_subtitle"
     assert cfg.pipeline.subtitle_track == "3"
 
@@ -1790,25 +1790,29 @@ routing:
 
     cfg = load_app_config(root_dir=tmp_path)
 
-    assert cfg.pipeline.asr_local.model_size == "large-v3"
-    assert cfg.pipeline.asr_local.device == "cuda"
-    assert cfg.pipeline.asr_local.compute_type == "int8_float16"
-    assert cfg.pipeline.asr_local.max_initial_timestamp == 30.0
-    assert cfg.pipeline.asr_local.beam_size == 5
-    assert cfg.pipeline.asr_local.temperature == 0.0
-    assert cfg.pipeline.asr_local.condition_on_previous_text is False
-    assert cfg.pipeline.asr_local.hotwords == ""
-    assert cfg.pipeline.asr_chunking.mode == "silence"
-    assert cfg.pipeline.asr_chunking.window_seconds == 300
-    assert cfg.pipeline.asr_chunking.max_window_seconds == 120
-    assert cfg.pipeline.asr_chunking.min_window_seconds == 12
-    assert cfg.pipeline.asr_chunking.overlap_seconds == 5
-    assert cfg.pipeline.asr_chunking.short_audio_seconds == 300
-    assert cfg.pipeline.asr_chunking.max_upload_mb == 24.0
-    assert cfg.pipeline.asr_chunking.silence.noise_db == -35.0
-    assert cfg.pipeline.asr_execution.cloud_concurrency == 8
-    assert cfg.pipeline.asr_execution.adaptive_concurrency is True
+    provider = cfg.asr_providers[cfg.pipeline.asr_provider]
+    assert provider.name == "faster_whisper_large_v3"
+    assert provider.kind == "local_inprocess"
+    assert provider.protocol == "faster_whisper"
+    assert provider.local.model_size == "large-v3"
+    assert provider.local.device == "cuda"
+    assert provider.local.compute_type == "int8_float16"
+    assert provider.local.max_initial_timestamp == 30.0
+    assert provider.local.beam_size == 5
+    assert provider.local.temperature == 0.0
+    assert provider.local.condition_on_previous_text is False
+    assert provider.local.hotwords == ""
+    assert provider.chunking.mode == "silence"
+    assert provider.chunking.window_seconds == 300
+    assert provider.chunking.max_window_seconds == 120
+    assert provider.chunking.min_window_seconds == 12
+    assert provider.chunking.overlap_seconds == 5
+    assert provider.chunking.short_audio_seconds == 300
+    assert provider.chunking.max_upload_mb == 24.0
+    assert provider.chunking.silence.noise_db == -35.0
+    assert provider.execution.concurrency == 1
+    assert provider.execution.adaptive_concurrency is False
     assert cfg.pipeline.asr_audio_track == "auto"
-    assert cfg.pipeline.asr_chunking.fuzzy_dedupe is True
+    assert provider.chunking.fuzzy_dedupe is True
     assert cfg.pipeline.source_mode == "auto"
     assert cfg.pipeline.subtitle_track == "auto"

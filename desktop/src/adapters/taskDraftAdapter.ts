@@ -10,10 +10,7 @@ export type StartTaskPayload = {
   bilingual: boolean;
   provider?: string;
   model?: string;
-  asrMode?: string;
   asrProvider?: string;
-  asrCloudCredentialId?: string;
-  asrCloudEnvKey?: string;
   asrModel?: string;
   sourceMode?: string;
   subtitleTrack?: string;
@@ -44,10 +41,7 @@ export function taskDraftToStartTaskPayload(draft: TaskDraft): StartTaskPayload 
     bilingual: draft.output.bilingual,
     provider: draft.translation.target.providerName,
     model: draft.translation.target.model,
-    asrMode: mapAsrMode(draft),
-    asrProvider: draft.speechRecognition.mode === "cloud" ? draft.speechRecognition.target?.providerName : undefined,
-    asrCloudCredentialId: undefined,
-    asrCloudEnvKey: undefined,
+    asrProvider: draft.speechRecognition.target?.providerName,
     asrModel: draft.speechRecognition.target?.model,
     sourceMode: subtitleMapping.sourceMode,
     subtitleTrack: subtitleMapping.subtitleTrack,
@@ -90,19 +84,6 @@ function mapSubtitleSource(draft: TaskDraft): { sourceMode?: string; subtitleTra
 
 function mapInputType(draft: TaskDraft): "video" | "srt" {
   return draft.input.kind === "subtitle" ? "srt" : "video";
-}
-
-function mapAsrMode(draft: TaskDraft): string | undefined {
-  if (draft.speechRecognition.mode === "none") {
-    return undefined;
-  }
-  if (draft.speechRecognition.mode === "cloud") {
-    return "cloud";
-  }
-  if (draft.speechRecognition.mode === "local") {
-    return "local";
-  }
-  return "auto";
 }
 
 function mapOutputFormats(formats: ExportFormat[]): string | undefined {

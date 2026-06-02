@@ -3,6 +3,7 @@
 import json
 import shutil
 from pathlib import Path
+from textwrap import dedent
 
 from transvortex.core.orchestrator import (
     _write_translation_experiment_artifacts,
@@ -27,15 +28,20 @@ translation_batch_size: 2
 default_concurrency: 1
 max_cps: 8
 asr:
-  mode: local
-  chunking:
-    mode: auto
-    window_seconds: 300
-    overlap_seconds: 30
-    short_audio_seconds: 300
-  model_size: tiny
-  device: cpu
-  compute_type: int8
+  provider: faster_whisper_test
+asr_providers:
+  - name: faster_whisper_test
+    kind: local_inprocess
+    protocol: faster_whisper
+    model: tiny
+    local:
+      device: cpu
+      compute_type: int8
+    chunking:
+      mode: auto
+      window_seconds: 300
+      overlap_seconds: 30
+      short_audio_seconds: 300
         """.strip(),
         encoding="utf-8",
     )
@@ -50,6 +56,48 @@ providers:
 routing:
   primary: {provider: p1, model: m1}
         """.strip(),
+        encoding="utf-8",
+    )
+
+
+def _indent_yaml_block(block: str, prefix: str) -> str:
+    text = dedent(block).strip()
+    if not text:
+        return ""
+    return "\n" + "\n".join(prefix + line if line else line for line in text.splitlines())
+
+
+def _write_remote_asr_config(
+    root: Path,
+    *,
+    provider_name: str = "cloud1",
+    prompt: str = "",
+    execution: str = "",
+    preprocessing: str = "",
+    chunking: str = "",
+) -> None:
+    (root / "pipeline.yaml").write_text(
+        (
+            f"""
+artifacts_dir: artifacts
+translation_batch_size: 2
+default_concurrency: 1
+asr:
+  provider: {provider_name}{_indent_yaml_block(prompt, "  ")}
+asr_providers:
+  - name: {provider_name}
+    kind: remote
+    protocol: openai_transcriptions
+    base_url: https://api.example.com/v1
+    endpoint: /v1/audio/transcriptions
+    model: whisper-1
+    auth:
+      type: bearer
+      env_key: PROVIDER_KEY
+      credential_id: {provider_name}{_indent_yaml_block(execution, "    ")}{_indent_yaml_block(preprocessing, "    ")}{_indent_yaml_block(chunking, "    ")}
+providers:
+            """
+        ).strip(),
         encoding="utf-8",
     )
 
@@ -353,9 +401,16 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     assert any(event["stage"] == "EXPORT" and event["message"] == "Subtitle delivery report ready" for event in events)
 
 
-def test_resume_uses_saved_pipeline_settings_for_asr_mode(tmp_path: Path, monkeypatch) -> None:
+def test_resume_uses_saved_pipeline_settings_for_asr_provider(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
-    _write_config(root)
+    _write_remote_asr_config(
+        root,
+        execution="""
+execution:
+  concurrency: 3
+  max_concurrency: 3
+        """,
+    )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
     task_id, _artifacts_dir = create_pipeline_task(
@@ -364,27 +419,26 @@ def test_resume_uses_saved_pipeline_settings_for_asr_mode(tmp_path: Path, monkey
         source_lang="ja",
         target_lang="ja",
         cli_overrides={
-            "asr_mode": "cloud",
             "source_mode": "asr",
-            "asr_cloud_concurrency": 3,
         },
         input_type="video_asr",
     )
     captured: dict[str, object] = {}
 
     def fake_execute_task(config, store, task_id, **_kwargs):
-        captured["asr_mode"] = config.pipeline.asr_mode
+        provider = config.asr_providers[config.pipeline.asr_provider]
+        captured["asr_provider"] = config.pipeline.asr_provider
         captured["source_mode"] = config.pipeline.source_mode
-        captured["cloud_concurrency"] = config.pipeline.asr_execution.cloud_concurrency
+        captured["concurrency"] = provider.execution.concurrency
 
     monkeypatch.setattr("transvortex.core.orchestrator._execute_task", fake_execute_task)
 
     resume_pipeline(root_dir=root, task_id=task_id)
 
     assert captured == {
-        "asr_mode": "cloud",
+        "asr_provider": "cloud1",
         "source_mode": "asr",
-        "cloud_concurrency": 3,
+        "concurrency": 3,
     }
 
 
@@ -398,8 +452,9 @@ def test_resume_uses_saved_one_off_asr_prompt(tmp_path: Path, monkeypatch) -> No
     raw = pipeline.read_text(encoding="utf-8")
     pipeline.write_text(
         raw.replace(
-            "  compute_type: int8",
-            """  compute_type: int8
+            "asr:\n  provider: faster_whisper_test",
+            """asr:
+  provider: faster_whisper_test
   prompt:
     active_profile: anime
     profiles:
@@ -458,46 +513,34 @@ def test_cloud_asr_trims_silence_before_provider_and_records_preprocess_artifact
     prompt_dir = root / "prompts" / "asr"
     prompt_dir.mkdir(parents=True)
     (prompt_dir / "cloud.v1.md").write_text("Names: Subaru", encoding="utf-8")
-    pipeline = root / "pipeline.yaml"
-    pipeline.write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  prompt:
+    _write_remote_asr_config(
+        root,
+        prompt="""
+prompt:
+  enabled: true
+  active_profile: cloud
+  profiles:
+    - id: cloud
+      name: Cloud prompt
+      path: prompts/asr/cloud.v1.md
+      max_chars: 80
+  max_chars: 80
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
     enabled: true
-    active_profile: cloud
-    profiles:
-      - id: cloud
-        name: Cloud prompt
-        path: prompts/asr/cloud.v1.md
-        max_chars: 80
-    max_chars: 80
-  preprocessing:
-    cloud_trim_silence:
-      enabled: true
-      noise_db: -35
-      min_silence_seconds: 0.2
-      keep_preroll_seconds: 0.25
-      trim_trailing: true
-      keep_postroll_seconds: 0.1
-      min_upload_seconds: 0.5
-  chunking:
-    mode: none
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    noise_db: -35
+    min_silence_seconds: 0.2
+    keep_preroll_seconds: 0.25
+    trim_trailing: true
+    keep_postroll_seconds: 0.1
+    min_upload_seconds: 0.5
+        """,
+        chunking="""
+chunking:
+  mode: none
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -537,7 +580,7 @@ providers:
 
     class FakeCloudAsrEngine:
         def __init__(self, **kwargs) -> None:
-            seen["mode"] = kwargs["mode"]
+            seen["provider"] = kwargs["asr_provider"].name
             seen["prompt"] = kwargs["prompt"]
 
         def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
@@ -579,7 +622,7 @@ providers:
 
     store = TaskStore(root / "artifacts")
     task_dir = store.task_dir(task_id)
-    assert seen["mode"] == "cloud"
+    assert seen["provider"] == "cloud1"
     assert seen["prompt"] == "Names: Subaru"
     assert seen["audio_path"] == task_dir / "source" / "asr" / "upload" / "segment_00000.wav"
     assert seen["offset"] == 22.75
@@ -597,42 +640,32 @@ def test_cloud_asr_previous_text_is_added_to_next_segment_prompt(tmp_path: Path,
     prompt_dir = root / "prompts" / "asr"
     prompt_dir.mkdir(parents=True)
     (prompt_dir / "cloud.v1.md").write_text("Names: Subaru", encoding="utf-8")
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  prompt:
-    enabled: true
-    active_profile: cloud
-    profiles:
-      - id: cloud
-        name: Cloud prompt
-        path: prompts/asr/cloud.v1.md
-        include_previous_text: true
-        max_chars: 400
-    include_previous_text: true
-    max_chars: 400
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: fixed
-    window_seconds: 10
-    overlap_seconds: 0
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        prompt="""
+prompt:
+  enabled: true
+  active_profile: cloud
+  profiles:
+    - id: cloud
+      name: Cloud prompt
+      path: prompts/asr/cloud.v1.md
+      include_previous_text: true
+      max_chars: 400
+  include_previous_text: true
+  max_chars: 400
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 10
+  overlap_seconds: 0
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -668,7 +701,7 @@ providers:
 
         def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float, *, prompt: str | None = None):
             prompts.append(prompt)
-            text = "Subaru arrives" if audio_path.name == "segment_00000.wav" else "Emilia answers"
+            text = "Subaru arrives" if audio_path.name in {"segment_00000.wav", "part_00000.wav"} else "Emilia answers"
             return type(
                 "Result",
                 (),
@@ -709,30 +742,17 @@ providers:
 def test_cloud_asr_retries_original_audio_when_trimmed_result_is_nonspeech(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  preprocessing:
-    cloud_trim_silence:
-      enabled: true
-  chunking:
-    mode: none
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: true
+        """,
+        chunking="""
+chunking:
+  mode: none
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -821,30 +841,17 @@ providers:
 def test_cloud_asr_filters_hard_garbage_rows_before_source_artifact(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: none
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: none
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -922,35 +929,24 @@ providers:
 def test_cloud_asr_concurrent_segments_merge_in_manifest_order(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  execution:
-    cloud_concurrency: 4
-    max_cloud_concurrency: 4
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: fixed
-    window_seconds: 10
-    overlap_seconds: 0
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        execution="""
+execution:
+  concurrency: 4
+  max_concurrency: 4
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 10
+  overlap_seconds: 0
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -1029,36 +1025,25 @@ providers:
 def test_cloud_asr_retryable_failure_splits_segment_from_original_timeline(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  execution:
-    cloud_concurrency: 1
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: fixed
-    window_seconds: 60
-    max_window_seconds: 60
-    min_window_seconds: 12
-    overlap_seconds: 0
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        execution="""
+execution:
+  concurrency: 1
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 60
+  max_window_seconds: 60
+  min_window_seconds: 12
+  overlap_seconds: 0
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -1164,36 +1149,25 @@ providers:
 def test_cloud_asr_http_transport_error_splits_segment(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  execution:
-    cloud_concurrency: 1
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: fixed
-    window_seconds: 60
-    max_window_seconds: 60
-    min_window_seconds: 12
-    overlap_seconds: 0
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        execution="""
+execution:
+  concurrency: 1
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 60
+  max_window_seconds: 60
+  min_window_seconds: 12
+  overlap_seconds: 0
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")
@@ -1293,37 +1267,26 @@ providers:
 def test_cloud_asr_adaptive_concurrency_requeues_retryable_failure(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)
-    (root / "pipeline.yaml").write_text(
-        """
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  mode: cloud
-  provider: cloud1
-  execution:
-    cloud_concurrency: 2
-    max_cloud_concurrency: 2
-    min_cloud_concurrency: 1
-    adaptive_concurrency: true
-  preprocessing:
-    cloud_trim_silence:
-      enabled: false
-  chunking:
-    mode: fixed
-    window_seconds: 10
-    overlap_seconds: 0
-asr_providers:
-  - name: cloud1
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: PROVIDER_KEY
-    credential_id: cloud1
-providers:
-        """.strip(),
-        encoding="utf-8",
+    _write_remote_asr_config(
+        root,
+        execution="""
+execution:
+  concurrency: 2
+  max_concurrency: 2
+  min_concurrency: 1
+  adaptive_concurrency: true
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 10
+  overlap_seconds: 0
+        """,
     )
     input_file = root / "demo.mp4"
     input_file.write_bytes(b"video")

@@ -193,8 +193,8 @@ export function NewTaskPage({
               >
                 <option value="auto">自动选择</option>
                 <option value="embedded" disabled={supportedStreams.length === 0}>使用内置字幕轨</option>
-                <option value="localAsr">本地识别</option>
-                <option value="cloudAsr">云端识别</option>
+                <option value="localAsr">本地/自托管 ASR</option>
+                <option value="cloudAsr">远端 ASR</option>
               </select>
             </label>
             <label>
@@ -265,14 +265,14 @@ export function NewTaskPage({
                   onChange={(event) => {
                     const mode = event.target.value as TaskDraft["speechRecognition"]["mode"];
                     const target = mode === "cloud"
-                      ? asrConnections.find((connection) => connection.providerName !== "faster-whisper")
-                      : asrConnections.find((connection) => connection.providerName === "faster-whisper");
+                      ? asrConnections.find((connection) => asrConnectionKind(connection) === "remote")
+                      : asrConnections.find((connection) => asrConnectionKind(connection) !== "remote");
                     onDraftChange((current) => ({ ...current, speechRecognition: { ...current.speechRecognition, mode, target: target ? { providerName: target.providerName, model: target.model ?? target.models[0] } : current.speechRecognition.target } }));
                   }}
                 >
                   <option value="auto">自动</option>
-                  <option value="local">本地识别</option>
-                  <option value="cloud">云端识别</option>
+                  <option value="local">本地进程/本地服务</option>
+                  <option value="cloud">远端服务</option>
                   <option value="none">不识别</option>
                 </select>
               </label>
@@ -434,6 +434,14 @@ function ErrorList({ error }: { error?: UserFacingError }) {
       </div>
     </div>
   );
+}
+
+function asrConnectionKind(connection?: ServiceConnection): string {
+  const raw = connection?.rawConfig;
+  if (typeof raw === "object" && raw !== null && "kind" in raw && typeof raw.kind === "string") {
+    return raw.kind;
+  }
+  return "remote";
 }
 
 function ReadinessRow({ icon, label, detail, ok }: { icon: ReactNode; label: string; detail: string; ok: boolean }) {
