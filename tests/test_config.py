@@ -893,6 +893,60 @@ asr_providers:
     assert cfg.pipeline.asr_prompt.max_chars == 120
 
 
+def test_funasr_local_server_profile_defaults(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  provider: funasr_sensevoice_local
+asr_providers:
+  - name: funasr_sensevoice_local
+    kind: local_server
+    protocol: openai_transcriptions
+    profile: funasr_openai
+    base_url: http://127.0.0.1:8899
+    endpoint: /v1/audio/transcriptions
+    model: sensevoice
+    auth:
+      type: none
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_app_config(root_dir=tmp_path)
+    provider = cfg.asr_providers["funasr_sensevoice_local"]
+
+    assert provider.kind == "local_server"
+    assert provider.profile == "funasr_openai"
+    assert provider.model == "sensevoice"
+    assert provider.auth.type == "none"
+    assert provider.http2 is False
+    assert provider.execution.concurrency == 1
+    assert provider.request.send_temperature is False
+    assert provider.request.send_timestamp_granularities is False
+    assert provider.request.array_format == "repeat"
+    assert provider.response_mapping.segment_paths == ["segments[]", "result[]", "utterances[]"]
+    assert provider.response_mapping.start_paths == ["start", "start_time", "timestamp[0]"]
+    assert provider.response_mapping.end_paths == ["end", "end_time", "timestamp[1]"]
+    assert provider.response_mapping.time_scale == 1.0
+    assert provider.response_mapping.time_scales == {
+        "timestamp[0]": 0.001,
+        "timestamp[1]": 0.001,
+    }
+
+
 def test_asr_prompt_rejects_inline_project_text(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

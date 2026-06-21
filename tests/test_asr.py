@@ -339,6 +339,7 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
             "meta": {
                 "provider": "openai",
                 "protocol": "openai_transcriptions",
+                "profile": "openai",
                 "source": "asr",
                 "transport": "httpx",
                 "http_version": "HTTP/2",
@@ -359,6 +360,95 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
     assert fallback.rows[0]["meta"]["transport"] == "httpx"
     assert fallback.rows[0]["start"] == 5.0
     assert fallback.rows[0]["end"] == 5.1
+
+
+def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    captured = {}
+    transport_meta = {"transport": "httpx", "http2_requested": False}
+
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return {
+            "result": [
+                {
+                    "timestamp": [1200, 2800],
+                    "sentence": "こんにちは",
+                    "confidence": 0.92,
+                    "speaker": "S1",
+                }
+            ]
+        }, transport_meta
+
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    provider = AsrProviderConfig(
+        name="funasr_sensevoice_local",
+        kind="local_server",
+        profile="funasr_openai",
+        base_url="http://127.0.0.1:8899",
+        model="sensevoice",
+        http2=False,
+        request=SimpleNamespace(
+            response_format="verbose_json",
+            temperature=0,
+            timestamp_granularities=[],
+            include=[],
+            extra_form_fields={},
+            array_format="repeat",
+            send_response_format=True,
+            send_temperature=False,
+            send_timestamp_granularities=False,
+            send_language=True,
+            language_field="language",
+            prompt_field="prompt",
+        ),
+    )
+    provider.response_mapping.segment_paths = ["result[]"]
+    provider.response_mapping.start_paths = ["timestamp[0]"]
+    provider.response_mapping.end_paths = ["timestamp[1]"]
+    provider.response_mapping.text_paths = ["sentence"]
+    provider.response_mapping.confidence_paths = ["confidence"]
+    provider.response_mapping.speaker_paths = ["speaker"]
+    provider.response_mapping.time_scale = 1.0
+    provider.response_mapping.time_scales = {"timestamp[0]": 0.001, "timestamp[1]": 0.001}
+
+    result = OpenAITranscriptionsAsrClient(provider).transcribe_segment(
+        audio,
+        10.0,
+        source_lang="ja-JP",
+        prompt="Names: Subaru",
+    )
+
+    data = captured["data"]
+    assert captured["url"] == "http://127.0.0.1:8899/v1/audio/transcriptions"
+    assert captured["http2"] is False
+    assert data["model"] == "sensevoice"
+    assert data["response_format"] == "verbose_json"
+    assert data["language"] == "ja"
+    assert data["prompt"] == "Names: Subaru"
+    assert "temperature" not in data
+    assert "timestamp_granularities" not in data
+    assert "timestamp_granularities[]" not in data
+    assert result.rows == [
+        {
+            "start": 11.2,
+            "end": 12.8,
+            "text": "こんにちは",
+            "confidence": 0.92,
+            "meta": {
+                "provider": "funasr_sensevoice_local",
+                "protocol": "openai_transcriptions",
+                "profile": "funasr_openai",
+                "source": "asr",
+                "transport": "httpx",
+                "http2_requested": False,
+                "speaker": "S1",
+            },
+        }
+    ]
 
 
 def test_cloud_asr_transcribe_propagates_transport_error(tmp_path, monkeypatch) -> None:

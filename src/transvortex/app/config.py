@@ -19,6 +19,7 @@ from .models import (
     AsrPromptProfile,
     AsrProviderConfig,
     AsrProviderRequestConfig,
+    AsrProviderResponseMappingConfig,
     AsrSilenceChunkingConfig,
     AsrTrimSilenceConfig,
     AsrUncertaintyHintsConfig,
@@ -487,6 +488,7 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
 
 ASR_PROVIDER_KINDS = {"local_inprocess", "local_server", "remote"}
 ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions"}
+ASR_PROVIDER_PROFILES = {"openai", "funasr_openai"}
 ASR_AUTH_TYPES = {"none", "bearer"}
 LEGACY_ASR_FIELDS = {
     "mode",
@@ -646,6 +648,61 @@ def _parse_asr_preprocessing(raw: Any, *, default: AsrPreprocessingConfig) -> As
     )
 
 
+def _default_asr_request_for_profile(profile: str) -> AsrProviderRequestConfig:
+    if profile == "funasr_openai":
+        return AsrProviderRequestConfig(
+            timestamp_granularities=[],
+            array_format="repeat",
+            send_response_format=True,
+            send_temperature=False,
+            send_timestamp_granularities=False,
+            send_language=True,
+        )
+    return AsrProviderRequestConfig()
+
+
+def _default_asr_response_mapping_for_profile(profile: str) -> AsrProviderResponseMappingConfig:
+    if profile == "funasr_openai":
+        return AsrProviderResponseMappingConfig(
+            segment_paths=["segments[]", "result[]", "utterances[]"],
+            start_paths=["start", "start_time", "timestamp[0]"],
+            end_paths=["end", "end_time", "timestamp[1]"],
+            text_paths=["text", "sentence"],
+            confidence_paths=["confidence", "avg_logprob"],
+            speaker_paths=["speaker"],
+            fallback_text_paths=["text", "result.text", "result"],
+            time_scales={
+                "timestamp[0]": 0.001,
+                "timestamp[1]": 0.001,
+            },
+        )
+    return AsrProviderResponseMappingConfig()
+
+
+def _parse_asr_response_mapping(raw: Any, *, default: AsrProviderResponseMappingConfig) -> AsrProviderResponseMappingConfig:
+    mapping_raw = raw if isinstance(raw, dict) else {}
+    return AsrProviderResponseMappingConfig(
+        segment_paths=_to_str_list(mapping_raw.get("segment_paths", mapping_raw.get("segment_path")), default.segment_paths),
+        start_paths=_to_str_list(mapping_raw.get("start_paths", mapping_raw.get("start_path")), default.start_paths),
+        end_paths=_to_str_list(mapping_raw.get("end_paths", mapping_raw.get("end_path")), default.end_paths),
+        text_paths=_to_str_list(mapping_raw.get("text_paths", mapping_raw.get("text_path")), default.text_paths),
+        confidence_paths=_to_str_list(
+            mapping_raw.get("confidence_paths", mapping_raw.get("confidence_path")),
+            default.confidence_paths,
+        ),
+        speaker_paths=_to_str_list(mapping_raw.get("speaker_paths", mapping_raw.get("speaker_path")), default.speaker_paths),
+        fallback_text_paths=_to_str_list(
+            mapping_raw.get("fallback_text_paths", mapping_raw.get("fallback_text_path")),
+            default.fallback_text_paths,
+        ),
+        time_scale=_to_float(mapping_raw.get("time_scale"), default.time_scale),
+        time_scales={
+            str(key): _to_float(value, default.time_scales.get(str(key), default.time_scale))
+            for key, value in dict(mapping_raw.get("time_scales") or default.time_scales).items()
+        },
+    )
+
+
 def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
     name = str(row.get("name") or "").strip()
     if not name:
@@ -663,15 +720,21 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         raise ValueError("ASR provider kind local_inprocess requires protocol faster_whisper")
     if kind in {"local_server", "remote"} and protocol != "openai_transcriptions":
         raise ValueError(f"ASR provider kind {kind} requires protocol openai_transcriptions")
+    profile = _to_str(row.get("profile"), "openai").strip().lower()
+    if profile not in ASR_PROVIDER_PROFILES:
+        raise ValueError(f"Unsupported ASR provider profile: {profile}")
     model = _to_str(row.get("model"), "large-v3" if protocol == "faster_whisper" else "whisper-1")
     request_raw = row.get("request") if isinstance(row.get("request"), dict) else {}
     default_execution = _default_asr_execution(kind)
     default_chunking = _default_asr_chunking(kind)
     default_preprocessing = _default_asr_preprocessing(kind)
+    default_request = _default_asr_request_for_profile(profile)
+    default_response_mapping = _default_asr_response_mapping_for_profile(profile)
     return AsrProviderConfig(
         name=name,
         kind=kind,
         protocol=protocol,
+        profile=profile,
         base_url=_to_str(row.get("base_url"), "https://api.openai.com").rstrip("/"),
         endpoint=_to_str(row.get("endpoint"), "/v1/audio/transcriptions"),
         model=model,
@@ -682,15 +745,31 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         preprocessing=_parse_asr_preprocessing(row.get("preprocessing"), default=default_preprocessing),
         http2=_to_bool(row.get("http2"), kind == "remote"),
         request=AsrProviderRequestConfig(
-            response_format=_to_str(request_raw.get("response_format"), "verbose_json"),
-            temperature=_to_float(request_raw.get("temperature"), 0.0),
-            timestamp_granularities=_to_str_list(request_raw.get("timestamp_granularities"), ["segment"]),
-            include=_to_str_list(request_raw.get("include"), []),
+            response_format=_to_str(request_raw.get("response_format"), default_request.response_format),
+            temperature=_to_float(request_raw.get("temperature"), default_request.temperature),
+            timestamp_granularities=_to_str_list(
+                request_raw.get("timestamp_granularities"),
+                default_request.timestamp_granularities,
+            ),
+            include=_to_str_list(request_raw.get("include"), default_request.include),
             extra_form_fields=dict(request_raw.get("extra_form_fields") or {})
             if isinstance(request_raw.get("extra_form_fields"), dict)
             else {},
-            array_format=_to_str(request_raw.get("array_format"), "brackets"),
+            array_format=_to_str(request_raw.get("array_format"), default_request.array_format),
+            send_response_format=_to_bool(
+                request_raw.get("send_response_format"),
+                default_request.send_response_format,
+            ),
+            send_temperature=_to_bool(request_raw.get("send_temperature"), default_request.send_temperature),
+            send_timestamp_granularities=_to_bool(
+                request_raw.get("send_timestamp_granularities"),
+                default_request.send_timestamp_granularities,
+            ),
+            send_language=_to_bool(request_raw.get("send_language"), default_request.send_language),
+            language_field=_to_str(request_raw.get("language_field"), default_request.language_field),
+            prompt_field=_to_str(request_raw.get("prompt_field"), default_request.prompt_field),
         ),
+        response_mapping=_parse_asr_response_mapping(row.get("response_mapping"), default=default_response_mapping),
     )
 
 

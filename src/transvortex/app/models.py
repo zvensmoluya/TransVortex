@@ -178,6 +178,25 @@ class AsrProviderRequestConfig:
     include: list[str] = field(default_factory=list)
     extra_form_fields: dict[str, Any] = field(default_factory=dict)
     array_format: str = "brackets"  # repeat | brackets
+    send_response_format: bool = True
+    send_temperature: bool = True
+    send_timestamp_granularities: bool = True
+    send_language: bool = True
+    language_field: str = "language"
+    prompt_field: str = "prompt"
+
+
+@dataclass
+class AsrProviderResponseMappingConfig:
+    segment_paths: list[str] = field(default_factory=lambda: ["segments[]"])
+    start_paths: list[str] = field(default_factory=lambda: ["start"])
+    end_paths: list[str] = field(default_factory=lambda: ["end"])
+    text_paths: list[str] = field(default_factory=lambda: ["text"])
+    confidence_paths: list[str] = field(default_factory=lambda: ["avg_logprob", "confidence"])
+    speaker_paths: list[str] = field(default_factory=lambda: ["speaker"])
+    fallback_text_paths: list[str] = field(default_factory=lambda: ["text"])
+    time_scale: float = 1.0
+    time_scales: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -207,6 +226,7 @@ class AsrProviderConfig:
     name: str
     kind: str = "remote"  # local_inprocess | local_server | remote
     protocol: str = "openai_transcriptions"
+    profile: str = "openai"
     base_url: str = "https://api.openai.com"
     endpoint: str = "/v1/audio/transcriptions"
     model: str = "whisper-1"
@@ -217,6 +237,7 @@ class AsrProviderConfig:
     preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())
     http2: bool = True
     request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
+    response_mapping: AsrProviderResponseMappingConfig = field(default_factory=AsrProviderResponseMappingConfig)
 
     @property
     def env_key(self) -> str:

@@ -168,23 +168,39 @@ asr_providers:
   - name: funasr_sensevoice_local
     kind: local_server
     protocol: openai_transcriptions
+    profile: funasr_openai
     base_url: http://127.0.0.1:8899
     endpoint: /v1/audio/transcriptions
-    model: SenseVoiceSmall
+    model: sensevoice
     auth:
       type: none
     http2: false
+    request:
+      response_format: verbose_json
+      send_temperature: false
+      send_timestamp_granularities: false
+      array_format: repeat
+    response_mapping:
+      segment_paths: ["segments[]", "result[]", "utterances[]"]
+      start_paths: [start, start_time, "timestamp[0]"]
+      end_paths: [end, end_time, "timestamp[1]"]
+      text_paths: [text, sentence]
+      confidence_paths: [confidence, avg_logprob]
+      fallback_text_paths: [text, result.text, result]
+      time_scales:
+        "timestamp[0]": 0.001
+        "timestamp[1]": 0.001
     execution:
       concurrency: 1
       timeout_seconds: 300
       retry: 1
     chunking:
       mode: silence
-      window_seconds: 600
-      max_window_seconds: 600
+      window_seconds: 30
+      max_window_seconds: 30
       min_window_seconds: 12
       overlap_seconds: 0
-      short_audio_seconds: 600
+      short_audio_seconds: 30
       max_upload_mb: 256
       silence:
         noise_db: -35
