@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>main-screen-v2 asset preview</title>
+  <style>
+    :root {
+      --ink: #2f2933;
+      --warm: #fff7f1;
+      --pink: #ffdce8;
+      --blue: #dff7fb;
+      --grid: rgba(47, 41, 51, .08);
+    }
+
+    body {
+      margin: 0;
+      padding: 32px;
+      color: var(--ink);
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+      background: #fffdf8;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 18px;
+    }
+
+    .preview {
+      min-height: 230px;
+      padding: 14px;
+      border: 1px solid #eadde4;
+      border-radius: 12px;
+    }
+
+    .preview.checker {
+      background:
+        linear-gradient(45deg, var(--grid) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--grid) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--grid) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--grid) 75%);
+      background-color: #fff;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+      background-size: 20px 20px;
+    }
+
+    .preview.warm { background: var(--warm); }
+    .preview.pink { background: var(--pink); }
+    .preview.blue { background: var(--blue); }
+
+    .preview img {
+      display: block;
+      width: 100%;
+      height: 180px;
+      object-fit: contain;
+    }
+
+    .label {
+      margin-top: 10px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>sticky-note asset preview</h1>
+  <div class="grid">
+    <section class="preview checker">
+      <img src="assets/sticky-note-clean-test.png" alt="">
+      <div class="label">checker</div>
+    </section>
+    <section class="preview warm">
+      <img src="assets/sticky-note-clean-test.png" alt="">
+      <div class="label">warm #fff7f1</div>
+    </section>
+    <section class="preview pink">
+      <img src="assets/sticky-note-clean-test.png" alt="">
+      <div class="label">pink #ffdce8</div>
+    </section>
+    <section class="preview blue">
+      <img src="assets/sticky-note-clean-test.png" alt="">
+      <div class="label">blue #dff7fb</div>
+    </section>
+  </div>
+</body>
+</html>
