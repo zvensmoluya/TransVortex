@@ -43,6 +43,7 @@ from .subtitle_compression import compress_overlong_subtitles
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_reflow import reflow_subtitles
 from .source_cleaner import clean_source_segments
+from .asr_quality import detect_asr_boundary_risks
 from .translate import (
     _adaptive_chunk_by_id,
     _source_chunk_completed_count,
@@ -385,7 +386,7 @@ def _process_asr_manifest_item(
     except Exception as exc:
         if (
             allow_split_retry
-            and provider.protocol == "openai_transcriptions"
+            and provider.protocol in {"openai_transcriptions", "funasr_openai"}
             and _is_retryable_asr_exception(exc)
             and task is not None
             and root_dir is not None
@@ -1013,7 +1014,7 @@ def _preflight(
             if importlib.util.find_spec("faster_whisper") is None:
                 raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
         elif asr_provider.kind in {"local_server", "remote"}:
-            if asr_provider.protocol != "openai_transcriptions":
+            if asr_provider.protocol not in {"openai_transcriptions", "funasr_openai"}:
                 raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
             if asr_provider.auth.type == "bearer":
                 credential = resolve_credential(
@@ -1300,6 +1301,39 @@ def _clean_asr_source_segments(
                 },
             )
     return result.segments
+
+
+def _mark_asr_boundary_quality(
+    *,
+    paths: dict[str, Path],
+    segments: list[Segment],
+    provider: Any,
+    store: TaskStore | None = None,
+    task_id: str = "",
+    stage: str = "ASR",
+) -> list[Segment]:
+    marked, report = detect_asr_boundary_risks(segments, provider=provider)
+    paths["quality"].mkdir(parents=True, exist_ok=True)
+    report_path = paths["quality"] / "asr_boundary_quality.json"
+    write_json(report_path, report)
+    warn_or_error = int(report.get("level_counts", {}).get("warn", 0)) + int(
+        report.get("level_counts", {}).get("error", 0)
+    )
+    if warn_or_error and store is not None and task_id:
+        store.append_event(
+            task_id,
+            "warning",
+            stage=stage,
+            level="warning",
+            message="ASR boundary risk detected",
+            details={
+                "path": str(report_path),
+                "risk_segments": report.get("risk_segments", 0),
+                "code_counts": report.get("code_counts", {}),
+                "level_counts": report.get("level_counts", {}),
+            },
+        )
+    return marked
 
 
 def _translation_route_providers(config: AppConfig) -> list:
@@ -1997,6 +2031,14 @@ def _execute_task(
                 all_segments = _clean_asr_source_segments(
                     paths=paths,
                     segments=all_segments,
+                    store=store,
+                    task_id=task_id,
+                    stage="ASR",
+                )
+                all_segments = _mark_asr_boundary_quality(
+                    paths=paths,
+                    segments=all_segments,
+                    provider=_active_asr_provider(config),
                     store=store,
                     task_id=task_id,
                     stage="ASR",

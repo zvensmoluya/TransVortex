@@ -172,7 +172,7 @@ class OpenAITranscriptionsAsrClient:
             api_key = credential.key
         elif self.config.auth.type != "none":
             raise RuntimeError(f"unsupported_asr_auth_type: {self.config.auth.type}")
-        if self.config.profile == "openai" and self.config.request.response_format != "verbose_json":
+        if self.config.request.response_format != "verbose_json":
             raise RuntimeError(
                 f"unsupported_asr_response_format_for_segments: {self.config.request.response_format}"
             )
@@ -183,7 +183,7 @@ class OpenAITranscriptionsAsrClient:
             source_lang=source_lang,
             prompt=prompt,
         )
-        rows = _map_asr_response_rows(
+        rows = _map_openai_transcription_rows(
             response=response,
             config=self.config,
             segment_start_offset=segment_start_offset,
@@ -191,7 +191,7 @@ class OpenAITranscriptionsAsrClient:
         )
         if rows:
             return AsrTranscriptionResult(rows=rows, raw_response=response, transport_meta=transport_meta)
-        text = _first_text_by_paths(response, self.config.response_mapping.fallback_text_paths).strip()
+        text = str(response.get("text", "")).strip()
         if not text:
             return AsrTranscriptionResult(rows=[], raw_response=response, transport_meta=transport_meta)
         return AsrTranscriptionResult(
@@ -289,7 +289,7 @@ class OpenAITranscriptionsAsrClient:
             for granularity in self.config.request.timestamp_granularities:
                 if str(granularity).strip():
                     add_field(timestamp_key, str(granularity).strip())
-        if prompt:
+        if prompt and _asr_request_bool(self.config.request, "send_prompt", True):
             add_field(str(getattr(self.config.request, "prompt_field", "prompt") or "prompt"), prompt)
         include_key = _asr_array_field_name("include", array_format)
         for include_item in self.config.request.include:
@@ -305,13 +305,77 @@ class OpenAITranscriptionsAsrClient:
         return data, files
 
 
-def build_asr_client(config: AsrProviderConfig | None) -> FasterWhisperAsrAdapter | OpenAITranscriptionsAsrClient:
+class FunASROpenAIAsrClient(OpenAITranscriptionsAsrClient):
+    def transcribe_segment(
+        self,
+        audio_path: Path,
+        segment_start_offset: float,
+        *,
+        source_lang: str | None = None,
+        prompt: str = "",
+        root_dir: Path | None = None,
+    ) -> AsrTranscriptionResult:
+        del root_dir
+        if self.config.auth.type != "none":
+            raise RuntimeError(f"unsupported_funasr_auth_type: {self.config.auth.type}")
+        if self.config.request.response_format != "verbose_json":
+            raise RuntimeError(
+                f"unsupported_funasr_response_format_for_segments: {self.config.request.response_format}"
+            )
+        if self.config.request.include:
+            raise RuntimeError("unsupported_funasr_request_field: include")
+        if self.config.request.extra_form_fields:
+            raise RuntimeError("unsupported_funasr_request_field: extra_form_fields")
+        _validate_extra_form_fields(self.config.request.extra_form_fields)
+        response, transport_meta = self._call_openai_transcriptions(
+            audio_path,
+            api_key="",
+            source_lang=source_lang,
+            prompt=prompt,
+        )
+        rows = _map_funasr_openai_rows(
+            response=response,
+            config=self.config,
+            segment_start_offset=segment_start_offset,
+            transport_meta=transport_meta,
+        )
+        if rows:
+            return AsrTranscriptionResult(rows=rows, raw_response=response, transport_meta=transport_meta)
+        text = str(response.get("text", "")).strip()
+        if not text:
+            return AsrTranscriptionResult(rows=[], raw_response=response, transport_meta=transport_meta)
+        return AsrTranscriptionResult(
+            rows=[
+                {
+                    "start": segment_start_offset,
+                    "end": segment_start_offset + _fallback_audio_duration_seconds(audio_path),
+                    "text": text,
+                    "confidence": None,
+                    "meta": {
+                        "provider": self.config.name,
+                        "protocol": self.config.protocol,
+                        "source": "asr",
+                        "warning": "missing_segment_timestamps",
+                        **_asr_row_transport_meta(transport_meta),
+                    },
+                }
+            ],
+            raw_response=response,
+            transport_meta=transport_meta,
+        )
+
+
+def build_asr_client(
+    config: AsrProviderConfig | None,
+) -> FasterWhisperAsrAdapter | OpenAITranscriptionsAsrClient | FunASROpenAIAsrClient:
     if config is None:
         raise RuntimeError("Missing ASR provider config")
     if config.kind == "local_inprocess" and config.protocol == "faster_whisper":
         return FasterWhisperAsrAdapter(config)
     if config.kind in {"local_server", "remote"} and config.protocol == "openai_transcriptions":
         return OpenAITranscriptionsAsrClient(config)
+    if config.kind == "local_server" and config.protocol == "funasr_openai":
+        return FunASROpenAIAsrClient(config)
     raise RuntimeError(f"unsupported_asr_provider: {config.kind}/{config.protocol}")
 
 
@@ -441,7 +505,7 @@ def _asr_row_transport_meta(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _map_asr_response_rows(
+def _map_openai_transcription_rows(
     *,
     response: dict[str, Any],
     config: AsrProviderConfig,
@@ -449,31 +513,61 @@ def _map_asr_response_rows(
     transport_meta: dict[str, Any],
 ) -> list[dict]:
     rows: list[dict] = []
-    mapping = config.response_mapping
-    for item in _first_list_by_paths(response, mapping.segment_paths):
+    segments = response.get("segments")
+    if not isinstance(segments, list):
+        return rows
+    for item in segments:
         if not isinstance(item, dict):
             continue
-        text = _first_text_by_paths(item, mapping.text_paths).strip()
+        text = str(item.get("text", "")).strip()
         if not text:
             continue
-        start = _first_timed_value_by_paths(item, mapping.start_paths, mapping)
-        end = _first_timed_value_by_paths(item, mapping.end_paths, mapping)
-        start_seconds = float(start[0]) * float(start[1]) if start is not None else 0.0
-        if end is None:
-            end_seconds = start_seconds + 0.1
-        else:
-            end_seconds = float(end[0]) * float(end[1])
-        if end_seconds <= start_seconds:
-            end_seconds = start_seconds + 0.1
-        confidence = _first_value_by_paths(item, mapping.confidence_paths)
-        speaker = _first_value_by_paths(item, mapping.speaker_paths)
+        start_seconds = _float_or_none(item.get("start"))
+        end_seconds = _float_or_none(item.get("end"))
+        if start_seconds is None or end_seconds is None or end_seconds <= start_seconds:
+            continue
+        confidence = item.get("avg_logprob", item.get("confidence"))
         meta = {
             "provider": config.name,
             "protocol": config.protocol,
-            "profile": config.profile,
             "source": "asr",
             **_asr_row_transport_meta(transport_meta),
         }
+        rows.append(
+            {
+                "start": start_seconds + segment_start_offset,
+                "end": end_seconds + segment_start_offset,
+                "text": text,
+                "confidence": confidence,
+                "meta": meta,
+            }
+        )
+    return rows
+
+
+def _map_funasr_openai_rows(
+    *,
+    response: dict[str, Any],
+    config: AsrProviderConfig,
+    segment_start_offset: float,
+    transport_meta: dict[str, Any],
+) -> list[dict]:
+    rows: list[dict] = []
+    for item in _funasr_segment_items(response):
+        text = _funasr_segment_text(item)
+        if not text:
+            continue
+        start_seconds, end_seconds = _funasr_segment_times(item)
+        if start_seconds is None or end_seconds is None or end_seconds <= start_seconds:
+            continue
+        confidence = item.get("confidence", item.get("avg_logprob"))
+        meta = {
+            "provider": config.name,
+            "protocol": config.protocol,
+            "source": "asr",
+            **_asr_row_transport_meta(transport_meta),
+        }
+        speaker = item.get("speaker")
         if speaker is not None:
             meta["speaker"] = speaker
         rows.append(
@@ -488,109 +582,49 @@ def _map_asr_response_rows(
     return rows
 
 
-def _first_list_by_paths(data: dict[str, Any], paths: list[str]) -> list[object]:
-    for path in paths:
-        values = _get_path_values(data, path)
-        if values:
-            return values
+def _funasr_segment_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("segments", "result", "utterances"):
+        value = response.get(key)
+        if isinstance(value, list):
+            out = [item for item in value if isinstance(item, dict)]
+            if out:
+                return out
     return []
 
 
-def _first_value_by_paths(data: dict[str, Any], paths: list[str]) -> Any:
-    for path in paths:
-        values = _get_path_values(data, path)
-        for value in values:
-            if value is not None:
-                return value
-    return None
-
-
-def _first_text_by_paths(data: dict[str, Any], paths: list[str]) -> str:
-    for path in paths:
-        values = _get_path_values(data, path)
-        chunks = [str(value).strip() for value in values if isinstance(value, (str, int, float)) and str(value).strip()]
-        if chunks:
-            return "\n".join(chunks)
+def _funasr_segment_text(item: dict[str, Any]) -> str:
+    for key in ("text", "sentence"):
+        value = item.get(key)
+        if isinstance(value, (str, int, float)):
+            text = str(value).strip()
+            if text:
+                return text
     return ""
 
 
-def _first_float_by_paths(data: dict[str, Any], paths: list[str]) -> float | None:
-    for path in paths:
-        values = _get_path_values(data, path)
-        for value in values:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                continue
-    return None
+def _funasr_segment_times(item: dict[str, Any]) -> tuple[float | None, float | None]:
+    start = _float_or_none(item.get("start"))
+    end = _float_or_none(item.get("end"))
+    if start is not None and end is not None:
+        return start, end
+    start = _float_or_none(item.get("start_time"))
+    end = _float_or_none(item.get("end_time"))
+    if start is not None and end is not None:
+        return start, end
+    timestamp = item.get("timestamp")
+    if isinstance(timestamp, list) and len(timestamp) >= 2:
+        start = _float_or_none(timestamp[0])
+        end = _float_or_none(timestamp[1])
+        if start is not None and end is not None:
+            return start / 1000.0, end / 1000.0
+    return None, None
 
 
-def _first_timed_value_by_paths(
-    data: dict[str, Any],
-    paths: list[str],
-    mapping: Any,
-) -> tuple[float, float] | None:
-    for path in paths:
-        values = _get_path_values(data, path)
-        for value in values:
-            try:
-                scale = _time_scale_for_path(path, mapping)
-                return float(value), scale
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
-def _time_scale_for_path(path: str, mapping: Any) -> float:
-    scales = getattr(mapping, "time_scales", {}) or {}
-    normalized = str(path or "")
-    if normalized in scales:
-        return float(scales[normalized])
-    base = normalized.split(".", 1)[-1]
-    if base in scales:
-        return float(scales[base])
-    return float(getattr(mapping, "time_scale", 1.0) or 1.0)
-
-
-def _get_path_values(data: object, path: str) -> list[object]:
-    def walk(nodes: list[object], token: str) -> list[object]:
-        out: list[object] = []
-        is_array = token.endswith("[]")
-        key_token = token[:-2] if is_array else token
-        idx = None
-        if "[" in key_token and key_token.endswith("]"):
-            key, raw_idx = key_token[:-1].split("[", 1)
-            key_token = key
-            try:
-                idx = int(raw_idx)
-            except ValueError:
-                return []
-        for node in nodes:
-            cur = node
-            if key_token:
-                if isinstance(cur, dict) and key_token in cur:
-                    cur = cur[key_token]
-                else:
-                    continue
-            if idx is not None:
-                if isinstance(cur, list) and 0 <= idx < len(cur):
-                    cur = cur[idx]
-                else:
-                    continue
-            if is_array:
-                if isinstance(cur, list):
-                    out.extend(cur)
-            else:
-                out.append(cur)
-        return out
-
-    tokens = [token for token in str(path or "").split(".") if token]
-    nodes: list[object] = [data]
-    for token in tokens:
-        nodes = walk(nodes, token)
-        if not nodes:
-            return []
-    return nodes
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _validate_extra_form_fields(fields: dict[str, Any]) -> None:

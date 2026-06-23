@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..app.models import Segment, SubtitleQualityConfig
+from .asr_quality import has_error_asr_risk, has_high_asr_risk
 from .subtitle_quality import clean_subtitle_text, subtitle_line_width, wrap_subtitle_text
 
 
@@ -191,6 +192,8 @@ def _report_payload(rows: list[SubtitleQualityRow], mode: str, config: SubtitleQ
 
 
 def _can_merge(left: Segment, right: Segment, config: SubtitleQualityConfig) -> bool:
+    if has_high_asr_risk(left) or has_high_asr_risk(right):
+        return False
     gap = float(right.start) - float(left.end)
     if gap < -0.001 or gap > 0.35:
         return False
@@ -296,7 +299,7 @@ def optimize_subtitles(segments: list[Segment], config: SubtitleQualityConfig) -
             text = _segment_text(seg)
             target_duration = min(config.max_duration_seconds, len(text) / max(config.target_cps, 1))
             target_end = start + max(config.min_duration_seconds, target_duration)
-            if end < target_end and (cap is None or target_end <= cap):
+            if not has_error_asr_risk(seg) and end < target_end and (cap is None or target_end <= cap):
                 end = target_end
                 actions.append("extend_target_cps")
         if cap is not None and end > cap:

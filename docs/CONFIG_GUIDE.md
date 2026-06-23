@@ -274,16 +274,18 @@ asr_providers:
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
 - `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。本地 ASR 还会传入 `beam_size`、`temperature`、`condition_on_previous_text` 和 `hotwords`；`vad_filter` 固定为 `false`，避免 faster-whisper 内部再丢弃无人声区间。
 - 当前本地 ASR 的默认档位是 `large-v3 + cuda + int8_float16`，并默认关闭 `condition_on_previous_text`。这套配置适合有 NVIDIA GPU 的机器；如果要迁回 CPU 或更低显存环境，手动把 `device` 和 `model_size` 降回去即可。
-- `mode: cloud` 使用独立 ASR provider，不复用翻译 provider routing；当前实现 `protocol: openai_transcriptions`。
-- 长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为云端 transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`。
+- ASR 使用独立 provider，不复用翻译 provider routing；不同 ASR 服务用各自的 `protocol` 接入，例如 `openai_transcriptions` 和 `funasr_openai`，不通过通用 response mapping 互相模拟。
+- `funasr_openai` 面向用户自行启动的 FunASR 本地 OpenAI-compatible 服务，默认 `chunking.mode: none`，优先把完整音频交给 FunASR 自己做 VAD、切句和时间戳；不要套用云端 OpenAI 上传限制下的 30 秒短切片。配置里的 3600 秒窗口只是避免 TransVortex 预先切碎常规长视频的上限哨兵，不代表官方保证任意 1 小时音频都稳定。
+- 长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为 OpenAI transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`；FunASR 官方 OpenAI-compatible server 当前没有 `prompt` 表单字段，`funasr_openai` 默认不会发送。
 - `asr.preprocessing.cloud_trim_silence` 只默认作用于 cloud ASR，使用 ffmpeg 分析真实静音并裁剪上传音频，返回时间轴会加回裁剪 offset；它不会识别背景音乐或环境声中的“无人声”。
 - `asr.execution.cloud_concurrency` 控制 cloud ASR 并发上传，默认 8；遇到 timeout、429 或 5xx 时调度层会降并发，单片失败后会尝试细分成更小片重跑，仍失败才失败任务。
 - ASR 行进入 `source/segments.normalized.jsonl` 前会过滤确定性垃圾，例如纯音乐符号、替换字符乱码、长时间重复 hallucination；raw response 和 `source/asr/quality/*.json` 会保留诊断信息。
-- `asr_providers[].request` 支持 `temperature`、`timestamp_granularities`、`include` 和 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。默认请求 `timestamp_granularities: [segment]`，让归一化层优先消费 `segments[]` 时间戳。
+- ASR 边界风险检测会在 source cleaning 之后运行，标记过长段、多句揉在一起、文本密度过高、重叠或缺失 segment 时间戳等问题；风险写入 `meta.asr_risk` 并汇总到 `quality/asr_boundary_quality.json`。该检测默认不阻断任务、不自动重听，只让后续字幕优化和 reflow 对高风险 ASR 段更保守。
+- `asr_providers[].request` 按协议生效。OpenAI transcription 支持 `prompt`、`temperature`、`timestamp_granularities`、`include` 和受限 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。FunASR 官方 OpenAI-compatible server 对齐 `file`、`model`、`language` 和 `response_format`，`funasr_openai` 不发送 `prompt`、`temperature`、`timestamp_granularities`、`include` 或扩展字段。
 - `asr_providers[].http2` 默认 `true`，表示云端 ASR 优先使用统一 `httpx` 传输层的 HTTP/2；客户端或服务端不可用时会按实际能力降级，并在 ASR meta 中记录实际协议。
-- `asr_providers[].retry` 控制云端 ASR 请求短重试次数，timeout、429 和 5xx 会重试；重试仍失败会保留失败，不会静默丢弃音频片段。
+- `asr_providers[].retry` 控制 HTTP ASR 请求短重试次数，timeout、429 和 5xx 会重试；重试仍失败会保留失败，不会静默丢弃音频片段。
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。
-- `asr.provider` 选择云 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。
+- `asr.provider` 选择 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。
 - ASR、SRT、内嵌字幕和外部 segments 都会归一化为 `source/segments.normalized.jsonl`，翻译层只读取统一 `Segment`。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
 - CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-beam-size`、`--asr-temperature`、`--asr-condition-on-previous-text`、`--asr-hotwords`、`--asr-prompt-profile`、`--asr-prompt-text`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds`、`--asr-max-upload-mb`、`--asr-audio-track`、`--asr-cloud-concurrency` 覆盖。
@@ -323,7 +325,7 @@ transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-
   - `PowerShell: $env:TVX_MODEL_API_KEY = "your_key"`
 
 - `response mapping did not extract text from sample`
-  - `response_mapping.text_paths` 与目标协议不匹配
+  - 这是翻译 provider 的协议检查错误，表示 `response_mapping.text_paths` 与目标协议不匹配；ASR provider 不使用这个翻译层 response mapping。
 
 - URL 多了重复 `/v1`
   - 现在已自动去重，若仍异常请检查 `base_url` 是否含非法路径

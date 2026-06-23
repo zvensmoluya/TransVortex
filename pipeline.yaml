@@ -20,7 +20,7 @@ subtitle:
     min_duration_seconds: 0.8
     max_duration_seconds: 6.0
     min_gap_seconds: 0.04
-    merge_short_segments: true
+    merge_short_segments: false
     adjust_timing: true
   compression:
     enabled: false
@@ -167,8 +167,7 @@ asr_providers:
         enabled: false
   - name: funasr_sensevoice_local
     kind: local_server
-    protocol: openai_transcriptions
-    profile: funasr_openai
+    protocol: funasr_openai
     base_url: http://127.0.0.1:8899
     endpoint: /v1/audio/transcriptions
     model: sensevoice
@@ -179,29 +178,20 @@ asr_providers:
       response_format: verbose_json
       send_temperature: false
       send_timestamp_granularities: false
+      send_prompt: false
       array_format: repeat
-    response_mapping:
-      segment_paths: ["segments[]", "result[]", "utterances[]"]
-      start_paths: [start, start_time, "timestamp[0]"]
-      end_paths: [end, end_time, "timestamp[1]"]
-      text_paths: [text, sentence]
-      confidence_paths: [confidence, avg_logprob]
-      fallback_text_paths: [text, result.text, result]
-      time_scales:
-        "timestamp[0]": 0.001
-        "timestamp[1]": 0.001
     execution:
       concurrency: 1
       timeout_seconds: 300
       retry: 1
     chunking:
-      mode: silence
-      window_seconds: 30
-      max_window_seconds: 30
-      min_window_seconds: 12
+      mode: none
+      window_seconds: 3600
+      max_window_seconds: 3600
+      min_window_seconds: 1
       overlap_seconds: 0
-      short_audio_seconds: 30
-      max_upload_mb: 256
+      short_audio_seconds: 3600
+      max_upload_mb: 2048
       silence:
         noise_db: -35
         min_silence_seconds: 0.25

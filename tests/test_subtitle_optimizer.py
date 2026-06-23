@@ -44,12 +44,67 @@ def test_optimizer_merges_short_adjacent_segments_when_safe() -> None:
             Segment(id=10, start=0.0, end=0.3, text_src="a", text_tgt="一"),
             Segment(id=20, start=0.32, end=1.2, text_src="b", text_tgt="二"),
         ],
-        SubtitleQualityConfig(target_cps=10, hard_max_cps=12, min_duration_seconds=0.8),
+        SubtitleQualityConfig(target_cps=10, hard_max_cps=12, min_duration_seconds=0.8, merge_short_segments=True),
     )
     assert len(result.segments) == 1
     assert result.segments[0].id == 10
     assert result.segments[0].meta["source_ids"] == [10, 20]
     assert "merge_next" in result.report["segments"][0]["actions"]
+
+
+def test_optimizer_default_does_not_merge_short_adjacent_segments() -> None:
+    result = optimize_subtitles(
+        [
+            Segment(id=10, start=0.0, end=0.3, text_src="a", text_tgt="一"),
+            Segment(id=20, start=0.32, end=1.2, text_src="b", text_tgt="二"),
+        ],
+        SubtitleQualityConfig(target_cps=10, hard_max_cps=12, min_duration_seconds=0.8),
+    )
+    assert [seg.id for seg in result.segments] == [10, 20]
+    assert "merge_next" not in result.report["summary"]["action_counts"]
+
+
+def test_optimizer_does_not_merge_high_risk_asr_segments_even_when_merge_enabled() -> None:
+    result = optimize_subtitles(
+        [
+            Segment(
+                id=10,
+                start=0.0,
+                end=0.3,
+                text_src="a",
+                text_tgt="一",
+                meta={"source": "asr", "asr_risk": {"level": "warn", "codes": ["long_duration"]}},
+            ),
+            Segment(id=20, start=0.32, end=1.2, text_src="b", text_tgt="二", meta={"source": "asr"}),
+        ],
+        SubtitleQualityConfig(
+            target_cps=10,
+            hard_max_cps=12,
+            min_duration_seconds=0.8,
+            merge_short_segments=True,
+        ),
+    )
+    assert [seg.id for seg in result.segments] == [10, 20]
+    assert "merge_next" not in result.report["summary"]["action_counts"]
+
+
+def test_optimizer_does_not_extend_target_cps_for_error_asr_risk() -> None:
+    result = optimize_subtitles(
+        [
+            Segment(
+                id=1,
+                start=0.0,
+                end=0.8,
+                text_src="hello",
+                text_tgt="这是一条非常长的字幕",
+                meta={"source": "asr", "asr_risk": {"level": "error", "codes": ["missing_segment_timestamps"]}},
+            ),
+            Segment(id=2, start=5.0, end=6.0, text_src="next", text_tgt="下一条"),
+        ],
+        SubtitleQualityConfig(target_cps=5, hard_max_cps=50, min_duration_seconds=0.8),
+    )
+    assert result.segments[0].end == 0.8
+    assert "extend_target_cps" not in result.report["segments"][0]["actions"]
 
 
 def test_optimizer_reports_unfixed_high_cps() -> None:

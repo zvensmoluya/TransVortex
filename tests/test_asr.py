@@ -8,6 +8,7 @@ from transvortex.app.models import AsrExecutionConfig, AsrLocalConfig, AsrProvid
 from transvortex.core.asr import (
     AsrEngine,
     OpenAITranscriptionsAsrClient,
+    build_asr_client,
     _build_cloud_asr_url,
     _normalize_whisper_language,
     _prepare_local_cuda_runtime,
@@ -339,7 +340,6 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
             "meta": {
                 "provider": "openai",
                 "protocol": "openai_transcriptions",
-                "profile": "openai",
                 "source": "asr",
                 "transport": "httpx",
                 "http_version": "HTTP/2",
@@ -362,7 +362,7 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
     assert fallback.rows[0]["end"] == 5.1
 
 
-def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, monkeypatch) -> None:
+def test_funasr_openai_protocol_uses_local_server_fields_and_adapter_parser(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     captured = {}
@@ -387,9 +387,10 @@ def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, 
     provider = AsrProviderConfig(
         name="funasr_sensevoice_local",
         kind="local_server",
-        profile="funasr_openai",
+        protocol="funasr_openai",
         base_url="http://127.0.0.1:8899",
         model="sensevoice",
+        auth=SimpleNamespace(type="none", env_key="", credential_id=""),
         http2=False,
         request=SimpleNamespace(
             response_format="verbose_json",
@@ -402,20 +403,13 @@ def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, 
             send_temperature=False,
             send_timestamp_granularities=False,
             send_language=True,
+            send_prompt=False,
             language_field="language",
             prompt_field="prompt",
         ),
     )
-    provider.response_mapping.segment_paths = ["result[]"]
-    provider.response_mapping.start_paths = ["timestamp[0]"]
-    provider.response_mapping.end_paths = ["timestamp[1]"]
-    provider.response_mapping.text_paths = ["sentence"]
-    provider.response_mapping.confidence_paths = ["confidence"]
-    provider.response_mapping.speaker_paths = ["speaker"]
-    provider.response_mapping.time_scale = 1.0
-    provider.response_mapping.time_scales = {"timestamp[0]": 0.001, "timestamp[1]": 0.001}
 
-    result = OpenAITranscriptionsAsrClient(provider).transcribe_segment(
+    result = build_asr_client(provider).transcribe_segment(
         audio,
         10.0,
         source_lang="ja-JP",
@@ -428,8 +422,9 @@ def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, 
     assert data["model"] == "sensevoice"
     assert data["response_format"] == "verbose_json"
     assert data["language"] == "ja"
-    assert data["prompt"] == "Names: Subaru"
+    assert "prompt" not in data
     assert "temperature" not in data
+    assert "include" not in data
     assert "timestamp_granularities" not in data
     assert "timestamp_granularities[]" not in data
     assert result.rows == [
@@ -440,8 +435,7 @@ def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, 
             "confidence": 0.92,
             "meta": {
                 "provider": "funasr_sensevoice_local",
-                "protocol": "openai_transcriptions",
-                "profile": "funasr_openai",
+                "protocol": "funasr_openai",
                 "source": "asr",
                 "transport": "httpx",
                 "http2_requested": False,
@@ -449,6 +443,42 @@ def test_funasr_profile_uses_local_server_fields_and_response_mapping(tmp_path, 
             },
         }
     ]
+
+
+def test_funasr_openai_rejects_unsupported_request_fields(tmp_path) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    provider = AsrProviderConfig(
+        name="funasr_sensevoice_local",
+        kind="local_server",
+        protocol="funasr_openai",
+        base_url="http://127.0.0.1:8899",
+        model="sensevoice",
+        auth=SimpleNamespace(type="none", env_key="", credential_id=""),
+        http2=False,
+        request=SimpleNamespace(
+            response_format="verbose_json",
+            temperature=0,
+            timestamp_granularities=[],
+            include=["logprobs"],
+            extra_form_fields={},
+            array_format="repeat",
+            send_response_format=True,
+            send_temperature=False,
+            send_timestamp_granularities=False,
+            send_language=True,
+            send_prompt=False,
+            language_field="language",
+            prompt_field="prompt",
+        ),
+    )
+
+    try:
+        build_asr_client(provider).transcribe_segment(audio, 0.0)
+    except RuntimeError as exc:
+        assert str(exc) == "unsupported_funasr_request_field: include"
+    else:
+        raise AssertionError("expected FunASR request validation error")
 
 
 def test_cloud_asr_transcribe_propagates_transport_error(tmp_path, monkeypatch) -> None:

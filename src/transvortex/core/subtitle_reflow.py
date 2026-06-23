@@ -15,6 +15,7 @@ from ..memory.plan import effective_memory_sources, translates_with_memory
 from ..providers import build_provider_client, classify_error
 from .subtitle_optimizer import optimize_subtitles
 from .subtitle_quality import clean_subtitle_text
+from .asr_quality import has_high_asr_risk
 
 
 REFLOW_STYLE_PROMPT = (
@@ -465,6 +466,11 @@ def _apply_replacements(
         if len(source_ids) > 1 and not allow_merge:
             artifacts.append({"status": "rejected", "source_ids": source_ids, "reason": "merge is disabled"})
             continue
+        source_segments = [by_id[seg_id] for seg_id in source_ids]
+        source_segments.sort(key=lambda seg: (seg.start, seg.end, seg.id))
+        if len(source_ids) > 1 and any(has_high_asr_risk(seg) for seg in source_segments):
+            artifacts.append({"status": "rejected", "source_ids": source_ids, "reason": "merge contains high-risk ASR segment"})
+            continue
         text = clean_subtitle_text(replacement_payload.get("text_tgt"))
         if not text and not allow_drop:
             artifacts.append({"status": "rejected", "source_ids": source_ids, "reason": "empty replacement text"})
@@ -482,8 +488,6 @@ def _apply_replacements(
                 }
             )
             continue
-        source_segments = [by_id[seg_id] for seg_id in source_ids]
-        source_segments.sort(key=lambda seg: (seg.start, seg.end, seg.id))
         merged_src = "\n".join(clean_subtitle_text(seg.text_src) for seg in source_segments if clean_subtitle_text(seg.text_src))
         start = min(seg.start for seg in source_segments)
         end = max(seg.end for seg in source_segments)

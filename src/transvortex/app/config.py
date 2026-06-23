@@ -19,7 +19,6 @@ from .models import (
     AsrPromptProfile,
     AsrProviderConfig,
     AsrProviderRequestConfig,
-    AsrProviderResponseMappingConfig,
     AsrSilenceChunkingConfig,
     AsrTrimSilenceConfig,
     AsrUncertaintyHintsConfig,
@@ -487,8 +486,7 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
 
 
 ASR_PROVIDER_KINDS = {"local_inprocess", "local_server", "remote"}
-ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions"}
-ASR_PROVIDER_PROFILES = {"openai", "funasr_openai"}
+ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions", "funasr_openai"}
 ASR_AUTH_TYPES = {"none", "bearer"}
 LEGACY_ASR_FIELDS = {
     "mode",
@@ -510,7 +508,18 @@ def _reject_legacy_asr_fields(asr_raw: dict[str, Any]) -> None:
         )
 
 
-def _default_asr_chunking(kind: str) -> AsrChunkingConfig:
+def _default_asr_chunking(kind: str, protocol: str = "") -> AsrChunkingConfig:
+    if protocol == "funasr_openai":
+        return AsrChunkingConfig(
+            mode="none",
+            window_seconds=3600,
+            max_window_seconds=3600,
+            min_window_seconds=1,
+            overlap_seconds=0,
+            short_audio_seconds=3600,
+            max_upload_mb=2048.0,
+            fuzzy_dedupe=False,
+        )
     if kind == "local_server":
         return AsrChunkingConfig(
             mode="silence",
@@ -648,8 +657,8 @@ def _parse_asr_preprocessing(raw: Any, *, default: AsrPreprocessingConfig) -> As
     )
 
 
-def _default_asr_request_for_profile(profile: str) -> AsrProviderRequestConfig:
-    if profile == "funasr_openai":
+def _default_asr_request_for_protocol(protocol: str) -> AsrProviderRequestConfig:
+    if protocol == "funasr_openai":
         return AsrProviderRequestConfig(
             timestamp_granularities=[],
             array_format="repeat",
@@ -657,50 +666,9 @@ def _default_asr_request_for_profile(profile: str) -> AsrProviderRequestConfig:
             send_temperature=False,
             send_timestamp_granularities=False,
             send_language=True,
+            send_prompt=False,
         )
     return AsrProviderRequestConfig()
-
-
-def _default_asr_response_mapping_for_profile(profile: str) -> AsrProviderResponseMappingConfig:
-    if profile == "funasr_openai":
-        return AsrProviderResponseMappingConfig(
-            segment_paths=["segments[]", "result[]", "utterances[]"],
-            start_paths=["start", "start_time", "timestamp[0]"],
-            end_paths=["end", "end_time", "timestamp[1]"],
-            text_paths=["text", "sentence"],
-            confidence_paths=["confidence", "avg_logprob"],
-            speaker_paths=["speaker"],
-            fallback_text_paths=["text", "result.text", "result"],
-            time_scales={
-                "timestamp[0]": 0.001,
-                "timestamp[1]": 0.001,
-            },
-        )
-    return AsrProviderResponseMappingConfig()
-
-
-def _parse_asr_response_mapping(raw: Any, *, default: AsrProviderResponseMappingConfig) -> AsrProviderResponseMappingConfig:
-    mapping_raw = raw if isinstance(raw, dict) else {}
-    return AsrProviderResponseMappingConfig(
-        segment_paths=_to_str_list(mapping_raw.get("segment_paths", mapping_raw.get("segment_path")), default.segment_paths),
-        start_paths=_to_str_list(mapping_raw.get("start_paths", mapping_raw.get("start_path")), default.start_paths),
-        end_paths=_to_str_list(mapping_raw.get("end_paths", mapping_raw.get("end_path")), default.end_paths),
-        text_paths=_to_str_list(mapping_raw.get("text_paths", mapping_raw.get("text_path")), default.text_paths),
-        confidence_paths=_to_str_list(
-            mapping_raw.get("confidence_paths", mapping_raw.get("confidence_path")),
-            default.confidence_paths,
-        ),
-        speaker_paths=_to_str_list(mapping_raw.get("speaker_paths", mapping_raw.get("speaker_path")), default.speaker_paths),
-        fallback_text_paths=_to_str_list(
-            mapping_raw.get("fallback_text_paths", mapping_raw.get("fallback_text_path")),
-            default.fallback_text_paths,
-        ),
-        time_scale=_to_float(mapping_raw.get("time_scale"), default.time_scale),
-        time_scales={
-            str(key): _to_float(value, default.time_scales.get(str(key), default.time_scale))
-            for key, value in dict(mapping_raw.get("time_scales") or default.time_scales).items()
-        },
-    )
 
 
 def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
@@ -718,23 +686,20 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         raise ValueError(f"Unsupported ASR protocol: {protocol}")
     if kind == "local_inprocess" and protocol != "faster_whisper":
         raise ValueError("ASR provider kind local_inprocess requires protocol faster_whisper")
-    if kind in {"local_server", "remote"} and protocol != "openai_transcriptions":
-        raise ValueError(f"ASR provider kind {kind} requires protocol openai_transcriptions")
-    profile = _to_str(row.get("profile"), "openai").strip().lower()
-    if profile not in ASR_PROVIDER_PROFILES:
-        raise ValueError(f"Unsupported ASR provider profile: {profile}")
+    if kind in {"local_server", "remote"} and protocol not in {"openai_transcriptions", "funasr_openai"}:
+        raise ValueError(f"ASR provider kind {kind} requires protocol openai_transcriptions or funasr_openai")
+    if protocol == "funasr_openai" and kind != "local_server":
+        raise ValueError("ASR protocol funasr_openai requires kind local_server")
     model = _to_str(row.get("model"), "large-v3" if protocol == "faster_whisper" else "whisper-1")
     request_raw = row.get("request") if isinstance(row.get("request"), dict) else {}
     default_execution = _default_asr_execution(kind)
-    default_chunking = _default_asr_chunking(kind)
+    default_chunking = _default_asr_chunking(kind, protocol)
     default_preprocessing = _default_asr_preprocessing(kind)
-    default_request = _default_asr_request_for_profile(profile)
-    default_response_mapping = _default_asr_response_mapping_for_profile(profile)
+    default_request = _default_asr_request_for_protocol(protocol)
     return AsrProviderConfig(
         name=name,
         kind=kind,
         protocol=protocol,
-        profile=profile,
         base_url=_to_str(row.get("base_url"), "https://api.openai.com").rstrip("/"),
         endpoint=_to_str(row.get("endpoint"), "/v1/audio/transcriptions"),
         model=model,
@@ -766,10 +731,10 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
                 default_request.send_timestamp_granularities,
             ),
             send_language=_to_bool(request_raw.get("send_language"), default_request.send_language),
+            send_prompt=_to_bool(request_raw.get("send_prompt"), default_request.send_prompt),
             language_field=_to_str(request_raw.get("language_field"), default_request.language_field),
             prompt_field=_to_str(request_raw.get("prompt_field"), default_request.prompt_field),
         ),
-        response_mapping=_parse_asr_response_mapping(row.get("response_mapping"), default=default_response_mapping),
     )
 
 
@@ -913,7 +878,7 @@ def load_app_config(
         min_duration_seconds=_to_float(quality_raw.get("min_duration_seconds"), 0.8),
         max_duration_seconds=_to_float(quality_raw.get("max_duration_seconds"), 6.0),
         min_gap_seconds=_to_float(quality_raw.get("min_gap_seconds"), 0.04),
-        merge_short_segments=_to_bool(quality_raw.get("merge_short_segments"), True),
+        merge_short_segments=_to_bool(quality_raw.get("merge_short_segments"), False),
         adjust_timing=_to_bool(quality_raw.get("adjust_timing"), True),
     )
     compression_raw = subtitle_raw.get("compression") or {}

@@ -129,6 +129,7 @@ def agent_info_payload() -> dict:
             "quality/compression.jsonl",
             "quality/reflow.jsonl",
             "quality/source_cleaning.json",
+            "quality/asr_boundary_quality.json",
             "quality/subtitle_quality.json",
             "quality/subtitle_delivery.json",
             "final/segments.aligned.json",

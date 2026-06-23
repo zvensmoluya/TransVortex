@@ -13,7 +13,8 @@ OpenAI /v1/audio/transcriptions adapter
 也就是：
 
 - 将 FFmpeg 切出的音频片段上传到 `/v1/audio/transcriptions`。
-- 传入 `model`、`response_format=verbose_json`、`temperature`、`timestamp_granularities[]` 等 OpenAI transcription 字段。
+- 对 OpenAI transcription provider，传入 `model`、`response_format=verbose_json`、`temperature`、`timestamp_granularities[]` 等 OpenAI 字段。
+- 对 FunASR 本地 OpenAI-compatible 服务，只传官方示例需要的本地服务字段，例如 `file`、`model`、`language` 和 `response_format=verbose_json`，不发送云端专用的 `temperature` 或 `timestamp_granularities[]`。
 - 优先解析响应里的 `segments[]`。
 - 若服务只返回整段 `text`，当前只能退化成一条弱时间轴结果，不适合高质量字幕。
 
@@ -200,9 +201,11 @@ platform policy:
 - 对 timeout、429 和 5xx 增加短重试；重试仍失败时保留失败状态，不静默丢弃音频片段。
 - 在 cloud ASR 前增加 ffmpeg 静音预处理：裁剪真实静音、记录 preprocess artifact、把时间轴 offset 回填到 source segments。
 
-### 阶段 2：ASR response mapping 与更强 VAD
+### 阶段 2：ASR 专用 adapter 与更强 VAD
 
-为 ASR 单独引入 response mapping：
+ASR 不再沿用翻译 provider 的通用 response mapping。不同厂商的音频上传、语言参数、热词、VAD、时间戳粒度、说话人字段和错误语义差异很大，应由独立 adapter 明确处理。
+
+当前协议方向：
 
 ```yaml
 asr_providers:
@@ -210,26 +213,29 @@ asr_providers:
     protocol: openai_transcriptions
     endpoint: /v1/audio/transcriptions
     models: [whisper-1]
-    response_mapping:
-      segment_path: segments[]
-      start_path: start
-      end_path: end
-      text_path: text
+
+  - name: funasr_sensevoice_local
+    kind: local_server
+    protocol: funasr_openai
+    endpoint: /v1/audio/transcriptions
+    models: [sensevoice]
 ```
 
-目标是支持：
+各 adapter 应明确声明和测试：
 
-- `segments[]`
-- `utterances[]`
-- `words[]`
-- `speaker`
+- 支持的请求字段要按协议声明。OpenAI transcription 可发送 `prompt`、`temperature`、`timestamp_granularities[]` 和 `include[]`；FunASR 官方 OpenAI-compatible server 当前只对齐 `file`、`model`、`language` 和 `response_format`。
+- 支持的返回结构，例如 `segments[]`、`utterances[]`、`words[]`、`speaker`。
+- 时间单位和粒度，例如秒、毫秒、整句、词级。
+- 缺失时间戳时的降级策略，不能静默生成看似成功但时间轴错误的字幕。
+- ASR 边界风险应进入 `meta.asr_risk` 和 `quality/asr_boundary_quality.json`，用于后处理保守化和未来局部重听入口；第一阶段不应作为任务失败门禁。
 - `confidence`
 - word-level alignment 与真正的人声 VAD，可用于处理“开头有音乐但无人声”的场景；第一阶段的 ffmpeg silence trim 只处理真实静音。
 
-### 阶段 3：云端 ASR 并发
+### 阶段 3：远端 ASR 并发
 
-- 对 FFmpeg 切出的音频片段并发提交 ASR。
+- 对需要外部分片的远端 ASR provider，并发提交 FFmpeg 切出的音频片段。
 - 按 provider 限流配置控制并发。
+- 本地服务型 provider 例如 `funasr_openai` 不默认短切片并发，优先让服务端自己的 VAD、切句和时间戳逻辑处理完整音频。配置中的 3600 秒窗口是避免调度层预先切碎常规长视频的上限哨兵，不是 FunASR 官方稳定性承诺；只有实测发现服务端长音频不稳时，才按该 adapter 的配置启用长窗口切分。
 - 每个片段完成即落盘，复用 checkpoint/resume。
 - 对异步 provider 支持 submit/query 状态。
 

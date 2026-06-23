@@ -887,6 +887,12 @@ chunking:
                             "text": "耳かき音、耳かき音、耳かき音、耳かき音",
                             "meta": {"source": "asr"},
                         },
+                        {
+                            "start": segment_start_offset + 3,
+                            "end": segment_start_offset + 11,
+                            "text": "第一句。第二句！第三句？",
+                            "meta": {"source": "asr"},
+                        },
                     ],
                     "raw_response": {"segments": []},
                 },
@@ -908,19 +914,24 @@ chunking:
 
     task_dir = TaskStore(root / "artifacts").task_dir(task_id)
     rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
-    assert [row["text"] for row in rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音"]
+    assert [row["text"] for row in rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音", "第一句。第二句！第三句？"]
     quality = json.loads((task_dir / "source" / "asr" / "quality" / "segment_00000.json").read_text(encoding="utf-8"))
     assert quality["dropped_rows"] == 1
     source_raw_rows = [
         json.loads(line)
         for line in (task_dir / "source" / "segments.raw.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert [row["text_src"] for row in source_raw_rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音"]
+    assert [row["text_src"] for row in source_raw_rows] == ["やったわ", "耳かき音、耳かき音、耳かき音、耳かき音", "第一句。第二句！第三句？"]
     source_rows = [
         json.loads(line)
         for line in (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert [row["text_src"] for row in source_rows] == ["やったわ"]
+    assert [row["text_src"] for row in source_rows] == ["やったわ", "第一句。第二句！第三句？"]
+    assert source_rows[1]["meta"]["asr_risk"]["level"] == "warn"
+    assert source_rows[1]["meta"]["asr_risk"]["codes"] == ["long_duration", "multiple_sentence_endings"]
+    boundary_quality = json.loads((task_dir / "quality" / "asr_boundary_quality.json").read_text(encoding="utf-8"))
+    assert boundary_quality["risk_segments"] == 1
+    assert boundary_quality["code_counts"] == {"long_duration": 1, "multiple_sentence_endings": 1}
     source_cleaning = json.loads((task_dir / "quality" / "source_cleaning.json").read_text(encoding="utf-8"))
     assert source_cleaning["dropped_segments"] == 1
     assert source_cleaning["dropped"][0]["reasons"] == ["repeated_sound_effect", "sound_effect"]

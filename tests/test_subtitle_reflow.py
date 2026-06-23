@@ -156,6 +156,37 @@ def test_reflow_merges_quality_failure_window(monkeypatch, tmp_path) -> None:
     assert out[0].meta["source_ids"] == [1, 2]
 
 
+def test_reflow_rejects_merge_containing_high_risk_asr_segment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("transvortex.core.subtitle_reflow.build_provider_client", lambda provider: FakeReflowClient(provider))
+    config = _config(tmp_path)
+    segments = [
+        Segment(
+            id=1,
+            start=0.0,
+            end=0.1,
+            text_src="a",
+            text_tgt="这是一条很长的字幕",
+            meta={"source": "asr", "asr_risk": {"level": "warn", "codes": ["long_duration"]}},
+        ),
+        Segment(id=2, start=0.5, end=1.6, text_src="b", text_tgt="下一句", meta={"source": "asr"}),
+        Segment(id=3, start=2.0, end=3.0, text_src="c", text_tgt="正常", meta={"source": "asr"}),
+    ]
+    quality_report = optimize_subtitles(segments, config.pipeline.subtitle.quality).report
+
+    out, artifacts = reflow_subtitles(
+        config=config,
+        segments=segments,
+        quality_report=quality_report,
+        source_lang="ja",
+        target_lang="zh-CN",
+    )
+
+    assert [seg.id for seg in out] == [1, 2, 3]
+    assert artifacts[0]["status"] == "failed"
+    assert artifacts[0]["attempts"][0]["status"] == "rejected"
+    assert artifacts[0]["attempts"][0]["results"][0]["reason"] == "merge contains high-risk ASR segment"
+
+
 def test_reflow_rejects_replacement_that_still_fails_quality(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("transvortex.core.subtitle_reflow.build_provider_client", lambda provider: BadReflowClient(provider))
     config = _config(tmp_path)
