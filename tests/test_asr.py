@@ -379,6 +379,14 @@ def test_funasr_openai_protocol_uses_local_server_fields_and_adapter_parser(tmp_
                     "sentence": "こんにちは",
                     "confidence": 0.92,
                     "speaker": "S1",
+                    "meta": {
+                        "provider_model": "sensevoice",
+                        "has_real_timestamp": True,
+                        "language_tag": "ja",
+                        "emotion_tag": "EMO_UNKNOWN",
+                        "event_tag": "Speech",
+                        "other_tags": ["withitn"],
+                    },
                 }
             ]
         }, transport_meta
@@ -439,6 +447,12 @@ def test_funasr_openai_protocol_uses_local_server_fields_and_adapter_parser(tmp_
                 "source": "asr",
                 "transport": "httpx",
                 "http2_requested": False,
+                "sensevoice_provider_model": "sensevoice",
+                "sensevoice_has_real_timestamp": True,
+                "sensevoice_language_tag": "ja",
+                "sensevoice_emotion_tag": "EMO_UNKNOWN",
+                "sensevoice_event_tag": "Speech",
+                "sensevoice_other_tags": ["withitn"],
                 "speaker": "S1",
             },
         }

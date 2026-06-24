@@ -380,13 +380,13 @@ routing:
     provider = cfg.asr_providers["funasr_sensevoice_local"]
 
     assert provider.protocol == "funasr_openai"
-    assert provider.chunking.mode == "none"
-    assert provider.chunking.window_seconds == 3600
-    assert provider.chunking.max_window_seconds == 3600
+    assert provider.chunking.mode == "fixed"
+    assert provider.chunking.window_seconds == 120
+    assert provider.chunking.max_window_seconds == 120
     assert provider.chunking.min_window_seconds == 1
     assert provider.chunking.overlap_seconds == 0
-    assert provider.chunking.short_audio_seconds == 3600
-    assert provider.chunking.max_upload_mb == 2048
+    assert provider.chunking.short_audio_seconds == 120
+    assert provider.chunking.max_upload_mb == 64
     assert provider.chunking.fuzzy_dedupe is False
 
 

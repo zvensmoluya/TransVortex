@@ -185,13 +185,13 @@ asr_providers:
       timeout_seconds: 300
       retry: 1
     chunking:
-      mode: none
-      window_seconds: 3600
-      max_window_seconds: 3600
+      mode: fixed
+      window_seconds: 120
+      max_window_seconds: 120
       min_window_seconds: 1
       overlap_seconds: 0
-      short_audio_seconds: 3600
-      max_upload_mb: 2048
+      short_audio_seconds: 120
+      max_upload_mb: 64
       silence:
         noise_db: -35
         min_silence_seconds: 0.25

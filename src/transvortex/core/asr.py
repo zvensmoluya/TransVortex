@@ -567,6 +567,18 @@ def _map_funasr_openai_rows(
             "source": "asr",
             **_asr_row_transport_meta(transport_meta),
         }
+        item_meta = item.get("meta")
+        if isinstance(item_meta, dict):
+            for source_key, target_key in (
+                ("provider_model", "sensevoice_provider_model"),
+                ("has_real_timestamp", "sensevoice_has_real_timestamp"),
+                ("language_tag", "sensevoice_language_tag"),
+                ("emotion_tag", "sensevoice_emotion_tag"),
+                ("event_tag", "sensevoice_event_tag"),
+                ("other_tags", "sensevoice_other_tags"),
+            ):
+                if source_key in item_meta:
+                    meta[target_key] = item_meta[source_key]
         speaker = item.get("speaker")
         if speaker is not None:
             meta["speaker"] = speaker
