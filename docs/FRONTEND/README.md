@@ -17,6 +17,9 @@
 - `current/FRONTEND_MAIN_SCREEN_STYLE_FRAME.md`
   - 定义第一轮首屏风格稿：构图、核心视觉对象、状态、色彩、素材清单。
   - 先用于静态原型和视觉验证，不代表最终实现规格。
+- `current/FRONTEND_IMAGE_ASSET_GENERATION.md`
+  - 记录首屏无背景 PNG 资源生成和验证流程。
+  - 后续图片资产必须先验证 alpha 通道，再进入原型 assets。
 - `current/FRONTEND_MAIN_SCREEN_WIREFRAME.md`
   - 定义第一轮首屏白描框架：对象位置、状态切换、主操作和配置展开。
   - 先验证结构，再进入风格稿和素材生产。

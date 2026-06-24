@@ -3,6 +3,9 @@
 }
 
 html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   background: var(--color-canvas);
   color: var(--color-text);
   font-family: var(--font-sans);
@@ -11,9 +14,10 @@ html {
 }
 
 body {
-  min-width: 1120px;
-  min-height: 100vh;
+  width: 100%;
+  height: 100%;
   margin: 0;
+  overflow: hidden;
   background:
     linear-gradient(180deg, rgba(198, 139, 67, 0.032), transparent 190px),
     var(--color-canvas);
@@ -50,7 +54,9 @@ textarea:focus-visible {
 }
 
 #root {
-  min-height: 100vh;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 ::-webkit-scrollbar {

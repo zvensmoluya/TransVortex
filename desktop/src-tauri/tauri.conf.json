@@ -5,7 +5,7 @@
   "identifier": "local.transvortex.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1420/",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -13,10 +13,16 @@
     "windows": [
       {
         "title": "TransVortex",
-        "width": 1280,
-        "height": 820,
-        "minWidth": 980,
-        "minHeight": 680
+        "width": 820,
+        "height": 560,
+        "minWidth": 820,
+        "minHeight": 560,
+        "maxWidth": 820,
+        "maxHeight": 560,
+        "resizable": false,
+        "maximizable": false,
+        "fullscreen": false,
+        "decorations": false
       }
     ],
     "security": {

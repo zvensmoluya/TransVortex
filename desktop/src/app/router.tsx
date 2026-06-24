@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 export type AppRouteId =
+  | "client-home"
   | "new-task"
   | "tasks"
   | "task-detail"
@@ -25,6 +26,7 @@ export type NavigationTarget = {
 };
 
 export const staticNavigationTargets: NavigationTarget[] = [
+  { id: "client-home", label: "首页", path: "/home" },
   { id: "new-task", label: "新建任务", path: "/new-task" },
   { id: "tasks", label: "任务历史", path: "/tasks" },
   { id: "terms", label: "术语表", path: "/terms" },
@@ -42,7 +44,7 @@ export function getTaskReviewPath(taskId: string): string {
 }
 
 export function matchRoute(pathname: string): RouteMatch {
-  const path = pathname === "/" ? "/new-task" : pathname;
+  const path = pathname === "/" ? "/home" : pathname;
   const taskReviewMatch = path.match(/^\/tasks\/([^/]+)\/review$/);
   if (taskReviewMatch) {
     return {
@@ -71,8 +73,8 @@ export function matchRoute(pathname: string): RouteMatch {
   }
 
   return {
-    id: "new-task",
-    path: "/new-task",
+    id: "client-home",
+    path: "/home",
     params: {},
   };
 }
