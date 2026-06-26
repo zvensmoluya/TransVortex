@@ -576,6 +576,7 @@ def _map_funasr_openai_rows(
                 ("emotion_tag", "sensevoice_emotion_tag"),
                 ("event_tag", "sensevoice_event_tag"),
                 ("other_tags", "sensevoice_other_tags"),
+                ("words", "sensevoice_words"),
             ):
                 if source_key in item_meta:
                     meta[target_key] = item_meta[source_key]
