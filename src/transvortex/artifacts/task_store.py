@@ -133,7 +133,9 @@ class TaskStore:
         return read_jsonl(self.events_file(task_id))
 
     def request_cancel(self, task_id: str) -> TaskRecord:
-        self.load_task(task_id)
+        task = self.load_task(task_id)
+        if task.status in {"CANCEL_REQUESTED", "DONE", "FAILED", "CANCELLED"}:
+            return task
         self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
         self.cancel_file(task_id).write_text(utc_now_iso(), encoding="utf-8")
         task = self.update_task_status(task_id, "CANCEL_REQUESTED")
