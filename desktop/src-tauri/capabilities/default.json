@@ -2,12 +2,16 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop permissions",
-  "windows": ["main"],
+  "windows": ["main", "translation-config", "recognition-config"],
   "permissions": [
     "core:default",
+    "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "dialog:default",
     "opener:default",
     "opener:allow-open-path"

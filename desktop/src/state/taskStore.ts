@@ -14,6 +14,7 @@ export type TaskStoreState = {
   activeTaskId?: string;
   loading: boolean;
   starting: boolean;
+  cancelingTaskId?: string;
   error?: UserFacingError;
   setDraft: (draft: TaskDraft) => void;
   updateDraft: (updater: (draft: TaskDraft) => TaskDraft) => void;
@@ -31,6 +32,7 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
   const [activeTaskId, setActiveTaskId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [cancelingTaskId, setCancelingTaskId] = useState<string>();
   const [error, setError] = useState<UserFacingError>();
 
   const refreshTasks = useCallback(async (): Promise<Task[]> => {
@@ -72,6 +74,7 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
 
   const updateInputPath = useCallback((path: string) => {
     setDraft((current) => current ? updateDraftInput(current, path) : current);
+    setActiveTaskId(undefined);
   }, []);
 
   const updateDraft = useCallback((updater: (draft: TaskDraft) => TaskDraft) => {
@@ -95,6 +98,7 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
     }
 
     const knownTaskIds = new Set(tasks.map((task) => task.id));
+    setActiveTaskId(undefined);
     setStarting(true);
     try {
       const response = await startTask(draft);
@@ -130,15 +134,17 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
   }, [refreshTasks]);
 
   const cancelStoredTask = useCallback(async (taskId: string) => {
-    setStarting(true);
+    setCancelingTaskId(taskId);
+    setTasks((current) => current.map((task) => task.id === taskId ? markTaskCancelRequested(task) : task));
     try {
-      await cancelTask(taskId);
+      const cancelledTask = await cancelTask(taskId);
+      setTasks((current) => upsertTask(current, cancelledTask));
       setError(undefined);
       await refreshTasks();
     } catch (err) {
       setError(technicalErrorToUserFacingError(err, "worker"));
     } finally {
-      setStarting(false);
+      setCancelingTaskId((current) => current === taskId ? undefined : current);
     }
   }, [refreshTasks]);
 
@@ -154,6 +160,7 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
     activeTaskId,
     loading,
     starting,
+    cancelingTaskId,
     error,
     setDraft,
     updateDraft,
@@ -178,4 +185,21 @@ async function waitForNewTaskId(knownTaskIds: Set<string>): Promise<string | und
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function markTaskCancelRequested(task: Task): Task {
+  if (task.status === "completed" || task.status === "cancelled" || task.status === "failedFatal") {
+    return task;
+  }
+  return {
+    ...task,
+    status: "cancelRequested",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function upsertTask(tasks: Task[], task: Task): Task[] {
+  const index = tasks.findIndex((item) => item.id === task.id);
+  if (index < 0) return [task, ...tasks];
+  return tasks.map((item, itemIndex) => itemIndex === index ? task : item);
 }

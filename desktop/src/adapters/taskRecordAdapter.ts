@@ -21,7 +21,7 @@ export function taskRecordToTask(record: unknown, index = 0): Task {
   const inputPath = stringValue(raw.input_file) || stringValue(raw.input);
   const inputName = stringValue(raw.input_name) || fileNameFromPath(inputPath);
   const title = stringValue(raw.title) || inputName || `字幕任务 ${index + 1}`;
-  const status = mapTaskStatus(stringValue(raw.status));
+  const status = mapTaskStatus(stringValue(raw.status), stringValue(raw.checkpoint_status));
   const outputPaths = raw.output_paths && typeof raw.output_paths === "object" ? (raw.output_paths as Record<string, unknown>) : {};
   const outputs = outputFilesFromRecord(outputPaths, stringValue(raw.output_path), stringValue(raw.updated_at));
   const errorInfo = raw.error_info && typeof raw.error_info === "object" ? raw.error_info : undefined;
@@ -57,8 +57,16 @@ export function taskRecordToTask(record: unknown, index = 0): Task {
   };
 }
 
-function mapTaskStatus(status?: string): TaskStatus {
+function mapTaskStatus(status?: string, checkpointStatus?: string): TaskStatus {
   const normalized = status?.trim().toUpperCase();
+  const normalizedCheckpoint = checkpointStatus?.trim().toUpperCase();
+  if (normalized === "CANCEL_REQUESTED" && normalizedCheckpoint && ["DONE", "FAILED", "CANCELLED"].includes(normalizedCheckpoint)) {
+    return mapNormalizedTaskStatus(normalizedCheckpoint);
+  }
+  return mapNormalizedTaskStatus(normalized);
+}
+
+function mapNormalizedTaskStatus(normalized?: string): TaskStatus {
   switch (normalized) {
     case "DRAFT":
       return "draft";

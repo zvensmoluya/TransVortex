@@ -39,6 +39,21 @@ test("task record adapter only marks failed or cancelled records resumable", () 
   assert.equal(taskRecordToTask({ task_id: "cancelled", status: "CANCELLED" }).recoverability.canResume, true);
 });
 
+test("task record adapter does not keep stale cancellation over terminal checkpoints", () => {
+  const task = taskRecordToTask({
+    task_id: "stale-cancel",
+    status: "CANCEL_REQUESTED",
+    checkpoint_status: "FAILED",
+    input_file: "D:\\media\\movie.mp4",
+    error: "ASR upstream returned HTTP 500",
+    created_at: "2026-05-27T01:00:00Z",
+    updated_at: "2026-05-27T01:02:00Z",
+  });
+
+  assert.equal(task.status, "failedRecoverable");
+  assert.equal(task.recoverability.canResume, true);
+});
+
 test("worker event adapter maps task store events and progress consistently", () => {
   const event = workerEventToTimelineEvent({
     type: "stage",
