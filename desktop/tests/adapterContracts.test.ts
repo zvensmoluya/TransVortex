@@ -6,6 +6,7 @@ import { taskRecordToTask } from "../src/adapters/taskRecordAdapter";
 import { taskToPresentation } from "../src/adapters/taskPresentationAdapter";
 import { normalizeWorkerEvents, workerEventToTimelineEvent } from "../src/adapters/workerEventAdapter";
 import type { TaskDraft } from "../src/domain/task";
+import { desktopSnapshotFromPayload } from "../src/services/desktopSnapshotService";
 
 test("task record adapter maps the CLI task payload contract", () => {
   const task = taskRecordToTask({
@@ -167,6 +168,38 @@ test("task draft adapter does not turn project terms into generation terms", () 
   assert.equal(payload.overrides.memory_inject_enabled, false);
   assert.equal(payload.overrides.memory_patch_enabled, false);
   assert.equal("memory_presets" in payload.overrides, false);
+});
+
+test("desktop snapshot service hydrates config tasks runtime and environment", () => {
+  const snapshot = desktopSnapshotFromPayload({
+    config: {
+      providers: [
+        {
+          name: "p1",
+          env_key: "PROVIDER_KEY",
+          credential_id: "p1",
+          credential_source: "auth_json",
+          has_key: true,
+          models: ["m1"],
+        },
+      ],
+      routing: { primary: { provider: "p1", model: "m1" }, fallback: [] },
+      pipeline: { asr_provider: "local", output_format: "srt" },
+      asr_providers: {
+        local: { name: "local", kind: "local_inprocess", auth: { type: "none" }, has_key: true, model: "large-v3" },
+      },
+    },
+    tasks: [{ task_id: "t1", status: "DONE", input_file: "D:\\media\\a.srt", output_paths: { srt: "D:\\out\\a.srt" } }],
+    runtime: { active: null, queued: [], interrupted: [] },
+    environment: { checks: [{ name: "config_load", status: "PASS", code: "ok", message: "ok" }] },
+  });
+
+  assert.equal(snapshot.serviceConnections.length, 2);
+  assert.equal(snapshot.serviceConnections[0].providerName, "p1");
+  assert.equal(snapshot.tasks[0].id, "t1");
+  assert.deepEqual(snapshot.runtime, { active: null, queued: [], interrupted: [] });
+  assert.equal(snapshot.environmentChecks[0].id, "ok");
+  assert.equal(snapshot.environmentChecks[0].label, "config_load");
 });
 
 test("task record adapter only marks failed or cancelled records resumable", () => {

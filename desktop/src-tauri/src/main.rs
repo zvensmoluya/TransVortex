@@ -1,12 +1,12 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{mpsc, Arc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -24,6 +24,41 @@ impl Clone for WorkerState {
             task_id: Arc::clone(&self.task_id),
         }
     }
+}
+
+struct SidecarState {
+    inner: Arc<Mutex<Option<SidecarProcess>>>,
+    next_id: Arc<Mutex<u64>>,
+}
+
+impl Default for SidecarState {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            next_id: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Clone for SidecarState {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            next_id: Arc::clone(&self.next_id),
+        }
+    }
+}
+
+struct SidecarProcess {
+    child: Child,
+    stdin: ChildStdin,
+    responses: mpsc::Receiver<Result<String, String>>,
+    root: PathBuf,
+}
+
+enum SidecarCallError {
+    Remote(String),
+    Transport(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -78,44 +113,169 @@ fn python_worker_command() -> Command {
     command
 }
 
-fn run_worker_json(root: &Path, args: &[String]) -> Result<Value, String> {
-    let output = python_worker_command()
+fn sidecar_timeout(method: &str) -> Duration {
+    if method == "provider.test" || method == "provider.models" {
+        Duration::from_secs(120)
+    } else {
+        Duration::from_secs(30)
+    }
+}
+
+fn sidecar_error(code: &str, message: impl Into<String>) -> String {
+    json!({"code": code, "message": message.into()}).to_string()
+}
+
+fn spawn_sidecar(root: &Path) -> Result<SidecarProcess, String> {
+    let mut child = python_worker_command()
         .arg("-m")
-        .arg("transvortex.cli")
+        .arg("transvortex.app_service")
         .arg("--root")
         .arg(root)
-        .args(args)
         .current_dir(root)
-        .output()
-        .map_err(|err| err.to_string())?;
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| sidecar_error("sidecar_unavailable", err.to_string()))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Err(if stderr.is_empty() { stdout } else { stderr });
-    }
-
-    serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())
-}
-
-fn value_arg(value: &Value) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|err| err.to_string())
-}
-
-fn push_arg(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
-    if let Some(value) = value {
-        if !value.trim().is_empty() {
-            args.push(flag.to_string());
-            args.push(value.clone());
+    let stderr = child.stderr.take().ok_or_else(|| sidecar_error("sidecar_unavailable", "Failed to capture sidecar stderr"))?;
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            if !line.trim().is_empty() {
+                eprintln!("[transvortex-sidecar] {line}");
+            }
         }
-    }
+    });
+
+    let stdin = child.stdin.take().ok_or_else(|| sidecar_error("sidecar_unavailable", "Failed to capture sidecar stdin"))?;
+    let stdout = child.stdout.take().ok_or_else(|| sidecar_error("sidecar_unavailable", "Failed to capture sidecar stdout"))?;
+    let (tx, rx) = mpsc::channel::<Result<String, String>>();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(value) => {
+                    let _ = tx.send(Ok(value));
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+    Ok(SidecarProcess {
+        child,
+        stdin,
+        responses: rx,
+        root: root.to_path_buf(),
+    })
 }
 
-fn push_bool_arg(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
-    if let Some(value) = value {
-        args.push(flag.to_string());
-        args.push(if value { "true" } else { "false" }.to_string());
+fn sidecar_call(app: &AppHandle, state: &SidecarState, method: &str, params: Value) -> Result<Value, String> {
+    let root = repo_root(app)?;
+    sidecar_call_root(state, &root, method, params, sidecar_method_can_retry(method))
+}
+
+fn sidecar_method_can_retry(method: &str) -> bool {
+    matches!(
+        method,
+        "desktop.ping"
+            | "desktop.snapshot"
+            | "config.get"
+            | "tasks.list"
+            | "tasks.events"
+            | "runtime.snapshot"
+            | "runtime.reconcile"
+            | "runtime.acquireNext"
+            | "auth.list"
+    )
+}
+
+fn sidecar_call_root(
+    state: &SidecarState,
+    root: &Path,
+    method: &str,
+    params: Value,
+    allow_restart: bool,
+) -> Result<Value, String> {
+    let id = {
+        let mut next = state.next_id.lock().map_err(|err| err.to_string())?;
+        *next += 1;
+        *next
+    };
+    let mut guard = state.inner.lock().map_err(|err| err.to_string())?;
+    let needs_spawn = match guard.as_mut() {
+        Some(process) => process.child.try_wait().map_err(|err| err.to_string())?.is_some() || process.root != root,
+        None => true,
+    };
+    if needs_spawn {
+        *guard = Some(spawn_sidecar(root)?);
     }
+    let response = match sidecar_call_locked(
+        guard.as_mut().ok_or_else(|| sidecar_error("sidecar_unavailable", "Sidecar was not started"))?,
+        id,
+        method,
+        params.clone(),
+    ) {
+        Ok(value) => return Ok(value),
+        Err(err) => err,
+    };
+    if let SidecarCallError::Remote(message) = response {
+        return Err(message);
+    }
+    let message = match response {
+        SidecarCallError::Transport(message) => message,
+        SidecarCallError::Remote(_) => unreachable!(),
+    };
+    if !allow_restart {
+        *guard = None;
+        return Err(message);
+    }
+    *guard = None;
+    *guard = Some(spawn_sidecar(root)?);
+    sidecar_call_locked(
+        guard.as_mut().ok_or_else(|| sidecar_error("sidecar_unavailable", "Sidecar was not restarted"))?,
+        id + 1,
+        method,
+        params,
+    )
+    .map_err(|err| match err {
+        SidecarCallError::Remote(message) | SidecarCallError::Transport(message) => message,
+    })
+}
+
+fn sidecar_call_locked(process: &mut SidecarProcess, id: u64, method: &str, params: Value) -> Result<Value, SidecarCallError> {
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    let raw = serde_json::to_string(&request).map_err(|err| SidecarCallError::Transport(err.to_string()))?;
+    process
+        .stdin
+        .write_all(raw.as_bytes())
+        .and_then(|_| process.stdin.write_all(b"\n"))
+        .and_then(|_| process.stdin.flush())
+        .map_err(|err| SidecarCallError::Transport(sidecar_error("sidecar_pipe_error", err.to_string())))?;
+
+    let line = process
+        .responses
+        .recv_timeout(sidecar_timeout(method))
+        .map_err(|_| SidecarCallError::Transport(sidecar_error("sidecar_timeout", format!("{method} timed out"))))?
+        .map_err(|err| SidecarCallError::Transport(sidecar_error("sidecar_pipe_error", err.to_string())))?;
+    if line.trim().is_empty() {
+        return Err(SidecarCallError::Transport(sidecar_error("sidecar_protocol_error", "Sidecar returned empty response")));
+    }
+    let payload: Value = serde_json::from_str(&line)
+        .map_err(|err| SidecarCallError::Transport(sidecar_error("sidecar_protocol_error", err.to_string())))?;
+    if let Some(error) = payload.get("error") {
+        return Err(SidecarCallError::Remote(error.to_string()));
+    }
+    payload
+        .get("result")
+        .cloned()
+        .ok_or_else(|| SidecarCallError::Transport(sidecar_error("sidecar_protocol_error", "Missing sidecar result")))
 }
 
 fn subtitle_streams_from_probe(payload: Value) -> Vec<SubtitleStream> {
@@ -176,25 +336,9 @@ fn ensure_no_running(state: &WorkerState) -> Result<(), String> {
     Ok(())
 }
 
-fn request_file_path(app: &AppHandle, command: &str) -> Result<PathBuf, String> {
-    let cache_dir = app.path().app_cache_dir().map_err(|err| err.to_string())?;
-    std::fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| err.to_string())?
-        .as_millis();
-    Ok(cache_dir.join(format!("transvortex-{command}-{millis}.json")))
-}
-
-fn write_request_file(app: &AppHandle, command: &str, request: &Value) -> Result<PathBuf, String> {
-    let path = request_file_path(app, command)?;
-    let bytes = serde_json::to_vec_pretty(request).map_err(|err| err.to_string())?;
-    std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
-    Ok(path)
-}
-
 fn spawn_streaming_worker(
     app: AppHandle,
+    sidecar: SidecarState,
     state: WorkerState,
     root: PathBuf,
     args: Vec<String>,
@@ -215,6 +359,7 @@ fn spawn_streaming_worker(
     let chain_app = app.clone();
     let chain_state = state.clone();
     let chain_root = root.clone();
+    let chain_sidecar = sidecar.clone();
     thread::spawn(move || {
         let mut first_task_id_sent = false;
         for line in BufReader::new(stdout).lines().flatten() {
@@ -238,7 +383,7 @@ fn spawn_streaming_worker(
                 let _ = emit_app.emit("worker-event", event);
             }
         }
-        let _ = launch_next_worker(chain_app, chain_state, chain_root);
+        let _ = launch_next_worker(chain_app, chain_sidecar, chain_state, chain_root);
     });
     let err_app = app.clone();
     thread::spawn(move || {
@@ -270,9 +415,9 @@ fn spawn_streaming_worker(
     })
 }
 
-fn launch_next_worker(app: AppHandle, state: WorkerState, root: PathBuf) -> Result<Option<String>, String> {
+fn launch_next_worker(app: AppHandle, sidecar: SidecarState, state: WorkerState, root: PathBuf) -> Result<Option<String>, String> {
     ensure_no_running(&state)?;
-    let acquired = run_worker_json(&root, &["runtime".into(), "acquire-next".into(), "--json".into()])?;
+    let acquired = sidecar_call_root(&sidecar, &root, "runtime.acquireNext", json!({}), true)?;
     if !acquired
         .get("acquired")
         .and_then(Value::as_bool)
@@ -294,22 +439,15 @@ fn launch_next_worker(app: AppHandle, state: WorkerState, root: PathBuf) -> Resu
     for item in launch_args {
         args.push(item.as_str().ok_or("Runtime launch arg must be a string")?.to_string());
     }
-    let response = match spawn_streaming_worker(app, state, root.clone(), args) {
+    let response = match spawn_streaming_worker(app, sidecar.clone(), state, root.clone(), args) {
         Ok(response) => response,
         Err(err) => {
-            let _ = run_worker_json(
+            let _ = sidecar_call_root(
+                &sidecar,
                 &root,
-                &[
-                    "runtime".into(),
-                    "release-active".into(),
-                    "--task-id".into(),
-                    task_id.clone(),
-                    "--state".into(),
-                    "interrupted".into(),
-                    "--reason".into(),
-                    "worker_launch_failed".into(),
-                    "--json".into(),
-                ],
+                "runtime.releaseActive",
+                json!({"task_id": task_id, "state": "interrupted", "reason": "worker_launch_failed"}),
+                false,
             );
             return Err(err);
         }
@@ -318,385 +456,185 @@ fn launch_next_worker(app: AppHandle, state: WorkerState, root: PathBuf) -> Resu
 }
 
 #[tauri::command]
-fn get_config(app: AppHandle) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(&root, &["config".into(), "show".into(), "--json".into()])
+fn get_config(app: AppHandle, sidecar: State<SidecarState>) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "config.get", json!({}))
 }
 
 #[tauri::command]
-fn list_tasks(app: AppHandle) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let _ = run_worker_json(&root, &["runtime".into(), "reconcile".into(), "--json".into()]);
-    run_worker_json(&root, &["tasks".into(), "--json".into()])
+fn desktop_snapshot(app: AppHandle, sidecar: State<SidecarState>) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "desktop.snapshot", json!({}))
 }
 
 #[tauri::command]
-fn doctor(app: AppHandle) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(&root, &["doctor".into(), "--json".into()])
+fn list_tasks(app: AppHandle, sidecar: State<SidecarState>) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "tasks.list", json!({}))
 }
 
 #[tauri::command]
-fn read_events(app: AppHandle, task_id: String) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let output = python_worker_command()
-        .arg("-m")
-        .arg("transvortex.cli")
-        .arg("--root")
-        .arg(&root)
-        .arg("events")
-        .arg("--task-id")
-        .arg(task_id)
-        .current_dir(&root)
-        .output()
-        .map_err(|err| err.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let mut events = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(event) = serde_json::from_str::<Value>(line) {
-            events.push(event);
-        }
-    }
-    Ok(Value::Array(events))
+fn doctor(app: AppHandle, sidecar: State<SidecarState>) -> Result<Value, String> {
+    let snapshot = sidecar_call(&app, sidecar.inner(), "desktop.snapshot", json!({}))?;
+    snapshot
+        .get("environment")
+        .cloned()
+        .ok_or_else(|| sidecar_error("sidecar_protocol_error", "Missing environment payload"))
+}
+
+#[tauri::command]
+fn read_events(app: AppHandle, sidecar: State<SidecarState>, task_id: String) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "tasks.events", json!({"task_id": task_id}))
 }
 
 #[tauri::command]
 fn probe_provider(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     provider: Option<String>,
     model: Option<String>,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec!["probe-provider".into(), "--strict".into()];
-    push_arg(&mut args, "--provider", &provider);
-    push_arg(&mut args, "--model", &model);
-    run_worker_json(&root, &args)
+    sidecar_call(&app, sidecar.inner(), "provider.probe", json!({"provider": provider, "model": model}))
 }
 
 #[tauri::command]
 fn save_provider_config(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     provider_draft: Value,
     api_key: Option<String>,
     expected_version: Option<Value>,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec![
-        "provider".into(),
-        "save".into(),
-        "--json-payload".into(),
-        value_arg(&provider_draft)?,
-        "--json".into(),
-    ];
-    push_arg(&mut args, "--api-key", &api_key);
-    if let Some(version) = expected_version {
-        args.push("--expected-version".into());
-        args.push(value_arg(&version)?);
-    }
-    run_worker_json(&root, &args)
+    sidecar_call(
+        &app,
+        sidecar.inner(),
+        "provider.save",
+        json!({"provider_draft": provider_draft, "api_key": api_key, "expected_version": expected_version}),
+    )
 }
 
 #[tauri::command]
-fn delete_provider_config(app: AppHandle, name: String, expected_version: Option<Value>) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec![
-        "provider".into(),
-        "delete".into(),
-        "--name".into(),
-        name,
-        "--json".into(),
-    ];
-    if let Some(version) = expected_version {
-        args.push("--expected-version".into());
-        args.push(value_arg(&version)?);
-    }
-    run_worker_json(&root, &args)
+fn delete_provider_config(app: AppHandle, sidecar: State<SidecarState>, name: String, expected_version: Option<Value>) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "provider.delete", json!({"name": name, "expected_version": expected_version}))
 }
 
 #[tauri::command]
-fn save_asr_prompt_profile(app: AppHandle, profile: Value) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let args = vec![
-        "prompt".into(),
-        "asr".into(),
-        "save".into(),
-        "--json-payload".into(),
-        value_arg(&profile)?,
-        "--json".into(),
-    ];
-    run_worker_json(&root, &args)
+fn save_asr_prompt_profile(app: AppHandle, sidecar: State<SidecarState>, profile: Value) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "prompt.asr.save", json!({"profile": profile}))
 }
 
 #[tauri::command]
-fn delete_asr_prompt_profile(app: AppHandle, profile_id: String) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let args = vec![
-        "prompt".into(),
-        "asr".into(),
-        "delete".into(),
-        "--id".into(),
-        profile_id,
-        "--json".into(),
-    ];
-    run_worker_json(&root, &args)
+fn delete_asr_prompt_profile(app: AppHandle, sidecar: State<SidecarState>, profile_id: String) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "prompt.asr.delete", json!({"id": profile_id}))
 }
 
 #[tauri::command]
 fn fetch_provider_models(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     provider_draft: Value,
     api_key: Option<String>,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec![
-        "provider".into(),
-        "models".into(),
-        "--json-payload".into(),
-        value_arg(&provider_draft)?,
-        "--json".into(),
-    ];
-    push_arg(&mut args, "--api-key", &api_key);
-    run_worker_json(&root, &args)
+    sidecar_call(&app, sidecar.inner(), "provider.models", json!({"provider_draft": provider_draft, "api_key": api_key}))
 }
 
 #[tauri::command]
 fn test_provider_connection(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     provider_draft: Value,
     model: String,
     api_key: Option<String>,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec![
-        "provider".into(),
-        "test".into(),
-        "--json-payload".into(),
-        value_arg(&provider_draft)?,
-        "--model".into(),
-        model,
-        "--json".into(),
-    ];
-    push_arg(&mut args, "--api-key", &api_key);
-    run_worker_json(&root, &args)
-}
-
-#[tauri::command]
-fn save_provider_routing(app: AppHandle, routing: Value) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "provider".into(),
-            "routing".into(),
-            "--json-payload".into(),
-            value_arg(&routing)?,
-            "--json".into(),
-        ],
+    sidecar_call(
+        &app,
+        sidecar.inner(),
+        "provider.test",
+        json!({"provider_draft": provider_draft, "model": model, "api_key": api_key}),
     )
 }
 
 #[tauri::command]
-fn save_auth_credential(app: AppHandle, credential_id: String, api_key: String) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "auth".into(),
-            "set".into(),
-            credential_id,
-            "--api-key".into(),
-            api_key,
-            "--json".into(),
-        ],
-    )
+fn save_provider_routing(app: AppHandle, sidecar: State<SidecarState>, routing: Value) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "provider.routing.save", json!({"routing": routing}))
 }
 
 #[tauri::command]
-fn list_auth_credentials(app: AppHandle) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(&root, &["auth".into(), "list".into(), "--json".into()])
+fn save_auth_credential(app: AppHandle, sidecar: State<SidecarState>, credential_id: String, api_key: String) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "auth.set", json!({"credential_id": credential_id, "api_key": api_key}))
+}
+
+#[tauri::command]
+fn list_auth_credentials(app: AppHandle, sidecar: State<SidecarState>) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "auth.list", json!({}))
 }
 
 #[tauri::command]
 fn update_task_memory_entry(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     task_id: String,
     entry_id: String,
     status: String,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "result".into(),
-            "memory-entry".into(),
-            "--task-id".into(),
-            task_id,
-            "--entry-id".into(),
-            entry_id,
-            "--status".into(),
-            status,
-            "--json".into(),
-        ],
+    sidecar_call(
+        &app,
+        sidecar.inner(),
+        "result.memoryEntry.update",
+        json!({"task_id": task_id, "entry_id": entry_id, "status": status}),
     )
 }
 
 #[tauri::command]
-fn export_memory_preset(app: AppHandle, options: Value) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let task_id = options
-        .get("taskId")
-        .and_then(Value::as_str)
-        .or_else(|| options.get("task_id").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
-    let preset_id = options
-        .get("presetId")
-        .and_then(Value::as_str)
-        .or_else(|| options.get("preset_id").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
-    let name = options
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let description = options
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let default_status = options
-        .get("defaultStatus")
-        .and_then(Value::as_str)
-        .or_else(|| options.get("default_status").and_then(Value::as_str))
-        .unwrap_or("confirmed")
-        .to_string();
-    let overwrite = options
-        .get("overwrite")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let mut args = vec![
-        "memory".into(),
-        "export-preset".into(),
-        "--task-id".into(),
-        task_id,
-        "--preset-id".into(),
-        preset_id,
-        "--name".into(),
-        name,
-        "--description".into(),
-        description,
-        "--default-status".into(),
-        default_status,
-        "--json".into(),
-    ];
-    if overwrite {
-        args.push("--overwrite".into());
-    }
-    run_worker_json(&root, &args)
+fn export_memory_preset(app: AppHandle, sidecar: State<SidecarState>, options: Value) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "memory.exportPreset", options)
 }
 
 #[tauri::command]
-fn open_task_result(app: AppHandle, task_id: String) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "result".into(),
-            "open".into(),
-            "--task-id".into(),
-            task_id,
-            "--json".into(),
-        ],
-    )
+fn open_task_result(app: AppHandle, sidecar: State<SidecarState>, task_id: String) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "result.open", json!({"task_id": task_id}))
 }
 
 #[tauri::command]
-fn save_task_segments(app: AppHandle, task_id: String, segments: Value) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    run_worker_json(
-        &root,
-        &[
-            "result".into(),
-            "save".into(),
-            "--task-id".into(),
-            task_id,
-            "--json-payload".into(),
-            value_arg(&json!({ "segments": segments }))?,
-            "--json".into(),
-        ],
-    )
+fn save_task_segments(app: AppHandle, sidecar: State<SidecarState>, task_id: String, segments: Value) -> Result<Value, String> {
+    sidecar_call(&app, sidecar.inner(), "result.segments.save", json!({"task_id": task_id, "segments": segments}))
 }
 
 #[tauri::command]
 fn reexport_task(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     task_id: String,
     output_format: String,
     bilingual: Option<bool>,
     subtitle_bilingual_order: Option<String>,
     subtitle_prefer_single_line: Option<bool>,
 ) -> Result<Value, String> {
-    let root = repo_root(&app)?;
-    let mut args = vec![
-        "reexport".into(),
-        "--task-id".into(),
-        task_id,
-        "--output-format".into(),
-        output_format,
-    ];
-    push_bool_arg(&mut args, "--bilingual", bilingual);
-    push_arg(
-        &mut args,
-        "--subtitle-bilingual-order",
-        &subtitle_bilingual_order,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-prefer-single-line",
-        subtitle_prefer_single_line,
-    );
-    args.push("--json".into());
-    run_worker_json(&root, &args)
+    sidecar_call(
+        &app,
+        sidecar.inner(),
+        "result.reexport",
+        json!({
+            "task_id": task_id,
+            "output_format": output_format,
+            "bilingual": bilingual,
+            "subtitle_bilingual_order": subtitle_bilingual_order,
+            "subtitle_prefer_single_line": subtitle_prefer_single_line,
+        }),
+    )
 }
 
 #[tauri::command]
 fn start_task(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     state: State<WorkerState>,
     request: Value,
 ) -> Result<StartTaskResponse, String> {
     let root = repo_root(&app)?;
-    let request_file = write_request_file(&app, "run", &request)?;
-    let submitted = match run_worker_json(
-        &root,
-        &[
-            "runtime".into(),
-            "submit-run".into(),
-            "--request-json".into(),
-            request_file.to_string_lossy().to_string(),
-            "--json".into(),
-        ],
-    ) {
-        Ok(value) => value,
-        Err(err) => {
-            let _ = std::fs::remove_file(&request_file);
-            return Err(err);
-        }
-    };
-    let _ = std::fs::remove_file(&request_file);
+    let submitted = sidecar_call_root(sidecar.inner(), &root, "runtime.submitRun", json!({"request": request}), false)?;
     let task_id = submitted
         .get("task_id")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let started_task_id = launch_next_worker(app, state.inner().clone(), root)?;
+    let started_task_id = launch_next_worker(app, sidecar.inner().clone(), state.inner().clone(), root)?;
     Ok(StartTaskResponse {
         started: started_task_id.is_some(),
         task_id,
@@ -706,33 +644,17 @@ fn start_task(
 #[tauri::command]
 fn resume_task(
     app: AppHandle,
+    sidecar: State<SidecarState>,
     state: State<WorkerState>,
     request: Value,
 ) -> Result<StartTaskResponse, String> {
     let root = repo_root(&app)?;
-    let request_file = write_request_file(&app, "resume", &request)?;
-    let submitted = match run_worker_json(
-        &root,
-        &[
-            "runtime".into(),
-            "submit-resume".into(),
-            "--request-json".into(),
-            request_file.to_string_lossy().to_string(),
-            "--json".into(),
-        ],
-    ) {
-        Ok(value) => value,
-        Err(err) => {
-            let _ = std::fs::remove_file(&request_file);
-            return Err(err);
-        }
-    };
-    let _ = std::fs::remove_file(&request_file);
+    let submitted = sidecar_call_root(sidecar.inner(), &root, "runtime.submitResume", json!({"request": request}), false)?;
     let task_id = submitted
         .get("task_id")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let started_task_id = launch_next_worker(app, state.inner().clone(), root)?;
+    let started_task_id = launch_next_worker(app, sidecar.inner().clone(), state.inner().clone(), root)?;
     Ok(StartTaskResponse {
         started: started_task_id.is_some(),
         task_id,
@@ -740,20 +662,9 @@ fn resume_task(
 }
 
 #[tauri::command]
-fn cancel_task(app: AppHandle, state: State<WorkerState>, task_id: String) -> Result<Value, String> {
-    let root = repo_root(&app)?;
+fn cancel_task(app: AppHandle, sidecar: State<SidecarState>, state: State<WorkerState>, task_id: String) -> Result<Value, String> {
     *state.task_id.lock().map_err(|err| err.to_string())? = Some(task_id.clone());
-    run_worker_json(
-        &root,
-        &[
-            "cancel".into(),
-            "--task-id".into(),
-            task_id,
-            "--force-after-grace".into(),
-            "15".into(),
-            "--json".into(),
-        ],
-    )
+    sidecar_call(&app, sidecar.inner(), "runtime.cancel", json!({"task_id": task_id, "force_after_grace": 15}))
 }
 
 #[tauri::command]
@@ -788,8 +699,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(WorkerState::default())
+        .manage(SidecarState::default())
         .invoke_handler(tauri::generate_handler![
             get_config,
+            desktop_snapshot,
             list_tasks,
             doctor,
             read_events,

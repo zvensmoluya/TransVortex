@@ -28,6 +28,7 @@ from ..app.credentials import (
     resolve_provider_credential,
     write_auth_credential,
 )
+from ..app.desktop_api import auth_list_payload, auth_status_payload, config_payload, task_payload
 from ..app.desktop_requests import (
     RequestValidationError,
     load_resume_request,
@@ -276,11 +277,7 @@ def _add_route_override_args(subparser: argparse.ArgumentParser) -> None:
 
 
 def _task_payload(task, artifacts_dir: Path | None = None) -> dict[str, Any]:
-    store = TaskStore(artifacts_dir) if artifacts_dir is not None else None
-    payload = task_status_json(task, store=store)
-    if artifacts_dir is not None:
-        payload["task_dir"] = str(artifacts_dir / task.task_id)
-    return payload
+    return task_payload(task, artifacts_dir)
 
 
 def _capability_payload(name: str, task, artifacts_dir: Path | None = None) -> dict[str, Any]:
@@ -290,94 +287,15 @@ def _capability_payload(name: str, task, artifacts_dir: Path | None = None) -> d
 
 
 def _config_show_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
-    resolved_providers_file = resolve_providers_file(root, providers_file)
-    config = load_app_config(root_dir=root, providers_file=providers_file)
-    providers = []
-    for provider in config.providers.values():
-        credential = resolve_provider_credential(provider, root_dir=root)
-        providers.append(
-            {
-                "name": provider.name,
-                "api_type": provider.api_type,
-                "compat_mode": provider.compat_mode,
-                "base_url": provider.base_url,
-                "env_key": provider.env_key,
-                "credential_id": provider_credential_id(provider),
-                "credential_source": credential.source,
-                "has_key": credential.found,
-                "models": provider.models,
-                "auth": to_plain(provider.auth),
-                "endpoint": to_plain(provider.endpoint),
-                "request_mapping": provider.mapping.request,
-                "response_mapping": provider.mapping.response,
-                "extra_headers": provider.extra_headers,
-                "model_list": to_plain(provider.model_list),
-                "limits": to_plain(provider.limits),
-                "capabilities": to_plain(provider.capabilities),
-            }
-        )
-    asr_providers = {}
-    for name, provider in sorted(config.asr_providers.items(), key=lambda item: item[0]):
-        if provider.auth.type == "none":
-            credential_source = "not_required"
-            has_key = True
-        else:
-            credential = resolve_credential(
-                env_key=provider.env_key,
-                credential_id=provider.credential_id,
-                provider_name=provider.name,
-                root_dir=root,
-            )
-            credential_source = credential.source
-            has_key = credential.found
-        asr_providers[name] = {
-            **to_plain(provider),
-            "credential_source": credential_source,
-            "has_key": has_key,
-        }
-    return {
-        "root_dir": str(root),
-        "auth_file": str(auth_file_path()),
-        "providers_file": str(resolved_providers_file),
-        "providers_file_version": providers_file_version(resolved_providers_file),
-        "artifacts_dir": str(config.pipeline.artifacts_dir),
-        "pipeline": to_plain(config.pipeline),
-        "routing": to_plain(config.routing),
-        "active_routing_profile": config.active_routing_profile,
-        "routing_profiles": to_plain(config.routing_profiles),
-        "routing_profile_next_seq": int(getattr(config, "routing_profile_next_seq", 1) or 1),
-        "protocol_templates": protocol_templates_payload(),
-        "provider_presets": provider_presets_payload(),
-        "custom_adapter_template": custom_adapter_template_payload(),
-        "provider_templates": provider_templates_payload(),
-        "providers": sorted(providers, key=lambda row: row["name"]),
-        "asr_providers": asr_providers,
-    }
+    return config_payload(root, providers_file)
 
 
 def _auth_status_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
-    config = load_app_config(root_dir=root, providers_file=providers_file)
-    rows = []
-    for provider in sorted(config.providers.values(), key=lambda item: item.name):
-        credential = resolve_provider_credential(provider, root_dir=root)
-        rows.append(
-            {
-                "provider": provider.name,
-                "env_key": provider.env_key,
-                "credential_id": provider_credential_id(provider),
-                "has_key": credential.found,
-                "source": credential.source,
-            }
-        )
-    return {"auth_file": str(auth_file_path()), "providers": rows}
+    return auth_status_payload(root, providers_file)
 
 
 def _auth_list_payload() -> dict[str, Any]:
-    credentials = read_auth_credentials()
-    return {
-        "auth_file": str(auth_file_path()),
-        "credentials": [{"credential_id": key, "has_key": True} for key in sorted(credentials)],
-    }
+    return auth_list_payload()
 
 
 def _read_auth_set_value(args: argparse.Namespace) -> str:
