@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resultWorkspaceToSegments, segmentsToSavePayload } from "../src/adapters/resultWorkspaceAdapter";
+import { taskDraftToStartTaskPayload } from "../src/adapters/taskDraftAdapter";
 import { taskRecordToTask } from "../src/adapters/taskRecordAdapter";
 import { taskToPresentation } from "../src/adapters/taskPresentationAdapter";
 import { normalizeWorkerEvents, workerEventToTimelineEvent } from "../src/adapters/workerEventAdapter";
+import type { TaskDraft } from "../src/domain/task";
 
 test("task record adapter maps the CLI task payload contract", () => {
   const task = taskRecordToTask({
@@ -33,6 +35,140 @@ test("task record adapter maps the CLI task payload contract", () => {
   assert.equal(task.recoverability.canResume, false);
 });
 
+test("task draft adapter emits backend RunRequest contract", () => {
+  const draft: TaskDraft = {
+    input: {
+      kind: "video",
+      path: "D:\\media\\episode01.mkv",
+      displayName: "episode01.mkv",
+    },
+    languages: {
+      sourceLanguage: "ja",
+      targetLanguage: "zh-CN",
+    },
+    subtitleSource: {
+      mode: "embedded",
+      streamId: "2",
+    },
+    translation: {
+      target: {
+        providerName: "p1",
+        model: "m1",
+      },
+      style: "natural",
+      projectContext: "Character names matter.",
+      stylePrompt: "Keep honorifics natural.",
+    },
+    speechRecognition: {
+      mode: "local",
+      target: {
+        providerName: "faster_whisper_large_v3",
+        model: "large-v3-turbo",
+      },
+    },
+    terms: {
+      selectedTermBaseId: "anime",
+      useProjectTerms: true,
+      allowSystemSuggestions: true,
+      enforceLockedTerms: true,
+    },
+    output: {
+      formats: ["srt", "ass"],
+      bilingual: true,
+      bilingualOrder: "target_first",
+      preferSingleLine: false,
+      outputDirectory: "D:\\output",
+    },
+    advanced: {
+      qualityMode: "balanced",
+      compressionEnabled: true,
+      reflowEnabled: false,
+    },
+  };
+
+  const payload = taskDraftToStartTaskPayload(draft);
+
+  assert.equal(payload.request_version, 1);
+  assert.equal(payload.input, "D:\\media\\episode01.mkv");
+  assert.equal(payload.input_type, "video");
+  assert.equal(payload.output_dir, "D:\\output");
+  assert.equal(payload.source_lang, "ja");
+  assert.equal(payload.target_lang, "zh-CN");
+  assert.equal(payload.bilingual, true);
+  assert.equal(payload.provider, "p1");
+  assert.equal(payload.model, "m1");
+  assert.deepEqual(payload.overrides, {
+    asr_provider: "faster_whisper_large_v3",
+    asr_model: "large-v3-turbo",
+    source_mode: "embedded_subtitle",
+    subtitle_track: "2",
+    output_format: "both",
+    translation_style_preset: "natural",
+    translation_style_prompt: "Character names matter.\n\nKeep honorifics natural.",
+    subtitle_quality_mode: "balanced",
+    subtitle_compression_enabled: true,
+    subtitle_reflow_enabled: false,
+    subtitle_ass_style: {
+      bilingual_order: "target_source",
+      prefer_single_line: false,
+    },
+    memory_enabled: true,
+    memory_bootstrap_enabled: true,
+    memory_inject_enabled: false,
+    memory_patch_enabled: true,
+  });
+});
+
+test("task draft adapter does not turn project terms into generation terms", () => {
+  const draft: TaskDraft = {
+    input: {
+      kind: "subtitle",
+      path: "D:\\media\\episode01.srt",
+      displayName: "episode01.srt",
+    },
+    languages: {
+      sourceLanguage: "en",
+      targetLanguage: "zh-CN",
+    },
+    subtitleSource: { mode: "existingSubtitle" },
+    translation: {
+      target: { providerName: "p1", model: "m1" },
+      style: "literal",
+      projectContext: "",
+      stylePrompt: "",
+    },
+    speechRecognition: {
+      mode: "none",
+    },
+    terms: {
+      selectedTermBaseId: "project",
+      useProjectTerms: true,
+      allowSystemSuggestions: false,
+      enforceLockedTerms: true,
+    },
+    output: {
+      formats: ["srt"],
+      bilingual: false,
+      bilingualOrder: "source_first",
+      preferSingleLine: true,
+    },
+    advanced: {
+      qualityMode: "conservative",
+      compressionEnabled: false,
+      reflowEnabled: false,
+    },
+  };
+
+  const payload = taskDraftToStartTaskPayload(draft);
+
+  assert.equal(payload.input_type, "srt");
+  assert.equal(payload.overrides.memory_enabled, false);
+  assert.equal(payload.overrides.memory_bootstrap_enabled, false);
+  assert.equal(payload.overrides.memory_inject_enabled, false);
+  assert.equal(payload.overrides.memory_patch_enabled, false);
+  assert.equal("memory_presets" in payload.overrides, false);
+});
+
 test("task record adapter only marks failed or cancelled records resumable", () => {
   assert.equal(taskRecordToTask({ task_id: "running", status: "RUNNING" }).recoverability.canResume, false);
   assert.equal(taskRecordToTask({ task_id: "failed", status: "FAILED" }).recoverability.canResume, true);
@@ -52,6 +188,21 @@ test("task record adapter does not keep stale cancellation over terminal checkpo
 
   assert.equal(task.status, "failedRecoverable");
   assert.equal(task.recoverability.canResume, true);
+});
+
+test("task record adapter maps interrupted tasks as resumable", () => {
+  const task = taskRecordToTask({
+    task_id: "interrupted",
+    status: "INTERRUPTED",
+    input_file: "D:\\media\\movie.mp4",
+    error_info: { code: "task_interrupted", type: "runtime_error", message: "worker missing" },
+    created_at: "2026-05-27T01:00:00Z",
+    updated_at: "2026-05-27T01:02:00Z",
+  });
+
+  assert.equal(task.status, "interrupted");
+  assert.equal(task.recoverability.canResume, true);
+  assert.equal(task.recoverability.resumeLabel, "从中断点继续");
 });
 
 test("worker event adapter maps task store events and progress consistently", () => {

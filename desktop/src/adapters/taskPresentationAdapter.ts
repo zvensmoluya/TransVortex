@@ -138,7 +138,7 @@ function taskActionsToPresentation(
   delivery: DeliveryPresentation,
   workspace: ResultWorkspacePresentation | undefined,
 ): Record<TaskActionId, TaskActionCapability> {
-  const terminalStatus = task.status === "completed" || task.status === "cancelled" || task.status === "failedRecoverable" || task.status === "failedFatal";
+  const terminalStatus = task.status === "completed" || task.status === "cancelled" || task.status === "interrupted" || task.status === "failedRecoverable" || task.status === "failedFatal";
   const canCancel = !terminalStatus && (taskRun?.canCancel === true || ["starting", "running", "cancelRequested"].includes(task.status));
   const canResume = task.recoverability.canResume || (taskRun?.phase === "failed" && task.status !== "failedFatal");
   const hasReviewResult = workspace?.hasSegments === true || delivery.files.length > 0;
@@ -312,7 +312,7 @@ function taskStatusTone(task: Task, taskRun?: TaskRun): PresentationTone {
   if (taskRun && taskRun.phase !== "completed" && taskRun.phase !== "idle") return "info";
   if (task.status === "completed") return "success";
   if (task.status === "running" || task.status === "starting" || task.status === "cancelRequested") return "info";
-  if (task.status === "failedRecoverable" || task.status === "cancelled") return "warning";
+  if (task.status === "failedRecoverable" || task.status === "cancelled" || task.status === "interrupted") return "warning";
   if (task.status === "failedFatal") return "danger";
   return "neutral";
 }
@@ -330,6 +330,8 @@ function taskStatusLabel(task: Task, taskRun?: TaskRun): string {
       return "启动中";
     case "cancelRequested":
       return "正在取消";
+    case "interrupted":
+      return "已中断";
     case "failedRecoverable":
       return "可恢复失败";
     case "failedFatal":
@@ -347,6 +349,7 @@ function taskStatusLabel(task: Task, taskRun?: TaskRun): string {
 function statusStageLabel(status: Task["status"], phase: TaskPhase): string {
   if (status === "completed") return "任务已完成";
   if (status === "cancelled") return "任务已取消";
+  if (status === "interrupted") return "任务已中断";
   if (status === "failedRecoverable" || status === "failedFatal") return "任务遇到问题";
   if (status === "starting") return "正在启动任务";
   if (status === "cancelRequested") return "正在取消任务";
@@ -355,7 +358,7 @@ function statusStageLabel(status: Task["status"], phase: TaskPhase): string {
 
 function phaseFromTaskStatus(status: Task["status"]): TaskPhase {
   if (status === "completed") return "completed";
-  if (status === "failedRecoverable" || status === "failedFatal" || status === "cancelled") return "failed";
+  if (status === "failedRecoverable" || status === "failedFatal" || status === "cancelled" || status === "interrupted") return "failed";
   if (status === "draft" || status === "ready" || status === "starting") return "input";
   return "translation";
 }

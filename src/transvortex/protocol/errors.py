@@ -34,6 +34,15 @@ def error_info(
 def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str, Any]:
     message = str(exc)
     lowered = message.lower()
+    if exc.__class__.__name__ == "RequestValidationError":
+        return error_info(
+            code="invalid_request",
+            error_type="input_error",
+            stage=stage,
+            message=message,
+            hint_zh="请求参数不符合任务接口契约，请检查 request JSON 或 CLI 参数组合。",
+            retryable=False,
+        )
     if "task cancelled" in lowered:
         return error_info(
             code="task_cancelled",
@@ -42,6 +51,15 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             message=message,
             hint_zh="任务已取消。",
             retryable=False,
+        )
+    if "task interrupted" in lowered:
+        return error_info(
+            code="task_interrupted",
+            error_type="runtime_error",
+            stage=stage,
+            message=message,
+            hint_zh="任务运行进程已中断，可以从上次检查点继续。",
+            retryable=True,
         )
     if "task not found" in lowered:
         return error_info(

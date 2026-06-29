@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from transvortex.app.config import load_app_config
+from transvortex.memory.plan import resolve_memory_plan
 
 
 def test_config_priority_cli_over_env_over_yaml(tmp_path: Path, monkeypatch) -> None:
@@ -1438,7 +1439,7 @@ memory:
         load_app_config(root_dir=tmp_path)
 
 
-def test_memory_patch_requires_inject_enabled(tmp_path: Path) -> None:
+def test_memory_patch_can_run_without_inject_enabled(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -1463,8 +1464,13 @@ memory:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="requires memory.inject.enabled=true"):
-        load_app_config(root_dir=tmp_path)
+    cfg = load_app_config(root_dir=tmp_path)
+    plan = resolve_memory_plan(cfg.pipeline.memory)
+
+    assert cfg.pipeline.memory.inject.enabled is False
+    assert cfg.pipeline.memory.patch.enabled is True
+    assert plan.translates_with_memory is False
+    assert plan.dynamic_updates_enabled is True
 
 
 def test_memory_patch_rejects_after_each_window(tmp_path: Path) -> None:

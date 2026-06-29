@@ -927,8 +927,6 @@ def load_app_config(
     memory_patch_mode = _to_str(memory_patch_raw.get("mode"), "serial").strip().lower()
     if memory_patch_mode not in MEMORY_PATCH_MODES:
         raise ValueError(f"Unsupported memory.patch.mode: {memory_patch_mode}; expected one of: {', '.join(sorted(MEMORY_PATCH_MODES))}")
-    if memory_patch_enabled and not memory_inject_enabled:
-        raise ValueError("memory.patch.enabled=true requires memory.inject.enabled=true")
     memory = MemoryConfig(
         enabled=_to_bool(memory_raw.get("enabled"), True),
         presets=memory_presets,
@@ -1201,9 +1199,6 @@ def load_app_config(
         )
     if "memory_presets" in memory_overrides:
         pipeline.memory.presets = _parse_memory_presets(memory_overrides["memory_presets"])
-    if pipeline.memory.patch.enabled and not pipeline.memory.inject.enabled:
-        raise ValueError("memory_patch_enabled=true requires memory_inject_enabled=true")
-
     providers: dict[str, ProviderConfig] = {}
     for row in p_yaml.get("providers", []):
         api_type = row["api_type"]

@@ -109,6 +109,14 @@ class TaskStore:
                 self.event_sink(event)
             except Exception:
                 pass
+        try:
+            from .runtime import TaskRuntime
+
+            runtime = TaskRuntime(self.artifacts_dir)
+            if runtime.is_tracked(task_id):
+                runtime.heartbeat(task_id)
+        except Exception:
+            pass
         return event
 
     def list_tasks(self) -> list[TaskRecord]:

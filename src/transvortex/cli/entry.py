@@ -16,6 +16,7 @@ from ..artifacts.result_workspace import (
     save_task_segments,
     update_task_memory_entry,
 )
+from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
 from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
 from ..app.credentials import (
@@ -26,6 +27,17 @@ from ..app.credentials import (
     resolve_credential,
     resolve_provider_credential,
     write_auth_credential,
+)
+from ..app.desktop_requests import (
+    RequestValidationError,
+    load_resume_request,
+    load_run_request,
+    resume_request_from_payload,
+    resume_request_from_flags,
+    resume_request_to_payload,
+    run_request_from_payload,
+    run_request_from_flags,
+    run_request_to_payload,
 )
 from ..app.doctor import doctor_report, format_doctor_report
 from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
@@ -391,7 +403,33 @@ def _read_json_arg(raw: str) -> dict[str, Any]:
     return payload
 
 
+def _request_path_arg(value: str | None) -> Path | None:
+    return Path(value).resolve() if value else None
+
+
+def _load_run_request_arg(value: str | None):
+    if not value:
+        raise RequestValidationError("request JSON is required")
+    raw = str(value)
+    if raw.lstrip().startswith("{"):
+        return run_request_from_payload(json.loads(raw))
+    return load_run_request(Path(raw).resolve())
+
+
+def _load_resume_request_arg(value: str | None):
+    if not value:
+        raise RequestValidationError("request JSON is required")
+    raw = str(value)
+    if raw.lstrip().startswith("{"):
+        return resume_request_from_payload(json.loads(raw))
+    return load_resume_request(Path(raw).resolve())
+
+
 def _optional_path_arg(value: str | None) -> Path | None:
+    return Path(value).resolve() if value else None
+
+
+def _output_path_from_request(value: str) -> Path | None:
     return Path(value).resolve() if value else None
 
 
@@ -463,6 +501,152 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         _append_optional(args, flag, value)
 
 
+def _append_request_overrides_to_args(args: list[str], overrides: dict[str, Any]) -> None:
+    def bool_text(value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return value
+
+    subtitle_style = overrides.get("subtitle_ass_style") if isinstance(overrides.get("subtitle_ass_style"), dict) else {}
+    mapping = [
+        ("--chunk-seconds", overrides.get("chunk_seconds")),
+        ("--chunk-overlap-seconds", overrides.get("chunk_overlap_seconds")),
+        ("--translation-batch-size", overrides.get("translation_batch_size")),
+        ("--concurrency", overrides.get("default_concurrency")),
+        ("--asr-provider", overrides.get("asr_provider")),
+        ("--asr-model", overrides.get("asr_model")),
+        ("--asr-audio-track", overrides.get("asr_audio_track")),
+        ("--asr-prompt-profile", overrides.get("asr_prompt_profile")),
+        ("--asr-prompt-text", overrides.get("asr_prompt_text")),
+        ("--asr-prompt-enabled", bool_text(overrides.get("asr_prompt_enabled"))),
+        ("--asr-prompt-include-previous-text", bool_text(overrides.get("asr_prompt_include_previous_text"))),
+        ("--asr-prompt-max-chars", overrides.get("asr_prompt_max_chars")),
+        ("--source-mode", overrides.get("source_mode")),
+        ("--subtitle-track", overrides.get("subtitle_track")),
+        ("--output-format", overrides.get("output_format")),
+        ("--subtitle-bilingual-order", subtitle_style.get("bilingual_order")),
+        ("--subtitle-prefer-single-line", bool_text(subtitle_style.get("prefer_single_line"))),
+        ("--translation-style-preset", overrides.get("translation_style_preset")),
+        ("--translation-style-prompt", overrides.get("translation_style_prompt")),
+        ("--translation-chunk-lines", overrides.get("translation_chunk_lines")),
+        ("--translation-context-before-lines", overrides.get("translation_context_before_lines")),
+        ("--translation-context-after-lines", overrides.get("translation_context_after_lines")),
+        ("--translation-repair-enabled", bool_text(overrides.get("translation_repair_enabled"))),
+        ("--translation-batching-mode", overrides.get("translation_batching_mode")),
+        ("--translation-min-chunk-lines", overrides.get("translation_min_chunk_lines")),
+        ("--translation-chunking-mode", overrides.get("translation_chunking_mode")),
+        ("--translation-experiment-logging-enabled", bool_text(overrides.get("translation_experiment_logging_enabled"))),
+        ("--translation-experiment-label", overrides.get("translation_experiment_label")),
+        ("--provider-timeout-seconds", overrides.get("provider_timeout_seconds")),
+        ("--provider-retry", overrides.get("provider_retry")),
+        ("--provider-http2", bool_text(overrides.get("provider_http2"))),
+        ("--provider-streaming-enabled", bool_text(overrides.get("provider_streaming_enabled"))),
+        ("--provider-connect-timeout-seconds", overrides.get("provider_connect_timeout_seconds")),
+        ("--provider-read-timeout-seconds", overrides.get("provider_read_timeout_seconds")),
+        ("--subtitle-quality-mode", overrides.get("subtitle_quality_mode")),
+        ("--subtitle-compression-enabled", bool_text(overrides.get("subtitle_compression_enabled"))),
+        ("--subtitle-reflow-enabled", bool_text(overrides.get("subtitle_reflow_enabled"))),
+        ("--memory-enabled", bool_text(overrides.get("memory_enabled"))),
+        ("--memory-bootstrap-enabled", bool_text(overrides.get("memory_bootstrap_enabled"))),
+        ("--memory-inject-enabled", bool_text(overrides.get("memory_inject_enabled"))),
+        ("--memory-patch-enabled", bool_text(overrides.get("memory_patch_enabled"))),
+        ("--memory-intensity", overrides.get("memory_intensity")),
+        ("--memory-patch-window-chunks", overrides.get("memory_patch_window_chunks")),
+        ("--memory-preset", _memory_presets_arg(overrides.get("memory_presets"))),
+    ]
+    for flag, value in mapping:
+        _append_optional(args, flag, value)
+
+
+def _memory_presets_arg(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+    tokens: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        preset_id = str(item.get("id") or "").strip()
+        if not preset_id:
+            continue
+        override = str(item.get("override_status") or "").strip()
+        tokens.append(f"{preset_id}:{override}" if override else preset_id)
+    return ",".join(tokens) or None
+
+
+def _request_mode_business_flags(ns: argparse.Namespace, command: str) -> list[str]:
+    flag_names = {
+        "input": "--input",
+        "input_type": "--input-type",
+        "src": "--src",
+        "tgt": "--tgt",
+        "bilingual": "--bilingual",
+        "output": "--output",
+        "provider": "--provider",
+        "model": "--model",
+        "chunk_seconds": "--chunk-seconds",
+        "chunk_overlap_seconds": "--chunk-overlap-seconds",
+        "translation_batch_size": "--translation-batch-size",
+        "concurrency": "--concurrency",
+        "asr_provider": "--asr-provider",
+        "asr_model": "--asr-model",
+        "asr_audio_track": "--asr-audio-track",
+        "asr_prompt_profile": "--asr-prompt-profile",
+        "asr_prompt_text": "--asr-prompt-text",
+        "asr_prompt_enabled": "--asr-prompt-enabled",
+        "asr_prompt_include_previous_text": "--asr-prompt-include-previous-text",
+        "asr_prompt_max_chars": "--asr-prompt-max-chars",
+        "source_mode": "--source-mode",
+        "subtitle_track": "--subtitle-track",
+        "output_format": "--output-format",
+        "subtitle_bilingual_order": "--subtitle-bilingual-order",
+        "subtitle_prefer_single_line": "--subtitle-prefer-single-line",
+        "translation_style_preset": "--translation-style-preset",
+        "translation_style_prompt": "--translation-style-prompt",
+        "translation_chunk_lines": "--translation-chunk-lines",
+        "translation_context_before_lines": "--translation-context-before-lines",
+        "translation_context_after_lines": "--translation-context-after-lines",
+        "translation_repair_enabled": "--translation-repair-enabled",
+        "translation_batching_mode": "--translation-batching-mode",
+        "translation_min_chunk_lines": "--translation-min-chunk-lines",
+        "translation_chunking_mode": "--translation-chunking-mode",
+        "translation_experiment_logging_enabled": "--translation-experiment-logging-enabled",
+        "translation_experiment_label": "--translation-experiment-label",
+        "provider_timeout_seconds": "--provider-timeout-seconds",
+        "provider_retry": "--provider-retry",
+        "provider_http2": "--provider-http2",
+        "provider_streaming_enabled": "--provider-streaming-enabled",
+        "provider_connect_timeout_seconds": "--provider-connect-timeout-seconds",
+        "provider_read_timeout_seconds": "--provider-read-timeout-seconds",
+        "subtitle_quality_mode": "--subtitle-quality-mode",
+        "subtitle_compression_enabled": "--subtitle-compression-enabled",
+        "subtitle_reflow_enabled": "--subtitle-reflow-enabled",
+        "memory_enabled": "--memory-enabled",
+        "memory_bootstrap_enabled": "--memory-bootstrap-enabled",
+        "memory_inject_enabled": "--memory-inject-enabled",
+        "memory_patch_enabled": "--memory-patch-enabled",
+        "memory_intensity": "--memory-intensity",
+        "memory_patch_window_chunks": "--memory-patch-window-chunks",
+        "memory_preset": "--memory-preset",
+    }
+    if command == "resume":
+        flag_names.pop("input", None)
+        flag_names.pop("input_type", None)
+        flag_names.pop("src", None)
+        flag_names.pop("tgt", None)
+        flag_names.pop("bilingual", None)
+        flag_names["task_id"] = "--task-id"
+    provided: list[str] = []
+    for name, flag in flag_names.items():
+        value = getattr(ns, name, None)
+        if value is True or (value not in {None, False, ""}):
+            provided.append(flag)
+    return provided
+
+
+def _raise_request_validation(message: str) -> None:
+    raise RequestValidationError(message)
+
+
 def _spawn_detached_worker(
     *,
     root: Path,
@@ -530,6 +714,11 @@ def _task_and_artifacts(root: Path, providers_file: Path | None, task_id: str):
     config = load_app_config(root_dir=root, providers_file=providers_file)
     store = TaskStore(config.pipeline.artifacts_dir)
     return store.load_task(task_id), config.pipeline.artifacts_dir
+
+
+def _runtime_for(root: Path, providers_file: Path | None) -> TaskRuntime:
+    config = load_app_config(root_dir=root, providers_file=providers_file)
+    return TaskRuntime(config.pipeline.artifacts_dir)
 
 
 def _print_task_json(root: Path, providers_file: Path | None, task_id: str, *, capability: str | None = None) -> None:
@@ -611,7 +800,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
     public_commands = (
         "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,"
-        "probe-provider,provider,auth,result,memory,reexport,asr,translate,export}"
+        "probe-provider,provider,auth,result,memory,runtime,reexport,asr,translate,export}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
 
@@ -620,10 +809,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run_p = sub.add_parser("run", help="Run a new task")
     _add_providers_file_arg(run_p)
-    run_p.add_argument("--input", required=True, help="Input video file")
-    run_p.add_argument("--input-type", choices=["video", "srt", "video_asr_translate", "srt_translate"], default="video")
-    run_p.add_argument("--src", required=True, help="Source language")
-    run_p.add_argument("--tgt", required=True, help="Target language")
+    run_p.add_argument("--request-json", default=None, help="Desktop/API request JSON file")
+    run_p.add_argument("--input", help="Input video file")
+    run_p.add_argument("--input-type", choices=["video", "srt", "video_asr_translate", "srt_translate"], default=None)
+    run_p.add_argument("--src", help="Source language")
+    run_p.add_argument("--tgt", help="Target language")
     run_p.add_argument("--bilingual", action="store_true", help="Output bilingual subtitle")
     run_p.add_argument("--output", help="Output subtitle file path")
     _add_pipeline_override_args(run_p)
@@ -634,7 +824,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     resume_p = sub.add_parser("resume", help="Resume an existing task")
     _add_providers_file_arg(resume_p)
-    resume_p.add_argument("--task-id", required=True)
+    resume_p.add_argument("--request-json", default=None, help="Desktop/API request JSON file")
+    resume_p.add_argument("--task-id")
     resume_p.add_argument("--output", help="Optional output override")
     _add_pipeline_override_args(resume_p)
     _add_route_override_args(resume_p)
@@ -655,6 +846,8 @@ def _build_parser() -> argparse.ArgumentParser:
     cancel_p = sub.add_parser("cancel", help="Request cancellation for a task")
     _add_providers_file_arg(cancel_p)
     cancel_p.add_argument("--task-id", required=True)
+    cancel_p.add_argument("--force", action="store_true", help="Terminate the active worker for this task")
+    cancel_p.add_argument("--force-after-grace", type=float, default=None, help="Force cancel after this many seconds")
     cancel_p.add_argument("--json", action="store_true", help="Print machine-readable task status")
 
     tasks_p = sub.add_parser("tasks", help="List known tasks")
@@ -775,6 +968,32 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_export_p.add_argument("--dry-run", action="store_true")
     memory_export_p.add_argument("--json", action="store_true")
 
+    runtime_p = sub.add_parser("runtime", help="Manage local task runtime")
+    runtime_sub = runtime_p.add_subparsers(dest="runtime_command", required=True)
+    runtime_submit_run_p = runtime_sub.add_parser("submit-run", help="Queue a run request")
+    _add_providers_file_arg(runtime_submit_run_p)
+    runtime_submit_run_p.add_argument("--request-json", required=True)
+    runtime_submit_run_p.add_argument("--json", action="store_true")
+    runtime_submit_resume_p = runtime_sub.add_parser("submit-resume", help="Queue a resume request")
+    _add_providers_file_arg(runtime_submit_resume_p)
+    runtime_submit_resume_p.add_argument("--request-json", required=True)
+    runtime_submit_resume_p.add_argument("--json", action="store_true")
+    runtime_acquire_p = runtime_sub.add_parser("acquire-next", help="Acquire the next queued task")
+    _add_providers_file_arg(runtime_acquire_p)
+    runtime_acquire_p.add_argument("--json", action="store_true")
+    runtime_snapshot_p = runtime_sub.add_parser("snapshot", help="Show runtime state")
+    _add_providers_file_arg(runtime_snapshot_p)
+    runtime_snapshot_p.add_argument("--json", action="store_true")
+    runtime_reconcile_p = runtime_sub.add_parser("reconcile", help="Repair stale runtime state")
+    _add_providers_file_arg(runtime_reconcile_p)
+    runtime_reconcile_p.add_argument("--json", action="store_true")
+    runtime_release_p = runtime_sub.add_parser("release-active", help="Release a claimed active task")
+    _add_providers_file_arg(runtime_release_p)
+    runtime_release_p.add_argument("--task-id", required=True)
+    runtime_release_p.add_argument("--state", choices=["interrupted", "queued"], default="interrupted")
+    runtime_release_p.add_argument("--reason", default="worker_launch_failed")
+    runtime_release_p.add_argument("--json", action="store_true")
+
     reexport_p = sub.add_parser("reexport", help="Re-export subtitles from task final segments")
     reexport_p.add_argument("--task-id", required=True)
     reexport_p.add_argument("--output-format", choices=["srt", "ass", "vtt", "webvtt", "both"], default=None)
@@ -842,16 +1061,38 @@ def main() -> None:
 
     if args.command == "_worker":
         def do_worker():
-            return execute_pipeline_task(
-                root_dir=root,
-                task_id=args.task_id,
-                output_file=_optional_path_arg(args.output),
-                providers_file=providers_file,
-                cli_overrides=_common_overrides(args),
-                provider_name=args.provider,
-                model=args.model,
-                event_sink=_print_jsonl_event,
-            )
+            runtime = _runtime_for(root, providers_file)
+            runtime.register_worker(task_id=args.task_id, owner="python", command="_worker")
+            saved_request = runtime.load_worker_request(args.task_id)
+            try:
+                if saved_request is not None:
+                    _command, request = saved_request
+                    result = execute_pipeline_task(
+                        root_dir=root,
+                        task_id=args.task_id,
+                        output_file=_output_path_from_request(request.output),
+                        providers_file=providers_file,
+                        cli_overrides=request.overrides,
+                        provider_name=request.provider or None,
+                        model=request.model or None,
+                        event_sink=_print_jsonl_event,
+                    )
+                else:
+                    result = execute_pipeline_task(
+                        root_dir=root,
+                        task_id=args.task_id,
+                        output_file=_optional_path_arg(args.output),
+                        providers_file=providers_file,
+                        cli_overrides=_common_overrides(args),
+                        provider_name=args.provider,
+                        model=args.model,
+                        event_sink=_print_jsonl_event,
+                    )
+                runtime.finish_worker(args.task_id, exit_code=0)
+                return result
+            except Exception:
+                runtime.finish_worker(args.task_id, exit_code=1, state="failed")
+                raise
 
         _run_or_exit(do_worker, json_mode=False, stream_events=True)
         return
@@ -861,31 +1102,61 @@ def main() -> None:
             parser.error("run: --json and --stream-events cannot be used together")
         if args.detach and args.stream_events:
             parser.error("run: --detach and --stream-events cannot be used together")
-        input_type = "srt_translate" if args.input_type in {"srt", "srt_translate"} else "video_asr_translate"
+        request_path = _request_path_arg(args.request_json)
+        if request_path is not None:
+            mixed = _request_mode_business_flags(args, "run")
+            if mixed:
+                _run_or_exit(
+                    lambda: _raise_request_validation(
+                        f"run: --request-json cannot be combined with {', '.join(mixed)}"
+                    ),
+                    json_mode=args.json,
+                    stream_events=args.stream_events,
+                )
+            request = _run_or_exit(lambda: load_run_request(request_path), json_mode=args.json, stream_events=args.stream_events)
+        else:
+            if not args.input or not args.src or not args.tgt:
+                parser.error("run: --input, --src and --tgt are required unless --request-json is used")
+            request = _run_or_exit(
+                lambda: run_request_from_flags(
+                    input_path=args.input,
+                    input_type=args.input_type or "video",
+                    source_lang=args.src,
+                    target_lang=args.tgt,
+                    bilingual=args.bilingual,
+                    output=args.output,
+                    provider=args.provider,
+                    model=args.model,
+                    overrides=_common_overrides(args),
+                ),
+                json_mode=args.json,
+                stream_events=args.stream_events,
+            )
         if args.detach:
             task_id, artifacts_dir = _run_or_exit(
                 lambda: create_pipeline_task(
                     root_dir=root,
-                    input_file=Path(args.input).resolve(),
-                    source_lang=args.src,
-                    target_lang=args.tgt,
-                    bilingual=args.bilingual,
+                    input_file=Path(request.input),
+                    source_lang=request.source_lang,
+                    target_lang=request.target_lang,
+                    bilingual=request.bilingual,
                     providers_file=providers_file,
-                    cli_overrides=_common_overrides(args),
-                    provider_name=args.provider,
-                    model=args.model,
-                    input_type=input_type,
+                    cli_overrides=request.overrides,
+                    provider_name=request.provider or None,
+                    model=request.model or None,
+                    input_type=request.input_type,
                     status="QUEUED",
                 ),
                 json_mode=args.json,
                 stream_events=False,
             )
+            TaskRuntime(artifacts_dir).save_runtime_request(task_id, "run", run_request_to_payload(request))
             worker_args = ["_worker", "--task-id", task_id]
             _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
-            _append_optional(worker_args, "--output", str(Path(args.output).resolve()) if args.output else None)
-            _append_optional(worker_args, "--provider", args.provider)
-            _append_optional(worker_args, "--model", args.model)
-            _append_common_overrides_to_args(worker_args, args)
+            _append_optional(worker_args, "--output", request.output)
+            _append_optional(worker_args, "--provider", request.provider)
+            _append_optional(worker_args, "--model", request.model)
+            _append_request_overrides_to_args(worker_args, request.overrides)
             try:
                 worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / task_id, worker_args=worker_args)
             except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
@@ -900,16 +1171,16 @@ def main() -> None:
         def do_run():
             return run_pipeline(
                 root_dir=root,
-                input_file=Path(args.input).resolve(),
-                source_lang=args.src,
-                target_lang=args.tgt,
-                bilingual=args.bilingual,
-                output_file=_optional_path_arg(args.output),
+                input_file=Path(request.input),
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+                bilingual=request.bilingual,
+                output_file=_output_path_from_request(request.output),
                 providers_file=providers_file,
-                cli_overrides=_common_overrides(args),
-                provider_name=args.provider,
-                model=args.model,
-                input_type=input_type,
+                cli_overrides=request.overrides,
+                provider_name=request.provider or None,
+                model=request.model or None,
+                input_type=request.input_type,
                 event_sink=_print_jsonl_event if args.stream_events else None,
             )
 
@@ -927,51 +1198,78 @@ def main() -> None:
             parser.error("resume: --json and --stream-events cannot be used together")
         if args.detach and args.stream_events:
             parser.error("resume: --detach and --stream-events cannot be used together")
+        request_path = _request_path_arg(args.request_json)
+        if request_path is not None:
+            mixed = _request_mode_business_flags(args, "resume")
+            if mixed:
+                _run_or_exit(
+                    lambda: _raise_request_validation(
+                        f"resume: --request-json cannot be combined with {', '.join(mixed)}"
+                    ),
+                    json_mode=args.json,
+                    stream_events=args.stream_events,
+                )
+            request = _run_or_exit(lambda: load_resume_request(request_path), json_mode=args.json, stream_events=args.stream_events)
+        else:
+            if not args.task_id:
+                parser.error("resume: --task-id is required unless --request-json is used")
+            request = _run_or_exit(
+                lambda: resume_request_from_flags(
+                    task_id=args.task_id,
+                    output=args.output,
+                    provider=args.provider,
+                    model=args.model,
+                    overrides=_common_overrides(args),
+                ),
+                json_mode=args.json,
+                stream_events=args.stream_events,
+            )
         if args.detach:
             artifacts_dir = _run_or_exit(
                 lambda: queue_resume_task(
                     root_dir=root,
-                    task_id=args.task_id,
+                    task_id=request.task_id,
                     providers_file=providers_file,
-                    cli_overrides=_common_overrides(args),
-                    provider_name=args.provider,
-                    model=args.model,
+                    cli_overrides=request.overrides,
+                    provider_name=request.provider or None,
+                    model=request.model or None,
                 ),
                 json_mode=args.json,
                 stream_events=False,
             )
-            worker_args = ["_worker", "--task-id", args.task_id]
+            TaskRuntime(artifacts_dir).save_runtime_request(request.task_id, "resume", resume_request_to_payload(request))
+            worker_args = ["_worker", "--task-id", request.task_id]
             _append_optional(worker_args, "--providers-file", str(providers_file) if providers_file else None)
-            _append_optional(worker_args, "--output", str(Path(args.output).resolve()) if args.output else None)
-            _append_optional(worker_args, "--provider", args.provider)
-            _append_optional(worker_args, "--model", args.model)
-            _append_common_overrides_to_args(worker_args, args)
+            _append_optional(worker_args, "--output", request.output)
+            _append_optional(worker_args, "--provider", request.provider)
+            _append_optional(worker_args, "--model", request.model)
+            _append_request_overrides_to_args(worker_args, request.overrides)
             try:
-                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / args.task_id, worker_args=worker_args)
+                worker = _spawn_detached_worker(root=root, task_dir=artifacts_dir / request.task_id, worker_args=worker_args)
             except Exception as exc:  # noqa: BLE001 - keep detach responses machine-readable
                 _handle_detached_worker_error(
                     exc,
                     root=root,
                     providers_file=providers_file,
-                    task_id=args.task_id,
+                    task_id=request.task_id,
                     json_mode=args.json,
                 )
-            payload = _detach_response(task_id=args.task_id, artifacts_dir=artifacts_dir, worker=worker, command="resume")
+            payload = _detach_response(task_id=request.task_id, artifacts_dir=artifacts_dir, worker=worker, command="resume")
             if args.json:
                 _print_json(payload)
             else:
-                print(args.task_id)
+                print(request.task_id)
             return
 
         def do_resume():
             return resume_pipeline(
                 root_dir=root,
-                task_id=args.task_id,
-                output_file=_optional_path_arg(args.output),
+                task_id=request.task_id,
+                output_file=_output_path_from_request(request.output),
                 providers_file=providers_file,
-                cli_overrides=_common_overrides(args),
-                provider_name=args.provider,
-                model=args.model,
+                cli_overrides=request.overrides,
+                provider_name=request.provider or None,
+                model=request.model or None,
                 event_sink=_print_jsonl_event if args.stream_events else None,
             )
 
@@ -984,9 +1282,59 @@ def main() -> None:
             sys.stdout.flush()
         return
 
+    if args.command == "runtime":
+        runtime = _runtime_for(root, providers_file)
+        if args.runtime_command == "submit-run":
+            payload = _run_or_exit(
+                lambda: runtime.submit_run(
+                    root_dir=root,
+                    request=_load_run_request_arg(args.request_json),
+                    providers_file=providers_file,
+                ),
+                json_mode=True,
+                stream_events=False,
+            )
+            _print_json(payload)
+            return
+        if args.runtime_command == "submit-resume":
+            payload = _run_or_exit(
+                lambda: runtime.submit_resume(
+                    root_dir=root,
+                    request=_load_resume_request_arg(args.request_json),
+                    providers_file=providers_file,
+                ),
+                json_mode=True,
+                stream_events=False,
+            )
+            _print_json(payload)
+            return
+        if args.runtime_command == "acquire-next":
+            payload = _run_or_exit(
+                lambda: runtime.acquire_next(root_dir=root, providers_file=providers_file),
+                json_mode=True,
+                stream_events=False,
+            )
+            _print_json(payload)
+            return
+        if args.runtime_command == "snapshot":
+            _print_json(runtime.snapshot())
+            return
+        if args.runtime_command == "reconcile":
+            _print_json(runtime.reconcile())
+            return
+        if args.runtime_command == "release-active":
+            payload = _run_or_exit(
+                lambda: runtime.release_active(args.task_id, state=args.state, reason=args.reason),
+                json_mode=True,
+                stream_events=False,
+            )
+            _print_json(payload)
+            return
+
     if args.command == "status":
         def do_status():
             config = load_app_config(root_dir=root, providers_file=providers_file)
+            TaskRuntime(config.pipeline.artifacts_dir).reconcile()
             store = TaskStore(config.pipeline.artifacts_dir)
             task = store.load_task(args.task_id)
             return _task_payload(task, config.pipeline.artifacts_dir)
@@ -1000,10 +1348,11 @@ def main() -> None:
 
     if args.command == "events":
         config = load_app_config(root_dir=root, providers_file=providers_file)
+        TaskRuntime(config.pipeline.artifacts_dir).reconcile()
         store = TaskStore(config.pipeline.artifacts_dir)
         emitted = 0
-        terminal_event_types = {"done", "error", "cancelled"}
-        terminal_statuses = {"DONE", "FAILED", "CANCELLED"}
+        terminal_event_types = {"done", "error", "cancelled", "interrupted"}
+        terminal_statuses = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
         while True:
             events = store.read_events(args.task_id)
             for event in events[emitted:]:
@@ -1026,7 +1375,21 @@ def main() -> None:
         def do_cancel():
             config = load_app_config(root_dir=root, providers_file=providers_file)
             store = TaskStore(config.pipeline.artifacts_dir)
-            task = store.request_cancel(args.task_id)
+            runtime = TaskRuntime(config.pipeline.artifacts_dir)
+            if args.force:
+                task = runtime.force_cancel(args.task_id, reason="force_cancel")
+            else:
+                task = store.request_cancel(args.task_id)
+                if args.force_after_grace is not None:
+                    deadline = time.time() + max(0.0, float(args.force_after_grace))
+                    while time.time() < deadline:
+                        latest = store.load_task(args.task_id)
+                        if latest.status in {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}:
+                            return task_status_json(latest, store=store)
+                        time.sleep(0.2)
+                    latest = store.load_task(args.task_id)
+                    if latest.status not in {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}:
+                        task = runtime.force_cancel(args.task_id, reason="force_after_grace")
             return task_status_json(task, store=store)
 
         payload = _run_or_exit(do_cancel, json_mode=args.json, stream_events=False, task_id_hint=args.task_id)
@@ -1038,6 +1401,7 @@ def main() -> None:
 
     if args.command == "tasks":
         config = load_app_config(root_dir=root, providers_file=providers_file)
+        TaskRuntime(config.pipeline.artifacts_dir).reconcile()
         store = TaskStore(config.pipeline.artifacts_dir)
         payload = [_task_payload(task, config.pipeline.artifacts_dir) for task in store.list_tasks()]
         if args.json:

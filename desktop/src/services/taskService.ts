@@ -21,7 +21,7 @@ export async function startTask(draft: TaskDraft): Promise<StartTaskResponse> {
 
 export async function resumeTask(taskId: string): Promise<StartTaskResponse> {
   return invokeCommand<StartTaskResponse>("resume_task", {
-    request: { taskId },
+    request: { request_version: 1, task_id: taskId },
   });
 }
 

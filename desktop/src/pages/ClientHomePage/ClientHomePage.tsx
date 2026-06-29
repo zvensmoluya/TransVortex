@@ -730,6 +730,8 @@ function taskStatusLabel(task: Task) {
       return "启动中";
     case "cancelRequested":
       return "收束中";
+    case "interrupted":
+      return "已中断";
     case "failedRecoverable":
       return "可恢复";
     case "failedFatal":

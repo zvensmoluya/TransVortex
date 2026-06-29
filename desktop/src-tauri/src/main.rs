@@ -1,98 +1,29 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(Default)]
 struct WorkerState {
-    child: Mutex<Option<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
     task_id: Arc<Mutex<Option<String>>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StartTaskRequest {
-    input: String,
-    input_type: Option<String>,
-    output_dir: Option<String>,
-    source_lang: String,
-    target_lang: String,
-    bilingual: bool,
-    provider: Option<String>,
-    model: Option<String>,
-    asr_provider: Option<String>,
-    asr_model: Option<String>,
-    asr_prompt_profile: Option<String>,
-    asr_prompt_text: Option<String>,
-    asr_prompt_enabled: Option<bool>,
-    asr_prompt_include_previous_text: Option<bool>,
-    asr_prompt_max_chars: Option<u32>,
-    source_mode: Option<String>,
-    subtitle_track: Option<String>,
-    translation_batch_size: Option<u32>,
-    concurrency: Option<u32>,
-    output_format: Option<String>,
-    translation_style_preset: Option<String>,
-    translation_style_prompt: Option<String>,
-    translation_chunk_lines: Option<u32>,
-    translation_context_before_lines: Option<u32>,
-    translation_context_after_lines: Option<u32>,
-    translation_repair_enabled: Option<bool>,
-    subtitle_quality_mode: Option<String>,
-    subtitle_compression_enabled: Option<bool>,
-    subtitle_reflow_enabled: Option<bool>,
-    subtitle_bilingual_order: Option<String>,
-    subtitle_prefer_single_line: Option<bool>,
-    memory_enabled: Option<bool>,
-    memory_bootstrap_enabled: Option<bool>,
-    memory_inject_enabled: Option<bool>,
-    memory_patch_enabled: Option<bool>,
-    memory_intensity: Option<String>,
-    memory_preset: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResumeTaskRequest {
-    task_id: String,
-    provider: Option<String>,
-    model: Option<String>,
-    asr_provider: Option<String>,
-    asr_model: Option<String>,
-    asr_prompt_profile: Option<String>,
-    asr_prompt_text: Option<String>,
-    asr_prompt_enabled: Option<bool>,
-    asr_prompt_include_previous_text: Option<bool>,
-    asr_prompt_max_chars: Option<u32>,
-    source_mode: Option<String>,
-    subtitle_track: Option<String>,
-    translation_batch_size: Option<u32>,
-    concurrency: Option<u32>,
-    output_format: Option<String>,
-    translation_style_preset: Option<String>,
-    translation_style_prompt: Option<String>,
-    translation_chunk_lines: Option<u32>,
-    translation_context_before_lines: Option<u32>,
-    translation_context_after_lines: Option<u32>,
-    translation_repair_enabled: Option<bool>,
-    subtitle_quality_mode: Option<String>,
-    subtitle_compression_enabled: Option<bool>,
-    subtitle_reflow_enabled: Option<bool>,
-    subtitle_bilingual_order: Option<String>,
-    subtitle_prefer_single_line: Option<bool>,
-    memory_enabled: Option<bool>,
-    memory_bootstrap_enabled: Option<bool>,
-    memory_inject_enabled: Option<bool>,
-    memory_patch_enabled: Option<bool>,
-    memory_intensity: Option<String>,
-    memory_preset: Option<String>,
+impl Clone for WorkerState {
+    fn clone(&self) -> Self {
+        Self {
+            child: Arc::clone(&self.child),
+            task_id: Arc::clone(&self.task_id),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -180,13 +111,6 @@ fn push_arg(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
     }
 }
 
-fn push_num_arg(args: &mut Vec<String>, flag: &str, value: Option<u32>) {
-    if let Some(value) = value {
-        args.push(flag.to_string());
-        args.push(value.to_string());
-    }
-}
-
 fn push_bool_arg(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
     if let Some(value) = value {
         args.push(flag.to_string());
@@ -242,35 +166,7 @@ fn subtitle_streams_from_probe(payload: Value) -> Vec<SubtitleStream> {
         .unwrap_or_default()
 }
 
-fn push_asr_source_args(args: &mut Vec<String>, request: &StartTaskRequest) {
-    push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
-    push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
-    push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
-    push_bool_arg(
-        args,
-        "--asr-prompt-include-previous-text",
-        request.asr_prompt_include_previous_text,
-    );
-    push_num_arg(args, "--asr-prompt-max-chars", request.asr_prompt_max_chars);
-    push_arg(args, "--source-mode", &request.source_mode);
-    push_arg(args, "--subtitle-track", &request.subtitle_track);
-}
-
-fn push_resume_asr_source_args(args: &mut Vec<String>, request: &ResumeTaskRequest) {
-    push_arg(args, "--asr-prompt-profile", &request.asr_prompt_profile);
-    push_arg(args, "--asr-prompt-text", &request.asr_prompt_text);
-    push_bool_arg(args, "--asr-prompt-enabled", request.asr_prompt_enabled);
-    push_bool_arg(
-        args,
-        "--asr-prompt-include-previous-text",
-        request.asr_prompt_include_previous_text,
-    );
-    push_num_arg(args, "--asr-prompt-max-chars", request.asr_prompt_max_chars);
-    push_arg(args, "--source-mode", &request.source_mode);
-    push_arg(args, "--subtitle-track", &request.subtitle_track);
-}
-
-fn ensure_no_running(state: &State<WorkerState>) -> Result<(), String> {
+fn ensure_no_running(state: &WorkerState) -> Result<(), String> {
     let mut current = state.child.lock().map_err(|err| err.to_string())?;
     if current.as_mut().is_some_and(|child| child.try_wait().ok().flatten().is_none()) {
         return Err("A task is already running".into());
@@ -280,9 +176,26 @@ fn ensure_no_running(state: &State<WorkerState>) -> Result<(), String> {
     Ok(())
 }
 
+fn request_file_path(app: &AppHandle, command: &str) -> Result<PathBuf, String> {
+    let cache_dir = app.path().app_cache_dir().map_err(|err| err.to_string())?;
+    std::fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())?
+        .as_millis();
+    Ok(cache_dir.join(format!("transvortex-{command}-{millis}.json")))
+}
+
+fn write_request_file(app: &AppHandle, command: &str, request: &Value) -> Result<PathBuf, String> {
+    let path = request_file_path(app, command)?;
+    let bytes = serde_json::to_vec_pretty(request).map_err(|err| err.to_string())?;
+    std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    Ok(path)
+}
+
 fn spawn_streaming_worker(
     app: AppHandle,
-    state: State<WorkerState>,
+    state: WorkerState,
     root: PathBuf,
     args: Vec<String>,
 ) -> Result<StartTaskResponse, String> {
@@ -294,24 +207,38 @@ fn spawn_streaming_worker(
         .spawn()
         .map_err(|err| err.to_string())?;
 
-    let stdout = child.stdout.take().ok_or("Failed to capture worker stdout")?;
-    let stderr = child.stderr.take().ok_or("Failed to capture worker stderr")?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture worker stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture worker stderr".to_string())?;
     let emit_app = app.clone();
     let task_state = state.task_id.clone();
+    let (task_tx, task_rx) = mpsc::channel::<String>();
+    let chain_app = app.clone();
+    let chain_state = state.clone();
+    let chain_root = root.clone();
     thread::spawn(move || {
+        let mut first_task_id_sent = false;
         for line in BufReader::new(stdout).lines().flatten() {
             if line.trim().is_empty() {
                 continue;
             }
             if let Ok(event) = serde_json::from_str::<Value>(&line) {
                 if let Some(task_id) = event.get("task_id").and_then(Value::as_str) {
+                    if task_id.is_empty() {
+                        let _ = emit_app.emit("worker-event", event);
+                        continue;
+                    }
                     if let Ok(mut current_task_id) = task_state.lock() {
                         *current_task_id = Some(task_id.to_string());
+                    }
+                    if !first_task_id_sent {
+                        let _ = task_tx.send(task_id.to_string());
+                        first_task_id_sent = true;
                     }
                 }
                 let _ = emit_app.emit("worker-event", event);
             }
         }
+        let _ = launch_next_worker(chain_app, chain_state, chain_root);
     });
     let err_app = app.clone();
     thread::spawn(move || {
@@ -322,15 +249,72 @@ fn spawn_streaming_worker(
         }
     });
 
+    let task_id = loop {
+        match task_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(task_id) => break Some(task_id),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+                    return Err(format!("Worker exited before task creation: {status}"));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("Worker stdout closed before task creation".to_string());
+            }
+        }
+    };
+
     *state.child.lock().map_err(|err| err.to_string())? = Some(child);
     Ok(StartTaskResponse {
         started: true,
-        task_id: state
-            .task_id
-            .lock()
-            .map_err(|err| err.to_string())?
-            .clone(),
+        task_id,
     })
+}
+
+fn launch_next_worker(app: AppHandle, state: WorkerState, root: PathBuf) -> Result<Option<String>, String> {
+    ensure_no_running(&state)?;
+    let acquired = run_worker_json(&root, &["runtime".into(), "acquire-next".into(), "--json".into()])?;
+    if !acquired
+        .get("acquired")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let launch = acquired.get("launch").and_then(Value::as_object).ok_or("Missing runtime launch payload")?;
+    let task_id = launch
+        .get("task_id")
+        .and_then(Value::as_str)
+        .ok_or("Missing runtime task id")?
+        .to_string();
+    let mut args = vec!["-m".into(), "transvortex.cli".into(), "--root".into(), root.to_string_lossy().to_string()];
+    let launch_args = launch
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or("Missing runtime launch args")?;
+    for item in launch_args {
+        args.push(item.as_str().ok_or("Runtime launch arg must be a string")?.to_string());
+    }
+    let response = match spawn_streaming_worker(app, state, root.clone(), args) {
+        Ok(response) => response,
+        Err(err) => {
+            let _ = run_worker_json(
+                &root,
+                &[
+                    "runtime".into(),
+                    "release-active".into(),
+                    "--task-id".into(),
+                    task_id.clone(),
+                    "--state".into(),
+                    "interrupted".into(),
+                    "--reason".into(),
+                    "worker_launch_failed".into(),
+                    "--json".into(),
+                ],
+            );
+            return Err(err);
+        }
+    };
+    Ok(response.task_id.or(Some(task_id)))
 }
 
 #[tauri::command]
@@ -342,6 +326,7 @@ fn get_config(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 fn list_tasks(app: AppHandle) -> Result<Value, String> {
     let root = repo_root(&app)?;
+    let _ = run_worker_json(&root, &["runtime".into(), "reconcile".into(), "--json".into()]);
     run_worker_json(&root, &["tasks".into(), "--json".into()])
 }
 
@@ -686,190 +671,89 @@ fn reexport_task(
 fn start_task(
     app: AppHandle,
     state: State<WorkerState>,
-    request: StartTaskRequest,
+    request: Value,
 ) -> Result<StartTaskResponse, String> {
-    ensure_no_running(&state)?;
     let root = repo_root(&app)?;
-    let input_path = request.input.clone();
-    let target_lang = request.target_lang.clone();
-    let input_type = request.input_type.clone().unwrap_or_else(|| "video".into());
-    let mut args = vec![
-        "-m".into(),
-        "transvortex.cli".into(),
-        "--root".into(),
-        root.to_string_lossy().to_string(),
-        "run".into(),
-        "--input".into(),
-        input_path.clone(),
-        "--input-type".into(),
-        input_type,
-        "--src".into(),
-        request.source_lang.clone(),
-        "--tgt".into(),
-        target_lang.clone(),
-        "--stream-events".into(),
-    ];
-    if request.bilingual {
-        args.push("--bilingual".into());
-    }
-    if let Some(output_dir) = request
-        .output_dir
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        let input_stem = Path::new(&input_path)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("output");
-        let output_path = Path::new(&output_dir).join(format!("{input_stem}.{target_lang}.srt"));
-        args.push("--output".into());
-        args.push(output_path.to_string_lossy().to_string());
-    }
-    push_arg(&mut args, "--provider", &request.provider);
-    push_arg(&mut args, "--model", &request.model);
-    push_arg(&mut args, "--asr-provider", &request.asr_provider);
-    push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_asr_source_args(&mut args, &request);
-    push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
-    push_num_arg(&mut args, "--concurrency", request.concurrency);
-    push_arg(&mut args, "--output-format", &request.output_format);
-    push_arg(&mut args, "--translation-style-preset", &request.translation_style_preset);
-    push_arg(&mut args, "--translation-style-prompt", &request.translation_style_prompt);
-    push_num_arg(&mut args, "--translation-chunk-lines", request.translation_chunk_lines);
-    push_num_arg(
-        &mut args,
-        "--translation-context-before-lines",
-        request.translation_context_before_lines,
-    );
-    push_num_arg(
-        &mut args,
-        "--translation-context-after-lines",
-        request.translation_context_after_lines,
-    );
-    push_bool_arg(
-        &mut args,
-        "--translation-repair-enabled",
-        request.translation_repair_enabled,
-    );
-    push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
-    push_arg(
-        &mut args,
-        "--subtitle-bilingual-order",
-        &request.subtitle_bilingual_order,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-prefer-single-line",
-        request.subtitle_prefer_single_line,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-compression-enabled",
-        request.subtitle_compression_enabled,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-reflow-enabled",
-        request.subtitle_reflow_enabled,
-    );
-    push_bool_arg(&mut args, "--memory-enabled", request.memory_enabled);
-    push_bool_arg(
-        &mut args,
-        "--memory-bootstrap-enabled",
-        request.memory_bootstrap_enabled,
-    );
-    push_bool_arg(&mut args, "--memory-inject-enabled", request.memory_inject_enabled);
-    push_bool_arg(&mut args, "--memory-patch-enabled", request.memory_patch_enabled);
-    push_arg(&mut args, "--memory-intensity", &request.memory_intensity);
-    push_arg(&mut args, "--memory-preset", &request.memory_preset);
-
-    spawn_streaming_worker(app, state, root, args)
+    let request_file = write_request_file(&app, "run", &request)?;
+    let submitted = match run_worker_json(
+        &root,
+        &[
+            "runtime".into(),
+            "submit-run".into(),
+            "--request-json".into(),
+            request_file.to_string_lossy().to_string(),
+            "--json".into(),
+        ],
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            let _ = std::fs::remove_file(&request_file);
+            return Err(err);
+        }
+    };
+    let _ = std::fs::remove_file(&request_file);
+    let task_id = submitted
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let started_task_id = launch_next_worker(app, state.inner().clone(), root)?;
+    Ok(StartTaskResponse {
+        started: started_task_id.is_some(),
+        task_id,
+    })
 }
 
 #[tauri::command]
 fn resume_task(
     app: AppHandle,
     state: State<WorkerState>,
-    request: ResumeTaskRequest,
+    request: Value,
 ) -> Result<StartTaskResponse, String> {
-    ensure_no_running(&state)?;
     let root = repo_root(&app)?;
-    let task_id = request.task_id.clone();
-    let mut args = vec![
-        "-m".into(),
-        "transvortex.cli".into(),
-        "--root".into(),
-        root.to_string_lossy().to_string(),
-        "resume".into(),
-        "--task-id".into(),
+    let request_file = write_request_file(&app, "resume", &request)?;
+    let submitted = match run_worker_json(
+        &root,
+        &[
+            "runtime".into(),
+            "submit-resume".into(),
+            "--request-json".into(),
+            request_file.to_string_lossy().to_string(),
+            "--json".into(),
+        ],
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            let _ = std::fs::remove_file(&request_file);
+            return Err(err);
+        }
+    };
+    let _ = std::fs::remove_file(&request_file);
+    let task_id = submitted
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let started_task_id = launch_next_worker(app, state.inner().clone(), root)?;
+    Ok(StartTaskResponse {
+        started: started_task_id.is_some(),
         task_id,
-        "--stream-events".into(),
-    ];
-    push_arg(&mut args, "--provider", &request.provider);
-    push_arg(&mut args, "--model", &request.model);
-    push_arg(&mut args, "--asr-provider", &request.asr_provider);
-    push_arg(&mut args, "--asr-model", &request.asr_model);
-    push_resume_asr_source_args(&mut args, &request);
-    push_num_arg(&mut args, "--translation-batch-size", request.translation_batch_size);
-    push_num_arg(&mut args, "--concurrency", request.concurrency);
-    push_arg(&mut args, "--output-format", &request.output_format);
-    push_arg(&mut args, "--translation-style-preset", &request.translation_style_preset);
-    push_arg(&mut args, "--translation-style-prompt", &request.translation_style_prompt);
-    push_num_arg(&mut args, "--translation-chunk-lines", request.translation_chunk_lines);
-    push_num_arg(
-        &mut args,
-        "--translation-context-before-lines",
-        request.translation_context_before_lines,
-    );
-    push_num_arg(
-        &mut args,
-        "--translation-context-after-lines",
-        request.translation_context_after_lines,
-    );
-    push_bool_arg(
-        &mut args,
-        "--translation-repair-enabled",
-        request.translation_repair_enabled,
-    );
-    push_arg(&mut args, "--subtitle-quality-mode", &request.subtitle_quality_mode);
-    push_arg(
-        &mut args,
-        "--subtitle-bilingual-order",
-        &request.subtitle_bilingual_order,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-prefer-single-line",
-        request.subtitle_prefer_single_line,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-compression-enabled",
-        request.subtitle_compression_enabled,
-    );
-    push_bool_arg(
-        &mut args,
-        "--subtitle-reflow-enabled",
-        request.subtitle_reflow_enabled,
-    );
-    push_bool_arg(&mut args, "--memory-enabled", request.memory_enabled);
-    push_bool_arg(
-        &mut args,
-        "--memory-bootstrap-enabled",
-        request.memory_bootstrap_enabled,
-    );
-    push_bool_arg(&mut args, "--memory-inject-enabled", request.memory_inject_enabled);
-    push_bool_arg(&mut args, "--memory-patch-enabled", request.memory_patch_enabled);
-    push_arg(&mut args, "--memory-intensity", &request.memory_intensity);
-    push_arg(&mut args, "--memory-preset", &request.memory_preset);
-    spawn_streaming_worker(app, state, root, args)
+    })
 }
 
 #[tauri::command]
 fn cancel_task(app: AppHandle, state: State<WorkerState>, task_id: String) -> Result<Value, String> {
     let root = repo_root(&app)?;
     *state.task_id.lock().map_err(|err| err.to_string())? = Some(task_id.clone());
-    run_worker_json(&root, &["cancel".into(), "--task-id".into(), task_id, "--json".into()])
+    run_worker_json(
+        &root,
+        &[
+            "cancel".into(),
+            "--task-id".into(),
+            task_id,
+            "--force-after-grace".into(),
+            "15".into(),
+            "--json".into(),
+        ],
+    )
 }
 
 #[tauri::command]

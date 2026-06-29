@@ -97,25 +97,24 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
       return undefined;
     }
 
-    const knownTaskIds = new Set(tasks.map((task) => task.id));
     setActiveTaskId(undefined);
     setStarting(true);
     try {
       const response = await startTask(draft);
       setError(undefined);
-      const taskId = response.taskId ?? await waitForNewTaskId(knownTaskIds);
+      const taskId = response.taskId;
       if (taskId) {
         setActiveTaskId(taskId);
       }
-      const latest = await refreshTasks();
-      return taskId ?? latest.find((task) => !knownTaskIds.has(task.id))?.id;
+      await refreshTasks();
+      return taskId;
     } catch (err) {
       setError(technicalErrorToUserFacingError(err, "worker"));
       return undefined;
     } finally {
       setStarting(false);
     }
-  }, [draft, refreshTasks, tasks]);
+  }, [draft, refreshTasks]);
 
   const resumeStoredTask = useCallback(async (taskId: string) => {
     setStarting(true);
@@ -173,22 +172,8 @@ export function useTaskStore(serviceConnections: ServiceConnection[] = []): Task
   };
 }
 
-async function waitForNewTaskId(knownTaskIds: Set<string>): Promise<string | undefined> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const latest = await listTasks();
-    const created = latest.find((task) => !knownTaskIds.has(task.id));
-    if (created) return created.id;
-    await delay(250);
-  }
-  return undefined;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function markTaskCancelRequested(task: Task): Task {
-  if (task.status === "completed" || task.status === "cancelled" || task.status === "failedFatal") {
+  if (task.status === "completed" || task.status === "cancelled" || task.status === "interrupted" || task.status === "failedFatal") {
     return task;
   }
   return {

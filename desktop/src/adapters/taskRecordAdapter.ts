@@ -43,12 +43,14 @@ export function taskRecordToTask(record: unknown, index = 0): Task {
     outputs,
     taskDirectory: stringValue(raw.task_dir),
     recoverability: {
-      canResume: status === "failedRecoverable" || status === "cancelled",
+      canResume: status === "failedRecoverable" || status === "cancelled" || status === "interrupted",
       resumeLabel:
         status === "failedRecoverable"
           ? "从上次完成的步骤继续"
           : status === "cancelled"
             ? "从取消点继续"
+            : status === "interrupted"
+              ? "从中断点继续"
             : undefined,
     },
     error: taskErrorToUserFacingError(errorInfo, raw.error),
@@ -92,6 +94,8 @@ function mapNormalizedTaskStatus(normalized?: string): TaskStatus {
     case "FAILED":
     case "FAILED_RECOVERABLE":
       return "failedRecoverable";
+    case "INTERRUPTED":
+      return "interrupted";
     case "FAILED_FATAL":
       return "failedFatal";
     case "DONE":

@@ -1067,6 +1067,19 @@ def _status_json(task: TaskRecord, store: TaskStore | None = None) -> dict[str, 
     }
     if store is not None:
         payload.update(_checkpoint_status_payload(store, task.task_id))
+        try:
+            from ..artifacts.runtime import TaskRuntime
+
+            payload["runtime"] = TaskRuntime(store.artifacts_dir).status_payload(task)
+        except Exception:
+            payload["runtime"] = {
+                "state": "unknown",
+                "can_cancel": task.status not in {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"},
+                "can_resume": task.status in {"FAILED", "CANCELLED", "INTERRUPTED"},
+                "worker_pid": None,
+                "last_seen": "",
+                "stale_reason": "",
+            }
     return payload
 
 

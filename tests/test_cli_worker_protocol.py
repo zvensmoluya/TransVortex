@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from transvortex.cli import main
+from transvortex.app.desktop_requests import run_request_from_flags, run_request_from_payload
 from transvortex.protocol.errors import PipelineTaskError, error_info
 from transvortex.app.models import TaskRecord
 from transvortex.artifacts.task_store import TaskStore
@@ -352,6 +353,394 @@ def test_run_stream_events_cli_jsonl_and_overrides(tmp_path: Path, monkeypatch, 
     assert captured["cli_overrides"]["asr_model"] == "large-v3-turbo"
 
 
+def test_run_request_contract_matches_flags_and_json(tmp_path: Path) -> None:
+    input_file = tmp_path / "demo.mp4"
+    output_dir = tmp_path / "out"
+    output_file = output_dir / "demo.zh-CN.srt"
+    overrides = {
+        "source_mode": "asr",
+        "output_format": "both",
+        "memory_bootstrap_enabled": True,
+        "memory_inject_enabled": False,
+        "memory_patch_enabled": True,
+        "memory_presets": [{"id": "anime"}],
+    }
+
+    from_flags = run_request_from_flags(
+        input_path=str(input_file),
+        input_type="video",
+        source_lang="ja",
+        target_lang="zh-CN",
+        bilingual=True,
+        output=str(output_file),
+        provider="p1",
+        model="m1",
+        overrides=overrides,
+    )
+    from_json = run_request_from_payload(
+        {
+            "request_version": 1,
+            "input": str(input_file),
+            "input_type": "video",
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+            "bilingual": True,
+            "output_dir": str(output_dir),
+            "provider": "p1",
+            "model": "m1",
+            "overrides": overrides,
+        }
+    )
+
+    assert from_json == from_flags
+
+
+def test_run_request_json_stream_events_uses_pipeline_contract(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "run-request.json"
+    write_json(
+        request_file,
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "input_type": "video",
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+            "bilingual": True,
+            "provider": "p1",
+            "model": "m1",
+            "overrides": {
+                "source_mode": "asr",
+                "output_format": "both",
+                "memory_bootstrap_enabled": True,
+                "memory_inject_enabled": False,
+                "memory_patch_enabled": True,
+            },
+        },
+    )
+    captured = {}
+
+    def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        kwargs["event_sink"]({"type": "task_created", "task_id": "json-task", "message": "created"})
+        kwargs["event_sink"]({"type": "done", "task_id": "json-task", "message": "done"})
+        return "json-task"
+
+    monkeypatch.setattr("transvortex.cli.entry.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--request-json",
+            str(request_file),
+            "--stream-events",
+        ],
+    )
+
+    main()
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[0]["type"] == "task_created"
+    assert captured["input_file"] == tmp_path / "demo.mp4"
+    assert captured["input_type"] == "video_asr_translate"
+    assert captured["source_lang"] == "ja"
+    assert captured["target_lang"] == "zh-CN"
+    assert captured["bilingual"] is True
+    assert captured["provider_name"] == "p1"
+    assert captured["model"] == "m1"
+    assert captured["cli_overrides"]["source_mode"] == "asr"
+    assert captured["cli_overrides"]["memory_inject_enabled"] is False
+    assert captured["cli_overrides"]["memory_patch_enabled"] is True
+
+
+def test_resume_request_json_stream_events_uses_pipeline_contract(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "resume-request.json"
+    write_json(
+        request_file,
+        {
+            "request_version": 1,
+            "task_id": "task-json",
+            "output": str(tmp_path / "out.srt"),
+            "provider": "p1",
+            "model": "m1",
+            "overrides": {"memory_patch_enabled": True},
+        },
+    )
+    captured = {}
+
+    def fake_resume_pipeline(**kwargs):
+        captured.update(kwargs)
+        kwargs["event_sink"]({"type": "resume_requested", "task_id": kwargs["task_id"], "message": "resume"})
+        return kwargs["task_id"]
+
+    monkeypatch.setattr("transvortex.cli.entry.resume_pipeline", fake_resume_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "resume",
+            "--request-json",
+            str(request_file),
+            "--stream-events",
+        ],
+    )
+
+    main()
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[0]["type"] == "resume_requested"
+    assert captured["task_id"] == "task-json"
+    assert captured["output_file"] == tmp_path / "out.srt"
+    assert captured["provider_name"] == "p1"
+    assert captured["model"] == "m1"
+    assert captured["cli_overrides"]["memory_patch_enabled"] is True
+
+
+def test_run_request_json_validation_errors_are_structured(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "bad-request.json"
+    write_json(
+        request_file,
+        {
+            "request_version": 2,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+        },
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--request-json",
+            str(request_file),
+            "--json",
+        ],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected validation failure")
+
+    raw = capsys.readouterr()
+    payload = json.loads(raw.out)
+    assert raw.err == ""
+    assert payload["ok"] is False
+    assert payload["error_info"]["code"] == "invalid_request"
+    assert "request_version" in payload["error_info"]["message"]
+
+
+def test_run_request_json_rejects_mixed_business_flags_as_structured_error(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "run-request.json"
+    write_json(
+        request_file,
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+        },
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "run",
+            "--request-json",
+            str(request_file),
+            "--input",
+            "other.mp4",
+            "--json",
+        ],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected validation failure")
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_info"]["code"] == "invalid_request"
+    assert "--input" in payload["error_info"]["message"]
+
+
+def test_resume_request_json_rejects_missing_task_id_as_jsonl_error(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "resume-request.json"
+    write_json(request_file, {"request_version": 1})
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "resume",
+            "--request-json",
+            str(request_file),
+            "--stream-events",
+        ],
+    )
+
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected validation failure")
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    assert events[0]["task_id"] == ""
+    assert events[0]["message"] == "task_id is required"
+    assert events[0]["details"]["error_info"]["code"] == "invalid_request"
+
+
+def test_runtime_submit_and_acquire_cli_json(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    request_file = tmp_path / "run-request.json"
+    write_json(
+        request_file,
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "en",
+            "target_lang": "zh-CN",
+            "provider": "p1",
+            "model": "m1",
+        },
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "runtime",
+            "submit-run",
+            "--request-json",
+            str(request_file),
+            "--json",
+        ],
+    )
+    main()
+    submitted = json.loads(capsys.readouterr().out)
+    assert submitted["status"] == "QUEUED"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "runtime", "acquire-next", "--json"],
+    )
+    main()
+    acquired = json.loads(capsys.readouterr().out)
+    assert acquired["acquired"] is True
+    assert acquired["launch"]["task_id"] == submitted["task_id"]
+    assert acquired["launch"]["args"] == ["_worker", "--task-id", submitted["task_id"]]
+
+
+def test_status_json_includes_runtime_payload(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    store.save_task(
+        TaskRecord(
+            task_id="runtime-status",
+            input_file="demo.mp4",
+            source_lang="en",
+            target_lang="zh-CN",
+            bilingual=False,
+            status="INTERRUPTED",
+            created_at="2026-02-13T00:00:00+00:00",
+            updated_at="2026-02-13T00:00:00+00:00",
+        )
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "status", "--task-id", "runtime-status", "--json"],
+    )
+    main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "INTERRUPTED"
+    assert payload["runtime"]["state"] == "interrupted"
+    assert payload["runtime"]["can_resume"] is True
+
+
+def test_worker_uses_saved_runtime_request(tmp_path: Path, monkeypatch, capsys) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    store.save_task(
+        TaskRecord(
+            task_id="worker-runtime",
+            input_file=str(tmp_path / "demo.mp4"),
+            source_lang="en",
+            target_lang="zh-CN",
+            bilingual=False,
+            status="QUEUED",
+            created_at="2026-02-13T00:00:00+00:00",
+            updated_at="2026-02-13T00:00:00+00:00",
+        )
+    )
+    from transvortex.artifacts.runtime import TaskRuntime
+
+    TaskRuntime(tmp_path / "artifacts").save_runtime_request(
+        "worker-runtime",
+        "run",
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "en",
+            "target_lang": "zh-CN",
+            "output": str(tmp_path / "out.srt"),
+            "provider": "p1",
+            "model": "m1",
+            "overrides": {"source_mode": "asr"},
+        },
+    )
+    captured = {}
+
+    def fake_execute_pipeline_task(**kwargs):
+        captured.update(kwargs)
+        kwargs["event_sink"]({"type": "done", "task_id": kwargs["task_id"], "stage": "DONE", "message": "done"})
+        return kwargs["task_id"]
+
+    monkeypatch.setattr("transvortex.cli.entry.execute_pipeline_task", fake_execute_pipeline_task)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["transvortex", "--root", str(tmp_path), "_worker", "--task-id", "worker-runtime"],
+    )
+
+    main()
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[-1]["type"] == "done"
+    assert captured["output_file"] == tmp_path / "out.srt"
+    assert captured["provider_name"] == "p1"
+    assert captured["model"] == "m1"
+    assert captured["cli_overrides"]["source_mode"] == "asr"
+
+
 def test_stream_events_and_json_are_mutually_exclusive(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setattr(
@@ -391,9 +780,12 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["protocol_version"]
     assert payload["machine_readable"] is True
     assert payload["commands"]["run"]["supports_detach"] is True
+    assert payload["commands"]["run"]["supports_request_json"] is True
+    assert payload["commands"]["resume"]["supports_request_json"] is True
     assert payload["commands"]["memory bootstrap"]["supports_dry_run"] is True
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
+    assert "INTERRUPTED" in payload["statuses"]
     assert "source/segments.raw.jsonl" in payload["artifact_contract"]
     assert "source/segments.normalized.jsonl" in payload["artifact_contract"]
     assert "quality/source_cleaning.json" in payload["artifact_contract"]

@@ -73,9 +73,11 @@ function mapEventPhase(type: string, stage?: string): TaskPhase {
       return "completed";
     case "FAILED":
     case "CANCELLED":
+    case "INTERRUPTED":
       return "failed";
   }
   if (type.includes("cancelled")) return "failed";
+  if (type.includes("interrupted")) return "failed";
   if (type.includes("cancel_requested")) return "input";
   if (type.includes("asr")) return "asr";
   if (type.includes("translate")) return "translation";
@@ -112,6 +114,7 @@ function mapEventTitle(type: string, stage?: string): string {
   }
   if (type.includes("cancel_requested")) return "正在取消任务";
   if (type.includes("cancelled")) return "任务已取消";
+  if (type.includes("interrupted")) return "任务已中断";
   if (type.includes("asr")) return "正在识别音频";
   if (type.includes("translate")) return "正在翻译字幕";
   if (type.includes("progress")) return "任务推进中";

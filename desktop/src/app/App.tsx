@@ -139,7 +139,7 @@ function findTaskForDraftSource(tasks: ReturnType<typeof useTaskStore>["tasks"],
   const normalizedInput = normalizePathForMatch(inputPath);
   return tasks.find((task) => {
     const taskInput = task.input.path ? normalizePathForMatch(task.input.path) : "";
-    return taskInput === normalizedInput && ["starting", "running", "cancelRequested", "failedRecoverable", "completed"].includes(task.status);
+    return taskInput === normalizedInput && ["starting", "running", "cancelRequested", "interrupted", "failedRecoverable", "completed"].includes(task.status);
   });
 }
 

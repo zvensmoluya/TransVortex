@@ -11,6 +11,7 @@ export type TaskStatus =
   | "running"
   | "cancelRequested"
   | "cancelled"
+  | "interrupted"
   | "failedRecoverable"
   | "failedFatal"
   | "completed";

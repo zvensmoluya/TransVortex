@@ -2,64 +2,73 @@ import type { ExportFormat } from "../domain/export";
 import type { TaskDraft } from "../domain/task";
 
 export type StartTaskPayload = {
+  request_version: 1;
   input: string;
-  inputType?: string;
-  outputDir?: string;
-  sourceLang: string;
-  targetLang: string;
+  input_type?: string;
+  output_dir?: string;
+  source_lang: string;
+  target_lang: string;
   bilingual: boolean;
   provider?: string;
   model?: string;
-  asrProvider?: string;
-  asrModel?: string;
-  sourceMode?: string;
-  subtitleTrack?: string;
-  outputFormat?: string;
-  translationStylePreset?: string;
-  translationStylePrompt?: string;
-  subtitleQualityMode?: string;
-  subtitleCompressionEnabled?: boolean;
-  subtitleReflowEnabled?: boolean;
-  subtitleBilingualOrder?: "target_source" | "source_target";
-  subtitlePreferSingleLine?: boolean;
-  memoryEnabled?: boolean;
-  memoryBootstrapEnabled?: boolean;
-  memoryInjectEnabled?: boolean;
-  memoryPatchEnabled?: boolean;
-  memoryPreset?: string;
+  overrides: {
+    asr_provider?: string;
+    asr_model?: string;
+    source_mode?: string;
+    subtitle_track?: string;
+    output_format?: string;
+    translation_style_preset?: string;
+    translation_style_prompt?: string;
+    subtitle_quality_mode?: string;
+    subtitle_compression_enabled?: boolean;
+    subtitle_reflow_enabled?: boolean;
+    subtitle_ass_style?: {
+      bilingual_order?: "target_source" | "source_target";
+      prefer_single_line?: boolean;
+    };
+    memory_enabled?: boolean;
+    memory_bootstrap_enabled?: boolean;
+    memory_inject_enabled?: boolean;
+    memory_patch_enabled?: boolean;
+    memory_presets?: Array<{ id: string }>;
+  };
 };
 
 export function taskDraftToStartTaskPayload(draft: TaskDraft): StartTaskPayload {
   const subtitleMapping = mapSubtitleSource(draft);
 
   return {
+    request_version: 1,
     input: draft.input.path ?? "",
-    inputType: mapInputType(draft),
-    outputDir: draft.output.outputDirectory,
-    sourceLang: draft.languages.sourceLanguage,
-    targetLang: draft.languages.targetLanguage,
+    input_type: mapInputType(draft),
+    output_dir: draft.output.outputDirectory,
+    source_lang: draft.languages.sourceLanguage,
+    target_lang: draft.languages.targetLanguage,
     bilingual: draft.output.bilingual,
     provider: draft.translation.target.providerName,
     model: draft.translation.target.model,
-    asrProvider: draft.speechRecognition.target?.providerName,
-    asrModel: draft.speechRecognition.target?.model,
-    sourceMode: subtitleMapping.sourceMode,
-    subtitleTrack: subtitleMapping.subtitleTrack,
-    outputFormat: mapOutputFormats(draft.output.formats),
-    translationStylePreset: draft.translation.style,
-    translationStylePrompt: [draft.translation.projectContext, draft.translation.stylePrompt]
-      .filter(Boolean)
-      .join("\n\n"),
-    subtitleQualityMode: draft.advanced.qualityMode,
-    subtitleCompressionEnabled: draft.advanced.compressionEnabled,
-    subtitleReflowEnabled: draft.advanced.reflowEnabled,
-    subtitleBilingualOrder: mapBilingualOrder(draft.output.bilingualOrder),
-    subtitlePreferSingleLine: draft.output.preferSingleLine,
-    memoryEnabled: draft.terms.useProjectTerms || draft.terms.allowSystemSuggestions,
-    memoryBootstrapEnabled: draft.terms.allowSystemSuggestions,
-    memoryInjectEnabled: draft.terms.useProjectTerms,
-    memoryPatchEnabled: draft.terms.allowSystemSuggestions,
-    memoryPreset: draft.terms.selectedTermBaseId,
+    overrides: compactObject({
+      asr_provider: draft.speechRecognition.target?.providerName,
+      asr_model: draft.speechRecognition.target?.model,
+      source_mode: subtitleMapping.sourceMode,
+      subtitle_track: subtitleMapping.subtitleTrack,
+      output_format: mapOutputFormats(draft.output.formats),
+      translation_style_preset: draft.translation.style,
+      translation_style_prompt: [draft.translation.projectContext, draft.translation.stylePrompt]
+        .filter(Boolean)
+        .join("\n\n"),
+      subtitle_quality_mode: draft.advanced.qualityMode,
+      subtitle_compression_enabled: draft.advanced.compressionEnabled,
+      subtitle_reflow_enabled: draft.advanced.reflowEnabled,
+      subtitle_ass_style: compactObject({
+        bilingual_order: mapBilingualOrder(draft.output.bilingualOrder),
+        prefer_single_line: draft.output.preferSingleLine,
+      }),
+      memory_enabled: draft.terms.allowSystemSuggestions,
+      memory_bootstrap_enabled: draft.terms.allowSystemSuggestions,
+      memory_inject_enabled: false,
+      memory_patch_enabled: draft.terms.allowSystemSuggestions,
+    }),
   };
 }
 
@@ -104,4 +113,15 @@ function mapOutputFormats(formats: ExportFormat[]): string | undefined {
 
 function mapBilingualOrder(order: TaskDraft["output"]["bilingualOrder"]): "target_source" | "source_target" {
   return order === "source_first" ? "source_target" : "target_source";
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => {
+      if (item === undefined || item === "") return false;
+      if (Array.isArray(item) && item.length === 0) return false;
+      if (item && typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 0) return false;
+      return true;
+    }),
+  ) as T;
 }

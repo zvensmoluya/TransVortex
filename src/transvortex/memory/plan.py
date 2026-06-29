@@ -29,7 +29,7 @@ def resolve_memory_plan(memory: MemoryConfig) -> MemoryPlan:
         uses_presets=uses_presets,
         runs_bootstrap=enabled and bool(memory.bootstrap.enabled),
         translates_with_memory=translates,
-        dynamic_updates_enabled=translates and bool(memory.patch.enabled),
+        dynamic_updates_enabled=enabled and bool(memory.patch.enabled),
         effective_sources=tuple(sources),
     )
 
