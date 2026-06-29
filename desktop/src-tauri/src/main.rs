@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(Default)]
@@ -123,6 +124,10 @@ fn sidecar_timeout(method: &str) -> Duration {
 
 fn sidecar_error(code: &str, message: impl Into<String>) -> String {
     json!({"code": code, "message": message.into()}).to_string()
+}
+
+fn notification_text(value: &str, max_chars: usize) -> String {
+    value.trim().chars().take(max_chars).collect()
 }
 
 fn spawn_sidecar(root: &Path) -> Result<SidecarProcess, String> {
@@ -677,6 +682,23 @@ fn open_path(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_desktop_notification(app: AppHandle, title: String, body: Option<String>) -> Result<(), String> {
+    let title = notification_text(&title, 80);
+    if title.is_empty() {
+        return Err(sidecar_error("invalid_notification", "Notification title is required"));
+    }
+    let body = body
+        .as_deref()
+        .map(|value| notification_text(value, 180))
+        .filter(|value| !value.is_empty());
+    let mut builder = app.notification().builder().title(title);
+    if let Some(value) = body {
+        builder = builder.body(value);
+    }
+    builder.show().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn probe_subtitle_streams(input: String) -> Result<Vec<SubtitleStream>, String> {
     let output = Command::new("ffprobe")
         .args([
@@ -699,6 +721,7 @@ fn probe_subtitle_streams(input: String) -> Result<Vec<SubtitleStream>, String> 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .manage(WorkerState::default())
         .manage(SidecarState::default())
@@ -726,6 +749,7 @@ fn main() {
             start_task,
             resume_task,
             cancel_task,
+            show_desktop_notification,
             probe_subtitle_streams,
             open_path
         ])
