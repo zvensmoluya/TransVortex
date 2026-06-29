@@ -366,7 +366,7 @@ ASS    打开
 - 布丁黄提醒。
 - 深紫灰文字。
 
-示例：
+示例（**已被 `FRONTEND_DESIGN_SPEC.md` §10.5 取代，以 SPEC token 表为准**，下列旧值不要直接采用）：
 
 ```css
 --bg: #fff7f1;

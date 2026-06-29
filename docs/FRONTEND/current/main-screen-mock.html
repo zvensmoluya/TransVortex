@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TransVortex 首屏 mock v4 · 两层配置 · ≡准备 / 可点词=任务选择</title>
+<style>
+  :root{
+    --bg:#FFF7F1; --surface:#FFFCF6; --ink:#2E2A33; --muted:#6F6573; --line:#ECDFE6;
+    --accent:#F2698E; --accent-strong:#D94E78; --accent-soft:#FFE3EC;
+    --warn:#F2B33D; --warn-soft:#FFF1D6; --sky:#4FB6CE; --sky-soft:#DEF3F8;
+    --ok:#5FB888; --danger:#D74F3E; --danger-soft:#FFE2DC;
+    --r-sm:6px; --r-md:10px; --r-lg:14px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:#efe6e0; color:var(--ink);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased; min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:24px;}
+  .switcher{display:flex; gap:6px; flex-wrap:wrap; justify-content:center;}
+  .switcher button{font:inherit; font-size:13px; padding:6px 14px; border-radius:999px; cursor:pointer;
+    border:1px solid #cdbfc6; background:#fff; color:var(--muted);}
+  .switcher button.on{background:var(--ink); color:#fff; border-color:var(--ink);}
+  .hint{font-size:12px; color:#8a7f86; max-width:720px; text-align:center; line-height:1.6;}
+
+  .app{width:720px; height:520px; background:var(--bg); border-radius:var(--r-lg); overflow:hidden;
+    box-shadow:0 18px 50px rgba(60,40,50,.20); display:flex; flex-direction:column; position:relative;}
+
+  .titlebar{height:40px; flex:0 0 40px; background:var(--surface); border-bottom:1px solid var(--line);
+    display:flex; align-items:center; padding:0 10px 0 12px; gap:9px;}
+  .brand-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);}
+  .titlebar b{font-size:13px;font-weight:700;}
+  .titlebar .st{font-size:12px;color:var(--muted);}
+  .titlebar .win{margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--muted);}
+  .tbtn{width:28px;height:26px;border-radius:7px;border:none;background:transparent;cursor:pointer;
+    font-size:15px;color:var(--muted);display:flex;align-items:center;justify-content:center;}
+  .tbtn:hover{background:#f0e6ea;}
+  /* ≡ 菜单 = 准备配置的门（单个 app 菜单，在窗控簇里 = 窗口 chrome） */
+  .menu{position:absolute;top:38px;right:8px;background:#fff;border:1px solid var(--line);
+    border-radius:var(--r-md);box-shadow:0 12px 30px rgba(60,40,50,.18);padding:6px;min-width:196px;z-index:20;display:none;}
+  .menu.open{display:block;}
+  .menu .grp{font-size:11px;color:#b3a6ad;padding:6px 12px 3px;font-weight:600;}
+  .menu .mi{font-size:13px;padding:8px 12px;border-radius:var(--r-sm);cursor:pointer;color:var(--ink);}
+  .menu .mi:hover{background:var(--accent-soft);color:var(--accent-strong);}
+  .menu .sep{height:1px;background:var(--line);margin:5px 8px;}
+
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:28px 40px;text-align:center;}
+
+  .slot{width:300px;height:150px;border:2px dashed #e3cdd6;border-radius:var(--r-md);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--muted);
+    background:linear-gradient(#fffdfb,#fff7fb);cursor:pointer;transition:.15s;}
+  .slot:hover{border-color:var(--accent);}
+  .slot .mouth{width:120px;height:60px;border:2.5px solid var(--accent);border-bottom-width:6px;border-radius:8px 8px 12px 12px;background:#fff;}
+  .slot .big{font-size:15px;font-weight:700;color:var(--ink);}
+  .slot .sm{font-size:12px;}
+
+  .subject{display:flex;flex-direction:column;align-items:center;gap:11px;}
+  .sleeve{width:74px;height:92px;border:2.5px solid var(--ink);border-radius:9px;position:relative;
+    background:repeating-linear-gradient(180deg,#fff 0 11px,#fdeef3 11px 15px);}
+  .sleeve::before{content:"";position:absolute;left:0;width:9px;top:8px;bottom:8px;background:repeating-linear-gradient(180deg,var(--ink) 0 5px,transparent 5px 11px);}
+  .sleeve::after{content:"";position:absolute;left:18px;right:10px;top:50%;height:2.5px;background:var(--accent);border-radius:2px;}
+  .sleeve.done{border-color:var(--accent-strong);}
+  .fname{font-size:18px;font-weight:700;max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .tags{display:flex;gap:6px;justify-content:center;}
+  .tag{font-size:12px;font-weight:500;color:var(--accent-strong);background:var(--accent-soft);padding:2px 9px;border-radius:var(--r-sm);}
+  .tag.kind{color:var(--ink);background:#f3ece8;}
+
+  .desc{display:flex;flex-direction:column;gap:5px;}
+  .line{font-size:14px;color:var(--muted);}
+  .line.out{font-size:13px;}
+  .k{color:var(--accent-strong);font-weight:600;border-bottom:1px dashed var(--accent);cursor:pointer;padding:0 1px;}
+  .k:hover{background:var(--accent-soft);}
+  .k.warn{color:#9a6a08;border-bottom-color:var(--warn);background:var(--warn-soft);}
+  .k.warn::after{content:" ●";color:var(--warn);font-size:10px;vertical-align:1px;}
+
+  .cta{border:none;cursor:pointer;font:inherit;font-weight:700;border-radius:999px;transition:.15s;margin-top:2px;}
+  .cta.go{background:var(--accent-strong);color:#fff;font-size:15px;padding:13px 34px;box-shadow:0 8px 20px rgba(217,78,120,.35);}
+  .cta.warn{background:var(--warn);color:#5a430c;font-size:14px;padding:12px 26px;box-shadow:0 6px 16px rgba(242,179,61,.4);}
+  .cta.stop{background:#fff;color:var(--danger);border:1.5px solid var(--danger);font-size:14px;padding:11px 26px;}
+  .cta.ghost{background:#fff;color:var(--muted);border:1px solid var(--line);font-size:13px;padding:10px 22px;}
+
+  .prog{display:flex;flex-direction:column;align-items:center;gap:12px;width:340px;}
+  .pnow{font-size:14px;font-weight:700;}
+  .ptrack{width:100%;height:8px;border-radius:999px;background:#f0e2e8;overflow:hidden;}
+  .pfill{height:100%;width:46%;background:linear-gradient(90deg,var(--accent),var(--accent-strong));border-radius:999px;}
+  .psub{font-size:12px;color:var(--muted);}
+
+  .delivery{display:flex;flex-direction:column;align-items:center;gap:10px;}
+  .dtitle{font-size:15px;font-weight:700;}
+  .outs{display:flex;gap:8px;}
+  .mini{font-size:12px;font-weight:600;color:var(--accent-strong);background:var(--accent-soft);border:none;border-radius:var(--r-sm);padding:6px 14px;cursor:pointer;}
+  .mini.line2{background:#fff;border:1px solid var(--line);color:var(--ink);}
+
+  .fix{background:var(--danger-soft);border:1px solid #F2B3A8;border-radius:var(--r-md);padding:14px 16px;max-width:380px;text-align:left;display:flex;flex-direction:column;gap:8px;}
+  .fix .h{font-size:14px;font-weight:700;color:var(--danger);}
+  .fix .imp{font-size:13px;color:var(--ink);line-height:1.6;}
+  .fix .act{align-self:flex-start;margin-top:2px;font-size:13px;font-weight:700;color:#fff;background:var(--danger);border:none;border-radius:var(--r-sm);padding:7px 15px;cursor:pointer;}
+
+  /* 任务配置 picker：在「已配好的」里选一个（底部桥到准备配置） */
+  .pick{position:fixed;background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+    box-shadow:0 14px 34px rgba(60,40,50,.22);padding:6px;min-width:186px;z-index:30;display:none;}
+  .pick.open{display:block;}
+  .pick .pt{font-size:11px;color:var(--muted);padding:6px 11px 4px;}
+  .pick .po{font-size:13px;padding:8px 11px;border-radius:var(--r-sm);cursor:pointer;display:flex;align-items:center;gap:8px;}
+  .pick .po:hover{background:var(--accent-soft);}
+  .pick .po .ck{color:var(--accent-strong);font-weight:800;width:12px;}
+  .pick .po small{color:var(--muted);margin-left:auto;}
+  .pick .sep{height:1px;background:var(--line);margin:5px 8px;}
+  .pick .foot{font-size:12px;color:var(--accent-strong);font-weight:600;padding:7px 11px;border-radius:var(--r-sm);cursor:pointer;}
+  .pick .foot:hover{background:var(--accent-soft);}
+</style>
+</head>
+<body>
+  <div class="switcher" id="sw">
+    <button data-s="empty">空</button><button data-s="ready">就绪</button><button data-s="blocked">受阻</button>
+    <button data-s="running">制作中</button><button data-s="done">完成</button><button data-s="failed">失败</button>
+  </div>
+  <p class="hint">v4 · 两层配置：≡（窗控簇内单个 app 菜单）= 准备配置；job 描述里的可点词 = 任务配置，点开是「已配好的选一个」picker，底部桥到准备配置窗。无顶栏导航排、无角落 ⋯。</p>
+
+  <div class="app" id="app">
+    <div class="titlebar">
+      <span class="brand-dot"></span><b>TransVortex</b><span class="st" id="tb-st">放入片源即可开始</span>
+      <span class="win">
+        <button class="tbtn" id="menuBtn" title="设置与工具">≡</button>
+        <button class="tbtn">—</button><button class="tbtn">✕</button>
+      </span>
+    </div>
+    <div class="menu" id="menu">
+      <div class="grp">准备配置</div>
+      <div class="mi">翻译模型设置…</div>
+      <div class="mi">语音识别设置…</div>
+      <div class="sep"></div>
+      <div class="mi">术语管理…</div>
+      <div class="mi">任务历史…</div>
+      <div class="mi">诊断…</div>
+    </div>
+    <div class="stage" id="stage"></div>
+  </div>
+
+  <div class="pick" id="pick"></div>
+
+<script>
+  const FNAME = "[Sakura-Raws].无职转生 第二季.S02E11.1080p.x265.10bit.mkv";
+  const subject = (done=false)=>`
+    <div class="subject"><div class="sleeve ${done?'done':''}"></div>
+      <div class="fname" title="${FNAME}">${FNAME}</div>
+      <div class="tags"><span class="tag kind">视频</span><span class="tag">日 → 简中</span></div></div>`;
+  const pipe = (warnTrans=false)=>`
+    <div class="desc">
+      <div class="line">识别 <span class="k" data-pick="asr">本机</span> · 翻译 ${warnTrans
+        ? '<span class="k warn" data-pick="transEmpty">需配置</span>'
+        : '<span class="k" data-pick="trans">Opus</span>'}</div>
+      <div class="line out">将做成 <span class="k" data-pick="bi">双语</span> <span class="k" data-pick="fmt">SRT·ASS</span> 字幕</div>
+    </div>`;
+
+  // 任务配置 picker 数据：都是「已配好的」，底部 foot 桥到准备配置
+  const PICKS = {
+    asr:{t:"用哪个识别引擎（已就绪）",o:[["本机 · faster-whisper",1,"零key"],["FunASR · 本地服务",0,""],["云端 · OpenAI",0,"需key"]],f:"语音识别设置…"},
+    trans:{t:"用哪个翻译模型（已配好）",o:[["Claude Opus",1,"默认"],["Claude Haiku",0,"更快"],["GPT-4o",0,""]],f:"翻译模型设置…"},
+    transEmpty:{t:"还没配好可用的翻译模型",o:[],f:"去翻译模型设置…"},
+    bi:{t:"字幕语言",o:[["双语（中 + 日）",1,""],["仅译文（中）",0,""]],f:""},
+    fmt:{t:"输出格式（可多选）",o:[["SRT",1,""],["ASS",1,""],["VTT",0,""]],f:""},
+  };
+
+  const STATES = {
+    empty:{ tb:"放入片源即可开始", html:`
+      <div class="slot"><div class="mouth"></div><div class="big">放入片源</div>
+        <div class="sm">拖进来，或点击选择 · 视频 / 音频 / 字幕</div></div>` },
+    ready:{ tb:"已就绪", html:`${subject()}${pipe()}<button class="cta go">开始译制</button>` },
+    blocked:{ tb:"翻译需配置", html:`${subject()}${pipe(true)}<button class="cta warn">去配置翻译</button>` },
+    running:{ tb:"正在制作…", html:`${subject()}
+      <div class="prog"><div class="pnow">正在识别语音…</div>
+        <div class="ptrack"><div class="pfill"></div></div>
+        <div class="psub">识别完成后会自动翻译并整理字幕</div></div>
+      <button class="cta stop">停下</button>` },
+    done:{ tb:"字幕已生成", html:`${subject(true)}
+      <div class="delivery"><div class="dtitle">字幕已生成</div>
+        <div class="outs"><button class="mini">打开 SRT</button><button class="mini">打开 ASS</button>
+          <button class="mini line2">打开所在文件夹</button></div></div>
+      <button class="cta ghost">再做一个</button>` },
+    failed:{ tb:"制作失败", html:`${subject()}
+      <div class="fix"><div class="h">⚠ 翻译模型连不上</div>
+        <div class="imp">当前方案使用 Claude Haiku，但凭据不可用。配好凭据后可继续这一单。</div>
+        <button class="act">去配置</button></div>
+      <button class="cta ghost">重试</button>` },
+  };
+
+  const pick = document.getElementById("pick");
+  function openPick(key, x, y){
+    const d = PICKS[key]; if(!d) return;
+    let h = `<div class="pt">${d.t}</div>`;
+    d.o.forEach(([n,cur,tag])=> h += `<div class="po"><span class="ck">${cur?'✓':''}</span>${n}${tag?`<small>${tag}</small>`:''}</div>`);
+    if(d.f){ if(d.o.length) h += `<div class="sep"></div>`; h += `<div class="foot">＋ ${d.f}</div>`; }
+    pick.innerHTML = h;
+    pick.style.left = Math.min(x, window.innerWidth-210) + "px";
+    pick.style.top = (y+8) + "px";
+    pick.classList.add("open");
+  }
+  function render(s){
+    const st=STATES[s];
+    document.getElementById("tb-st").textContent=st.tb;
+    document.getElementById("stage").innerHTML=st.html;
+    document.querySelectorAll("#sw button").forEach(b=>b.classList.toggle("on", b.dataset.s===s));
+  }
+  document.getElementById("sw").addEventListener("click", e=>{ if(e.target.dataset.s) render(e.target.dataset.s); });
+  document.getElementById("stage").addEventListener("click", e=>{
+    const k = e.target.closest("[data-pick]");
+    if(k){ e.stopPropagation(); openPick(k.dataset.pick, e.clientX, e.clientY); }
+  });
+  const menu=document.getElementById("menu");
+  document.getElementById("menuBtn").addEventListener("click", e=>{ e.stopPropagation(); menu.classList.toggle("open"); });
+  document.addEventListener("click", ()=>{ pick.classList.remove("open"); menu.classList.remove("open"); });
+  render("ready");
+</script>
+</body>
+</html>

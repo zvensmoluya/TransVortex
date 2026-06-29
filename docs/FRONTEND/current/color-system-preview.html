@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TransVortex 配色重做 · 色卡草稿（草莓粉 / 明亮克制赛璐珞）</title>
+<style>
+  /* ============================================================
+     唯一事实源：改这里，全卡联动。定稿后写回 SPEC §10.5 / §9.2
+     画风锁定：干净动画线稿 + 平涂赛璐珞（SPEC §9.1）
+     主色家族：草莓 / 樱花粉   彩度基调：明亮但克制
+     ============================================================ */
+  :root{
+    /* ---- 第一层 chrome（大面积·低彩度·暖中性，画廊白墙） ---- */
+    --bg:        #FFF7F1;  /* 暖白主体底 ≥70% 画面 */
+    --surface:   #FFFCF6;  /* 轻分区底（非卡片） */
+    --ink:       #2E2A33;  /* 柔墨字（深但不死黑） */
+    --muted:     #6F6573;  /* 次要文字（比旧 #7c7180 加深，保 12px 可读） */
+    --line:      #ECDFE6;  /* 分隔线 / 描边 */
+
+    /* ---- 第三层 功能色（一小撮·按角色指派·三重区分） ---- */
+    --accent:        #F2698E;  /* 主色：草莓粉。只点焦点 CTA / 激活态 */
+    --accent-strong: #D94E78;  /* 深一档：CTA 实底配白字 / hover / 文字版主色 */
+    --accent-soft:   #FFE3EC;  /* 浅晕：选中/hover 底、焦点环光晕 */
+
+    --warn:      #F2B33D;  /* 需配置 / 注意（最常用状态色，布丁蜜黄） */
+    --warn-soft: #FFF1D6;
+    --sky:       #4FB6CE;  /* 次要交互（汽水蓝，少用，不当第二焦点） */
+    --sky-soft:  #DEF3F8;
+    --ok:        #5FB888;  /* 成功（极少用） */
+    --danger:    #D74F3E;  /* 失败（极少用，暖砖红，与粉拉开色相+明度） */
+    --danger-soft:#FFE2DC;
+
+    --r-sm:6px; --r-md:10px; --r-lg:14px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:32px 40px 80px;
+  }
+  h1{font-size:22px; font-weight:700; margin:0 0 4px;}
+  h2{font-size:15px; font-weight:700; margin:36px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--line);}
+  .sub{color:var(--muted); font-size:13px; margin:0 0 8px;}
+  .grid{display:flex; flex-wrap:wrap; gap:14px;}
+
+  /* 色块 */
+  .sw{width:150px; border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden; background:var(--surface);}
+  .sw .chip{height:64px;}
+  .sw .meta{padding:8px 10px;}
+  .sw .role{font-size:12px; font-weight:500;}
+  .sw .hex{font-size:12px; color:var(--muted); font-family:ui-monospace,Consolas,monospace; margin-top:2px;}
+
+  /* 灰度可辨检查 */
+  .row{display:flex; gap:0; border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden; max-width:760px;}
+  .row > div{flex:1; height:54px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:700;}
+  .gray{filter:grayscale(1);}
+
+  /* 贴邻撞色测试 */
+  .adj{display:flex; gap:0; max-width:520px; border-radius:var(--r-md); overflow:hidden; border:1px solid var(--line);}
+  .adj > div{flex:1; height:72px; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:13px;}
+
+  /* 主屏迷你 mock */
+  .mock{width:560px; border:1px solid var(--line); border-radius:var(--r-lg); overflow:hidden; background:var(--bg); box-shadow:0 8px 28px rgba(60,40,50,.08);}
+  .mock .title{height:36px; background:var(--surface); border-bottom:1px solid var(--line); display:flex; align-items:center; padding:0 14px; gap:8px;}
+  .mock .dot{width:10px; height:10px; border-radius:50%; background:var(--accent);}
+  .mock .title b{font-size:13px; font-weight:700;}
+  .mock .title span{font-size:12px; color:var(--muted);}
+  .mock .body{display:flex; padding:22px; gap:20px;}
+  .cradle{flex:1; background:var(--surface); border:1.5px solid var(--line); border-radius:var(--r-md); padding:22px; text-align:center;}
+  .cradle .fn{font-size:20px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .cradle .tag{display:inline-block; margin-top:8px; font-size:12px; font-weight:500; color:var(--accent-strong); background:var(--accent-soft); padding:2px 8px; border-radius:var(--r-sm);}
+  .side{width:170px; display:flex; flex-direction:column; gap:10px;}
+  .cap{font-size:12px; padding:6px 10px; border-radius:var(--r-sm); display:flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--surface);}
+  .cap.warnc{background:var(--warn-soft); border-color:#F2D58A;}
+  .cap b{font-weight:500;}
+  .cta{margin-top:4px; height:42px; border-radius:var(--r-md); background:var(--accent-strong); color:#fff; font-size:15px; font-weight:700; display:flex; align-items:center; justify-content:center; cursor:pointer;}
+  .fix{margin:0 22px 22px; background:var(--danger-soft); border:1px solid #F2B3A8; border-radius:var(--r-md); padding:12px 14px;}
+  .fix .h{font-size:13px; font-weight:700; color:var(--danger);}
+  .fix .a{margin-top:8px; display:inline-block; font-size:12px; font-weight:700; color:#fff; background:var(--danger); padding:5px 12px; border-radius:var(--r-sm);}
+
+  /* 字号实读 */
+  .type p{margin:0 0 6px;}
+  .t20{font-size:20px; font-weight:700;} .t16{font-size:16px; font-weight:700;}
+  .t13{font-size:13px; font-weight:500;} .t12{font-size:12px; font-weight:400; color:var(--muted);}
+</style>
+</head>
+<body>
+  <h1>TransVortex 配色重做 · 色卡草稿</h1>
+  <p class="sub">主色：草莓 / 樱花粉　·　基调：明亮但克制的赛璐珞　·　画风锁定：平涂线稿（SPEC §9.1）　·　所有 hex 为起点值，按本卡上屏校</p>
+
+  <h2>第一层 · chrome（大面积低彩度，安静耐看）</h2>
+  <div class="grid">
+    <div class="sw"><div class="chip" style="background:var(--bg)"></div><div class="meta"><div class="role">--bg 暖白主体</div><div class="hex">#FFF7F1</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface)"></div><div class="meta"><div class="role">--surface 轻分区底</div><div class="hex">#FFFCF6</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink)"></div><div class="meta"><div class="role">--ink 柔墨字</div><div class="hex">#2E2A33</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--muted)"></div><div class="meta"><div class="role">--muted 次要文字</div><div class="hex">#6F6573</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--line)"></div><div class="meta"><div class="role">--line 分隔/描边</div><div class="hex">#ECDFE6</div></div></div>
+  </div>
+
+  <h2>第三层 · 功能色（按角色指派，主色只点焦点）</h2>
+  <div class="grid">
+    <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="role">--accent 草莓主色</div><div class="hex">#F2698E</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-strong)"></div><div class="meta"><div class="role">--accent-strong CTA实底</div><div class="hex">#D94E78</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-soft)"></div><div class="meta"><div class="role">--accent-soft 选中晕</div><div class="hex">#FFE3EC</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--warn)"></div><div class="meta"><div class="role">--warn 需配置/注意</div><div class="hex">#F2B33D</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--sky)"></div><div class="meta"><div class="role">--sky 次要交互</div><div class="hex">#4FB6CE</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ok)"></div><div class="meta"><div class="role">--ok 成功(极少)</div><div class="hex">#5FB888</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--danger)"></div><div class="meta"><div class="role">--danger 失败(极少)</div><div class="hex">#D74F3E</div></div></div>
+  </div>
+
+  <h2>检查 A · 灰度可辨（G6：去掉颜色仍能区分关键状态）</h2>
+  <p class="sub">上排原色，下排灰度。下排若有两块糊在一起，说明只靠颜色编码、对色盲不友好 —— 真界面里它们必须再叠形状+文字。</p>
+  <div class="row"><div style="background:var(--accent)">主色</div><div style="background:var(--warn)">注意</div><div style="background:var(--sky)">次要</div><div style="background:var(--ok)">成功</div><div style="background:var(--danger)">失败</div></div>
+  <div style="height:8px"></div>
+  <div class="row gray"><div style="background:var(--accent)">主色</div><div style="background:var(--warn)">注意</div><div style="background:var(--sky)">次要</div><div style="background:var(--ok)">成功</div><div style="background:var(--danger)">失败</div></div>
+
+  <h2>检查 B · 主色 × 失败色 贴邻撞色测试（根治旧版 9° 同色）</h2>
+  <p class="sub">旧版 accent #ff6b9a 与 danger #e85d75 色相只差 9°，CTA 和「出错」几乎同色。现在 accent≈344° / danger≈8°，色相 ~30° + 明度差。看这两块贴一起能不能一眼分开：</p>
+  <div class="adj"><div style="background:var(--accent)">开始（主色 CTA）</div><div style="background:var(--danger)">失败（danger）</div></div>
+
+  <h2>检查 C · 主屏迷你 mock（用量比例：暖白大面积 + 主色只点焦点）</h2>
+  <div class="mock">
+    <div class="title"><span class="dot"></span><b>TransVortex</b><span>· 翻译需配置</span></div>
+    <div class="body">
+      <div class="cradle">
+        <div class="fn">[EMBER].无职转生.S02E11.1080p.mkv</div>
+        <div class="tag">视频 · 日 → 简中</div>
+      </div>
+      <div class="side">
+        <div class="cap">输出 <b>SRT · ASS</b></div>
+        <div class="cap">双语 <b>开</b></div>
+        <div class="cap">术语生成 <b>开</b></div>
+        <div class="cap warnc">⚠ 翻译 <b>需配置</b></div>
+        <div class="cta">去配置翻译</div>
+      </div>
+    </div>
+    <div class="fix">
+      <div class="h">⚠ 翻译模型连不上</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">当前方案使用 Claude Haiku，但凭据不可用。</div>
+      <span class="a">去配置</span>
+    </div>
+  </div>
+
+  <h2>检查 D · CJK 字号实读（下限 12px，无 10/11px 承载有效信息）</h2>
+  <div class="type">
+    <p class="t20">片源文件名 20px Bold　无职转生 第二季</p>
+    <p class="t16">主动作 CTA 16px Bold　开始译制</p>
+    <p class="t13">区块小标题 13px Medium　当前运行设置</p>
+    <p class="t12">次要注脚 12px Regular（下限）　拖进来，或点击选择 · 视频 / 音频 / 字幕</p>
+  </div>
+</body>
+</html>
