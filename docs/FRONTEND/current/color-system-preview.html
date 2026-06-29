@@ -3,10 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>TransVortex 配色重做 · 色卡草稿（草莓粉 / 明亮克制赛璐珞）</title>
+<title>TransVortex 配色重做 · 候选色卡预览（草莓粉 / 明亮克制赛璐珞）</title>
 <style>
   /* ============================================================
-     唯一事实源：改这里，全卡联动。定稿后写回 SPEC §10.5 / §9.2
+     辅助校色页：改这里可快速预览色卡效果。
+     实现准则与验收口径以 FRONTEND_DESIGN_SPEC.md / FRONTEND_DEVELOPMENT_GOALS.md 为准。
      画风锁定：干净动画线稿 + 平涂赛璐珞（SPEC §9.1）
      主色家族：草莓 / 樱花粉   彩度基调：明亮但克制
      ============================================================ */
@@ -18,7 +19,7 @@
     --muted:     #6F6573;  /* 次要文字（比旧 #7c7180 加深，保 12px 可读） */
     --line:      #ECDFE6;  /* 分隔线 / 描边 */
 
-    /* ---- 第三层 功能色（一小撮·按角色指派·三重区分） ---- */
+    /* ---- 第二层 主色家族（草莓粉，只点焦点 CTA / 激活态） ---- */
     --accent:        #F2698E;  /* 主色：草莓粉。只点焦点 CTA / 激活态 */
     --accent-strong: #D94E78;  /* 深一档：CTA 实底配白字 / hover / 文字版主色 */
     --accent-soft:   #FFE3EC;  /* 浅晕：选中/hover 底、焦点环光晕 */
@@ -87,8 +88,8 @@
 </style>
 </head>
 <body>
-  <h1>TransVortex 配色重做 · 色卡草稿</h1>
-  <p class="sub">主色：草莓 / 樱花粉　·　基调：明亮但克制的赛璐珞　·　画风锁定：平涂线稿（SPEC §9.1）　·　所有 hex 为起点值，按本卡上屏校</p>
+  <h1>TransVortex 配色重做 · 候选色卡预览</h1>
+  <p class="sub">辅助校色页，不替代 SPEC。主色：草莓 / 樱花粉　·　基调：明亮但克制的赛璐珞　·　画风锁定：平涂线稿（SPEC §9.1）　·　所有 hex 为起点值，最终以 SPEC 与真实 Tauri 窗口上屏结果为准</p>
 
   <h2>第一层 · chrome（大面积低彩度，安静耐看）</h2>
   <div class="grid">
@@ -99,7 +100,7 @@
     <div class="sw"><div class="chip" style="background:var(--line)"></div><div class="meta"><div class="role">--line 分隔/描边</div><div class="hex">#ECDFE6</div></div></div>
   </div>
 
-  <h2>第三层 · 功能色（按角色指派，主色只点焦点）</h2>
+  <h2>第二层 · 主色家族 + 第三层 · 罕用语义色</h2>
   <div class="grid">
     <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><div class="role">--accent 草莓主色</div><div class="hex">#F2698E</div></div></div>
     <div class="sw"><div class="chip" style="background:var(--accent-strong)"></div><div class="meta"><div class="role">--accent-strong CTA实底</div><div class="hex">#D94E78</div></div></div>

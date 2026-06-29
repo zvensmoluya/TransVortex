@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>TransVortex 首屏 mock v4 · 两层配置 · ≡准备 / 可点词=任务选择</title>
+<title>TransVortex 首屏候选预览 v4 · 两层配置 · ≡准备 / 可点词=任务选择</title>
 <style>
   :root{
     --bg:#FFF7F1; --surface:#FFFCF6; --ink:#2E2A33; --muted:#6F6573; --line:#ECDFE6;
@@ -15,9 +15,9 @@
   *{box-sizing:border-box; margin:0; padding:0;}
   body{background:#efe6e0; color:var(--ink);
     font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased; min-height:100vh; display:flex; flex-direction:column; align-items:center; gap:16px; padding:24px;}
+    -webkit-font-smoothing:antialiased; min-height:640px; display:flex; flex-direction:column; align-items:center; gap:16px; padding:24px;}
   .switcher{display:flex; gap:6px; flex-wrap:wrap; justify-content:center;}
-  .switcher button{font:inherit; font-size:13px; padding:6px 14px; border-radius:999px; cursor:pointer;
+  .switcher button{font:inherit; font-size:13px; padding:6px 14px; border-radius:var(--r-md); cursor:pointer;
     border:1px solid #cdbfc6; background:#fff; color:var(--muted);}
   .switcher button.on{background:var(--ink); color:#fff; border-color:var(--ink);}
   .hint{font-size:12px; color:#8a7f86; max-width:720px; text-align:center; line-height:1.6;}
@@ -38,7 +38,7 @@
   .menu{position:absolute;top:38px;right:8px;background:#fff;border:1px solid var(--line);
     border-radius:var(--r-md);box-shadow:0 12px 30px rgba(60,40,50,.18);padding:6px;min-width:196px;z-index:20;display:none;}
   .menu.open{display:block;}
-  .menu .grp{font-size:11px;color:#b3a6ad;padding:6px 12px 3px;font-weight:600;}
+  .menu .grp{font-size:12px;color:#9a8d96;padding:6px 12px 3px;font-weight:600;}
   .menu .mi{font-size:13px;padding:8px 12px;border-radius:var(--r-sm);cursor:pointer;color:var(--ink);}
   .menu .mi:hover{background:var(--accent-soft);color:var(--accent-strong);}
   .menu .sep{height:1px;background:var(--line);margin:5px 8px;}
@@ -70,9 +70,9 @@
   .k{color:var(--accent-strong);font-weight:600;border-bottom:1px dashed var(--accent);cursor:pointer;padding:0 1px;}
   .k:hover{background:var(--accent-soft);}
   .k.warn{color:#9a6a08;border-bottom-color:var(--warn);background:var(--warn-soft);}
-  .k.warn::after{content:" ●";color:var(--warn);font-size:10px;vertical-align:1px;}
+  .k.warn::after{content:" ●";color:var(--warn);font-size:12px;vertical-align:0;}
 
-  .cta{border:none;cursor:pointer;font:inherit;font-weight:700;border-radius:999px;transition:.15s;margin-top:2px;}
+  .cta{border:none;cursor:pointer;font:inherit;font-weight:700;border-radius:var(--r-md);transition:.15s;margin-top:2px;}
   .cta.go{background:var(--accent-strong);color:#fff;font-size:15px;padding:13px 34px;box-shadow:0 8px 20px rgba(217,78,120,.35);}
   .cta.warn{background:var(--warn);color:#5a430c;font-size:14px;padding:12px 26px;box-shadow:0 6px 16px rgba(242,179,61,.4);}
   .cta.stop{background:#fff;color:var(--danger);border:1.5px solid var(--danger);font-size:14px;padding:11px 26px;}
@@ -80,8 +80,8 @@
 
   .prog{display:flex;flex-direction:column;align-items:center;gap:12px;width:340px;}
   .pnow{font-size:14px;font-weight:700;}
-  .ptrack{width:100%;height:8px;border-radius:999px;background:#f0e2e8;overflow:hidden;}
-  .pfill{height:100%;width:46%;background:linear-gradient(90deg,var(--accent),var(--accent-strong));border-radius:999px;}
+  .ptrack{width:100%;height:8px;border-radius:var(--r-sm);background:#f0e2e8;overflow:hidden;}
+  .pfill{height:100%;width:46%;background:linear-gradient(90deg,var(--accent),var(--accent-strong));border-radius:var(--r-sm);}
   .psub{font-size:12px;color:var(--muted);}
 
   .delivery{display:flex;flex-direction:column;align-items:center;gap:10px;}
@@ -96,10 +96,10 @@
   .fix .act{align-self:flex-start;margin-top:2px;font-size:13px;font-weight:700;color:#fff;background:var(--danger);border:none;border-radius:var(--r-sm);padding:7px 15px;cursor:pointer;}
 
   /* 任务配置 picker：在「已配好的」里选一个（底部桥到准备配置） */
-  .pick{position:fixed;background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+  .pick{position:absolute;background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
     box-shadow:0 14px 34px rgba(60,40,50,.22);padding:6px;min-width:186px;z-index:30;display:none;}
   .pick.open{display:block;}
-  .pick .pt{font-size:11px;color:var(--muted);padding:6px 11px 4px;}
+  .pick .pt{font-size:12px;color:var(--muted);padding:6px 11px 4px;}
   .pick .po{font-size:13px;padding:8px 11px;border-radius:var(--r-sm);cursor:pointer;display:flex;align-items:center;gap:8px;}
   .pick .po:hover{background:var(--accent-soft);}
   .pick .po .ck{color:var(--accent-strong);font-weight:800;width:12px;}
@@ -114,7 +114,7 @@
     <button data-s="empty">空</button><button data-s="ready">就绪</button><button data-s="blocked">受阻</button>
     <button data-s="running">制作中</button><button data-s="done">完成</button><button data-s="failed">失败</button>
   </div>
-  <p class="hint">v4 · 两层配置：≡（窗控簇内单个 app 菜单）= 准备配置；job 描述里的可点词 = 任务配置，点开是「已配好的选一个」picker，底部桥到准备配置窗。无顶栏导航排、无角落 ⋯。</p>
+  <p class="hint">v4 候选预览，只用于讨论构图和状态，不是实现源码或验收标准。两层配置：≡（窗控簇内单个 app 菜单）= 准备配置；job 描述里的可点词 = 任务配置，点开是「已配好的选一个」picker，底部桥到准备配置窗。最终验收回到真实 Tauri 窗口、资产规范和最坏内容验证。</p>
 
   <div class="app" id="app">
     <div class="titlebar">
