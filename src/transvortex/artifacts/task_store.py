@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from ..app.models import TaskRecord
 from ..utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
+from .catalog import try_sync_task
 
 
 def _normalize_progress(progress: float) -> float:
@@ -36,6 +37,7 @@ class TaskStore:
         write_json(self.task_file(task.task_id), task)
         self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
         self.events_file(task.task_id).touch(exist_ok=True)
+        try_sync_task(self.artifacts_dir, task)
 
     def load_task(self, task_id: str) -> TaskRecord:
         task_file = self.task_file(task_id)
@@ -101,7 +103,10 @@ class TaskStore:
         try:
             task = self.load_task(task_id)
             task.updated_at = created_at
-            self.save_task(task)
+            write_json(self.task_file(task.task_id), task)
+            self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
+            self.events_file(task.task_id).touch(exist_ok=True)
+            try_sync_task(self.artifacts_dir, task, last_event_at=created_at)
         except Exception:
             pass
         if self.event_sink is not None:

@@ -16,6 +16,7 @@ from ..artifacts.result_workspace import (
     save_task_segments,
     update_task_memory_entry,
 )
+from ..artifacts.catalog import TaskCatalog
 from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
 from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
@@ -717,7 +718,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="transvortex")
     parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
     public_commands = (
-        "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,"
+        "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,catalog,"
         "probe-provider,provider,auth,result,memory,runtime,reexport,asr,translate,export}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar=public_commands)
@@ -781,6 +782,15 @@ def _build_parser() -> argparse.ArgumentParser:
     config_show_p = config_sub.add_parser("show", help="Show resolved configuration")
     _add_providers_file_arg(config_show_p)
     config_show_p.add_argument("--json", action="store_true", help="Print machine-readable configuration")
+
+    catalog_p = sub.add_parser("catalog", help="Inspect or rebuild the local task catalog")
+    catalog_sub = catalog_p.add_subparsers(dest="catalog_command", required=True)
+    catalog_status_p = catalog_sub.add_parser("status", help="Show task catalog status")
+    _add_providers_file_arg(catalog_status_p)
+    catalog_status_p.add_argument("--json", action="store_true")
+    catalog_rebuild_p = catalog_sub.add_parser("rebuild", help="Rebuild task catalog from artifacts")
+    _add_providers_file_arg(catalog_rebuild_p)
+    catalog_rebuild_p.add_argument("--json", action="store_true")
 
     probe_p = sub.add_parser("probe-provider", help="Run local provider protocol checks (no network)")
     _add_providers_file_arg(probe_p)
@@ -1327,6 +1337,21 @@ def main() -> None:
         else:
             for task in payload:
                 print(f"{task['task_id']} {task['status']} {task['updated_at']}")
+        return
+
+    if args.command == "catalog":
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        catalog = TaskCatalog(config.pipeline.artifacts_dir)
+        if args.catalog_command == "status":
+            payload = _run_or_exit(catalog.status, json_mode=args.json, stream_events=False)
+        elif args.catalog_command == "rebuild":
+            payload = _run_or_exit(catalog.rebuild, json_mode=args.json, stream_events=False)
+        else:
+            parser.error("catalog: unknown command")
+        if args.json:
+            _print_json(payload)
+        else:
+            print(payload)
         return
 
     if args.command == "doctor":

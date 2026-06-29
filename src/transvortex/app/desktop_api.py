@@ -10,6 +10,7 @@ from ..artifacts.result_workspace import (
     save_task_segments,
     update_task_memory_entry,
 )
+from ..artifacts.catalog import TaskCatalog
 from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
 from ..core.orchestrator import task_status_json
@@ -63,6 +64,8 @@ class DesktopApi:
         handlers = {
             "desktop.ping": self.ping,
             "desktop.snapshot": self.desktop_snapshot,
+            "catalog.status": self.catalog_status,
+            "catalog.rebuild": self.catalog_rebuild,
             "config.get": self.config_get,
             "tasks.list": self.tasks_list,
             "tasks.events": self.tasks_events,
@@ -104,19 +107,25 @@ class DesktopApi:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         runtime = TaskRuntime(config.pipeline.artifacts_dir)
         runtime.reconcile()
-        store = TaskStore(config.pipeline.artifacts_dir)
         return {
             "config": config_payload(self.root_dir, self.providers_file),
-            "tasks": [task_payload(task, config.pipeline.artifacts_dir) for task in store.list_tasks()],
+            "tasks": _catalog_task_payloads(config.pipeline.artifacts_dir),
             "runtime": runtime.snapshot(),
             "environment": doctor_report(root_dir=self.root_dir, providers_file=self.providers_file),
         }
 
+    def catalog_status(self, _params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        return TaskCatalog(config.pipeline.artifacts_dir).status()
+
+    def catalog_rebuild(self, _params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        return TaskCatalog(config.pipeline.artifacts_dir).rebuild()
+
     def tasks_list(self, _params: dict[str, Any]) -> list[dict[str, Any]]:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         TaskRuntime(config.pipeline.artifacts_dir).reconcile()
-        store = TaskStore(config.pipeline.artifacts_dir)
-        return [task_payload(task, config.pipeline.artifacts_dir) for task in store.list_tasks()]
+        return _catalog_task_payloads(config.pipeline.artifacts_dir)
 
     def tasks_events(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         task_id = _required_text(params, "task_id", "taskId")
@@ -376,6 +385,38 @@ def task_payload(task: Any, artifacts_dir: Path | None = None) -> dict[str, Any]
     if artifacts_dir is not None:
         payload["task_dir"] = str(artifacts_dir / task.task_id)
     return payload
+
+
+def _catalog_task_payloads(artifacts_dir: Path) -> list[dict[str, Any]]:
+    catalog = TaskCatalog(artifacts_dir)
+    store = TaskStore(artifacts_dir)
+    try:
+        task_ids = catalog.list_task_ids(order="updated_desc")
+    except Exception:
+        catalog.rebuild()
+        task_ids = catalog.list_task_ids(order="updated_desc")
+    if not task_ids and _has_task_dirs(artifacts_dir):
+        catalog.rebuild()
+        task_ids = catalog.list_task_ids(order="updated_desc")
+    payloads: list[dict[str, Any]] = []
+    missing = False
+    for task_id in task_ids:
+        try:
+            payloads.append(task_payload(store.load_task(task_id), artifacts_dir))
+        except Exception:
+            missing = True
+    if missing:
+        catalog.rebuild()
+    return payloads
+
+
+def _has_task_dirs(artifacts_dir: Path) -> bool:
+    if not artifacts_dir.exists():
+        return False
+    try:
+        return any(child.is_dir() and (child / "task.json").exists() for child in artifacts_dir.iterdir())
+    except Exception:
+        return False
 
 
 def _request_param(params: dict[str, Any]) -> dict[str, Any]:

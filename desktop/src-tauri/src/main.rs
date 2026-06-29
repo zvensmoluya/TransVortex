@@ -181,6 +181,8 @@ fn sidecar_method_can_retry(method: &str) -> bool {
         method,
         "desktop.ping"
             | "desktop.snapshot"
+            | "catalog.status"
+            | "catalog.rebuild"
             | "config.get"
             | "tasks.list"
             | "tasks.events"

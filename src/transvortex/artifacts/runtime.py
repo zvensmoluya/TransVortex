@@ -20,6 +20,7 @@ from ..app.models import TaskRecord
 from ..core.orchestrator import create_pipeline_task, queue_resume_task
 from ..protocol.errors import classify_exception
 from ..utils import read_json, utc_now_iso, write_json
+from .catalog import TaskCatalog
 from .task_store import TaskStore
 
 
@@ -108,7 +109,7 @@ class TaskRuntime:
         active = self._active_payload()
         if active is not None:
             return {"acquired": False, "reason": "active_worker", "active": active}
-        for task in sorted(self.store.list_tasks(), key=lambda item: item.created_at):
+        for task in self._tasks_created_asc():
             if task.status != "QUEUED":
                 continue
             request_payload = self._read_runtime_request(task.task_id)
@@ -242,7 +243,7 @@ class TaskRuntime:
                     self.active_file.unlink(missing_ok=True)
 
         stale: list[str] = []
-        for task in self.store.list_tasks():
+        for task in self._tasks_updated_desc():
             if task.status in RUNNING_STATUSES and task.status != "QUEUED":
                 worker = self._read_worker(task.task_id)
                 if not worker:
@@ -258,7 +259,7 @@ class TaskRuntime:
 
     def snapshot(self) -> dict[str, Any]:
         self.reconcile()
-        tasks = self.store.list_tasks()
+        tasks = self._tasks_updated_desc()
         active = self._active_payload()
         active_task_id = str((active or {}).get("task_id") or "")
         return {
@@ -377,6 +378,47 @@ class TaskRuntime:
         except Exception:
             return None
         return payload if isinstance(payload, dict) else None
+
+    def _tasks_created_asc(self) -> list[TaskRecord]:
+        return self._catalog_tasks(order="created_asc")
+
+    def _tasks_updated_desc(self) -> list[TaskRecord]:
+        return self._catalog_tasks(order="updated_desc")
+
+    def _catalog_tasks(self, *, order: str) -> list[TaskRecord]:
+        catalog = TaskCatalog(self.artifacts_dir)
+        try:
+            task_ids = catalog.list_task_ids(order=order)
+        except Exception:
+            catalog.rebuild()
+            task_ids = catalog.list_task_ids(order=order)
+        if not task_ids and self._has_task_dirs():
+            catalog.rebuild()
+            task_ids = catalog.list_task_ids(order=order)
+        tasks: list[TaskRecord] = []
+        missing = False
+        for task_id in task_ids:
+            try:
+                tasks.append(self.store.load_task(task_id))
+            except Exception:
+                missing = True
+        if missing:
+            catalog.rebuild()
+        if tasks:
+            return tasks
+        return sorted(
+            self.store.list_tasks(),
+            key=lambda item: item.created_at if order == "created_asc" else item.updated_at,
+            reverse=order != "created_asc",
+        )
+
+    def _has_task_dirs(self) -> bool:
+        if not self.artifacts_dir.exists():
+            return False
+        try:
+            return any(child.is_dir() and (child / "task.json").exists() for child in self.artifacts_dir.iterdir())
+        except Exception:
+            return False
 
     def _mark_interrupted(self, task: TaskRecord, *, reason: str) -> None:
         err = classify_exception(RuntimeError(f"Task interrupted: {reason}"), stage=task.status)
