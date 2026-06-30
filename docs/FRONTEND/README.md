@@ -23,6 +23,9 @@
 - `current/FRONTEND_MAIN_SCREEN_WIREFRAME.md`
   - 定义第一轮首屏白描框架：对象位置、状态切换、主操作和配置展开。
   - 先验证结构，再进入风格稿和素材生产。
+- `current/FRONTEND_TECH_STACK_REASSESSMENT.md`
+  - 记录 Tauri / Flutter / Slint / Qt Quick 的技术路线复盘。
+  - 结论是先用 Flutter 做主体验前端 spike，Tauri 可降级为配置台 / 维护台 / fallback UI，Python JSON-RPC sidecar 作为共享后端边界。
 
 当前不保留大而全的产品方向或架构治理文档作为前置规范。已有 React/Tauri/service/adapter 框架可以作为代码事实存在，但不应继续吸走设计注意力。
 
