@@ -57,6 +57,14 @@
 
 如果配置名、字段名或 UI 文案容易让用户误解，应明确指出问题，并给出更清楚的命名或拆分建议。
 
+## Frontend Strategy
+
+主体验前端是 Flutter（`desktop_flutter/`）。Tauri（`desktop/`）已冻结为参考实现，不作为兼容约束（背景见 `desktop/FROZEN.md`）。
+
+- 后端契约只由 CLI / Agent 与 Flutter Local Service 驱动；改后端不需要保 Tauri 可用，也不必为它保留 RPC 形状或修复其已知降级。
+- 保留唯一护栏：Tauri sidecar 以 `--no-pump` 启动，避免与 Python pump 抢同一 `artifacts_dir`；改 runtime 队列 / 锁语义时一并考虑。
+- 后端 runtime / 协议改动以 Python 测试为准；仅当主动改 `desktop/src-tauri` 时才跑 `cargo check`。
+
 ## Commit Policy
 
 - 不要在用户未要求时主动提交。
