@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from .. import __version__
 from ..artifacts.result_workspace import (
     open_task_result,
     reexport_task,
@@ -44,6 +44,16 @@ from .doctor import doctor_report
 
 
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
+PROTOCOL_VERSION = 1
+SERVICE_NAME = "transvortex.app_service"
+SERVICE_CAPABILITIES = [
+    "desktop_snapshot",
+    "runtime",
+    "runtime_pump",
+    "provider_admin",
+    "result_workspace",
+    "event_cursor",
+]
 
 
 class DesktopApiError(RuntimeError):
@@ -55,13 +65,26 @@ class DesktopApiError(RuntimeError):
 
 
 class DesktopApi:
-    def __init__(self, *, root_dir: Path, providers_file: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        root_dir: Path,
+        providers_file: Path | None = None,
+        pump_status: Callable[[], dict[str, Any]] | None = None,
+        shutdown_callback: Callable[[], None] | None = None,
+    ) -> None:
         self.root_dir = root_dir
         self.providers_file = providers_file
+        self._pump_status = pump_status
+        self._shutdown_callback = shutdown_callback
+        self.shutdown_requested = False
 
     def dispatch(self, method: str, params: dict[str, Any] | None = None) -> Any:
         params = params or {}
         handlers = {
+            "service.info": self.service_info,
+            "service.health": self.service_health,
+            "service.shutdown": self.service_shutdown,
             "desktop.ping": self.ping,
             "desktop.snapshot": self.desktop_snapshot,
             "catalog.status": self.catalog_status,
@@ -97,8 +120,43 @@ class DesktopApi:
             raise DesktopApiError("method_not_found", f"Unknown desktop method: {method}", details={"method": method})
         return handler(params)
 
+    def service_info(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "service": SERVICE_NAME,
+            "protocol_version": PROTOCOL_VERSION,
+            "app_version": __version__,
+            "capabilities": SERVICE_CAPABILITIES,
+        }
+
+    def service_health(self, _params: dict[str, Any]) -> dict[str, Any]:
+        pump = self._pump_status() if self._pump_status is not None else {"enabled": False}
+        try:
+            active = self._runtime().active_payload_light()
+            return {
+                "service": SERVICE_NAME,
+                "status": "healthy" if not pump.get("last_error") else "degraded",
+                "runtime": {
+                    "active": active,
+                },
+                "pump": pump,
+            }
+        except Exception as exc:  # noqa: BLE001 - health must return structured state
+            return {
+                "service": SERVICE_NAME,
+                "status": "degraded",
+                "runtime": {},
+                "pump": pump,
+                "error": str(exc),
+            }
+
+    def service_shutdown(self, _params: dict[str, Any]) -> dict[str, Any]:
+        self.shutdown_requested = True
+        if self._shutdown_callback is not None:
+            self._shutdown_callback()
+        return {"ok": True, "shutdown": "requested"}
+
     def ping(self, _params: dict[str, Any]) -> dict[str, Any]:
-        return {"ok": True, "service": "transvortex.app_service"}
+        return {"ok": True, "service": SERVICE_NAME}
 
     def config_get(self, _params: dict[str, Any]) -> dict[str, Any]:
         return config_payload(self.root_dir, self.providers_file)
@@ -127,11 +185,13 @@ class DesktopApi:
         TaskRuntime(config.pipeline.artifacts_dir).reconcile()
         return _catalog_task_payloads(config.pipeline.artifacts_dir)
 
-    def tasks_events(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def tasks_events(self, params: dict[str, Any]) -> dict[str, Any]:
         task_id = _required_text(params, "task_id", "taskId")
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         TaskRuntime(config.pipeline.artifacts_dir).reconcile()
-        return TaskStore(config.pipeline.artifacts_dir).read_events(task_id)
+        cursor = _optional_int(params, "cursor", default=0)
+        limit = _optional_int(params, "limit", default=500)
+        return TaskStore(config.pipeline.artifacts_dir).read_events_page(task_id, cursor=cursor, limit=limit)
 
     def runtime_snapshot(self, _params: dict[str, Any]) -> dict[str, Any]:
         return self._runtime().snapshot()
@@ -165,18 +225,7 @@ class DesktopApi:
         if params.get("force"):
             task = runtime.force_cancel(task_id, reason=str(params.get("reason") or "force_cancel"))
         else:
-            task = store.request_cancel(task_id)
-            grace = params.get("force_after_grace")
-            if grace is not None:
-                deadline = time.time() + max(0.0, float(grace))
-                while time.time() < deadline:
-                    latest = store.load_task(task_id)
-                    if latest.status in TERMINAL_STATUSES:
-                        return task_status_json(latest, store=store)
-                    time.sleep(0.2)
-                latest = store.load_task(task_id)
-                if latest.status not in TERMINAL_STATUSES:
-                    task = runtime.force_cancel(task_id, reason=str(params.get("reason") or "force_after_grace"))
+            task = store.request_cancel(task_id, force_after_grace=_optional_float(params, "force_after_grace", "forceAfterGrace"))
         return task_status_json(task, store=store)
 
     def auth_list(self, _params: dict[str, Any]) -> dict[str, Any]:
@@ -447,6 +496,30 @@ def _optional_bool(params: dict[str, Any], *keys: str) -> bool | None:
         value = params.get(key)
         if isinstance(value, bool):
             return value
+    return None
+
+
+def _optional_int(params: dict[str, Any], *keys: str, default: int) -> int:
+    for key in keys:
+        value = params.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            raise DesktopApiError("invalid_request", f"{key} must be an integer") from None
+    return default
+
+
+def _optional_float(params: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = params.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except Exception:
+            raise DesktopApiError("invalid_request", f"{key} must be a number") from None
     return None
 
 

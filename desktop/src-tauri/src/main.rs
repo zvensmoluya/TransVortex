@@ -136,6 +136,7 @@ fn spawn_sidecar(root: &Path) -> Result<SidecarProcess, String> {
         .arg("transvortex.app_service")
         .arg("--root")
         .arg(root)
+        .arg("--no-pump")
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

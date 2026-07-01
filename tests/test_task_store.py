@@ -94,6 +94,34 @@ def test_read_events_tolerates_missing_events_file_for_existing_task(tmp_path) -
     assert store.read_events("legacy") == []
 
 
+def test_read_events_page_uses_line_cursor(tmp_path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task = TaskRecord(
+        task_id="t1",
+        input_file="demo.mp4",
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        status="RUNNING",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:00+00:00",
+    )
+    store.save_task(task)
+    store.append_event("t1", "first", message="一")
+    store.append_event("t1", "second", message="二")
+    store.append_event("t1", "third", message="三")
+
+    first = store.read_events_page("t1", cursor=0, limit=2)
+    second = store.read_events_page("t1", cursor=first["next_cursor"], limit=2)
+
+    assert [event["type"] for event in first["events"]] == ["first", "second"]
+    assert first["next_cursor"] == 2
+    assert first["has_more"] is True
+    assert [event["type"] for event in second["events"]] == ["third"]
+    assert second["next_cursor"] == 3
+    assert second["has_more"] is False
+
+
 def test_append_event_rounds_progress_and_refreshes_task_updated_at(tmp_path) -> None:
     store = TaskStore(tmp_path / "artifacts")
     task = TaskRecord(

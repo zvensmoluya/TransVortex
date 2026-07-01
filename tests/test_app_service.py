@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from transvortex.app.desktop_api import DesktopApi
-from transvortex.app_service import handle_line
+from transvortex.app_service import LocalServicePump, handle_line
+from transvortex.artifacts.runtime import TaskRuntime
 from transvortex.cli import main as cli_main
+from transvortex.utils import write_json
 
 
 def _write_config(root: Path) -> None:
@@ -39,6 +42,81 @@ def test_app_service_ping_and_unknown_method(tmp_path: Path) -> None:
 
     assert ping["result"]["ok"] is True
     assert missing["error"]["code"] == "method_not_found"
+
+
+def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    stopped = []
+    service = DesktopApi(
+        root_dir=tmp_path,
+        pump_status=lambda: {"enabled": True, "running": True, "last_error": ""},
+        shutdown_callback=lambda: stopped.append(True),
+    )
+
+    info = handle_line(service, _request("service.info"), root_dir=tmp_path)
+    health = handle_line(service, _request("service.health"), root_dir=tmp_path)
+    shutdown = handle_line(service, _request("service.shutdown"), root_dir=tmp_path)
+
+    assert info["result"]["service"] == "transvortex.app_service"
+    assert info["result"]["protocol_version"] == 1
+    assert "runtime_pump" in info["result"]["capabilities"]
+    assert health["result"]["status"] == "healthy"
+    assert health["result"]["pump"]["running"] is True
+    assert set(health["result"]["runtime"]) == {"active"}
+    assert shutdown["result"] == {"ok": True, "shutdown": "requested"}
+    assert service.shutdown_requested is True
+    assert stopped == [True]
+
+
+def test_app_service_health_reads_active_without_snapshot(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    config = DesktopApi(root_dir=tmp_path).config_get({})
+    active_path = Path(config["artifacts_dir"]) / ".runtime" / "active.json"
+    write_json(active_path, {"task_id": "task1", "state": "running"})
+    called = []
+
+    def forbidden_snapshot(self):  # noqa: ANN001
+        called.append("snapshot")
+        raise AssertionError("health must not call snapshot")
+
+    def forbidden_reconcile(self):  # noqa: ANN001
+        called.append("reconcile")
+        raise AssertionError("health must not call reconcile")
+
+    monkeypatch.setattr(TaskRuntime, "snapshot", forbidden_snapshot)
+    monkeypatch.setattr(TaskRuntime, "reconcile", forbidden_reconcile)
+
+    response = handle_line(DesktopApi(root_dir=tmp_path), _request("service.health"), root_dir=tmp_path)
+
+    assert response["result"]["runtime"]["active"]["task_id"] == "task1"
+    assert called == []
+
+
+def test_app_service_health_tolerates_missing_and_corrupt_active(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+
+    missing = handle_line(service, _request("service.health"), root_dir=tmp_path)
+    active_path = Path(missing["result"]["runtime"].get("active") or tmp_path / "artifacts" / ".runtime" / "active.json")
+    active_path.parent.mkdir(parents=True, exist_ok=True)
+    active_path.write_text("{bad", encoding="utf-8")
+    corrupt = handle_line(service, _request("service.health"), root_dir=tmp_path)
+
+    assert missing["result"]["runtime"]["active"] is None
+    assert corrupt["result"]["runtime"]["active"] is None
+
+
+def test_app_service_health_degraded_when_pump_reports_error(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(
+        root_dir=tmp_path,
+        pump_status=lambda: {"enabled": True, "running": True, "last_error": "pump_tick_failed"},
+    )
+
+    response = handle_line(service, _request("service.health"), root_dir=tmp_path)
+
+    assert response["result"]["status"] == "degraded"
+    assert response["result"]["pump"]["last_error"] == "pump_tick_failed"
 
 
 def test_app_service_invalid_json_returns_parse_error(tmp_path: Path) -> None:
@@ -103,6 +181,61 @@ def test_app_service_runtime_submit_and_acquire(tmp_path: Path) -> None:
     assert (tmp_path / "artifacts" / task_id / "runtime_request.json").exists()
 
 
+def test_app_service_tasks_events_uses_cursor_payload(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+    task_id = submitted["result"]["task_id"]
+    handle_line(service, _request("runtime.cancel", {"task_id": task_id}), root_dir=tmp_path)
+
+    first = handle_line(service, _request("tasks.events", {"task_id": task_id, "cursor": 0, "limit": 1}), root_dir=tmp_path)
+    second = handle_line(
+        service,
+        _request("tasks.events", {"task_id": task_id, "cursor": first["result"]["next_cursor"], "limit": 1}),
+        root_dir=tmp_path,
+    )
+
+    assert first["result"]["task_id"] == task_id
+    assert first["result"]["cursor"] == 0
+    assert len(first["result"]["events"]) == 1
+    assert first["result"]["next_cursor"] == 1
+    assert second["result"]["cursor"] == 1
+
+
+def test_app_service_runtime_cancel_force_after_grace_is_non_blocking(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+    task_id = submitted["result"]["task_id"]
+
+    start = time.monotonic()
+    cancelled = handle_line(
+        service,
+        _request("runtime.cancel", {"task_id": task_id, "force_after_grace": 10}),
+        root_dir=tmp_path,
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0
+    assert cancelled["result"]["status"] == "CANCEL_REQUESTED"
+
+
 def test_app_service_auth_list_does_not_return_secret(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
@@ -138,3 +271,113 @@ def test_app_service_subprocess_smoke(tmp_path: Path) -> None:
     payload = json.loads(proc.stdout.strip())
     assert payload["result"]["service"] == "transvortex.app_service"
     assert proc.stderr == ""
+
+
+def test_app_service_subprocess_shutdown_smoke(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    request = _request("service.shutdown") + "\n"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "transvortex.app_service", "--root", str(tmp_path)],
+        input=request,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=10,
+        check=True,
+    )
+
+    payload = json.loads(proc.stdout.strip())
+    assert payload["result"]["shutdown"] == "requested"
+
+
+def test_app_service_subprocess_no_pump_health(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    request = _request("service.health") + "\n" + _request("service.shutdown", request_id=2) + "\n"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "transvortex.app_service", "--root", str(tmp_path), "--no-pump"],
+        input=request,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=10,
+        check=True,
+    )
+
+    lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    assert lines[0]["result"]["pump"]["running"] is False
+    assert lines[1]["result"]["shutdown"] == "requested"
+
+
+def test_local_service_pump_launches_queued_worker(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    launched = []
+    service = DesktopApi(root_dir=tmp_path)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+    task_id = submitted["result"]["task_id"]
+
+    def fake_launcher(**kwargs):
+        launched.append(kwargs)
+        return {"pid": 12345, "stdout_log": "stdout.log", "stderr_log": "stderr.log"}
+
+    pump = LocalServicePump(root_dir=tmp_path, worker_launcher=fake_launcher)
+    pump.tick()
+
+    assert launched[0]["worker_args"] == ["_worker", "--task-id", task_id]
+    events = handle_line(service, _request("tasks.events", {"task_id": task_id}), root_dir=tmp_path)["result"]["events"]
+    assert events[-1]["type"] == "worker_launch_requested"
+
+
+def test_local_service_pump_does_not_reconcile_twice(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    calls = []
+    original_reconcile = TaskRuntime.reconcile
+
+    def counted_reconcile(self):  # noqa: ANN001
+        calls.append("reconcile")
+        return original_reconcile(self)
+
+    monkeypatch.setattr(TaskRuntime, "reconcile", counted_reconcile)
+
+    pump = LocalServicePump(root_dir=tmp_path, worker_launcher=lambda **_kwargs: {"pid": 123})
+    pump.tick()
+
+    assert calls == ["reconcile"]
+
+
+def test_local_service_pump_release_active_when_launch_fails(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+    task_id = submitted["result"]["task_id"]
+
+    def failing_launcher(**_kwargs):
+        raise RuntimeError("launch exploded")
+
+    pump = LocalServicePump(root_dir=tmp_path, worker_launcher=failing_launcher)
+    try:
+        pump.tick()
+    except RuntimeError:
+        pass
+
+    task = handle_line(service, _request("tasks.list"), root_dir=tmp_path)["result"][0]
+    events = handle_line(service, _request("tasks.events", {"task_id": task_id}), root_dir=tmp_path)["result"]["events"]
+    assert task["status"] == "INTERRUPTED"
+    assert events[-1]["type"] == "worker_launch_failed"

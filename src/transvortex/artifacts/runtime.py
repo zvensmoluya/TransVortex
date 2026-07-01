@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import signal
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from .task_store import TaskStore
 
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
 CLAIM_STALE_SECONDS = 60
+DEFAULT_CANCEL_GRACE_SECONDS = 30.0
 RUNNING_STATUSES = {
     "INIT",
     "QUEUED",
@@ -60,6 +62,9 @@ class TaskRuntime:
 
     def worker_file(self, task_id: str) -> Path:
         return self.store.task_dir(task_id) / "worker.json"
+
+    def lock(self):
+        return self.store.lock()
 
     def submit_run(
         self,
@@ -104,37 +109,45 @@ class TaskRuntime:
         task = self.store.load_task(request.task_id)
         return self._submit_payload(task, artifacts_dir)
 
-    def acquire_next(self, *, root_dir: Path, providers_file: Path | None = None) -> dict[str, Any]:
-        self.reconcile()
-        active = self._active_payload()
-        if active is not None:
-            return {"acquired": False, "reason": "active_worker", "active": active}
-        for task in self._tasks_created_asc():
-            if task.status != "QUEUED":
-                continue
-            request_payload = self._read_runtime_request(task.task_id)
-            if not request_payload:
-                continue
-            command = str(request_payload.get("command") or "run")
-            active_payload = {
-                "task_id": task.task_id,
-                "state": "claimed",
-                "claimed_at": utc_now_iso(),
-                "root_dir": str(root_dir),
-                "providers_file": str(providers_file) if providers_file else "",
-                "command": command,
-            }
-            write_json(self.active_file, active_payload)
-            return {
-                "acquired": True,
-                "launch": {
+    def acquire_next(
+        self,
+        *,
+        root_dir: Path,
+        providers_file: Path | None = None,
+        reconcile: bool = True,
+    ) -> dict[str, Any]:
+        with self.lock():
+            if reconcile:
+                self.reconcile()
+            active = self._active_payload()
+            if active is not None:
+                return {"acquired": False, "reason": "active_worker", "active": active}
+            for task in self._tasks_created_asc():
+                if task.status != "QUEUED":
+                    continue
+                request_payload = self._read_runtime_request(task.task_id)
+                if not request_payload:
+                    continue
+                command = str(request_payload.get("command") or "run")
+                active_payload = {
                     "task_id": task.task_id,
+                    "state": "claimed",
+                    "claimed_at": utc_now_iso(),
+                    "root_dir": str(root_dir),
+                    "providers_file": str(providers_file) if providers_file else "",
                     "command": command,
-                    "request_file": str(self.request_file(task.task_id)),
-                    "args": ["_worker", "--task-id", task.task_id],
-                },
-            }
-        return {"acquired": False, "reason": "no_queued_task"}
+                }
+                write_json(self.active_file, active_payload)
+                return {
+                    "acquired": True,
+                    "launch": {
+                        "task_id": task.task_id,
+                        "command": command,
+                        "request_file": str(self.request_file(task.task_id)),
+                        "args": ["_worker", "--task-id", task.task_id],
+                    },
+                }
+            return {"acquired": False, "reason": "no_queued_task"}
 
     def register_worker(
         self,
@@ -144,40 +157,41 @@ class TaskRuntime:
         owner: str = "python",
         command: str = "worker",
     ) -> dict[str, Any]:
-        now = utc_now_iso()
-        payload = {
-            "task_id": task_id,
-            "pid": int(pid or os.getpid()),
-            "owner": owner,
-            "command": command,
-            "state": "running",
-            "started_at": now,
-            "last_seen": now,
-            "ended_at": "",
-            "exit_code": None,
-        }
-        write_json(self.worker_file(task_id), payload)
-        active = self._active_payload() or {}
-        active.update(
-            {
+        with self.lock():
+            now = utc_now_iso()
+            payload = {
                 "task_id": task_id,
-                "pid": payload["pid"],
+                "pid": int(pid or os.getpid()),
                 "owner": owner,
+                "command": command,
                 "state": "running",
                 "started_at": now,
                 "last_seen": now,
-                "command": command,
+                "ended_at": "",
+                "exit_code": None,
             }
-        )
-        write_json(self.active_file, active)
-        self.store.append_event(
-            task_id,
-            "worker_started",
-            stage=self.store.load_task(task_id).status,
-            message="Worker started",
-            details={"pid": payload["pid"], "owner": owner},
-        )
-        return payload
+            write_json(self.worker_file(task_id), payload)
+            active = self._active_payload() or {}
+            active.update(
+                {
+                    "task_id": task_id,
+                    "pid": payload["pid"],
+                    "owner": owner,
+                    "state": "running",
+                    "started_at": now,
+                    "last_seen": now,
+                    "command": command,
+                }
+            )
+            write_json(self.active_file, active)
+            self.store.append_event(
+                task_id,
+                "worker_started",
+                stage=self.store.load_task(task_id).status,
+                message="Worker started",
+                details={"pid": payload["pid"], "owner": owner},
+            )
+            return payload
 
     def is_tracked(self, task_id: str) -> bool:
         active = self._active_payload()
@@ -189,73 +203,76 @@ class TaskRuntime:
         return active_matches or self.worker_file(task_id).exists()
 
     def heartbeat(self, task_id: str, *, pid: int | None = None) -> None:
-        now = utc_now_iso()
-        worker = self._read_worker(task_id) or {"task_id": task_id, "pid": int(pid or os.getpid())}
-        worker["last_seen"] = now
-        worker.setdefault("state", "running")
-        write_json(self.worker_file(task_id), worker)
-        active = self._active_payload()
-        if active and active.get("task_id") == task_id:
-            active["last_seen"] = now
-            active["pid"] = int(worker.get("pid") or pid or os.getpid())
-            active["state"] = "running"
-            write_json(self.active_file, active)
+        with self.lock():
+            now = utc_now_iso()
+            worker = self._read_worker(task_id) or {"task_id": task_id, "pid": int(pid or os.getpid())}
+            worker["last_seen"] = now
+            worker.setdefault("state", "running")
+            write_json(self.worker_file(task_id), worker)
+            active = self._active_payload()
+            if active and active.get("task_id") == task_id:
+                active["last_seen"] = now
+                active["pid"] = int(worker.get("pid") or pid or os.getpid())
+                active["state"] = "running"
+                write_json(self.active_file, active)
 
     def finish_worker(self, task_id: str, *, exit_code: int = 0, state: str = "ended") -> None:
-        now = utc_now_iso()
-        active = self._active_payload()
-        worker = self._read_worker(task_id) or {
-            "task_id": task_id,
-            "pid": _int_or_none(active.get("pid")) if active and active.get("task_id") == task_id else None,
-        }
-        worker["state"] = state
-        worker["ended_at"] = now
-        worker["last_seen"] = now
-        worker["exit_code"] = exit_code
-        write_json(self.worker_file(task_id), worker)
-        if active and active.get("task_id") == task_id:
-            self.active_file.unlink(missing_ok=True)
+        with self.lock():
+            now = utc_now_iso()
+            active = self._active_payload()
+            worker = self._read_worker(task_id) or {
+                "task_id": task_id,
+                "pid": _int_or_none(active.get("pid")) if active and active.get("task_id") == task_id else None,
+            }
+            worker["state"] = state
+            worker["ended_at"] = now
+            worker["last_seen"] = now
+            worker["exit_code"] = exit_code
+            write_json(self.worker_file(task_id), worker)
+            if active and active.get("task_id") == task_id:
+                self.active_file.unlink(missing_ok=True)
 
     def reconcile(self) -> dict[str, Any]:
-        active = self._active_payload()
-        interrupted: list[str] = []
-        if active:
-            task_id = str(active.get("task_id") or "")
-            pid = _int_or_none(active.get("pid"))
-            state = str(active.get("state") or "")
-            try:
-                task = self.store.load_task(task_id)
-            except Exception:
-                self.active_file.unlink(missing_ok=True)
-            else:
-                if task.status in TERMINAL_STATUSES:
-                    self.finish_worker(task_id, exit_code=0, state="ended")
-                elif pid and is_pid_alive(pid):
-                    self.heartbeat(task_id, pid=pid)
-                elif state == "claimed":
-                    if _is_claim_stale(active.get("claimed_at")):
-                        self._mark_interrupted(task, reason="worker_launch_abandoned")
+        with self.lock():
+            active = self._active_payload()
+            interrupted: list[str] = []
+            if active:
+                task_id = str(active.get("task_id") or "")
+                pid = _int_or_none(active.get("pid"))
+                state = str(active.get("state") or "")
+                try:
+                    task = self.store.load_task(task_id)
+                except Exception:
+                    self.active_file.unlink(missing_ok=True)
+                else:
+                    if task.status in TERMINAL_STATUSES:
+                        self.finish_worker(task_id, exit_code=0, state="ended")
+                    elif pid and is_pid_alive(pid):
+                        self.heartbeat(task_id, pid=pid)
+                    elif state == "claimed":
+                        if _is_claim_stale(active.get("claimed_at")):
+                            self._mark_interrupted(task, reason="worker_launch_abandoned")
+                            interrupted.append(task_id)
+                            self.active_file.unlink(missing_ok=True)
+                    else:
+                        self._mark_interrupted(task, reason="worker_process_missing")
                         interrupted.append(task_id)
                         self.active_file.unlink(missing_ok=True)
-                else:
-                    self._mark_interrupted(task, reason="worker_process_missing")
-                    interrupted.append(task_id)
-                    self.active_file.unlink(missing_ok=True)
 
-        stale: list[str] = []
-        for task in self._tasks_updated_desc():
-            if task.status in RUNNING_STATUSES and task.status != "QUEUED":
-                worker = self._read_worker(task.task_id)
-                if not worker:
-                    continue
-                pid = _int_or_none((worker or {}).get("pid"))
-                if pid and is_pid_alive(pid):
-                    continue
-                if self._active_payload() and self._active_payload().get("task_id") == task.task_id:
-                    continue
-                self._mark_interrupted(task, reason="no_active_worker")
-                stale.append(task.task_id)
-        return {"ok": True, "interrupted": interrupted, "stale": stale}
+            stale: list[str] = []
+            for task in self._tasks_updated_desc():
+                if task.status in RUNNING_STATUSES and task.status != "QUEUED":
+                    worker = self._read_worker(task.task_id)
+                    if not worker:
+                        continue
+                    pid = _int_or_none((worker or {}).get("pid"))
+                    if pid and is_pid_alive(pid):
+                        continue
+                    if self._active_payload() and self._active_payload().get("task_id") == task.task_id:
+                        continue
+                    self._mark_interrupted(task, reason="no_active_worker")
+                    stale.append(task.task_id)
+            return {"ok": True, "interrupted": interrupted, "stale": stale}
 
     def snapshot(self) -> dict[str, Any]:
         self.reconcile()
@@ -272,16 +289,20 @@ class TaskRuntime:
             "interrupted": [task.task_id for task in tasks if task.status == "INTERRUPTED"],
         }
 
+    def active_payload_light(self) -> dict[str, Any] | None:
+        return self._active_payload()
+
     def release_active(self, task_id: str, *, state: str = "interrupted", reason: str = "worker_launch_failed") -> dict[str, Any]:
-        active = self._active_payload()
-        if active and active.get("task_id") == task_id:
-            self.active_file.unlink(missing_ok=True)
-        task = self.store.load_task(task_id)
-        if state == "queued":
-            self.store.update_task_status(task_id, "QUEUED", clear_error=True)
-            return {"ok": True, "task_id": task_id, "status": "QUEUED"}
-        self._mark_interrupted(task, reason=reason)
-        return {"ok": True, "task_id": task_id, "status": "INTERRUPTED"}
+        with self.lock():
+            active = self._active_payload()
+            if active and active.get("task_id") == task_id:
+                self.active_file.unlink(missing_ok=True)
+            task = self.store.load_task(task_id)
+            if state == "queued":
+                self.store.update_task_status(task_id, "QUEUED", clear_error=True)
+                return {"ok": True, "task_id": task_id, "status": "QUEUED"}
+            self._mark_interrupted(task, reason=reason)
+            return {"ok": True, "task_id": task_id, "status": "INTERRUPTED"}
 
     def status_payload(self, task: TaskRecord) -> dict[str, Any]:
         active = self._active_payload()
@@ -311,24 +332,47 @@ class TaskRuntime:
         }
 
     def force_cancel(self, task_id: str, *, reason: str = "forced_cancel") -> TaskRecord:
-        task = self.store.load_task(task_id)
-        worker = self._read_worker(task_id)
-        pid = _int_or_none((worker or {}).get("pid"))
-        if pid and is_pid_alive(pid):
-            terminate_pid(pid)
-        err = classify_exception(RuntimeError("Task cancelled"), stage=task.status)
-        task = self.store.update_task_status(task_id, "CANCELLED", error=reason, error_info=err)
-        self.store.clear_cancel(task_id)
-        self.store.append_event(
-            task_id,
-            "cancelled",
-            stage="CANCELLED",
-            message="Task cancelled",
-            level="warning",
-            details={"forced": True, "reason": reason, "error_info": err},
-        )
-        self.finish_worker(task_id, exit_code=-1, state="cancelled")
-        return task
+        with self.lock():
+            task = self.store.load_task(task_id)
+            worker = self._read_worker(task_id)
+            pid = _int_or_none((worker or {}).get("pid"))
+            if pid and is_pid_alive(pid):
+                terminate_pid(pid)
+            err = classify_exception(RuntimeError("Task cancelled"), stage=task.status)
+            task = self.store.update_task_status(task_id, "CANCELLED", error=reason, error_info=err)
+            self.store.clear_cancel(task_id)
+            self.store.append_event(
+                task_id,
+                "cancelled",
+                stage="CANCELLED",
+                message="Task cancelled",
+                level="warning",
+                details={"forced": True, "reason": reason, "error_info": err},
+            )
+            self.finish_worker(task_id, exit_code=-1, state="cancelled")
+            return task
+
+    def force_cancel_expired(self, *, grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS) -> list[str]:
+        now = datetime.now(timezone.utc)
+        cancelled: list[str] = []
+        with self.lock():
+            for task in self._tasks_updated_desc():
+                if task.status != "CANCEL_REQUESTED":
+                    continue
+                cancel_request = _cancel_request_payload(self.store.cancel_file(task.task_id))
+                if cancel_request is None:
+                    continue
+                requested_at, task_grace = cancel_request
+                effective_grace = grace_seconds if task_grace is None else task_grace
+                if (now - requested_at).total_seconds() < max(0.0, float(effective_grace)):
+                    continue
+                latest = self.store.load_task(task.task_id)
+                if latest.status in TERMINAL_STATUSES:
+                    self.store.clear_cancel(task.task_id)
+                    continue
+                self.force_cancel(task.task_id, reason="force_after_grace")
+                cancelled.append(task.task_id)
+        return cancelled
 
     def _submit_payload(self, task: TaskRecord, artifacts_dir: Path) -> dict[str, Any]:
         return {
@@ -341,7 +385,8 @@ class TaskRuntime:
         }
 
     def save_runtime_request(self, task_id: str, command: str, request: dict[str, Any]) -> None:
-        write_json(self.request_file(task_id), {"command": command, "request": request})
+        with self.lock():
+            write_json(self.request_file(task_id), {"command": command, "request": request})
 
     def _read_runtime_request(self, task_id: str) -> dict[str, Any]:
         path = self.request_file(task_id)
@@ -457,6 +502,38 @@ def _is_claim_stale(value: Any) -> bool:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - parsed).total_seconds() > CLAIM_STALE_SECONDS
+
+
+def _cancel_request_payload(path: Path) -> tuple[datetime, float | None] | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    if not value:
+        return None
+    force_after_grace: float | None = None
+    try:
+        payload = json.loads(value)
+    except Exception:
+        requested_at_value = value
+    else:
+        if isinstance(payload, dict):
+            requested_at_value = str(payload.get("requested_at") or "")
+            raw_grace = payload.get("force_after_grace")
+            if raw_grace is not None:
+                try:
+                    force_after_grace = float(raw_grace)
+                except Exception:
+                    force_after_grace = None
+        else:
+            requested_at_value = value
+    try:
+        parsed = datetime.fromisoformat(requested_at_value)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed, force_after_grace
 
 
 def is_pid_alive(pid: int) -> bool:

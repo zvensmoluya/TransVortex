@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable
 
 from ..app.models import TaskRecord
-from ..utils import append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
+from ..utils import FileLock, append_jsonl, read_json, read_jsonl, utc_now_iso, write_json
 from .catalog import try_sync_task
 
 
@@ -33,7 +34,17 @@ class TaskStore:
     def cancel_file(self, task_id: str) -> Path:
         return self.task_dir(task_id) / "cancel.requested"
 
+    def runtime_lock_file(self) -> Path:
+        return self.artifacts_dir / ".runtime" / "runtime.lock"
+
+    def lock(self) -> FileLock:
+        return FileLock(self.runtime_lock_file())
+
     def save_task(self, task: TaskRecord) -> None:
+        with self.lock():
+            self._save_task_unlocked(task)
+
+    def _save_task_unlocked(self, task: TaskRecord) -> None:
         write_json(self.task_file(task.task_id), task)
         self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
         self.events_file(task.task_id).touch(exist_ok=True)
@@ -57,22 +68,23 @@ class TaskStore:
         error_info: dict[str, Any] | None = None,
         clear_error: bool = False,
     ) -> TaskRecord:
-        task = self.load_task(task_id)
-        task.status = status
-        task.updated_at = utc_now_iso()
-        if output_path is not None:
-            task.output_path = output_path
-        if output_paths is not None:
-            task.output_paths = output_paths
-        if error is not None:
-            task.error = error
-        if error_info is not None:
-            task.error_info = error_info
-        if clear_error or status == "DONE":
-            task.error = None
-            task.error_info = None
-        self.save_task(task)
-        return task
+        with self.lock():
+            task = self.load_task(task_id)
+            task.status = status
+            task.updated_at = utc_now_iso()
+            if output_path is not None:
+                task.output_path = output_path
+            if output_paths is not None:
+                task.output_paths = output_paths
+            if error is not None:
+                task.error = error
+            if error_info is not None:
+                task.error_info = error_info
+            if clear_error or status == "DONE":
+                task.error = None
+                task.error_info = None
+            self._save_task_unlocked(task)
+            return task
 
     def append_event(
         self,
@@ -99,16 +111,17 @@ class TaskStore:
             event["progress"] = _normalize_progress(progress)
         if details:
             event["details"] = details
-        append_jsonl(self.events_file(task_id), event)
-        try:
-            task = self.load_task(task_id)
-            task.updated_at = created_at
-            write_json(self.task_file(task.task_id), task)
-            self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
-            self.events_file(task.task_id).touch(exist_ok=True)
-            try_sync_task(self.artifacts_dir, task, last_event_at=created_at)
-        except Exception:
-            pass
+        with self.lock():
+            append_jsonl(self.events_file(task_id), event)
+            try:
+                task = self.load_task(task_id)
+                task.updated_at = created_at
+                write_json(self.task_file(task.task_id), task)
+                self.events_file(task.task_id).parent.mkdir(parents=True, exist_ok=True)
+                self.events_file(task.task_id).touch(exist_ok=True)
+                try_sync_task(self.artifacts_dir, task, last_event_at=created_at)
+            except Exception:
+                pass
         if self.event_sink is not None:
             try:
                 self.event_sink(event)
@@ -145,18 +158,56 @@ class TaskStore:
         self.load_task(task_id)
         return read_jsonl(self.events_file(task_id))
 
-    def request_cancel(self, task_id: str) -> TaskRecord:
-        task = self.load_task(task_id)
-        if task.status in {"CANCEL_REQUESTED", "DONE", "FAILED", "CANCELLED"}:
+    def read_events_page(self, task_id: str, *, cursor: int = 0, limit: int = 500) -> dict[str, Any]:
+        self.load_task(task_id)
+        safe_cursor = max(0, int(cursor))
+        safe_limit = max(1, min(5000, int(limit)))
+        path = self.events_file(task_id)
+        events: list[dict[str, Any]] = []
+        line_index = 0
+        has_more = False
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if line_index < safe_cursor:
+                        line_index += 1
+                        continue
+                    if len(events) >= safe_limit:
+                        has_more = True
+                        break
+                    events.append(read_event_line(stripped))
+                    line_index += 1
+        return {
+            "task_id": task_id,
+            "events": events,
+            "cursor": safe_cursor,
+            "next_cursor": safe_cursor + len(events),
+            "has_more": has_more,
+        }
+
+    def request_cancel(self, task_id: str, *, force_after_grace: float | None = None) -> TaskRecord:
+        with self.lock():
+            task = self.load_task(task_id)
+            if task.status in {"CANCEL_REQUESTED", "DONE", "FAILED", "CANCELLED"}:
+                return task
+            self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
+            write_json(
+                self.cancel_file(task_id),
+                {
+                    "requested_at": utc_now_iso(),
+                    "force_after_grace": force_after_grace,
+                },
+            )
+            task = self.update_task_status(task_id, "CANCEL_REQUESTED")
+            self.append_event(task_id, "cancel_requested", message="Cancel requested")
             return task
-        self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
-        self.cancel_file(task_id).write_text(utc_now_iso(), encoding="utf-8")
-        task = self.update_task_status(task_id, "CANCEL_REQUESTED")
-        self.append_event(task_id, "cancel_requested", message="Cancel requested")
-        return task
 
     def clear_cancel(self, task_id: str) -> None:
-        self.cancel_file(task_id).unlink(missing_ok=True)
+        with self.lock():
+            self.cancel_file(task_id).unlink(missing_ok=True)
 
     def is_cancel_requested(self, task_id: str) -> bool:
         return self.cancel_file(task_id).exists()
@@ -173,5 +224,11 @@ class TaskStore:
         return read_json(file)
 
     def save_checkpoint(self, task_id: str, data: dict) -> None:
-        data["updated_at"] = utc_now_iso()
-        write_json(self.checkpoint_file(task_id), data)
+        with self.lock():
+            data["updated_at"] = utc_now_iso()
+            write_json(self.checkpoint_file(task_id), data)
+
+
+def read_event_line(line: str) -> dict[str, Any]:
+    payload = json.loads(line)
+    return payload if isinstance(payload, dict) else {"value": payload}

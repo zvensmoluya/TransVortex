@@ -84,6 +84,22 @@ def test_runtime_acquire_next_is_fifo_and_single_active(tmp_path: Path) -> None:
     assert runtime.snapshot()["queued"] == ["task2"]
 
 
+def test_runtime_acquire_next_reconciles_by_default(tmp_path: Path, monkeypatch) -> None:
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    calls = []
+    original_reconcile = TaskRuntime.reconcile
+
+    def counted_reconcile(self):  # noqa: ANN001
+        calls.append("reconcile")
+        return original_reconcile(self)
+
+    monkeypatch.setattr(TaskRuntime, "reconcile", counted_reconcile)
+
+    runtime.acquire_next(root_dir=tmp_path)
+
+    assert calls == ["reconcile"]
+
+
 def test_runtime_worker_heartbeat_and_finish(tmp_path: Path) -> None:
     runtime = TaskRuntime(tmp_path / "artifacts")
     runtime.store.save_task(_task("task1", "TRANSLATE"))
@@ -133,6 +149,18 @@ def test_runtime_force_cancel_marks_task_cancelled(tmp_path: Path) -> None:
 
     assert task.status == "CANCELLED"
     assert runtime.store.read_events("task1")[-1]["details"]["forced"] is True
+
+
+def test_runtime_force_cancel_expired_uses_request_grace(tmp_path: Path) -> None:
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    runtime.store.save_task(_task("task1", "TRANSLATE"))
+    runtime.register_worker(task_id="task1", pid=99999999, owner="test")
+    runtime.store.request_cancel("task1", force_after_grace=0)
+
+    cancelled = runtime.force_cancel_expired(grace_seconds=60)
+
+    assert cancelled == ["task1"]
+    assert runtime.store.load_task("task1").status == "CANCELLED"
 
 
 def test_runtime_release_claimed_task_marks_interrupted(tmp_path: Path) -> None:
