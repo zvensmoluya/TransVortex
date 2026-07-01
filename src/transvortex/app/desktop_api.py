@@ -30,6 +30,7 @@ from ..providers.admin import (
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
+from .asr_admin import save_asr_provider_config
 from .config import load_app_config, resolve_providers_file
 from .credentials import (
     auth_file_path,
@@ -51,6 +52,7 @@ SERVICE_CAPABILITIES = [
     "runtime",
     "runtime_pump",
     "provider_admin",
+    "asr_provider_admin",
     "result_workspace",
     "event_cursor",
 ]
@@ -107,6 +109,7 @@ class DesktopApi:
             "provider.models": self.provider_models,
             "provider.test": self.provider_test,
             "provider.routing.save": self.provider_routing_save,
+            "asr.provider.save": self.asr_provider_save,
             "prompt.asr.save": self.prompt_asr_save,
             "prompt.asr.delete": self.prompt_asr_delete,
             "result.open": self.result_open,
@@ -282,6 +285,14 @@ class DesktopApi:
         if not isinstance(routing, dict):
             raise DesktopApiError("invalid_request", "routing must be an object")
         return save_provider_routing(root_dir=self.root_dir, routing=routing)
+
+    def asr_provider_save(self, params: dict[str, Any]) -> dict[str, Any]:
+        return save_asr_provider_config(
+            root_dir=self.root_dir,
+            provider_draft=_dict_param(params, "provider_draft", "providerDraft"),
+            api_key=_optional_text(params, "api_key", "apiKey"),
+            expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
+        )
 
     def prompt_asr_save(self, params: dict[str, Any]) -> dict[str, Any]:
         return save_asr_prompt_profile(root_dir=self.root_dir, profile=_dict_param(params, "profile"))

@@ -357,6 +357,14 @@ class AppServiceClient {
 
   final AppServiceTransport _transport;
 
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) {
+    return _transport.call(method, params, timeout);
+  }
+
   Future<ServiceInfo> info() async {
     return ServiceInfo.fromJson(await _transport.call('service.info'));
   }
@@ -367,6 +375,133 @@ class AppServiceClient {
 
   Future<DesktopSnapshot> desktopSnapshot() async {
     return DesktopSnapshot.fromJson(await _transport.call('desktop.snapshot'));
+  }
+
+  Future<RuntimeSnapshot> runtimeSnapshot() async {
+    return RuntimeSnapshot.fromJson(await _transport.call('runtime.snapshot'));
+  }
+
+  Future<TaskSubmissionResult> submitRun(Map<String, Object?> request) async {
+    return TaskSubmissionResult.fromJson(
+      await _transport.call('runtime.submitRun', {'request': request}),
+    );
+  }
+
+  Future<TaskSubmissionResult> submitResume(
+    Map<String, Object?> request,
+  ) async {
+    return TaskSubmissionResult.fromJson(
+      await _transport.call('runtime.submitResume', {'request': request}),
+    );
+  }
+
+  Future<TaskSummary> cancel(String taskId, {bool force = false}) async {
+    return TaskSummary.fromJson(
+      await _transport.call('runtime.cancel', {
+        'task_id': taskId,
+        'force': force,
+      }),
+    );
+  }
+
+  Future<TaskEventsPage> taskEvents(
+    String taskId, {
+    int cursor = 0,
+    int limit = 200,
+  }) async {
+    return TaskEventsPage.fromJson(
+      await _transport.call('tasks.events', {
+        'task_id': taskId,
+        'cursor': cursor,
+        'limit': limit,
+      }),
+    );
+  }
+
+  Future<Map<String, Object?>> authSet(String credentialId, String apiKey) {
+    return call('auth.set', {
+      'credential_id': credentialId,
+      'api_key': apiKey,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> providerSave({
+    required Map<String, Object?> providerDraft,
+    String? apiKey,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('provider.save', {
+      'provider_draft': providerDraft,
+      'api_key': ?apiKey,
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> providerModels({
+    required Map<String, Object?> providerDraft,
+    String? apiKey,
+  }) {
+    return call('provider.models', {
+      'provider_draft': providerDraft,
+      'api_key': ?apiKey,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> providerTest({
+    required Map<String, Object?> providerDraft,
+    required String model,
+    String? apiKey,
+  }) {
+    return call('provider.test', {
+      'provider_draft': providerDraft,
+      'model': model,
+      'api_key': ?apiKey,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> saveTranslationRouting({
+    required String provider,
+    required String model,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('provider.routing.save', {
+      'primary': {'provider': provider, 'model': model},
+      'fallback': const [],
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> asrProviderSave({
+    required Map<String, Object?> providerDraft,
+    String? apiKey,
+  }) {
+    return call('asr.provider.save', {
+      'provider_draft': providerDraft,
+      'api_key': ?apiKey,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> resultOpen(String taskId) async {
+    return _stringMap(
+      await _transport.call('result.open', {'task_id': taskId}),
+    );
+  }
+
+  Future<Map<String, Object?>> resultReexport(
+    String taskId, {
+    String outputFormat = 'both',
+    bool bilingual = true,
+    String? subtitleBilingualOrder,
+    bool? subtitlePreferSingleLine,
+  }) async {
+    final params = <String, Object?>{
+      'task_id': taskId,
+      'output_format': outputFormat,
+      'bilingual': bilingual,
+      'subtitle_bilingual_order': ?subtitleBilingualOrder,
+      'subtitle_prefer_single_line': ?subtitlePreferSingleLine,
+    };
+    return _stringMap(await _transport.call('result.reexport', params));
   }
 
   Future<void> shutdown() async {
@@ -461,7 +596,7 @@ class DesktopSnapshot {
   });
 
   final Map<String, Object?> config;
-  final List<Object?> tasks;
+  final List<TaskSummary> tasks;
   final Map<String, Object?> runtime;
   final Map<String, Object?> environment;
   final Map<String, Object?> raw;
@@ -470,7 +605,7 @@ class DesktopSnapshot {
     final map = _stringMap(value);
     return DesktopSnapshot(
       config: _stringMap(map['config']),
-      tasks: _objectList(map['tasks']),
+      tasks: _taskList(map['tasks']),
       runtime: _stringMap(map['runtime']),
       environment: _stringMap(map['environment']),
       raw: map,
@@ -478,6 +613,76 @@ class DesktopSnapshot {
   }
 
   ConfigReadiness get configReadiness => ConfigReadiness.fromConfig(config);
+
+  List<ProviderOption> get providers {
+    return _objectList(config['providers'])
+        .map(ProviderOption.fromJson)
+        .where((provider) => provider.name.isNotEmpty)
+        .toList();
+  }
+
+  List<AsrProviderOption> get asrProviders {
+    final source = _stringMap(config['asr_providers']);
+    return source.values
+        .map(AsrProviderOption.fromJson)
+        .where((provider) => provider.name.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  Map<String, Object?>? get providersFileVersion {
+    final version = _stringMap(config['providers_file_version']);
+    return version.isEmpty ? null : version;
+  }
+
+  TaskSummary? taskById(String taskId) {
+    for (final task in tasks) {
+      if (task.taskId == taskId) return task;
+    }
+    return null;
+  }
+
+  TaskSummary? get latestActiveTask {
+    for (final task in tasks) {
+      if (!task.isTerminal) return task;
+    }
+    return tasks.isEmpty ? null : tasks.first;
+  }
+
+  String? get translationProvider {
+    final routing = _stringMap(config['routing']);
+    final primary = _stringMap(routing['primary']);
+    return _stringValue(primary['provider']);
+  }
+
+  String? get translationModel {
+    final routing = _stringMap(config['routing']);
+    final primary = _stringMap(routing['primary']);
+    return _stringValue(primary['model']);
+  }
+
+  String? get asrProviderName {
+    final pipeline = _stringMap(config['pipeline']);
+    return _stringValue(pipeline['asr_provider']);
+  }
+
+  String? get asrModel {
+    final pipeline = _stringMap(config['pipeline']);
+    final providerName = _stringValue(pipeline['asr_provider']);
+    if (providerName == null) return null;
+    final asrProviders = _stringMap(config['asr_providers']);
+    final provider = _stringMap(asrProviders[providerName]);
+    return _stringValue(provider['model']) ?? _stringValue(provider['name']);
+  }
+
+  String? get asrLabel {
+    final pipeline = _stringMap(config['pipeline']);
+    final providerName = _stringValue(pipeline['asr_provider']);
+    if (providerName == null) return null;
+    final asrProviders = _stringMap(config['asr_providers']);
+    final provider = _stringMap(asrProviders[providerName]);
+    return _stringValue(provider['name']) ?? providerName;
+  }
 }
 
 class ConfigReadiness {
@@ -526,6 +731,114 @@ class ConfigReadiness {
   }
 }
 
+class ProviderOption {
+  const ProviderOption({
+    required this.name,
+    required this.models,
+    this.hasKey = false,
+    this.baseUrl = '',
+    this.apiType = '',
+    this.compatMode = '',
+    this.credentialId = '',
+    this.credentialSource = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  final String name;
+  final List<String> models;
+  final bool hasKey;
+  final String baseUrl;
+  final String apiType;
+  final String compatMode;
+  final String credentialId;
+  final String credentialSource;
+  final Map<String, Object?> raw;
+
+  factory ProviderOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return ProviderOption(
+      name: _stringValue(map['name']) ?? '',
+      models: _stringList(map['models']),
+      hasKey: map['has_key'] == true || map['hasKey'] == true,
+      baseUrl:
+          _stringValue(map['base_url']) ?? _stringValue(map['baseUrl']) ?? '',
+      apiType:
+          _stringValue(map['api_type']) ?? _stringValue(map['apiType']) ?? '',
+      compatMode:
+          _stringValue(map['compat_mode']) ??
+          _stringValue(map['compatMode']) ??
+          '',
+      credentialId:
+          _stringValue(map['credential_id']) ??
+          _stringValue(map['credentialId']) ??
+          '',
+      credentialSource:
+          _stringValue(map['credential_source']) ??
+          _stringValue(map['credentialSource']) ??
+          '',
+      raw: map,
+    );
+  }
+}
+
+class AsrProviderOption {
+  const AsrProviderOption({
+    required this.name,
+    required this.kind,
+    required this.protocol,
+    required this.model,
+    this.baseUrl = '',
+    this.endpoint = '',
+    this.hasKey = false,
+    this.credentialId = '',
+    this.credentialSource = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  final String name;
+  final String kind;
+  final String protocol;
+  final String model;
+  final String baseUrl;
+  final String endpoint;
+  final bool hasKey;
+  final String credentialId;
+  final String credentialSource;
+  final Map<String, Object?> raw;
+
+  factory AsrProviderOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AsrProviderOption(
+      name: _stringValue(map['name']) ?? '',
+      kind: _stringValue(map['kind']) ?? 'remote',
+      protocol: _stringValue(map['protocol']) ?? 'openai_transcriptions',
+      model: _stringValue(map['model']) ?? '',
+      baseUrl:
+          _stringValue(map['base_url']) ?? _stringValue(map['baseUrl']) ?? '',
+      endpoint: _stringValue(map['endpoint']) ?? '',
+      hasKey: map['has_key'] == true || map['hasKey'] == true,
+      credentialId:
+          _stringValue(map['credential_id']) ??
+          _stringValue(map['credentialId']) ??
+          '',
+      credentialSource:
+          _stringValue(map['credential_source']) ??
+          _stringValue(map['credentialSource']) ??
+          '',
+      raw: map,
+    );
+  }
+
+  String get displayLabel {
+    return switch (kind) {
+      'local_inprocess' => '本机',
+      'local_server' => protocol == 'funasr_openai' ? 'FunASR' : '本地服务',
+      'remote' => '云端',
+      _ => name,
+    };
+  }
+}
+
 String? _routeProviderName(Object? primary) {
   final route = _stringMap(primary);
   return _stringValue(route['provider']) ?? _stringValue(primary);
@@ -559,6 +872,189 @@ class TaskEventsPage {
   }
 }
 
+class TaskSubmissionResult {
+  const TaskSubmissionResult({
+    required this.ok,
+    required this.taskId,
+    required this.status,
+    required this.taskDir,
+    required this.terminal,
+    required this.message,
+    this.raw = const <String, Object?>{},
+  });
+
+  final bool ok;
+  final String taskId;
+  final String status;
+  final String taskDir;
+  final bool terminal;
+  final String message;
+  final Map<String, Object?> raw;
+
+  factory TaskSubmissionResult.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return TaskSubmissionResult(
+      ok: map['ok'] == true,
+      taskId: _stringValue(map['task_id']) ?? _stringValue(map['taskId']) ?? '',
+      status: _stringValue(map['status']) ?? 'unknown',
+      taskDir:
+          _stringValue(map['task_dir']) ?? _stringValue(map['taskDir']) ?? '',
+      terminal: map['terminal'] == true,
+      message: _stringValue(map['message']) ?? '',
+      raw: map,
+    );
+  }
+}
+
+class RuntimeSnapshot {
+  const RuntimeSnapshot({
+    required this.active,
+    required this.queued,
+    required this.interrupted,
+    required this.raw,
+  });
+
+  final Map<String, Object?> active;
+  final List<String> queued;
+  final List<String> interrupted;
+  final Map<String, Object?> raw;
+
+  factory RuntimeSnapshot.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return RuntimeSnapshot(
+      active: _stringMap(map['active']),
+      queued: _stringList(map['queued']),
+      interrupted: _stringList(map['interrupted']),
+      raw: map,
+    );
+  }
+
+  String? get activeTaskId {
+    return _stringValue(active['task_id']) ?? _stringValue(active['taskId']);
+  }
+}
+
+class TaskSummary {
+  const TaskSummary({
+    required this.taskId,
+    required this.status,
+    required this.inputFile,
+    required this.sourceLang,
+    required this.targetLang,
+    required this.bilingual,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.outputPath,
+    required this.outputPaths,
+    required this.error,
+    required this.errorInfo,
+    required this.runtime,
+    required this.settings,
+    required this.raw,
+  });
+
+  final String taskId;
+  final String status;
+  final String inputFile;
+  final String sourceLang;
+  final String targetLang;
+  final bool bilingual;
+  final String createdAt;
+  final String updatedAt;
+  final String? outputPath;
+  final Map<String, String> outputPaths;
+  final String? error;
+  final Map<String, Object?> errorInfo;
+  final Map<String, Object?> runtime;
+  final Map<String, Object?> settings;
+  final Map<String, Object?> raw;
+
+  factory TaskSummary.fromJson(Object? value) {
+    if (value is String) {
+      return TaskSummary(
+        taskId: value,
+        status: 'unknown',
+        inputFile: '',
+        sourceLang: '',
+        targetLang: '',
+        bilingual: false,
+        createdAt: '',
+        updatedAt: '',
+        outputPath: null,
+        outputPaths: const {},
+        error: null,
+        errorInfo: const {},
+        runtime: const {},
+        settings: const {},
+        raw: {'task_id': value},
+      );
+    }
+    final map = _stringMap(value);
+    return TaskSummary(
+      taskId: _stringValue(map['task_id']) ?? _stringValue(map['taskId']) ?? '',
+      status: _stringValue(map['status']) ?? 'unknown',
+      inputFile:
+          _stringValue(map['input_file']) ??
+          _stringValue(map['inputFile']) ??
+          '',
+      sourceLang:
+          _stringValue(map['source_lang']) ??
+          _stringValue(map['sourceLang']) ??
+          '',
+      targetLang:
+          _stringValue(map['target_lang']) ??
+          _stringValue(map['targetLang']) ??
+          '',
+      bilingual: map['bilingual'] == true,
+      createdAt:
+          _stringValue(map['created_at']) ??
+          _stringValue(map['createdAt']) ??
+          '',
+      updatedAt:
+          _stringValue(map['updated_at']) ??
+          _stringValue(map['updatedAt']) ??
+          '',
+      outputPath:
+          _stringValue(map['output_path']) ?? _stringValue(map['outputPath']),
+      outputPaths: _stringMap(
+        map['output_paths'],
+      ).map((key, value) => MapEntry(key, '$value')),
+      error: _stringValue(map['error']),
+      errorInfo: _stringMap(map['error_info']),
+      runtime: _stringMap(map['runtime']),
+      settings: _stringMap(map['settings']),
+      raw: map,
+    );
+  }
+
+  bool get isDone => status == 'DONE';
+  bool get isFailed => status == 'FAILED';
+  bool get isCancelled => status == 'CANCELLED' || status == 'INTERRUPTED';
+  bool get isActive =>
+      status == 'RUNNING' || status == 'QUEUED' || status == 'CANCEL_REQUESTED';
+  bool get isTerminal => isDone || isFailed || isCancelled;
+  bool get canCancel => runtime['can_cancel'] == true;
+  bool get canResume => runtime['can_resume'] == true;
+
+  double? get latestProgress {
+    final progress = _numValue(raw['progress']);
+    if (progress != null) return progress.toDouble().clamp(0.0, 1.0);
+    final detail = _stringMap(raw['progress_detail']);
+    final done = _numValue(detail['translate_done_count']);
+    final total = _numValue(detail['translate_total_chunks']);
+    if (done != null && total != null && total > 0) {
+      return (done / total).clamp(0.0, 1.0);
+    }
+    return null;
+  }
+
+  String get displayStatus {
+    final checkpoint = _stringValue(raw['checkpoint_status']);
+    if (checkpoint != null && checkpoint.isNotEmpty) return checkpoint;
+    return status;
+  }
+}
+
 class _PendingRpc {
   _PendingRpc();
 
@@ -587,6 +1083,12 @@ List<Object?> _objectList(Object? value) {
   return const <Object?>[];
 }
 
+List<TaskSummary> _taskList(Object? value) {
+  return _objectList(
+    value,
+  ).map(TaskSummary.fromJson).where((task) => task.taskId.isNotEmpty).toList();
+}
+
 List<String> _stringList(Object? value) {
   return _objectList(value).map((item) => '$item').toList();
 }
@@ -601,5 +1103,11 @@ int? _intValue(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   if (value is String) return int.tryParse(value);
+  return null;
+}
+
+num? _numValue(Object? value) {
+  if (value is num) return value;
+  if (value is String) return num.tryParse(value);
   return null;
 }

@@ -8,8 +8,10 @@ import 'package:flutter/material.dart';
 import 'model/session.dart';
 import 'model/spike_state.dart';
 import 'painters/source_object_painter.dart';
+import 'services/app_service_client.dart';
 import 'services/current_window_controls.dart';
 import 'services/local_service_controller.dart';
+import 'services/path_opener.dart';
 import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
 import 'widgets/job_line.dart';
@@ -118,6 +120,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   final Map<SpikeWindowType, WindowController> _toolWindows = {};
   late final LocalServiceController _service;
   late final bool _ownsService;
+  final PathOpener _pathOpener = PathOpener();
+  Timer? _taskPoll;
+  int _eventCursor = 0;
+  bool _submitting = false;
+  List<Map<String, Object?>> _recentEvents = const [];
 
   late final AnimationController _breathe = AnimationController(
     vsync: this,
@@ -139,10 +146,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     super.initState();
     _service = widget.localServiceController ?? LocalServiceController();
     _ownsService = widget.localServiceController == null;
+    widget.bridge.attachServiceCaller((method, params) async {
+      await _service.start();
+      final client = _service.client;
+      if (client == null) {
+        throw StateError('Local Service 未连接');
+      }
+      return client.call(method, params);
+    });
     widget.store.addListener(_applySpikeState);
     _service.addListener(_applyLocalServiceState);
     _session = _sessionFromSpikeState(_session);
-    unawaited(_service.start());
+    unawaited(_service.start().then((_) => _refreshTaskState()));
     _run
       ..addListener(() {
         setState(() => _session = _session.copyWith(progress: _run.value));
@@ -162,6 +177,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _taskPoll?.cancel();
     _service.removeListener(_applyLocalServiceState);
     if (_ownsService) {
       _service.dispose();
@@ -180,7 +196,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   void _applyLocalServiceState() {
-    final readiness = _service.snapshot.desktopSnapshot?.configReadiness;
+    final snapshot = _service.snapshot.desktopSnapshot;
+    final readiness = snapshot?.configReadiness;
     if (readiness != null) {
       final nextStoreValue = widget.store.value.copyWith(
         translationDefaultLabel: readiness.translationLabel,
@@ -196,6 +213,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         asrConfigured: nextStoreValue.asrConfigured,
       );
     }
+    final taskId = _session.taskId;
+    final task = taskId == null ? null : snapshot?.taskById(taskId);
+    if (task != null) {
+      _session = _sessionFromTask(_session, task);
+    }
     if (mounted) setState(() {});
   }
 
@@ -209,6 +231,30 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
   }
 
+  Session _sessionFromTask(Session base, TaskSummary task) {
+    final progress = task.latestProgress ?? base.progress;
+    final failure = task.isFailed || task.isCancelled
+        ? Failure(
+            reason: _taskFailureReason(task),
+            recoverLabel: task.canResume ? '继续任务' : '重试',
+          )
+        : null;
+    return base.copyWith(
+      fileName: base.fileName ?? _basename(task.inputFile),
+      filePath: base.filePath ?? task.inputFile,
+      sourceLang: task.sourceLang.isEmpty ? base.sourceLang : task.sourceLang,
+      targetLang: task.targetLang.isEmpty ? base.targetLang : task.targetLang,
+      bilingual: task.bilingual,
+      running: !task.isTerminal,
+      canceling: task.status == 'CANCEL_REQUESTED',
+      completed: task.isDone,
+      progress: task.isDone ? 1 : progress,
+      outputPaths: task.outputPaths,
+      statusText: _taskStatusLabel(task),
+      failure: failure,
+    );
+  }
+
   bool _sameSessionConfig(Session a, Session b) {
     return a.engineTranslate == b.engineTranslate &&
         a.engineRecognize == b.engineRecognize &&
@@ -218,15 +264,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   // —— 状态转移 ——
 
-  void _loadFile(String name) {
-    final kind = _kindOf(name);
+  void _loadFile(String path, {String? name}) {
+    final displayName = name ?? _basename(path);
+    final kind = _kindOf(displayName);
     setState(() {
       _session = _session.copyWith(
-        fileName: name,
+        fileName: displayName,
+        filePath: path,
         kind: kind,
+        taskId: null,
+        statusText: null,
         completed: false,
         running: false,
+        canceling: false,
         progress: 0,
+        outputPaths: const <String, String>{},
         failure: null,
         engineTranslate: widget.store.value.translationDefaultLabel,
         engineRecognize: widget.store.value.asrDefaultLabel,
@@ -234,25 +286,107 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         asrConfigured: widget.store.value.asrConfigured,
       );
     });
+    _recentEvents = const [];
+    _eventCursor = 0;
   }
 
-  void _start() {
-    setState(() {
-      _session = _session.copyWith(running: true, progress: 0, failure: null);
-    });
-    _run.forward(from: 0);
-  }
-
-  void _stop() {
+  Future<void> _start() async {
+    if (_submitting) return;
+    if (_session.filePath == null) {
+      await _pickFile();
+      return;
+    }
+    if (!_session.translateConfigured) {
+      _openToolWindow(SpikeWindowType.translationSettings);
+      return;
+    }
+    if (!_session.asrConfigured) {
+      _openToolWindow(SpikeWindowType.asrSettings);
+      return;
+    }
     _run.stop();
     setState(() {
-      _session = _session.copyWith(running: false, progress: 0);
+      _submitting = true;
+      _session = _session.copyWith(
+        running: true,
+        canceling: false,
+        progress: 0,
+        completed: false,
+        statusText: '正在排队',
+        failure: null,
+      );
     });
+    try {
+      await _service.start();
+      final client = _service.client;
+      if (client == null) {
+        throw StateError('Local Service 未连接');
+      }
+      final result = await client.submitRun(_runRequestPayload());
+      _eventCursor = 0;
+      _recentEvents = const [];
+      setState(() {
+        _session = _session.copyWith(
+          taskId: result.taskId,
+          statusText: result.status,
+          running: true,
+          failure: null,
+        );
+      });
+      _ensureTaskPolling();
+      await _refreshTaskState();
+    } on Object catch (error) {
+      setState(() {
+        _session = _session.copyWith(
+          running: false,
+          canceling: false,
+          statusText: null,
+          failure: Failure(reason: '$error', recoverLabel: '重试'),
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+        });
+      } else {
+        _submitting = false;
+      }
+    }
+  }
+
+  Future<void> _stop() async {
+    final taskId = _session.taskId;
+    if (taskId == null) {
+      _run.stop();
+      setState(() {
+        _session = _session.copyWith(running: false, progress: 0);
+      });
+      return;
+    }
+    setState(() {
+      _session = _session.copyWith(canceling: true, statusText: '正在取消');
+    });
+    try {
+      await _service.client?.cancel(taskId);
+      await _refreshTaskState();
+    } on Object catch (error) {
+      setState(() {
+        _session = _session.copyWith(
+          canceling: false,
+          failure: Failure(reason: '$error', recoverLabel: '重试取消'),
+        );
+      });
+    }
   }
 
   void _reset() {
+    _taskPoll?.cancel();
+    _taskPoll = null;
     _run.reset();
-    setState(() => _session = const Session());
+    _recentEvents = const [];
+    _eventCursor = 0;
+    setState(() => _session = _sessionFromSpikeState(const Session()));
   }
 
   void _onCta() {
@@ -260,7 +394,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case MainState.empty:
         break; // disabled
       case MainState.ready:
-        _start();
+        unawaited(_start());
         break;
       case MainState.blocked:
         if (!_session.translateConfigured) {
@@ -270,21 +404,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         }
         break;
       case MainState.running:
-        _stop();
+        unawaited(_stop());
         break;
       case MainState.completed:
         _reset();
         break;
       case MainState.failed:
-        _start();
+        unawaited(_start());
         break;
     }
   }
 
   Future<void> _pickFile() async {
     final res = await FilePicker.platform.pickFiles();
-    final name = res?.files.singleOrNull?.name;
-    if (name != null) _loadFile(name);
+    final file = res?.files.singleOrNull;
+    final path = file?.path;
+    if (path != null) _loadFile(path, name: file?.name);
   }
 
   static SourceKind _kindOf(String name) {
@@ -298,6 +433,150 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return SourceKind.video;
   }
 
+  Map<String, Object?> _runRequestPayload() {
+    final snapshot = _service.snapshot.desktopSnapshot;
+    final provider = snapshot?.translationProvider;
+    final model = snapshot?.translationModel;
+    final asrProvider = snapshot?.asrProviderName;
+    final asrModel = snapshot?.asrModel;
+    final overrides = <String, Object?>{
+      'output_format': _outputFormatValue(_session.formats),
+      'subtitle_quality_mode': 'balanced',
+      'memory_bootstrap_enabled': _session.termsEnabled,
+      'memory_patch_enabled': _session.termsEnabled,
+      if (asrProvider != null && asrProvider.isNotEmpty)
+        'asr_provider': asrProvider,
+      if (asrModel != null && asrModel.isNotEmpty) 'asr_model': asrModel,
+    };
+    return {
+      'request_version': 1,
+      'input': _session.filePath,
+      'input_type': _inputTypeFor(_session.kind),
+      'source_lang': _session.sourceLang,
+      'target_lang': _session.targetLang,
+      'bilingual': _session.bilingual,
+      if (provider != null && provider.isNotEmpty) 'provider': provider,
+      if (model != null && model.isNotEmpty) 'model': model,
+      'overrides': overrides,
+    };
+  }
+
+  static String _inputTypeFor(SourceKind? kind) {
+    return switch (kind) {
+      SourceKind.subtitle => 'srt_translate',
+      _ => 'video_asr_translate',
+    };
+  }
+
+  static String _outputFormatValue(List<String> formats) {
+    final selected = formats.map((item) => item.toLowerCase()).toSet();
+    if (selected.contains('srt') && selected.contains('ass')) return 'both';
+    if (selected.contains('ass')) return 'ass';
+    if (selected.contains('vtt')) return 'vtt';
+    return 'srt';
+  }
+
+  void _ensureTaskPolling() {
+    if (_taskPoll != null) return;
+    _taskPoll = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_refreshTaskState()),
+    );
+  }
+
+  Future<void> _refreshTaskState() async {
+    final taskId = _session.taskId;
+    if (taskId == null) return;
+    final client = _service.client;
+    if (client == null) return;
+    try {
+      await _service.refresh();
+      final page = await client.taskEvents(taskId, cursor: _eventCursor);
+      final nextEvents = page.events
+          .map(_asStringMap)
+          .where((event) => event.isNotEmpty)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _eventCursor = page.nextCursor;
+        _recentEvents = [..._recentEvents, ...nextEvents];
+        if (_recentEvents.length > 12) {
+          _recentEvents = _recentEvents.sublist(_recentEvents.length - 12);
+        }
+        final progress = _latestEventProgress(_recentEvents);
+        final message = _latestEventMessage(_recentEvents);
+        _session = _session.copyWith(
+          progress: progress ?? _session.progress,
+          statusText: message ?? _session.statusText,
+        );
+      });
+      if (_session.state != MainState.running) {
+        _taskPoll?.cancel();
+        _taskPoll = null;
+      }
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _session = _session.copyWith(statusText: '刷新失败：$error');
+      });
+    }
+  }
+
+  static Map<String, Object?> _asStringMap(Object? value) {
+    if (value is Map) {
+      return value.map((key, item) => MapEntry('$key', item));
+    }
+    return const {};
+  }
+
+  static double? _latestEventProgress(List<Map<String, Object?>> events) {
+    for (final event in events.reversed) {
+      final value = event['progress'];
+      if (value is num) return value.toDouble().clamp(0.0, 1.0);
+      if (value is String) {
+        final parsed = double.tryParse(value);
+        if (parsed != null) return parsed.clamp(0.0, 1.0);
+      }
+    }
+    return null;
+  }
+
+  static String? _latestEventMessage(List<Map<String, Object?>> events) {
+    for (final event in events.reversed) {
+      final message = '${event['message'] ?? ''}'.trim();
+      if (message.isNotEmpty) return message;
+      final stage = '${event['stage'] ?? ''}'.trim();
+      if (stage.isNotEmpty) return stage;
+    }
+    return null;
+  }
+
+  static String _taskFailureReason(TaskSummary task) {
+    final hint = '${task.errorInfo['hint_zh'] ?? ''}'.trim();
+    if (hint.isNotEmpty) return hint;
+    final message = '${task.errorInfo['message'] ?? ''}'.trim();
+    if (message.isNotEmpty) return message;
+    return task.error ?? '制作失败';
+  }
+
+  static String _taskStatusLabel(TaskSummary task) {
+    return switch (task.status) {
+      'QUEUED' => '等待本地服务调度',
+      'CANCEL_REQUESTED' => '正在取消',
+      'DONE' => '字幕已生成',
+      'FAILED' => '制作失败',
+      'CANCELLED' => '已取消',
+      'INTERRUPTED' => '任务中断',
+      _ => task.displayStatus,
+    };
+  }
+
+  static String _basename(String path) {
+    final normalized = path.replaceAll(r'\', '/');
+    final parts = normalized.split('/');
+    return parts.isEmpty ? path : parts.last;
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = _session.state;
@@ -307,8 +586,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         onDragExited: (_) => _drag.reverse(),
         onDragDone: (detail) {
           _drag.reverse();
-          final name = detail.files.isNotEmpty ? detail.files.first.name : null;
-          if (name != null) _loadFile(name);
+          final file = detail.files.isNotEmpty ? detail.files.first : null;
+          final path = file?.path;
+          if (path != null) _loadFile(path, name: file?.name);
         },
         child: Container(
           color: T.bg,
@@ -427,7 +707,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             _fileHeader(),
             const SizedBox(height: T.s8),
             Text(
-              _session.progress < 0.5 ? '正在识别语音…' : '正在翻译…',
+              _session.statusText ?? (_session.canceling ? '正在取消…' : '制作中…'),
               style: T.tCaption.copyWith(color: T.accentStrong),
             ),
           ],
@@ -437,12 +717,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           children: [
             _fileHeader(),
             const SizedBox(height: T.s12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: T.s8,
+              runSpacing: T.s8,
               children: [
-                _Chip(label: '打开字幕', onTap: () => _toast('打开字幕（占位）')),
-                const SizedBox(width: T.s8),
-                _Chip(label: '打开所在文件夹', onTap: () => _toast('打开文件夹（占位）')),
+                _Chip(label: '打开字幕', onTap: _openOutputFile),
+                _Chip(label: '打开所在文件夹', onTap: _openOutputFolder),
+                _Chip(label: '重新导出', onTap: _reexportResult),
               ],
             ),
           ],
@@ -462,6 +744,91 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ],
         );
     }
+  }
+
+  Future<void> _openOutputFile() async {
+    final taskId = _session.taskId;
+    if (taskId == null) {
+      _toast('还没有可打开的任务结果');
+      return;
+    }
+    try {
+      final outputs = await _resultOutputPaths(taskId);
+      final path = _primaryOutputPath(outputs);
+      if (path == null) {
+        _toast('还没有输出文件记录');
+        return;
+      }
+      await _pathOpener.revealFile(path);
+    } on Object catch (error) {
+      _toast('打开字幕失败：$error');
+    }
+  }
+
+  Future<void> _openOutputFolder() async {
+    final taskId = _session.taskId;
+    if (taskId == null) {
+      _toast('还没有可打开的任务目录');
+      return;
+    }
+    try {
+      final outputs = await _resultOutputPaths(taskId);
+      final path = _primaryOutputPath(outputs);
+      final dir = path == null ? null : _parentPath(path);
+      if (dir == null || dir.isEmpty) {
+        _toast('还没有输出目录记录');
+        return;
+      }
+      await _pathOpener.openDirectory(dir);
+    } on Object catch (error) {
+      _toast('打开文件夹失败：$error');
+    }
+  }
+
+  Future<void> _reexportResult() async {
+    final taskId = _session.taskId;
+    if (taskId == null) {
+      _toast('还没有可重新导出的任务');
+      return;
+    }
+    try {
+      await _service.client?.resultReexport(
+        taskId,
+        outputFormat: _outputFormatValue(_session.formats),
+        bilingual: _session.bilingual,
+      );
+      await _refreshTaskState();
+      _toast('已重新导出字幕');
+    } on Object catch (error) {
+      _toast('重新导出失败：$error');
+    }
+  }
+
+  Future<Map<String, Object?>> _resultOutputPaths(String taskId) async {
+    if (_session.outputPaths.isNotEmpty) {
+      return Map<String, Object?>.from(_session.outputPaths);
+    }
+    final result = await _service.client?.resultOpen(taskId);
+    return _asStringMap(result?['output_paths']);
+  }
+
+  static String? _primaryOutputPath(Map<String, Object?> outputs) {
+    for (final key in const ['srt', 'ass', 'vtt']) {
+      final value = '${outputs[key] ?? ''}'.trim();
+      if (value.isNotEmpty) return value;
+    }
+    for (final value in outputs.values) {
+      final text = '$value'.trim();
+      if (text.isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  static String? _parentPath(String path) {
+    final normalized = path.replaceAll(r'\', '/');
+    final idx = normalized.lastIndexOf('/');
+    if (idx <= 0) return null;
+    return path.substring(0, idx);
   }
 
   Widget _fileHeader() {
@@ -510,11 +877,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   String _ctaLabel(MainState s) => switch (s) {
     MainState.empty => '放入片源',
-    MainState.ready => '开始译制',
+    MainState.ready => _submitting ? '提交中…' : '开始译制',
     MainState.blocked => !_session.translateConfigured ? '去配置翻译' : '去配置识别',
-    MainState.running => '停下',
+    MainState.running => _session.canceling ? '取消中…' : '停下',
     MainState.completed => '再做一个',
-    MainState.failed => '重试',
+    MainState.failed => _session.failure?.recoverLabel ?? '重试',
   };
 
   CtaVariant _ctaVariant(MainState s) => switch (s) {

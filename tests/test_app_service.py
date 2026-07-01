@@ -254,6 +254,45 @@ def test_app_service_auth_list_does_not_return_secret(tmp_path: Path, monkeypatc
     assert listed["result"]["credentials"] == [{"credential_id": "p1", "has_key": True}]
 
 
+def test_app_service_asr_provider_save_updates_pipeline_and_redacts_key(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.save",
+            {
+                "provider_draft": {
+                    "name": "openai_asr",
+                    "kind": "remote",
+                    "protocol": "openai_transcriptions",
+                    "base_url": "https://api.openai.com",
+                    "endpoint": "/v1/audio/transcriptions",
+                    "model": "whisper-1",
+                    "auth": {
+                        "type": "bearer",
+                        "env_key": "OPENAI_API_KEY",
+                        "credential_id": "openai_asr",
+                    },
+                },
+                "api_key": "secret-asr-token",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+    snapshot = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+    raw_response = json.dumps(response, ensure_ascii=False)
+    config = snapshot["result"]["config"]
+
+    assert response["result"]["provider"] == "openai_asr"
+    assert "secret-asr-token" not in raw_response
+    assert config["pipeline"]["asr_provider"] == "openai_asr"
+    assert config["asr_providers"]["openai_asr"]["kind"] == "remote"
+    assert config["asr_providers"]["openai_asr"]["has_key"] is True
+
+
 def test_app_service_subprocess_smoke(tmp_path: Path) -> None:
     _write_config(tmp_path)
     request = _request("desktop.ping") + "\n"

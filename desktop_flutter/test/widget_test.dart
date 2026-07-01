@@ -7,6 +7,7 @@ import 'package:transvortex_desktop_flutter/main.dart';
 import 'package:transvortex_desktop_flutter/model/spike_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
+import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/widgets/sidecar_probe_view.dart';
 
 void main() {
@@ -93,6 +94,103 @@ void main() {
     expect(find.text('模型名'), findsOneWidget);
     expect(find.textContaining('中文备注'), findsOneWidget);
   });
+
+  testWidgets('translation settings window reads providers through bridge', (
+    tester,
+  ) async {
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: SpikeWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('RealProvider'), findsWidgets);
+    expect(find.text('real-model'), findsWidgets);
+    expect(find.textContaining('API key 会写入用户级'), findsOneWidget);
+  });
+
+  testWidgets('translation settings window saves provider through bridge', (
+    tester,
+  ) async {
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'provider.save') return {'ok': true};
+      if (method == 'provider.routing.save') {
+        return {
+          'routing': {
+            'primary': {'provider': 'RealProvider', 'model': 'real-model'},
+          },
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: SpikeWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('保存 provider'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, contains('provider.save'));
+    expect(calls, contains('provider.routing.save'));
+    expect(find.textContaining('provider 已保存'), findsOneWidget);
+  });
+
+  testWidgets('ASR settings window saves default provider through bridge', (
+    tester,
+  ) async {
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'asr.provider.save') {
+        return {'ok': true, 'provider': 'local'};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: SpikeWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('保存识别默认'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, contains('asr.provider.save'));
+    expect(find.textContaining('识别默认已保存'), findsOneWidget);
+  });
 }
 
 LocalServiceController _readyController() {
@@ -123,10 +221,24 @@ DesktopSnapshot _desktopSnapshot() {
       },
       'pipeline': {'asr_provider': 'local'},
       'providers': [
-        {'name': 'RealProvider', 'has_key': true},
+        {
+          'name': 'RealProvider',
+          'has_key': true,
+          'base_url': 'https://example.com/v1',
+          'api_type': 'openai-compatible',
+          'compat_mode': 'openai_chat',
+          'credential_id': 'RealProvider',
+          'models': ['real-model'],
+        },
       ],
       'asr_providers': {
-        'local': {'name': 'Local ASR', 'has_key': true},
+        'local': {
+          'name': 'Local ASR',
+          'kind': 'local_inprocess',
+          'protocol': 'faster_whisper',
+          'model': 'large-v3',
+          'has_key': true,
+        },
       },
     },
     'tasks': [],

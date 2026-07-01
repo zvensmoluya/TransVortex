@@ -26,6 +26,9 @@
 - `current/FRONTEND_TECH_STACK_REASSESSMENT.md`
   - 记录 Tauri / Flutter / Slint / Qt Quick 的技术路线复盘。
   - 结论是先用 Flutter 做主体验前端 spike，Tauri 可降级为配置台 / 维护台 / fallback UI，Python JSON-RPC sidecar 作为共享后端边界。
+- `current/FLUTTER_FRONTEND_IMPLEMENTATION_CHECKLIST.md`
+  - 把设计规格、架构文档和后端现状收敛成 Flutter 前端 MVP 的施工清单。
+  - 适合在开始接真实任务流、配置流和结果流之前先读一遍。
 
 当前不保留大而全的产品方向或架构治理文档作为前置规范。已有 React/Tauri/service/adapter 框架可以作为代码事实存在，但不应继续吸走设计注意力。
 

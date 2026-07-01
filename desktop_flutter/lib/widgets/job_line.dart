@@ -50,7 +50,9 @@ class JobLine extends StatelessWidget {
             ),
             const Text(' · 翻译', style: T.tBody),
             _Word(
-              label: session.translateConfigured ? session.engineTranslate : '需配置',
+              label: session.translateConfigured
+                  ? session.engineTranslate
+                  : '需配置',
               warn: !session.translateConfigured,
               onPick: () async {
                 if (!session.translateConfigured) {
@@ -76,9 +78,8 @@ class JobLine extends StatelessWidget {
             const Text('将做成', style: T.tBody),
             _Word(
               label: session.bilingual ? '双语' : '单语',
-              onPick: () => onChanged(
-                session.copyWith(bilingual: !session.bilingual),
-              ),
+              onPick: () =>
+                  onChanged(session.copyWith(bilingual: !session.bilingual)),
             ),
             _Word(
               label: session.formats.join('·'),
@@ -134,54 +135,49 @@ class JobLine extends StatelessWidget {
     BuildContext context,
     List<String> current,
   ) {
-    final sel = {...current};
     return showModalBottomSheet<List<String>>(
       context: context,
       backgroundColor: T.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(T.rLg)),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(T.s24, T.s16, T.s24, T.s8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('输出格式（可多选）', style: T.tSection),
-                ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(T.s24, T.s16, T.s24, T.s8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('输出格式', style: T.tSection),
               ),
-              for (final f in const ['SRT', 'ASS', 'VTT'])
-                CheckboxListTile(
-                  value: sel.contains(f),
-                  activeColor: T.accent,
-                  title: Text(f, style: T.tBody),
-                  onChanged: (v) => setSheet(() {
-                    if (v == true) {
-                      sel.add(f);
-                    } else {
-                      sel.remove(f);
-                    }
-                  }),
-                ),
-              Padding(
-                padding: const EdgeInsets.all(T.s16),
-                child: TextButton(
-                  onPressed: () => Navigator.pop(
-                    ctx,
-                    ['SRT', 'ASS', 'VTT'].where(sel.contains).toList(),
-                  ),
-                  child: const Text('完成', style: T.tBody),
-                ),
+            ),
+            for (final option in const [
+              ['SRT'],
+              ['ASS'],
+              ['VTT'],
+              ['SRT', 'ASS'],
+            ])
+              ListTile(
+                title: Text(option.join('·'), style: T.tBody),
+                selected: _sameFormats(current, option),
+                selectedColor: T.accentStrong,
+                onTap: () => Navigator.pop(ctx, option),
               ),
-            ],
-          ),
+            const SizedBox(height: T.s8),
+          ],
         ),
       ),
     );
   }
+}
+
+bool _sameFormats(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// 可点词：`〈label〉`，accent 着色 + hover 下划线；warn 变体带 ● 点。
@@ -213,10 +209,16 @@ class _WordState extends State<_Word> {
           child: Text.rich(
             TextSpan(
               children: [
-                const TextSpan(text: '〈', style: TextStyle(color: T.muted)),
+                const TextSpan(
+                  text: '〈',
+                  style: TextStyle(color: T.muted),
+                ),
                 TextSpan(text: widget.label),
                 if (widget.warn) const TextSpan(text: ' ●'),
-                const TextSpan(text: '〉', style: TextStyle(color: T.muted)),
+                const TextSpan(
+                  text: '〉',
+                  style: TextStyle(color: T.muted),
+                ),
               ],
               style: TextStyle(
                 fontSize: 13,
