@@ -1,58 +1,78 @@
 import 'package:flutter/material.dart';
 
-import '../services/sidecar_probe.dart';
+import '../services/local_service_controller.dart';
 import '../theme/tokens.dart';
 
 class SidecarProbeView extends StatefulWidget {
-  const SidecarProbeView({super.key});
+  const SidecarProbeView({super.key, required this.controller});
+
+  final LocalServiceController controller;
 
   @override
   State<SidecarProbeView> createState() => _SidecarProbeViewState();
 }
 
 class _SidecarProbeViewState extends State<SidecarProbeView> {
-  bool _running = false;
-  SidecarProbeResult? _result;
+  bool _refreshing = false;
 
-  Future<void> _run() async {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_refresh);
+    super.dispose();
+  }
+
+  void _refresh() => setState(() {});
+
+  Future<void> _reload() async {
     setState(() {
-      _running = true;
-      _result = null;
+      _refreshing = true;
     });
-    final result = await SidecarProbe().run();
+    await widget.controller.refresh();
     if (!mounted) return;
     setState(() {
-      _running = false;
-      _result = result;
+      _refreshing = false;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final result = _result;
+    final snapshot = widget.controller.snapshot;
+    final info = snapshot.info;
+    final health = snapshot.health;
+    final desktopSnapshot = snapshot.desktopSnapshot;
+    final config = desktopSnapshot?.configReadiness;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text('Python sidecar 探针', style: T.tSection),
+            Text('Local Service 诊断', style: T.tSection),
             const Spacer(),
-            _ProbeButton(running: _running, onTap: _running ? null : _run),
+            _ProbeButton(
+              running:
+                  _refreshing ||
+                  snapshot.status == LocalServiceConnectionStatus.starting,
+              onTap: _refreshing ? null : _reload,
+            ),
           ],
         ),
         const SizedBox(height: T.s12),
         Text(
-          result == null
-              ? '等待运行'
-              : result.ok
-              ? '通过 · exit=${result.exitCode}'
-              : '未通过 · exit=${result.exitCode ?? 'unknown'}',
+          snapshot.status.zh,
           style: T.tBody.copyWith(
-            color: result == null
-                ? T.muted
-                : result.ok
-                ? T.ok
-                : T.danger,
+            color: switch (snapshot.status) {
+              LocalServiceConnectionStatus.ready => T.ok,
+              LocalServiceConnectionStatus.degraded => T.warn,
+              LocalServiceConnectionStatus.unavailable => T.danger,
+              LocalServiceConnectionStatus.stopped => T.muted,
+              _ => T.muted,
+            },
             fontWeight: T.wMedium,
           ),
         ),
@@ -63,20 +83,85 @@ class _SidecarProbeViewState extends State<SidecarProbeView> {
               border: Border(top: BorderSide(color: T.line)),
             ),
             child: ListView(
+              padding: const EdgeInsets.only(top: T.s12),
               children: [
-                for (final line in result?.lines ?? const <String>[])
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Text(
-                      line,
-                      style: T.tCaption.copyWith(fontFamily: 'Consolas'),
-                    ),
+                _FactRow(label: 'service', value: info?.service ?? 'unknown'),
+                _FactRow(
+                  label: 'protocol',
+                  value: '${info?.protocolVersion ?? '-'}',
+                ),
+                _FactRow(
+                  label: 'app version',
+                  value: info?.appVersion ?? 'unknown',
+                ),
+                _FactRow(label: 'health', value: health?.status ?? 'unknown'),
+                _FactRow(label: 'pump', value: health?.pumpLabel ?? 'unknown'),
+                if (health?.pump['last_error'] != null)
+                  _FactRow(
+                    label: 'pump error',
+                    value: '${health!.pump['last_error']}',
                   ),
+                _FactRow(
+                  label: 'active',
+                  value: health?.activeTaskLabel ?? 'unknown',
+                ),
+                _FactRow(
+                  label: 'translation',
+                  value: config == null
+                      ? 'unknown'
+                      : '${config.translationLabel} · ${config.translationConfigured ? 'ready' : 'needs config'}',
+                ),
+                _FactRow(
+                  label: 'asr',
+                  value: config == null
+                      ? 'unknown'
+                      : '${config.asrLabel} · ${config.asrConfigured ? 'ready' : 'needs config'}',
+                ),
+                _FactRow(
+                  label: 'tasks',
+                  value: '${desktopSnapshot?.tasks.length ?? 0}',
+                ),
+                if (snapshot.lastError != null)
+                  _FactRow(label: 'last error', value: snapshot.lastError!),
+                if (health?.error != null)
+                  _FactRow(label: 'health error', value: health!.error!),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _FactRow extends StatelessWidget {
+  const _FactRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: T.tCaption.copyWith(fontFamily: 'Consolas'),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: T.tCaption.copyWith(color: T.ink, fontFamily: 'Consolas'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -112,7 +197,7 @@ class _ProbeButtonState extends State<_ProbeButton> {
             border: Border.all(color: T.accent, width: 1.2),
           ),
           child: Text(
-            widget.running ? '运行中' : '运行',
+            widget.running ? '刷新中' : '刷新',
             style: T.tBody.copyWith(
               color: T.accentStrong,
               fontWeight: T.wMedium,

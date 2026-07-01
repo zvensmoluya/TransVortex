@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
@@ -7,6 +9,7 @@ import 'model/session.dart';
 import 'model/spike_state.dart';
 import 'painters/source_object_painter.dart';
 import 'services/current_window_controls.dart';
+import 'services/local_service_controller.dart';
 import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
 import 'widgets/job_line.dart';
@@ -33,11 +36,7 @@ Future<void> main(List<String> args) async {
   await registerCurrentWindowControls();
 
   runApp(
-    TransVortexApp(
-      windowType: parsedArgs.type,
-      store: store,
-      bridge: bridge,
-    ),
+    TransVortexApp(windowType: parsedArgs.type, store: store, bridge: bridge),
   );
 }
 
@@ -55,16 +54,19 @@ class TransVortexApp extends StatelessWidget {
     this.windowType = SpikeWindowType.main,
     this.store,
     this.bridge,
+    this.localServiceController,
   });
 
   final SpikeWindowType windowType;
   final WindowStateStore? store;
   final WindowStateBridge? bridge;
+  final LocalServiceController? localServiceController;
 
   @override
   Widget build(BuildContext context) {
     final appStore = store ?? WindowStateStore();
-    final appBridge = bridge ??
+    final appBridge =
+        bridge ??
         (windowType == SpikeWindowType.main
             ? WindowStateBridge.main(appStore)
             : WindowStateBridge.child(appStore));
@@ -80,27 +82,42 @@ class TransVortexApp extends StatelessWidget {
         ),
       ),
       home: windowType == SpikeWindowType.main
-          ? MainScreen(store: appStore, bridge: appBridge)
-          : SettingsWindow(type: windowType, store: appStore, bridge: appBridge),
+          ? MainScreen(
+              store: appStore,
+              bridge: appBridge,
+              localServiceController: localServiceController,
+            )
+          : SettingsWindow(
+              type: windowType,
+              store: appStore,
+              bridge: appBridge,
+            ),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key, required this.store, required this.bridge});
+  const MainScreen({
+    super.key,
+    required this.store,
+    required this.bridge,
+    this.localServiceController,
+  });
 
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final LocalServiceController? localServiceController;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen>
-    with TickerProviderStateMixin {
+class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Session _session = const Session();
   String _panel = 'main';
   final Map<SpikeWindowType, WindowController> _toolWindows = {};
+  late final LocalServiceController _service;
+  late final bool _ownsService;
 
   late final AnimationController _breathe = AnimationController(
     vsync: this,
@@ -120,8 +137,12 @@ class _MainScreenState extends State<MainScreen>
   @override
   void initState() {
     super.initState();
+    _service = widget.localServiceController ?? LocalServiceController();
+    _ownsService = widget.localServiceController == null;
     widget.store.addListener(_applySpikeState);
+    _service.addListener(_applyLocalServiceState);
     _session = _sessionFromSpikeState(_session);
+    unawaited(_service.start());
     _run
       ..addListener(() {
         setState(() => _session = _session.copyWith(progress: _run.value));
@@ -141,6 +162,10 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   void dispose() {
+    _service.removeListener(_applyLocalServiceState);
+    if (_ownsService) {
+      _service.dispose();
+    }
     widget.store.removeListener(_applySpikeState);
     _breathe.dispose();
     _drag.dispose();
@@ -152,6 +177,26 @@ class _MainScreenState extends State<MainScreen>
     final next = _sessionFromSpikeState(_session);
     if (_sameSessionConfig(_session, next)) return;
     setState(() => _session = next);
+  }
+
+  void _applyLocalServiceState() {
+    final readiness = _service.snapshot.desktopSnapshot?.configReadiness;
+    if (readiness != null) {
+      final nextStoreValue = widget.store.value.copyWith(
+        translationDefaultLabel: readiness.translationLabel,
+        translationConfigured: readiness.translationConfigured,
+        asrDefaultLabel: readiness.asrLabel,
+        asrConfigured: readiness.asrConfigured,
+      );
+      widget.store.replace(nextStoreValue);
+      _session = _session.copyWith(
+        engineTranslate: nextStoreValue.translationDefaultLabel,
+        engineRecognize: nextStoreValue.asrDefaultLabel,
+        translateConfigured: nextStoreValue.translationConfigured,
+        asrConfigured: nextStoreValue.asrConfigured,
+      );
+    }
+    if (mounted) setState(() {});
   }
 
   Session _sessionFromSpikeState(Session base) {
@@ -285,7 +330,7 @@ class _MainScreenState extends State<MainScreen>
 
   Widget _body(MainState state) {
     if (_panel == 'sidecar') {
-      return const SidecarProbeView();
+      return SidecarProbeView(controller: _service);
     }
     if (_panel == 'review') {
       return const SubtitleReviewSpike();
@@ -413,11 +458,7 @@ class _MainScreenState extends State<MainScreen>
               style: T.tCaption.copyWith(color: T.danger),
             ),
             const SizedBox(height: T.s8),
-            _Chip(
-              label: f?.recoverLabel ?? '重试',
-              danger: true,
-              onTap: _onCta,
-            ),
+            _Chip(label: f?.recoverLabel ?? '重试', danger: true, onTap: _onCta),
           ],
         );
     }
@@ -444,18 +485,28 @@ class _MainScreenState extends State<MainScreen>
 
   // —— 文案 / 标签映射 ——
 
-  String _statusLine(MainState s) => switch (s) {
-    _ when _panel == 'sidecar' => 'Phase A · sidecar 探针',
-    _ when _panel == 'review' => 'Phase A · 1000 条字幕审看',
-    MainState.empty => '等待片源',
-    MainState.ready => '就绪 · 可开始',
-    MainState.blocked => !_session.translateConfigured
-        ? '需要先配置翻译'
-        : '需要先配置识别',
-    MainState.running => '制作中…',
-    MainState.completed => '已完成',
-    MainState.failed => '制作失败',
-  };
+  String _statusLine(MainState s) {
+    final base = switch (s) {
+      _ when _panel == 'sidecar' =>
+        'Local Service · ${_service.snapshot.status.zh}',
+      _ when _panel == 'review' => 'Phase A · 1000 条字幕审看',
+      MainState.empty => '等待片源',
+      MainState.ready => '就绪 · 可开始',
+      MainState.blocked =>
+        !_session.translateConfigured ? '需要先配置翻译' : '需要先配置识别',
+      MainState.running => '制作中…',
+      MainState.completed => '已完成',
+      MainState.failed => '制作失败',
+    };
+    return switch (_service.snapshot.status) {
+      LocalServiceConnectionStatus.starting => '服务启动中 · $base',
+      LocalServiceConnectionStatus.ready => '服务已连接 · $base',
+      LocalServiceConnectionStatus.degraded => '服务降级 · $base',
+      LocalServiceConnectionStatus.unavailable => '服务不可用 · $base',
+      LocalServiceConnectionStatus.stopped => '服务已停止 · $base',
+      LocalServiceConnectionStatus.idle => base,
+    };
+  }
 
   String _ctaLabel(MainState s) => switch (s) {
     MainState.empty => '放入片源',
@@ -493,7 +544,7 @@ class _MainScreenState extends State<MainScreen>
             for (final e in const [
               '翻译模型设置',
               '语音识别设置',
-              'Sidecar 探针',
+              'Local Service 诊断',
               '字幕审看小样',
               '术语管理',
               '任务历史',
@@ -510,7 +561,7 @@ class _MainScreenState extends State<MainScreen>
                     case '语音识别设置':
                       _openToolWindow(SpikeWindowType.asrSettings);
                       break;
-                    case 'Sidecar 探针':
+                    case 'Local Service 诊断':
                       setState(() => _panel = 'sidecar');
                       break;
                     case '字幕审看小样':
@@ -578,11 +629,18 @@ class _MainScreenState extends State<MainScreen>
     const demoName = 'Spirited.Away.2001.BluRay.1080p.x265.mkv';
     void setDemo(MainState s) {
       _run.stop();
+      final currentConfig = widget.store.value;
       setState(() {
         _session = switch (s) {
           MainState.empty => const Session(),
-          MainState.ready =>
-            Session(fileName: demoName, kind: SourceKind.video),
+          MainState.ready => Session(
+            fileName: demoName,
+            kind: SourceKind.video,
+            engineTranslate: currentConfig.translationDefaultLabel,
+            engineRecognize: currentConfig.asrDefaultLabel,
+            translateConfigured: currentConfig.translationConfigured,
+            asrConfigured: currentConfig.asrConfigured,
+          ),
           MainState.blocked => Session(
             fileName: demoName,
             kind: SourceKind.video,
@@ -594,12 +652,20 @@ class _MainScreenState extends State<MainScreen>
             kind: SourceKind.video,
             running: true,
             progress: 0.4,
+            engineTranslate: currentConfig.translationDefaultLabel,
+            engineRecognize: currentConfig.asrDefaultLabel,
+            translateConfigured: currentConfig.translationConfigured,
+            asrConfigured: currentConfig.asrConfigured,
           ),
           MainState.completed => Session(
             fileName: demoName,
             kind: SourceKind.video,
             completed: true,
             progress: 1,
+            engineTranslate: currentConfig.translationDefaultLabel,
+            engineRecognize: currentConfig.asrDefaultLabel,
+            translateConfigured: currentConfig.translationConfigured,
+            asrConfigured: currentConfig.asrConfigured,
           ),
           MainState.failed => const Session(
             fileName: demoName,
@@ -634,8 +700,7 @@ class _MainScreenState extends State<MainScreen>
                   e.value,
                   style: T.tCaption.copyWith(
                     color: _session.state == e.key ? T.accentStrong : T.muted,
-                    fontWeight:
-                        _session.state == e.key ? T.wBold : T.wRegular,
+                    fontWeight: _session.state == e.key ? T.wBold : T.wRegular,
                   ),
                 ),
               ),
@@ -661,7 +726,10 @@ class _TypeTag extends StatelessWidget {
       ),
       child: Text(
         kind.zh,
-        style: T.tCaption.copyWith(color: T.accentStrong, fontWeight: T.wMedium),
+        style: T.tCaption.copyWith(
+          color: T.accentStrong,
+          fontWeight: T.wMedium,
+        ),
       ),
     );
   }
