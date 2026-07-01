@@ -16,6 +16,12 @@ TransVortex is an agent-callable headless worker with multiple frontends:
 Business logic must stay in Python core modules. Desktop Rust commands should
 only host processes, open files, and bridge events.
 
+The desktop App direction is now documented separately in
+`docs/DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`. That document defines the
+target Local Service / App Host / Worker process model for the Flutter desktop
+client, including tray-oriented lifecycle, multi-window boundaries, and the
+service integration milestone.
+
 ## Package Layers
 
 ```text
