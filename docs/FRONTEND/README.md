@@ -29,6 +29,9 @@
 - `current/FLUTTER_FRONTEND_IMPLEMENTATION_CHECKLIST.md`
   - 把设计规格、架构文档和后端现状收敛成 Flutter 前端 MVP 的施工清单。
   - 适合在开始接真实任务流、配置流和结果流之前先读一遍。
+- `current/FRONTEND_IMPLEMENTATION_CONTRACT.md`
+  - 定义从 Flutter spike 收束到正式 MVP 的实施边界。
+  - 明确哪些服务接线保留、哪些 spike UI 重做，以及用户动作到 RPC 的契约。
 
 当前不保留大而全的产品方向或架构治理文档作为前置规范。已有 React/Tauri/service/adapter 框架可以作为代码事实存在，但不应继续吸走设计注意力。
 
