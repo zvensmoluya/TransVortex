@@ -157,6 +157,7 @@ def test_app_service_desktop_snapshot_contains_control_plane_payloads(tmp_path: 
     assert "tasks" in response["result"]
     assert "runtime" in response["result"]
     assert "environment" in response["result"]
+    assert response["result"]["config"]["pipeline_file_version"]
 
 
 def test_app_service_runtime_submit_and_acquire(tmp_path: Path) -> None:

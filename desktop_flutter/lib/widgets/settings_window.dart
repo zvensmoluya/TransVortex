@@ -23,112 +23,94 @@ class SettingsWindow extends StatefulWidget {
 }
 
 class _SettingsWindowState extends State<SettingsWindow> {
-  final _baseUrl = TextEditingController(text: 'https://api.example.com/v1');
-  final _model = TextEditingController(text: 'opus-translation-latest');
+  final _baseUrl = TextEditingController();
+  final _model = TextEditingController();
   final _key = TextEditingController();
-  final _note = TextEditingController(text: '中文输入验证：候选窗位置、组合输入、复制粘贴。');
+  final _endpoint = TextEditingController();
+  final _device = TextEditingController(text: 'auto');
   late final AppServiceClient _client = AppServiceClient(
     WindowBridgeTransport(widget.bridge),
   );
+
   DesktopSnapshot? _snapshot;
   String? _selectedProvider;
   String? _selectedModel;
-  String? _selectedAsrProvider;
-  String? _settingsError;
-  String? _settingsMessage;
-  bool _loadingConfig = false;
-  bool _savingDefault = false;
+  String _selectedAsrProvider = 'faster_whisper_large_v3';
+  String? _message;
+  String? _error;
+  bool _loading = false;
   bool _savingProvider = false;
+  bool _savingDefault = false;
   bool _loadingModels = false;
   bool _testingProvider = false;
   bool _savingAsr = false;
+
+  bool get _isTranslation =>
+      widget.type == SpikeWindowType.translationSettings;
 
   @override
   void initState() {
     super.initState();
     widget.bridge.initializeChild();
-    widget.store.addListener(_refresh);
     _loadConfig();
   }
 
   @override
   void dispose() {
-    widget.store.removeListener(_refresh);
     _baseUrl.dispose();
     _model.dispose();
     _key.dispose();
-    _note.dispose();
+    _endpoint.dispose();
+    _device.dispose();
     super.dispose();
   }
 
-  void _refresh() => setState(() {});
-
   Future<void> _loadConfig() async {
     setState(() {
-      _loadingConfig = true;
-      _settingsError = null;
+      _loading = true;
+      _error = null;
     });
     try {
       final snapshot = await _client.desktopSnapshot();
       if (!mounted) return;
-      final provider = snapshot.translationProvider;
-      final model = snapshot.translationModel;
-      final providerOption = _providerByName(snapshot, provider);
-      final selectedModel =
-          model ??
-          (providerOption.models.isNotEmpty
-              ? providerOption.models.first
-              : null);
-      final asrProvider = snapshot.asrProviderName;
       setState(() {
         _snapshot = snapshot;
-        _selectedProvider = provider;
-        _selectedModel = selectedModel;
-        _selectedAsrProvider = asrProvider;
-        if (widget.type == SpikeWindowType.translationSettings &&
-            providerOption.name.isNotEmpty) {
-          _baseUrl.text = providerOption.baseUrl;
-          _model.text = selectedModel ?? '';
-          _key.clear();
-        }
-        if (widget.type == SpikeWindowType.asrSettings && asrProvider != null) {
-          final asrOption = _asrProviderByName(snapshot, asrProvider);
-          _baseUrl.text = asrOption.baseUrl;
-          _model.text = asrOption.model;
-          _key.clear();
-        }
-        if (provider != null) {
-          widget.store.setTranslationDefault(
-            provider,
-            configured: snapshot.configReadiness.translationConfigured,
-          );
-        }
-        if (asrProvider != null) {
-          widget.store.setAsrDefault(
-            snapshot.asrLabel ?? asrProvider,
-            configured: snapshot.configReadiness.asrConfigured,
-          );
+        if (_isTranslation) {
+          _selectedProvider = snapshot.translationProvider ??
+              (snapshot.providers.isNotEmpty ? snapshot.providers.first.name : null);
+          _selectedModel = snapshot.translationModel;
+          _loadProviderDraftFields();
+        } else {
+          _selectedAsrProvider =
+              snapshot.asrProviderName ?? 'faster_whisper_large_v3';
+          _loadAsrDraftFields();
         }
       });
+      _syncMainLabels(snapshot);
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() {
-        _settingsError = '$error';
-      });
+      setState(() => _error = '$error');
     } finally {
-      if (mounted) {
-        setState(() {
-          _loadingConfig = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _syncMainLabels(DesktopSnapshot snapshot) {
+    final translation = snapshot.configReadiness;
+    widget.store.setTranslationDefault(
+      snapshot.translationProvider ?? translation.translationLabel,
+      configured: translation.translationConfigured,
+    );
+    widget.store.setAsrDefault(
+      snapshot.asrLabel ?? translation.asrLabel,
+      configured: translation.asrConfigured,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final isTranslation = widget.type == SpikeWindowType.translationSettings;
-    final title = isTranslation ? '翻译模型设置' : '语音识别设置';
-    final status = isTranslation ? '多窗口 + 中文 IME 验证' : '引擎选择 + 中文 IME 验证';
+    final title = _isTranslation ? '翻译模型设置' : '语音识别设置';
+    final status = _isTranslation ? '配好模型服务，选定默认模型' : '视频没有现成字幕时，用它把语音转成字幕';
     return Scaffold(
       backgroundColor: T.bg,
       body: Column(
@@ -137,7 +119,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
-              child: isTranslation ? _translationBody() : _asrBody(),
+              child: _isTranslation ? _translationBody() : _asrBody(),
             ),
           ),
         ],
@@ -146,271 +128,290 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Widget _translationBody() {
-    final value = widget.store.value;
-    final providers = _snapshot?.providers ?? const <ProviderOption>[];
-    final selected = _selectedProvider ?? value.translationDefaultLabel;
-    return Row(
+    final snapshot = _snapshot;
+    final providers = snapshot?.providers ?? const <ProviderOption>[];
+    final selected = _selectedProvider;
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 190,
-          child: _FlatChoiceList(
-            title: '供应商',
-            selected: selected,
-            items: providers.isEmpty
-                ? const [_ChoiceItem(label: '需配置', warn: true)]
-                : providers
-                      .map(
-                        (provider) => _ChoiceItem(
-                          label: provider.name,
-                          warn: !provider.hasKey,
-                          detail: provider.models.isEmpty
-                              ? '未配置模型'
-                              : provider.models.first,
-                        ),
-                      )
-                      .toList(),
-            onPick: _pickProvider,
-          ),
+        _DefaultBar(
+          text: selected == null || _selectedModel == null
+              ? '还没选默认模型'
+              : '翻译默认：$selected · $_selectedModel',
+          busy: _loading || _savingDefault,
+          error: _error,
+          message: _message,
         ),
-        const SizedBox(width: T.s32),
+        const SizedBox(height: T.s16),
         Expanded(
-          child: SingleChildScrollView(
-            child: _FormColumn(
-              header: '默认翻译：$selected',
-              footer: _translationFooter(providers),
-              busy: _loadingConfig || _savingDefault,
-              error: _settingsError,
-              fields: [
-                _FieldSpec('Base URL', _baseUrl),
-                _FieldSpec('模型名', _model),
-                _FieldSpec('API key（留空则沿用已保存凭据）', _key, obscure: true),
-                _FieldSpec('中文备注 / IME 验证', _note, maxLines: 2),
-              ],
-            ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 210,
+                child: _ProviderList(
+                  providers: providers,
+                  selected: selected,
+                  defaultProvider: snapshot?.translationProvider,
+                  onPick: _pickProvider,
+                ),
+              ),
+              const SizedBox(width: T.s32),
+              Expanded(child: _translationDetails()),
+            ],
           ),
         ),
       ],
     );
   }
 
-  Widget _translationFooter(List<ProviderOption> providers) {
-    final provider = providers.firstWhere(
-      (item) => item.name == _selectedProvider,
-      orElse: () => const ProviderOption(name: '', models: []),
-    );
-    final models = provider.models;
-    final model = _selectedModel ?? (models.isEmpty ? '' : models.first);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _translationDetails() {
+    final provider = _selectedProvider == null || _snapshot == null
+        ? const ProviderOption(name: '', models: [])
+        : _providerByName(_snapshot!, _selectedProvider);
+    final model = _selectedModel ?? _model.text.trim();
+    return _ToolPanel(
       children: [
-        if (models.isNotEmpty) ...[
-          Text('模型', style: T.tCaption),
-          const SizedBox(height: T.s4),
-          Wrap(
-            spacing: T.s8,
-            runSpacing: T.s8,
-            children: [
-              for (final item in models.take(8))
-                _MiniChoice(
-                  label: item,
-                  selected: item == model,
-                  onTap: () => setState(() {
-                    _selectedModel = item;
-                    _model.text = item;
-                  }),
-                ),
-            ],
-          ),
-          const SizedBox(height: T.s16),
-        ],
+        Text(
+          provider.name.isEmpty ? '选择一个供应商' : provider.name,
+          style: T.tSection,
+        ),
+        const SizedBox(height: T.s16),
+        _ReadonlyRow(label: '协议格式', value: provider.apiType.isEmpty ? 'openai-compatible' : provider.apiType),
+        const SizedBox(height: T.s12),
+        _Input(label: 'Base URL', controller: _baseUrl),
+        const SizedBox(height: T.s12),
+        _Input(label: 'API key（留空则沿用已保存凭据）', controller: _key, obscure: true),
+        const SizedBox(height: T.s16),
         Row(
           children: [
-            _InlineAction(
-              label: _savingProvider ? '保存中' : '保存 provider',
-              onTap: _savingProvider ? null : _saveProvider,
-            ),
-            const SizedBox(width: T.s12),
-            _InlineAction(
-              label: _loadingModels ? '拉取中' : '拉模型',
+            _ActionButton(
+              label: _loadingModels ? '拉取中' : '拉取模型列表',
               onTap: _loadingModels ? null : _fetchModels,
             ),
             const SizedBox(width: T.s12),
-            _InlineAction(
+            _ActionButton(
               label: _testingProvider ? '测试中' : '测试连接',
               onTap: _testingProvider ? null : _testProvider,
             ),
+            const SizedBox(width: T.s12),
+            _ActionButton(
+              label: _savingProvider ? '保存中' : '保存供应商',
+              onTap: _savingProvider ? null : _saveProvider,
+            ),
           ],
         ),
-        const SizedBox(height: T.s12),
+        const SizedBox(height: T.s16),
+        Text('模型', style: T.tCaption),
+        const SizedBox(height: T.s8),
+        Wrap(
+          spacing: T.s8,
+          runSpacing: T.s8,
+          children: [
+            for (final item in provider.models.take(10))
+              _ChoicePill(
+                label: item,
+                selected: item == model,
+                onTap: () {
+                  setState(() {
+                    _selectedModel = item;
+                    _model.text = item;
+                  });
+                },
+              ),
+            _InlineTextField(controller: _model, hint: '手动填写模型名'),
+          ],
+        ),
+        const SizedBox(height: T.s16),
         Row(
           children: [
-            _InlineAction(
+            _ActionButton(
               label: _savingDefault ? '保存中' : '设为翻译默认',
+              strong: true,
               onTap: _savingDefault ? null : _saveTranslationDefault,
             ),
             const SizedBox(width: T.s12),
-            _InlineAction(
-              label: _loadingConfig ? '刷新中' : '刷新配置',
-              onTap: _loadingConfig ? null : _loadConfig,
+            _ActionButton(
+              label: _loading ? '刷新中' : '刷新配置',
+              onTap: _loading ? null : _loadConfig,
             ),
           ],
         ),
-        const SizedBox(height: T.s12),
-        Text(
-          _settingsMessage ??
-              'API key 会写入用户级 auth.json；provider YAML 只保存 credential_id、base_url 和模型名。',
+        const SizedBox(height: T.s8),
+        const Text(
+          'API key 写入用户级 auth.json；provider YAML 只保存 credential_id、base_url 和模型名。',
           style: T.tCaption,
         ),
       ],
     );
   }
 
-  void _pickProvider(_ChoiceItem item) {
-    if (item.warn) {
-      widget.bridge.setTranslationDefault(item.label, configured: false);
-      setState(() {
-        _selectedProvider = item.label;
-        _selectedModel = null;
-        _settingsMessage = null;
-      });
-      return;
-    }
-    final provider = _snapshot?.providers.firstWhere(
-      (row) => row.name == item.label,
-      orElse: () => const ProviderOption(name: '', models: []),
+  Widget _asrBody() {
+    final snapshot = _snapshot;
+    final selected = _selectedAsrProvider;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DefaultBar(
+          text: '当前识别：${_asrHeaderLabel(selected)}',
+          busy: _loading || _savingAsr,
+          error: _error,
+          message: _message,
+        ),
+        const SizedBox(height: T.s16),
+        _SegmentedEngines(
+          selected: _selectedAsrProvider,
+          onPick: _pickAsrProvider,
+        ),
+        const SizedBox(height: T.s24),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 210,
+                child: _AsrSummaryList(
+                  providers: snapshot?.asrProviders ?? const [],
+                  selected: selected,
+                  onPick: _pickAsrProvider,
+                ),
+              ),
+              const SizedBox(width: T.s32),
+              Expanded(child: _asrDetails()),
+            ],
+          ),
+        ),
+      ],
     );
-    final model = provider == null || provider.models.isEmpty
-        ? null
-        : provider.models.first;
+  }
+
+  Widget _asrDetails() {
+    final draft = _asrDraft(_selectedAsrProvider);
+    final kind = '${draft['kind']}';
+    return _ToolPanel(
+      children: [
+        Text(_asrLabelForDraft(draft), style: T.tSection),
+        const SizedBox(height: T.s12),
+        if (kind == 'local_inprocess') ...[
+          Row(
+            children: [
+              Expanded(child: _Input(label: '模型规格', controller: _model)),
+              const SizedBox(width: T.s12),
+              Expanded(child: _Input(label: '运算设备', controller: _device)),
+            ],
+          ),
+          const SizedBox(height: T.s12),
+          const Text('保存后由诊断入口确认模型和 GPU 可用性。', style: T.tCaption),
+        ] else ...[
+          Row(
+            children: [
+              Expanded(
+                child: _Input(
+                  label: kind == 'local_server' ? '本地服务地址' : 'Base URL',
+                  controller: _baseUrl,
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              Expanded(child: _Input(label: '模型', controller: _model)),
+            ],
+          ),
+          const SizedBox(height: T.s12),
+          Row(
+            children: [
+              Expanded(child: _Input(label: 'Endpoint', controller: _endpoint)),
+              const SizedBox(width: T.s12),
+              Expanded(
+                child: kind == 'remote'
+                    ? _Input(
+                        label: 'API key（留空则沿用）',
+                        controller: _key,
+                        obscure: true,
+                      )
+                    : const _ReadonlyRow(label: 'API key', value: '本地服务不需要 key'),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: T.s12),
+        Row(
+          children: [
+            _ActionButton(
+              label: _savingAsr ? '保存中' : '保存识别默认',
+              strong: true,
+              onTap: _savingAsr ? null : _saveAsrProvider,
+            ),
+            const SizedBox(width: T.s12),
+            _ActionButton(
+              label: _loading ? '刷新中' : '刷新配置',
+              onTap: _loading ? null : _loadConfig,
+            ),
+          ],
+        ),
+        const SizedBox(height: T.s8),
+        const Text(
+          '本机和 FunASR 不需要 key；云端 key 写入用户级 auth.json。',
+          style: T.tCaption,
+        ),
+      ],
+    );
+  }
+
+  void _pickProvider(String providerName) {
     setState(() {
-      _selectedProvider = item.label;
-      _selectedModel = model;
-      _baseUrl.text = provider?.baseUrl ?? '';
-      _model.text = model ?? '';
-      _key.clear();
-      _settingsMessage = null;
+      _selectedProvider = providerName;
+      final provider = _snapshot == null
+          ? const ProviderOption(name: '', models: [])
+          : _providerByName(_snapshot!, providerName);
+      _selectedModel = provider.models.isEmpty ? null : provider.models.first;
+      _loadProviderDraftFields();
+      _message = null;
+      _error = null;
     });
-    widget.bridge.setTranslationDefault(item.label, configured: true);
+  }
+
+  void _loadProviderDraftFields() {
+    final snapshot = _snapshot;
+    final provider = snapshot == null
+        ? const ProviderOption(name: '', models: [])
+        : _providerByName(snapshot, _selectedProvider);
+    final model = _selectedModel ?? snapshot?.translationModel;
+    _baseUrl.text = provider.baseUrl;
+    _model.text = model ?? (provider.models.isNotEmpty ? provider.models.first : '');
+    _key.clear();
   }
 
   Future<void> _saveProvider() async {
     final provider = _selectedProvider;
     final model = _model.text.trim();
-    if (provider == null || provider.isEmpty || provider == '需配置') {
-      setState(() => _settingsError = '需要先选择 provider');
+    if (provider == null || provider.isEmpty) {
+      setState(() => _error = '需要先选择供应商');
       return;
     }
     if (model.isEmpty) {
-      setState(() => _settingsError = '模型名不能为空');
+      setState(() => _error = '模型名不能为空');
       return;
     }
     setState(() {
       _savingProvider = true;
-      _settingsError = null;
-      _settingsMessage = null;
+      _error = null;
+      _message = null;
     });
     try {
       await _client.providerSave(
-        providerDraft: _translationDraft(
-          providerName: provider,
-          models: _mergedModels(model),
-        ),
+        providerDraft: _translationDraft(providerName: provider, models: _mergedModels(model)),
         apiKey: _keyTextOrNull(),
         expectedVersion: _snapshot?.providersFileVersion,
       );
       _selectedModel = model;
-      await _client.saveTranslationRouting(provider: provider, model: model);
-      await widget.bridge.setTranslationDefault(provider, configured: true);
+      await _saveRouting(provider, model);
       await _loadConfig();
       if (!mounted) return;
-      setState(() {
-        _settingsMessage = 'provider 已保存，并已设为当前翻译默认。';
-      });
+      setState(() => _message = '供应商已保存，并已设为当前翻译默认。');
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _settingsError = '$error');
+      setState(() => _error = '$error');
     } finally {
       if (mounted) setState(() => _savingProvider = false);
-    }
-  }
-
-  Future<void> _fetchModels() async {
-    final provider = _selectedProvider;
-    if (provider == null || provider.isEmpty || provider == '需配置') {
-      setState(() => _settingsError = '需要先选择 provider');
-      return;
-    }
-    setState(() {
-      _loadingModels = true;
-      _settingsError = null;
-      _settingsMessage = null;
-    });
-    try {
-      final result = await _client.providerModels(
-        providerDraft: _translationDraft(providerName: provider),
-        apiKey: _keyTextOrNull(),
-      );
-      final models = _stringList(result['models']);
-      if (models.isNotEmpty) {
-        setState(() {
-          _model.text = models.first;
-          _selectedModel = models.first;
-          _settingsMessage = '已拉取到 ${models.length} 个模型，已选中第一个。';
-        });
-      } else {
-        setState(() {
-          _settingsMessage =
-              _stringValue(result['hint_zh']) ?? '没有解析到模型，可以手动填写模型名。';
-        });
-      }
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _settingsError = '$error');
-    } finally {
-      if (mounted) setState(() => _loadingModels = false);
-    }
-  }
-
-  Future<void> _testProvider() async {
-    final provider = _selectedProvider;
-    final model = _model.text.trim();
-    if (provider == null || provider.isEmpty || provider == '需配置') {
-      setState(() => _settingsError = '需要先选择 provider');
-      return;
-    }
-    if (model.isEmpty) {
-      setState(() => _settingsError = '模型名不能为空');
-      return;
-    }
-    setState(() {
-      _testingProvider = true;
-      _settingsError = null;
-      _settingsMessage = null;
-    });
-    try {
-      final result = await _client.providerTest(
-        providerDraft: _translationDraft(
-          providerName: provider,
-          models: _mergedModels(model),
-        ),
-        model: model,
-        apiKey: _keyTextOrNull(),
-      );
-      final status = _stringValue(result['status']) ?? 'UNKNOWN';
-      final checks = _objectList(result['checks']);
-      final first = checks.isEmpty
-          ? const <String, Object?>{}
-          : _stringMap(checks.first);
-      setState(() {
-        _settingsMessage =
-            '$status：${_stringValue(first['hint_zh']) ?? _stringValue(first['message']) ?? '连接测试完成'}';
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _settingsError = '$error');
-    } finally {
-      if (mounted) setState(() => _testingProvider = false);
     }
   }
 
@@ -419,179 +420,104 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final model = _model.text.trim().isNotEmpty
         ? _model.text.trim()
         : _selectedModel;
-    if (provider == null ||
-        provider.isEmpty ||
-        model == null ||
-        model.isEmpty) {
-      setState(() {
-        _settingsError = '需要先选择 provider 和模型';
-      });
+    if (provider == null || provider.isEmpty || model == null || model.isEmpty) {
+      setState(() => _error = '需要先选择供应商和模型');
       return;
     }
     setState(() {
       _savingDefault = true;
-      _settingsError = null;
-      _settingsMessage = null;
+      _error = null;
+      _message = null;
     });
     try {
-      await _client.saveTranslationRouting(
-        provider: provider,
-        model: model,
-        expectedVersion: _snapshot?.providersFileVersion,
-      );
-      await widget.bridge.setTranslationDefault(provider, configured: true);
+      await _saveRouting(provider, model);
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _settingsMessage = '默认翻译已切换到 $provider · $model。');
+      setState(() => _message = '默认翻译已切换到 $provider · $model。');
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() {
-        _settingsError = '$error';
-      });
+      setState(() => _error = '$error');
     } finally {
-      if (mounted) {
-        setState(() {
-          _savingDefault = false;
-        });
-      }
+      if (mounted) setState(() => _savingDefault = false);
     }
   }
 
-  Widget _asrBody() {
-    final value = widget.store.value;
-    final snapshot = _snapshot;
-    final providers = snapshot?.asrProviders ?? const <AsrProviderOption>[];
-    final selected = _selectedAsrProvider ?? snapshot?.asrProviderName;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 210,
-          child: _FlatChoiceList(
-            title: '识别引擎',
-            selected: _asrChoiceLabel(selected, value.asrDefaultLabel),
-            items: _asrChoices(providers),
-            onPick: _pickAsr,
-          ),
-        ),
-        const SizedBox(width: T.s32),
-        Expanded(
-          child: SingleChildScrollView(
-            child: _FormColumn(
-              header:
-                  '当前识别：${_asrHeaderLabel(selected, value.asrDefaultLabel)}',
-              footer: _asrFooter(),
-              busy: _loadingConfig || _savingAsr,
-              error: _settingsError,
-              fields: [
-                _FieldSpec('Base URL / 本地服务地址', _baseUrl),
-                _FieldSpec('模型名', _model),
-                _FieldSpec('访问 key（云端留空则沿用已保存凭据）', _key, obscure: true),
-                _FieldSpec('中文备注 / IME 验证', _note, maxLines: 2),
-              ],
-            ),
-          ),
-        ),
-      ],
+  Future<void> _saveRouting(String provider, String model) async {
+    final snapshot = _snapshot ?? await _client.desktopSnapshot();
+    await _client.saveTranslationRouting(
+      provider: provider,
+      model: model,
+      fallback: snapshot.translationFallback,
+      expectedVersion: snapshot.providersFileVersion,
     );
+    await widget.bridge.setTranslationDefault(provider, configured: true);
   }
 
-  Widget _asrFooter() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            _InlineAction(
-              label: _savingAsr ? '保存中' : '保存识别默认',
-              onTap: _savingAsr ? null : _saveAsrProvider,
-            ),
-            const SizedBox(width: T.s12),
-            _InlineAction(
-              label: _loadingConfig ? '刷新中' : '刷新配置',
-              onTap: _loadingConfig ? null : _loadConfig,
-            ),
-          ],
-        ),
-        const SizedBox(height: T.s12),
-        Text(
-          _settingsMessage ?? '本机和 FunASR 不需要 key；云端 key 会写入用户级 auth.json。',
-          style: T.tCaption,
-        ),
-      ],
-    );
-  }
-
-  List<_ChoiceItem> _asrChoices(List<AsrProviderOption> providers) {
-    final choices = <_ChoiceItem>[
-      const _ChoiceItem(
-        label: '本机',
-        detail: 'faster-whisper',
-        value: 'faster_whisper_large_v3',
-      ),
-      const _ChoiceItem(
-        label: 'FunASR',
-        detail: '本地服务',
-        value: 'funasr_sensevoice_local',
-      ),
-      const _ChoiceItem(
-        label: '云端',
-        detail: 'OpenAI Whisper',
-        value: 'openai_whisper',
-      ),
-    ];
-    for (final provider in providers) {
-      if (choices.any((item) => item.value == provider.name)) continue;
-      choices.add(
-        _ChoiceItem(
-          label: provider.displayLabel,
-          detail: provider.name,
-          warn: !provider.hasKey,
-          value: provider.name,
-        ),
-      );
+  Future<void> _fetchModels() async {
+    final provider = _selectedProvider;
+    if (provider == null || provider.isEmpty) {
+      setState(() => _error = '需要先选择供应商');
+      return;
     }
-    return choices;
-  }
-
-  void _pickAsr(_ChoiceItem item) {
-    final providerName = item.value ?? item.label;
-    final draft = _asrDraft(providerName, useEditedFields: false);
     setState(() {
-      _selectedAsrProvider = providerName;
-      _baseUrl.text = '${draft['base_url'] ?? ''}';
-      _model.text = '${draft['model'] ?? ''}';
-      _key.clear();
-      _settingsMessage = null;
-    });
-    widget.bridge.setAsrDefault(item.label, configured: !item.warn);
-  }
-
-  Future<void> _saveAsrProvider() async {
-    final providerName = _selectedAsrProvider ?? 'faster_whisper_large_v3';
-    final draft = _asrDraft(providerName);
-    setState(() {
-      _savingAsr = true;
-      _settingsError = null;
-      _settingsMessage = null;
+      _loadingModels = true;
+      _error = null;
+      _message = null;
     });
     try {
-      await _client.asrProviderSave(
-        providerDraft: draft,
+      final result = await _client.providerModels(
+        providerDraft: _translationDraft(providerName: provider),
         apiKey: _keyTextOrNull(),
       );
-      await widget.bridge.setAsrDefault(
-        _asrLabelForDraft(draft),
-        configured: true,
-      );
-      await _loadConfig();
+      final models = _stringList(result['models']);
       if (!mounted) return;
-      setState(() => _settingsMessage = '识别默认已保存：${_asrLabelForDraft(draft)}。');
+      setState(() {
+        if (models.isNotEmpty) {
+          _selectedModel = models.first;
+          _model.text = models.first;
+          _message = '已拉取到 ${models.length} 个模型，已选中第一个。';
+        } else {
+          _message = _stringValue(result['hint_zh']) ?? '没有解析到模型，可以手动填写模型名。';
+        }
+      });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _settingsError = '$error');
+      setState(() => _error = '$error');
     } finally {
-      if (mounted) setState(() => _savingAsr = false);
+      if (mounted) setState(() => _loadingModels = false);
+    }
+  }
+
+  Future<void> _testProvider() async {
+    final provider = _selectedProvider;
+    final model = _model.text.trim();
+    if (provider == null || provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先选择供应商和模型');
+      return;
+    }
+    setState(() {
+      _testingProvider = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final result = await _client.providerTest(
+        providerDraft: _translationDraft(providerName: provider, models: _mergedModels(model)),
+        model: model,
+        apiKey: _keyTextOrNull(),
+      );
+      final status = _stringValue(result['status']) ?? 'UNKNOWN';
+      final checks = _objectList(result['checks']);
+      final first = checks.isEmpty ? const <String, Object?>{} : _stringMap(checks.first);
+      if (!mounted) return;
+      setState(() {
+        _message = '$status：${_stringValue(first['hint_zh']) ?? _stringValue(first['message']) ?? '连接测试完成'}';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _testingProvider = false);
     }
   }
 
@@ -599,18 +525,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return snapshot.providers.firstWhere(
       (provider) => provider.name == name,
       orElse: () => const ProviderOption(name: '', models: []),
-    );
-  }
-
-  AsrProviderOption _asrProviderByName(DesktopSnapshot snapshot, String? name) {
-    return snapshot.asrProviders.firstWhere(
-      (provider) => provider.name == name,
-      orElse: () => const AsrProviderOption(
-        name: '',
-        kind: 'remote',
-        protocol: 'openai_transcriptions',
-        model: '',
-      ),
     );
   }
 
@@ -624,19 +538,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return {
       ...provider.raw,
       'name': providerName,
-      'base_url': _baseUrl.text.trim().isNotEmpty
-          ? _baseUrl.text.trim()
-          : provider.baseUrl,
+      'base_url': _baseUrl.text.trim().isNotEmpty ? _baseUrl.text.trim() : provider.baseUrl,
       'models': models ?? _mergedModels(_model.text.trim()),
-      'compat_mode': provider.compatMode.isNotEmpty
-          ? provider.compatMode
-          : 'openai_chat',
-      'api_type': provider.apiType.isNotEmpty
-          ? provider.apiType
-          : 'openai-compatible',
-      'credential_id': provider.credentialId.isNotEmpty
-          ? provider.credentialId
-          : providerName,
+      'compat_mode': provider.compatMode.isNotEmpty ? provider.compatMode : 'openai_chat',
+      'api_type': provider.apiType.isNotEmpty ? provider.apiType : 'openai-compatible',
+      'credential_id': provider.credentialId.isNotEmpty ? provider.credentialId : providerName,
     };
   }
 
@@ -653,34 +559,74 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return merged;
   }
 
-  Map<String, Object?> _asrDraft(
-    String providerName, {
-    bool useEditedFields = true,
-  }) {
-    final existing = _snapshot == null
-        ? null
-        : _asrProviderByName(_snapshot!, providerName);
+  void _pickAsrProvider(String providerName) {
+    setState(() {
+      _selectedAsrProvider = providerName;
+      _loadAsrDraftFields();
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _loadAsrDraftFields() {
+    final draft = _asrDraft(_selectedAsrProvider, useEditedFields: false);
+    _baseUrl.text = '${draft['base_url'] ?? ''}';
+    _model.text = '${draft['model'] ?? ''}';
+    _endpoint.text = '${draft['endpoint'] ?? '/v1/audio/transcriptions'}';
+    final local = _stringMap(draft['local']);
+    _device.text = '${local['device'] ?? 'auto'}';
+    _key.clear();
+  }
+
+  Future<void> _saveAsrProvider() async {
+    final providerName = _selectedAsrProvider;
+    setState(() {
+      _savingAsr = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final latest = await _client.desktopSnapshot();
+      _snapshot = latest;
+      final draft = _asrDraft(providerName);
+      await _client.asrProviderSave(
+        providerDraft: draft,
+        apiKey: _keyTextOrNull(),
+        expectedVersion: latest.pipelineFileVersion,
+      );
+      await widget.bridge.setAsrDefault(_asrLabelForDraft(draft), configured: true);
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() => _message = '识别默认已保存：${_asrLabelForDraft(draft)}。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _savingAsr = false);
+    }
+  }
+
+  Map<String, Object?> _asrDraft(String providerName, {bool useEditedFields = true}) {
+    final existing = _snapshot == null ? null : _asrProviderByName(_snapshot!, providerName);
     final hasExisting = existing != null && existing.name.isNotEmpty;
     final kind = hasExisting ? existing.kind : _defaultAsrKind(providerName);
-    final protocol = hasExisting
-        ? existing.protocol
-        : _defaultAsrProtocol(kind, providerName);
+    final protocol = hasExisting ? existing.protocol : _defaultAsrProtocol(kind, providerName);
     final editedModel = useEditedFields ? _model.text.trim() : '';
     final editedBaseUrl = useEditedFields ? _baseUrl.text.trim() : '';
+    final editedEndpoint = useEditedFields ? _endpoint.text.trim() : '';
     final model = editedModel.isNotEmpty
         ? editedModel
         : (hasExisting ? existing.model : _defaultAsrModel(kind, protocol));
     final baseUrl = editedBaseUrl.isNotEmpty
         ? editedBaseUrl
         : (hasExisting ? existing.baseUrl : _defaultAsrBaseUrl(kind, protocol));
-    final auth = hasExisting
-        ? _stringMap(existing.raw['auth'])
-        : const <String, Object?>{};
-    final local = hasExisting
-        ? Map<String, Object?>.from(_stringMap(existing.raw['local']))
-        : <String, Object?>{};
+    final endpoint = editedEndpoint.isNotEmpty
+        ? editedEndpoint
+        : (hasExisting && existing.endpoint.isNotEmpty ? existing.endpoint : '/v1/audio/transcriptions');
+    final auth = hasExisting ? _stringMap(existing.raw['auth']) : const <String, Object?>{};
+    final local = hasExisting ? Map<String, Object?>.from(_stringMap(existing.raw['local'])) : <String, Object?>{};
     local['model_size'] = model;
-    local.putIfAbsent('device', () => 'auto');
+    local['device'] = _device.text.trim().isEmpty ? 'auto' : _device.text.trim();
     return {
       if (hasExisting) ...existing.raw,
       'name': providerName,
@@ -688,19 +634,27 @@ class _SettingsWindowState extends State<SettingsWindow> {
       'protocol': protocol,
       'model': model,
       if (kind != 'local_inprocess') 'base_url': baseUrl,
-      if (kind != 'local_inprocess') 'endpoint': '/v1/audio/transcriptions',
+      if (kind != 'local_inprocess') 'endpoint': endpoint,
       if (kind == 'remote')
         'auth': auth.isNotEmpty
             ? auth
-            : {
-                'type': 'bearer',
-                'env_key': 'OPENAI_API_KEY',
-                'credential_id': providerName,
-              }
+            : {'type': 'bearer', 'env_key': 'OPENAI_API_KEY', 'credential_id': providerName}
       else
         'auth': {'type': 'none'},
       if (kind == 'local_inprocess') 'local': local,
     };
+  }
+
+  AsrProviderOption _asrProviderByName(DesktopSnapshot snapshot, String? name) {
+    return snapshot.asrProviders.firstWhere(
+      (provider) => provider.name == name,
+      orElse: () => const AsrProviderOption(
+        name: '',
+        kind: 'remote',
+        protocol: 'openai_transcriptions',
+        model: '',
+      ),
+    );
   }
 
   String _defaultAsrKind(String providerName) {
@@ -731,20 +685,13 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String _asrLabelForDraft(Map<String, Object?> draft) {
     return switch (draft['kind']) {
       'local_inprocess' => '本机',
-      'local_server' =>
-        draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
+      'local_server' => draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
       'remote' => '云端',
       _ => '${draft['name']}',
     };
   }
 
-  String _asrChoiceLabel(String? providerName, String fallback) {
-    if (providerName == null || providerName.isEmpty) return fallback;
-    return _asrLabelForDraft(_asrDraft(providerName, useEditedFields: false));
-  }
-
-  String _asrHeaderLabel(String? providerName, String fallback) {
-    if (providerName == null || providerName.isEmpty) return fallback;
+  String _asrHeaderLabel(String providerName) {
     final draft = _asrDraft(providerName, useEditedFields: false);
     return '${_asrLabelForDraft(draft)} · ${draft['model']}';
   }
@@ -755,35 +702,327 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 }
 
-class _FlatChoiceList extends StatelessWidget {
-  const _FlatChoiceList({
-    required this.title,
+class _DefaultBar extends StatelessWidget {
+  const _DefaultBar({
+    required this.text,
+    required this.busy,
+    this.error,
+    this.message,
+  });
+
+  final String text;
+  final bool busy;
+  final String? error;
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 58,
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: T.line, width: 1)),
+      ),
+      alignment: Alignment.centerLeft,
+      child: Row(
+        children: [
+          Expanded(child: Text(text, style: T.tSection)),
+          if (busy) Text('同步中…', style: T.tCaption),
+          if (!busy && error != null)
+            Flexible(child: Text(error!, style: T.tCaption.copyWith(color: T.danger), overflow: TextOverflow.ellipsis)),
+          if (!busy && error == null && message != null)
+            Flexible(child: Text(message!, style: T.tCaption.copyWith(color: T.accentStrong), overflow: TextOverflow.ellipsis)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderList extends StatelessWidget {
+  const _ProviderList({
+    required this.providers,
     required this.selected,
-    required this.items,
+    required this.defaultProvider,
     required this.onPick,
   });
 
-  final String title;
-  final String selected;
-  final List<_ChoiceItem> items;
-  final ValueChanged<_ChoiceItem> onPick;
+  final List<ProviderOption> providers;
+  final String? selected;
+  final String? defaultProvider;
+  final ValueChanged<String> onPick;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: T.tSection),
+        const Text('供应商', style: T.tSection),
         const SizedBox(height: T.s12),
-        for (final item in items)
-          _ChoiceRow(
-            label: item.label,
-            detail: item.detail,
-            selected: item.label == selected,
-            warn: item.warn,
-            onTap: () => onPick(item),
+        if (providers.isEmpty)
+          const Text('还没有 provider', style: T.tCaption)
+        else
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                for (final provider in providers)
+                  _ChoiceRow(
+                    label: provider.name,
+                    detail: [
+                      if (provider.name == defaultProvider) '默认',
+                      if (provider.apiType.isNotEmpty) provider.apiType,
+                      provider.hasKey ? '已配置' : '缺 key',
+                    ].join(' · '),
+                    selected: provider.name == selected,
+                    warn: !provider.hasKey,
+                    onTap: () => onPick(provider.name),
+                  ),
+              ],
+            ),
           ),
       ],
+    );
+  }
+}
+
+class _SegmentedEngines extends StatelessWidget {
+  const _SegmentedEngines({required this.selected, required this.onPick});
+
+  final String selected;
+  final ValueChanged<String> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    const items = [
+      ('faster_whisper_large_v3', '本机识别', 'faster-whisper'),
+      ('funasr_sensevoice_local', 'FunASR', '本地服务'),
+      ('openai_whisper', '云端识别', 'OpenAI Whisper'),
+    ];
+    return Row(
+      children: [
+        for (final item in items) ...[
+          _SegmentButton(
+            label: item.$2,
+            detail: item.$3,
+            selected: selected == item.$1,
+            onTap: () => onPick(item.$1),
+          ),
+          const SizedBox(width: T.s8),
+        ],
+      ],
+    );
+  }
+}
+
+class _AsrSummaryList extends StatelessWidget {
+  const _AsrSummaryList({
+    required this.providers,
+    required this.selected,
+    required this.onPick,
+  });
+
+  final List<AsrProviderOption> providers;
+  final String selected;
+  final ValueChanged<String> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('已保存方案', style: T.tSection),
+        const SizedBox(height: T.s12),
+        if (providers.isEmpty)
+          const Text('保存后会出现在这里', style: T.tCaption)
+        else
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                for (final provider in providers)
+                  _ChoiceRow(
+                    label: provider.displayLabel,
+                    detail: '${provider.model}${provider.hasKey ? ' · 已配置' : ' · 缺 key'}',
+                    selected: provider.name == selected,
+                    warn: !provider.hasKey,
+                    onTap: () => onPick(provider.name),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ToolPanel extends StatelessWidget {
+  const _ToolPanel({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+  }
+}
+
+class _Input extends StatelessWidget {
+  const _Input({required this.label, required this.controller, this.obscure = false});
+  final String label;
+  final TextEditingController controller;
+  final bool obscure;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: T.tCaption),
+        const SizedBox(height: T.s4),
+        TextField(
+          controller: controller,
+          obscureText: obscure,
+          style: T.tBody,
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: T.surface,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(T.rMd),
+              borderSide: const BorderSide(color: T.line),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(T.rMd),
+              borderSide: const BorderSide(color: T.accent, width: 1.5),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InlineTextField extends StatelessWidget {
+  const _InlineTextField({required this.controller, required this.hint});
+  final TextEditingController controller;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 220,
+      height: 32,
+      child: TextField(
+        controller: controller,
+        style: T.tCaption.copyWith(color: T.ink),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: T.tCaption,
+          isDense: true,
+          filled: true,
+          fillColor: T.surface,
+          contentPadding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rSm),
+            borderSide: const BorderSide(color: T.line),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadonlyRow extends StatelessWidget {
+  const _ReadonlyRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(width: 96, child: Text(label, style: T.tCaption)),
+        Expanded(child: Text(value, style: T.tBody, overflow: TextOverflow.ellipsis)),
+      ],
+    );
+  }
+}
+
+class _ActionButton extends StatefulWidget {
+  const _ActionButton({required this.label, required this.onTap, this.strong = false});
+  final String label;
+  final VoidCallback? onTap;
+  final bool strong;
+
+  @override
+  State<_ActionButton> createState() => _ActionButtonState();
+}
+
+class _ActionButtonState extends State<_ActionButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final bg = widget.strong
+        ? (enabled ? (_hover ? T.accentStrong : T.accent) : T.line)
+        : (_hover && enabled ? T.accentSoft : T.surface);
+    final fg = widget.strong ? const Color(0xFFFFFFFF) : (enabled ? T.accentStrong : T.muted);
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(T.rMd),
+            border: Border.all(color: widget.strong ? bg : (enabled ? T.accent : T.line), width: 1.2),
+          ),
+          child: Text(widget.label, style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium)),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChoicePill extends StatefulWidget {
+  const _ChoicePill({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_ChoicePill> createState() => _ChoicePillState();
+}
+
+class _ChoicePillState extends State<_ChoicePill> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 180),
+          padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 6),
+          decoration: BoxDecoration(
+            color: widget.selected || _hover ? T.accentSoft : T.surface,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: widget.selected ? T.accent : T.line, width: 1),
+          ),
+          child: Text(
+            widget.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: T.tCaption.copyWith(color: widget.selected ? T.accentStrong : T.ink),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -820,13 +1059,10 @@ class _ChoiceRowState extends State<_ChoiceRow> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          height: 40,
+          height: 44,
           decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(
-                color: widget.selected ? color : const Color(0x00000000),
-                width: 3,
-              ),
+              left: BorderSide(color: widget.selected ? color : const Color(0x00000000), width: 3),
               bottom: const BorderSide(color: T.line, width: 1),
             ),
             color: _hover || widget.selected ? T.accentSoft : null,
@@ -847,12 +1083,7 @@ class _ChoiceRowState extends State<_ChoiceRow> {
                 ),
               ),
               if (widget.detail != null && widget.detail!.isNotEmpty)
-                Text(
-                  widget.detail!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: T.tCaption,
-                ),
+                Text(widget.detail!, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.tCaption),
             ],
           ),
         ),
@@ -861,100 +1092,23 @@ class _ChoiceRowState extends State<_ChoiceRow> {
   }
 }
 
-class _FormColumn extends StatelessWidget {
-  const _FormColumn({
-    required this.header,
-    required this.fields,
-    this.footer,
-    this.busy = false,
-    this.error,
-  });
-
-  final String header;
-  final List<_FieldSpec> fields;
-  final Widget? footer;
-  final bool busy;
-  final String? error;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(header, style: T.tSection),
-        if (busy) ...[
-          const SizedBox(height: T.s8),
-          Text('正在同步 Local Service…', style: T.tCaption),
-        ],
-        if (error != null) ...[
-          const SizedBox(height: T.s8),
-          Text(error!, style: T.tCaption.copyWith(color: T.danger)),
-        ],
-        const SizedBox(height: T.s16),
-        for (final field in fields) ...[
-          Text(field.label, style: T.tCaption),
-          const SizedBox(height: T.s4),
-          TextField(
-            controller: field.controller,
-            obscureText: field.obscure,
-            maxLines: field.obscure ? 1 : field.maxLines,
-            style: T.tBody,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: T.surface,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(T.rMd),
-                borderSide: const BorderSide(color: T.line),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(T.rMd),
-                borderSide: const BorderSide(color: T.accent, width: 1.5),
-              ),
-            ),
-          ),
-          const SizedBox(height: T.s16),
-        ],
-        Text(
-          'Phase A 只验证跨窗状态和中文输入；这里的表单控件是 spike 占位，不是最终配置窗设计。',
-          style: T.tCaption,
-        ),
-        if (footer != null) ...[const SizedBox(height: T.s16), footer!],
-      ],
-    );
-  }
-}
-
-class _ChoiceItem {
-  const _ChoiceItem({
+class _SegmentButton extends StatefulWidget {
+  const _SegmentButton({
     required this.label,
-    this.detail,
-    this.warn = false,
-    this.value,
-  });
-
-  final String label;
-  final String? detail;
-  final bool warn;
-  final String? value;
-}
-
-class _MiniChoice extends StatefulWidget {
-  const _MiniChoice({
-    required this.label,
+    required this.detail,
     required this.selected,
     required this.onTap,
   });
-
   final String label;
+  final String detail;
   final bool selected;
   final VoidCallback onTap;
 
   @override
-  State<_MiniChoice> createState() => _MiniChoiceState();
+  State<_SegmentButton> createState() => _SegmentButtonState();
 }
 
-class _MiniChoiceState extends State<_MiniChoice> {
+class _SegmentButtonState extends State<_SegmentButton> {
   bool _hover = false;
 
   @override
@@ -966,84 +1120,25 @@ class _MiniChoiceState extends State<_MiniChoice> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 180),
-          padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 5),
+          width: 150,
+          padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
           decoration: BoxDecoration(
             color: widget.selected || _hover ? T.accentSoft : T.surface,
-            borderRadius: BorderRadius.circular(T.rSm),
-            border: Border.all(
-              color: widget.selected ? T.accent : T.line,
-              width: 1,
-            ),
-          ),
-          child: Text(
-            widget.label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: T.tCaption.copyWith(
-              color: widget.selected ? T.accentStrong : T.ink,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _InlineAction extends StatefulWidget {
-  const _InlineAction({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback? onTap;
-
-  @override
-  State<_InlineAction> createState() => _InlineActionState();
-}
-
-class _InlineActionState extends State<_InlineAction> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = widget.onTap != null;
-    return MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 7),
-          decoration: BoxDecoration(
-            color: _hover && enabled ? T.accentSoft : T.surface,
             borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(color: enabled ? T.accent : T.line, width: 1.2),
+            border: Border.all(color: widget.selected ? T.accent : T.line, width: 1.2),
           ),
-          child: Text(
-            widget.label,
-            style: T.tBody.copyWith(
-              color: enabled ? T.accentStrong : T.muted,
-              fontWeight: T.wMedium,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.label, style: T.tBody.copyWith(fontWeight: widget.selected ? T.wBold : T.wRegular)),
+              const SizedBox(height: 2),
+              Text(widget.detail, style: T.tCaption),
+            ],
           ),
         ),
       ),
     );
   }
-}
-
-class _FieldSpec {
-  _FieldSpec(
-    this.label,
-    this.controller, {
-    this.obscure = false,
-    this.maxLines = 1,
-  });
-
-  final String label;
-  final TextEditingController controller;
-  final bool obscure;
-  final int maxLines;
 }
 
 Map<String, Object?> _stringMap(Object? value) {

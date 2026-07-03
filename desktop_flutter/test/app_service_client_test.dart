@@ -297,13 +297,21 @@ void main() {
     );
     await client.providerModels(providerDraft: {'name': 'p1'});
     await client.providerTest(providerDraft: {'name': 'p1'}, model: 'model-a');
-    await client.saveTranslationRouting(provider: 'p1', model: 'model-a');
+    await client.saveTranslationRouting(
+      provider: 'p1',
+      model: 'model-a',
+      fallback: [
+        {'provider': 'p2', 'model': 'model-b'},
+      ],
+      expectedVersion: {'mtime_ns': 1, 'size': 2},
+    );
     await client.asrProviderSave(
       providerDraft: {
         'name': 'openai_whisper',
         'kind': 'remote',
         'model': 'whisper-1',
       },
+      expectedVersion: {'mtime_ns': 3, 'size': 4},
     );
 
     expect(transport.calls.map((call) => call.method), [
@@ -318,10 +326,21 @@ void main() {
       'provider': 'p1',
       'model': 'model-a',
     });
+    expect(transport.calls[3].params['fallback'], [
+      {'provider': 'p2', 'model': 'model-b'},
+    ]);
+    expect(transport.calls[3].params['expected_version'], {
+      'mtime_ns': 1,
+      'size': 2,
+    });
     expect(
       transport.calls.last.params['provider_draft'],
       containsPair('kind', 'remote'),
     );
+    expect(transport.calls.last.params['expected_version'], {
+      'mtime_ns': 3,
+      'size': 4,
+    });
   });
 
   test('TaskSummary parses status, runtime, progress, and errors', () {

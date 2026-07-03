@@ -10,7 +10,7 @@ Future<void> configureCurrentWindow(SpikeWindowType type) async {
   final size = switch (type) {
     SpikeWindowType.main => const Size(720, 520),
     SpikeWindowType.translationSettings => const Size(780, 560),
-    SpikeWindowType.asrSettings => const Size(680, 500),
+    SpikeWindowType.asrSettings => const Size(700, 540),
   };
 
   final options = WindowOptions(

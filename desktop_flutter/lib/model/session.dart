@@ -26,7 +26,7 @@ class Session {
     this.targetLang = 'zh-CN',
     this.translateConfigured = true,
     this.asrConfigured = true,
-    this.engineTranslate = 'Opus',
+    this.engineTranslate = '需配置',
     this.engineRecognize = '本机',
     this.bilingual = true,
     this.formats = const ['SRT', 'ASS'],

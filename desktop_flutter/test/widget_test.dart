@@ -1,6 +1,6 @@
 import 'dart:async';
+import 'dart:ui';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:transvortex_desktop_flutter/main.dart';
@@ -8,7 +8,6 @@ import 'package:transvortex_desktop_flutter/model/spike_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
-import 'package:transvortex_desktop_flutter/widgets/sidecar_probe_view.dart';
 
 void main() {
   testWidgets('main screen renders empty-state subject', (tester) async {
@@ -20,9 +19,9 @@ void main() {
 
     // 「放入片源」出现两处：主体提示 + 空态禁用 CTA。
     expect(find.text('放入片源'), findsNWidgets(2));
-    expect(find.textContaining('拖进来'), findsOneWidget);
+    expect(find.textContaining('SRT 字幕'), findsOneWidget);
     expect(find.text('TransVortex'), findsOneWidget);
-    expect(find.textContaining('调试态'), findsOneWidget);
+    expect(find.textContaining('调试态'), findsNothing);
   });
 
   testWidgets('main screen applies readonly service snapshot readiness', (
@@ -34,54 +33,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.textContaining('服务已连接'), findsOneWidget);
-    await tester.tap(find.text('就绪'));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(
-      find.textContaining('RealProvider', findRichText: true),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Local ASR', findRichText: true),
-      findsOneWidget,
-    );
+    expect(find.textContaining('等待片源'), findsOneWidget);
   });
 
-  testWidgets('service diagnostics renders degraded state', (tester) async {
-    final controller = LocalServiceController(
-      sessionFactory: () async => _FakeHandle(
-        info: const ServiceInfo(
-          service: 'transvortex.app_service',
-          protocolVersion: 1,
-          appVersion: 'test',
-          capabilities: ['desktop_snapshot'],
-        ),
-        health: const ServiceHealth(
-          service: 'transvortex.app_service',
-          status: 'degraded',
-          runtime: {
-            'active': {'task_id': 'tvx_1', 'status': 'RUNNING'},
-          },
-          pump: {'enabled': true, 'last_error': 'launch failed'},
-        ),
-        snapshot: _desktopSnapshot(),
-      ),
-    );
-    await controller.start();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: SidecarProbeView(controller: controller)),
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.text('Local Service 诊断'), findsOneWidget);
-    expect(find.text('degraded'), findsWidgets);
-    expect(find.text('tvx_1 · RUNNING'), findsOneWidget);
-    expect(find.text('launch failed'), findsOneWidget);
-  });
-
-  testWidgets('translation settings window renders IME probe fields', (
+  testWidgets('translation settings window renders provider tool layout', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -90,9 +45,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('翻译模型设置'), findsOneWidget);
+    expect(find.text('供应商'), findsOneWidget);
     expect(find.text('Base URL'), findsOneWidget);
-    expect(find.text('模型名'), findsOneWidget);
-    expect(find.textContaining('中文备注'), findsOneWidget);
+    expect(find.textContaining('中文备注'), findsNothing);
+    expect(find.textContaining('spike'), findsNothing);
   });
 
   testWidgets('translation settings window reads providers through bridge', (
@@ -117,7 +73,7 @@ void main() {
 
     expect(find.text('RealProvider'), findsWidgets);
     expect(find.text('real-model'), findsWidgets);
-    expect(find.textContaining('API key 会写入用户级'), findsOneWidget);
+    expect(find.textContaining('API key 写入用户级'), findsOneWidget);
   });
 
   testWidgets('translation settings window saves provider through bridge', (
@@ -150,18 +106,20 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('保存 provider'));
+    await tester.tap(find.text('保存供应商'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(calls, contains('provider.save'));
     expect(calls, contains('provider.routing.save'));
-    expect(find.textContaining('provider 已保存'), findsOneWidget);
+    expect(find.textContaining('供应商已保存'), findsOneWidget);
   });
 
   testWidgets('ASR settings window saves default provider through bridge', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(700, 540));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
@@ -218,8 +176,13 @@ DesktopSnapshot _desktopSnapshot() {
     'config': {
       'routing': {
         'primary': {'provider': 'RealProvider', 'model': 'real-model'},
+        'fallback': [
+          {'provider': 'RealProvider', 'model': 'real-model'},
+        ],
       },
       'pipeline': {'asr_provider': 'local'},
+      'pipeline_file_version': {'mtime_ns': 1, 'size': 2},
+      'providers_file_version': {'mtime_ns': 3, 'size': 4},
       'providers': [
         {
           'name': 'RealProvider',

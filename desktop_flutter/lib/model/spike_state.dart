@@ -53,7 +53,7 @@ class SpikeWindowArgs {
 @immutable
 class AppSpikeState {
   const AppSpikeState({
-    this.translationDefaultLabel = 'Opus',
+    this.translationDefaultLabel = '需配置',
     this.asrDefaultLabel = '本机',
     this.translationConfigured = true,
     this.asrConfigured = true,
@@ -91,7 +91,7 @@ class AppSpikeState {
     final map = value is Map ? value : const <String, Object?>{};
     return AppSpikeState(
       translationDefaultLabel:
-          map['translationDefaultLabel'] as String? ?? 'Opus',
+          map['translationDefaultLabel'] as String? ?? '需配置',
       asrDefaultLabel: map['asrDefaultLabel'] as String? ?? '本机',
       translationConfigured: map['translationConfigured'] as bool? ?? true,
       asrConfigured: map['asrConfigured'] as bool? ?? true,

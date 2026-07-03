@@ -12,6 +12,8 @@ abstract class AppServiceTransport {
   Future<void> close();
 }
 
+const Object _preserveFallback = Object();
+
 class RpcRemoteException implements Exception {
   RpcRemoteException(this.code, this.message, {this.details});
 
@@ -462,22 +464,28 @@ class AppServiceClient {
   Future<Map<String, Object?>> saveTranslationRouting({
     required String provider,
     required String model,
+    Object? fallback = _preserveFallback,
     Map<String, Object?>? expectedVersion,
   }) {
-    return call('provider.routing.save', {
+    final params = <String, Object?>{
       'primary': {'provider': provider, 'model': model},
-      'fallback': const [],
       'expected_version': ?expectedVersion,
-    }).then(_stringMap);
+    };
+    if (!identical(fallback, _preserveFallback)) {
+      params['fallback'] = fallback;
+    }
+    return call('provider.routing.save', params).then(_stringMap);
   }
 
   Future<Map<String, Object?>> asrProviderSave({
     required Map<String, Object?> providerDraft,
     String? apiKey,
+    Map<String, Object?>? expectedVersion,
   }) {
     return call('asr.provider.save', {
       'provider_draft': providerDraft,
       'api_key': ?apiKey,
+      'expected_version': ?expectedVersion,
     }).then(_stringMap);
   }
 
@@ -635,6 +643,14 @@ class DesktopSnapshot {
     return version.isEmpty ? null : version;
   }
 
+  Map<String, Object?>? get pipelineFileVersion {
+    final direct = _stringMap(config['pipeline_file_version']);
+    if (direct.isNotEmpty) return direct;
+    final pipeline = _stringMap(config['pipeline']);
+    final nested = _stringMap(pipeline['pipeline_file_version']);
+    return nested.isEmpty ? null : nested;
+  }
+
   TaskSummary? taskById(String taskId) {
     for (final task in tasks) {
       if (task.taskId == taskId) return task;
@@ -659,6 +675,11 @@ class DesktopSnapshot {
     final routing = _stringMap(config['routing']);
     final primary = _stringMap(routing['primary']);
     return _stringValue(primary['model']);
+  }
+
+  List<Object?> get translationFallback {
+    final routing = _stringMap(config['routing']);
+    return _objectList(routing['fallback']);
   }
 
   String? get asrProviderName {

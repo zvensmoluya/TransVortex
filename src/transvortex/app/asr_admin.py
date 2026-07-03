@@ -64,7 +64,7 @@ def _text(source: dict[str, Any], *keys: str, default: str = "") -> str:
     return default
 
 
-def _pipeline_file_version(path: Path) -> dict[str, int] | None:
+def pipeline_file_version(path: Path) -> dict[str, int] | None:
     if not path.exists():
         return None
     stat = path.stat()
@@ -85,7 +85,7 @@ def _check_expected_version(path: Path, expected_version: Any) -> None:
     expected = _expected_version(expected_version)
     if expected is None:
         return
-    current = _pipeline_file_version(path)
+    current = pipeline_file_version(path)
     if current != expected:
         raise ValueError(
             json.dumps(
@@ -234,7 +234,7 @@ def save_asr_provider_config(
         "provider": provider.name,
         "asr_provider": to_plain(provider),
         "pipeline_file": str(pipeline_file),
-        "pipeline_file_version": _pipeline_file_version(pipeline_file),
+        "pipeline_file_version": pipeline_file_version(pipeline_file),
         "auth_file": str(auth_file_path()),
         "credential_id": credential_id,
         "has_key": has_key,

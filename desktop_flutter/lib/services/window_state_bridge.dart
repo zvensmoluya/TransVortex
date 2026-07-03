@@ -50,7 +50,7 @@ class WindowStateBridge {
       case 'state.setTranslationDefault':
         final args = _asMap(call.arguments);
         store.setTranslationDefault(
-          args['label'] as String? ?? 'Opus',
+          args['label'] as String? ?? '需配置',
           configured: args['configured'] as bool? ?? true,
         );
         return store.value.toJson();

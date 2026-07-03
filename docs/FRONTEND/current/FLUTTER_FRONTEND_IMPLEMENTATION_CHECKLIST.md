@@ -39,7 +39,7 @@
 - `desktop_flutter/lib/services/app_service_client.dart` 已有 `JsonRpcTransport`、`LocalServiceSupervisor`、`AppServiceClient`、`ServiceInfo`、`ServiceHealth`、`DesktopSnapshot`。
 - `desktop_flutter/lib/services/local_service_controller.dart` 已有启动、刷新、重启、关闭、退出监控。
 - `desktop_flutter/lib/main.dart` 已经能在主窗口读取 `desktop.snapshot`，并把配置就绪状态灌进主屏。
-- `desktop_flutter/lib/widgets/job_line.dart`、`primary_action.dart`、`settings_window.dart`、`sidecar_probe_view.dart` 已经把 spike 结构搭起来。
+- `desktop_flutter/lib/widgets/job_line.dart`、`primary_action.dart`、`settings_window.dart` 曾把 spike 结构搭起来；`sidecar_probe_view.dart` 已移出活跃构建范围。
 
 ### 已有的后端能力
 

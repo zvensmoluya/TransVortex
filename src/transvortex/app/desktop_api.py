@@ -30,7 +30,7 @@ from ..providers.admin import (
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
-from .asr_admin import save_asr_provider_config
+from .asr_admin import pipeline_file_version, save_asr_provider_config
 from .config import load_app_config, resolve_providers_file
 from .credentials import (
     auth_file_path,
@@ -399,6 +399,7 @@ def config_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
         "auth_file": str(auth_file_path()),
         "providers_file": str(resolved_providers_file),
         "providers_file_version": providers_file_version(resolved_providers_file),
+        "pipeline_file_version": pipeline_file_version(root / "pipeline.yaml"),
         "artifacts_dir": str(config.pipeline.artifacts_dir),
         "pipeline": to_plain(config.pipeline),
         "routing": to_plain(config.routing),
