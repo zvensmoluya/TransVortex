@@ -1,6 +1,6 @@
 # Flutter 前端实现清单
 
-本文档把 `FRONTEND_DEVELOPMENT_GOALS.md` 的验收标准、`FRONTEND_DESIGN_SPEC.md` 的三个窗口 MVP、`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md` 的本地服务模型，收敛成一份可直接施工的实现清单。
+本文档把 `FRONTEND_DELIVERY_GOALS.md` 的当前交付目标、`FRONTEND_DESIGN_SPEC.md` 的三个窗口 MVP、`FRONTEND_IMPLEMENTATION_CONTRACT.md` 的实施边界、`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md` 的本地服务模型，收敛成一份可直接施工的实现清单。
 
 它不是新的设计稿，也不是再抽象一层架构图。它只回答四件事：
 
@@ -313,12 +313,15 @@ MVP 先控制在两层：
 
 ## 8. 建议的实现顺序
 
-1. 已完成：把主窗口的“开始译制”接到 `runtime.submitRun`。
-2. 已完成：把主窗口状态改成真实任务状态源，并接 `tasks.events` / `runtime.cancel`。
-3. 已完成：把翻译设置窗接到 `provider.save` / `provider.routing.save` / `provider.test` / `provider.models`。
-4. 已完成：补 `asr.provider.save` 并接 ASR 设置窗最小保存链路。
-5. 已完成：接完成态结果读取、打开字幕、打开所在文件夹、重新导出。
-6. 后续：做任务历史、诊断、术语、结果审看、通知和更完整的人工验收矩阵。
+> 下面「已完成」全部指**后端接线**已成立，即数据链路能跑通。它**不等于** UI 已按 `FRONTEND_DESIGN_SPEC.md` 重做、也**不等于**通过 G1 真实窗口验收——当前 UI 仍是 spike 形状（`spike_state.dart`、`settings_window.dart` 临时表单台、主窗口未抽出 controller）。契约里的「重做」尚未开始。
+
+1. 接线已完成：把主窗口的“开始译制”接到 `runtime.submitRun`。
+2. 接线已完成：把主窗口状态改成真实任务状态源，并接 `tasks.events` / `runtime.cancel`。
+3. 接线已完成：把翻译设置窗接到 `provider.save` / `provider.routing.save` / `provider.test` / `provider.models`。
+4. 接线已完成：补 `asr.provider.save` 并接 ASR 设置窗最小保存链路。
+5. 接线已完成：接完成态结果读取、打开字幕、打开所在文件夹、重新导出。
+6. UI 重做未开始：抽出主窗口 controller、按 SPEC 重做主窗口六态与两个设置窗、过 G1 截图验收（见 `FRONTEND_IMPLEMENTATION_CONTRACT.md` §11）。
+7. 后续：做任务历史、诊断、术语、结果审看、通知和更完整的人工验收矩阵。
 
 ---
 
@@ -340,4 +343,4 @@ MVP 先控制在两层：
 
 这份清单的定位很简单：它把 Flutter 前端 MVP 从“看起来像在做”变成“知道下一步该接哪根线”。
 
-截至当前实现，主窗口真实任务流、翻译设置工具窗和 ASR 设置工具窗的 MVP 接线已经成立。后续优先级应转向结果审看、任务历史、术语管理、诊断修复和真实桌面窗口的视觉 / 交互验收矩阵。
+截至当前实现，主窗口真实任务流、翻译设置工具窗和 ASR 设置工具窗的 MVP **接线**已经成立——数据链路能跑通，但 UI 仍是 spike 形状，未按 `FRONTEND_DESIGN_SPEC.md` 重做，也未过 G1 真实窗口验收。后续优先级应先转向 UI 重做（抽 controller、重做主窗口六态与两个设置窗、拿到验收截图），再进入结果审看、任务历史、术语管理、诊断修复。

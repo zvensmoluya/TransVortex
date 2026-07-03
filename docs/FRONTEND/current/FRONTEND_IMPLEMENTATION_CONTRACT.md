@@ -2,7 +2,7 @@
 
 本文档只解决一件事：把当前 Flutter spike 收束为正式 MVP 施工边界。
 
-它不是新的设计方向，也不是新的视觉原型。方向和验收仍以 `FRONTEND_DEVELOPMENT_GOALS.md` 为准，窗口与交互规格仍以 `FRONTEND_DESIGN_SPEC.md` 为准。本文只规定实现时哪些东西保留、哪些东西重做、每个窗口先接哪些能力，以及如何验收。
+它不是新的设计方向，也不是新的视觉原型。硬规则以 `../rules/FRONTEND_FAILURE_RECOVERY_RULES.md` 为准，剩余交付目标以 `FRONTEND_DELIVERY_GOALS.md` 为准，窗口与交互规格以 `FRONTEND_DESIGN_SPEC.md` 为准。本文只规定实现时哪些东西保留、哪些东西重做、每个窗口先接哪些能力，以及如何验收。
 
 ---
 
@@ -242,4 +242,3 @@ MVP 美术执行采用文字契约 + 真实 Flutter 窗口验收：
 5. 重做翻译模型设置窗。
 6. 重做语音识别设置窗。
 7. 再进入任务历史、诊断、术语管理、结果审看等后续窗口。
-
