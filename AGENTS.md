@@ -135,8 +135,9 @@ Short English title
 - 不要求任何改动都跑完整测试。
 - Python 改动优先跑相关 pytest。
 - 较大的 Python 改动，或影响核心流程的改动，优先跑全量 `pytest -q`。
-- 桌面 UI 或 worker protocol 改动至少跑 `npm run build`。
-- Tauri/Rust 改动至少跑 `cargo check`。
+- 桌面 UI 或 worker protocol 改动默认跑 `flutter analyze` 和 `flutter test`（工作目录 `desktop_flutter/`）；较大或影响主流程的改动补 `flutter build windows`。
+- 仅当主动改冻结的 Tauri 前端（`desktop/`）时才跑 `npm run build`；日常桌面改动不必构建它。
+- Tauri/Rust 改动（仅当主动改 `desktop/src-tauri` 时）至少跑 `cargo check`。
 - 凭据、provider、ASR、翻译流程相关改动，应优先跑对应的最小验证命令或相关测试。
 - 如果没有跑测试，应明确说明原因。
 - 回复用户时说明已经验证的内容，以及未验证但存在风险的部分。
