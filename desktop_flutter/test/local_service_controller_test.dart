@@ -35,60 +35,69 @@ void main() {
     expect(controller.snapshot.status, LocalServiceConnectionStatus.degraded);
   });
 
-  test('process exit clears session and refresh can start a new handle', () async {
-    var starts = 0;
-    late _FakeHandle first;
-    late _FakeHandle second;
-    final controller = LocalServiceController(
-      sessionFactory: () async {
-        starts += 1;
-        if (starts == 1) {
-          return first = _FakeHandle.ready();
-        }
-        return second = _FakeHandle.ready(appVersion: 'second');
-      },
-    );
+  test(
+    'process exit clears session and refresh can start a new handle',
+    () async {
+      var starts = 0;
+      late _FakeHandle first;
+      late _FakeHandle second;
+      final controller = LocalServiceController(
+        sessionFactory: () async {
+          starts += 1;
+          if (starts == 1) {
+            return first = _FakeHandle.ready();
+          }
+          return second = _FakeHandle.ready(appVersion: 'second');
+        },
+      );
 
-    await controller.start();
-    first.completeExit(7);
-    await Future<void>.delayed(Duration.zero);
+      await controller.start();
+      first.completeExit(7);
+      await Future<void>.delayed(Duration.zero);
 
-    expect(controller.snapshot.status, LocalServiceConnectionStatus.unavailable);
-    expect(controller.client, isNull);
+      expect(
+        controller.snapshot.status,
+        LocalServiceConnectionStatus.unavailable,
+      );
+      expect(controller.client, isNull);
 
-    await controller.refresh();
+      await controller.refresh();
 
-    expect(starts, 2);
-    expect(controller.client, same(second.client));
-    expect(controller.snapshot.status, LocalServiceConnectionStatus.ready);
-    expect(controller.snapshot.info?.appVersion, 'second');
-  });
+      expect(starts, 2);
+      expect(controller.client, same(second.client));
+      expect(controller.snapshot.status, LocalServiceConnectionStatus.ready);
+      expect(controller.snapshot.info?.appVersion, 'second');
+    },
+  );
 
-  test('connection closed during refresh retries once with a new handle', () async {
-    var starts = 0;
-    late _FakeHandle failed;
-    late _FakeHandle recovered;
-    final controller = LocalServiceController(
-      sessionFactory: () async {
-        starts += 1;
-        if (starts == 1) {
-          return failed = _FakeHandle.ready();
-        }
-        return recovered = _FakeHandle.ready(appVersion: 'recovered');
-      },
-    );
-    await controller.start();
-    failed.transport.failures['service.health'] =
-        RpcConnectionClosedException('service stdout closed');
+  test(
+    'connection closed during refresh retries once with a new handle',
+    () async {
+      var starts = 0;
+      late _FakeHandle failed;
+      late _FakeHandle recovered;
+      final controller = LocalServiceController(
+        sessionFactory: () async {
+          starts += 1;
+          if (starts == 1) {
+            return failed = _FakeHandle.ready();
+          }
+          return recovered = _FakeHandle.ready(appVersion: 'recovered');
+        },
+      );
+      await controller.start();
+      failed.transport.failures['service.health'] =
+          RpcConnectionClosedException('service stdout closed');
 
-    await controller.refresh();
+      await controller.refresh();
 
-    expect(starts, 2);
-    expect(failed.shutdownCalled, isTrue);
-    expect(controller.client, same(recovered.client));
-    expect(controller.snapshot.status, LocalServiceConnectionStatus.ready);
-    expect(controller.snapshot.info?.appVersion, 'recovered');
-  });
+      expect(starts, 2);
+      expect(failed.shutdownCalled, isTrue);
+      expect(controller.client, same(recovered.client));
+      expect(controller.snapshot.status, LocalServiceConnectionStatus.ready);
+      expect(controller.snapshot.info?.appVersion, 'recovered');
+    },
+  );
 
   test('timeout during refresh degrades without restarting', () async {
     var starts = 0;

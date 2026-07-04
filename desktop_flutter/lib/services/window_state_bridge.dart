@@ -1,7 +1,7 @@
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/services.dart';
 
-import '../model/spike_state.dart';
+import '../model/window_state.dart';
 import 'app_service_client.dart';
 
 const stateChannelName = 'transvortex.state';
@@ -19,11 +19,18 @@ class WindowStateBridge {
   final WindowMethodChannel? _channel;
   Future<Object?> Function(String method, Map<String, Object?> params)?
   _serviceCaller;
+  Future<void> Function(AppWindowArgs args)? _toolWindowOpener;
 
   void attachServiceCaller(
     Future<Object?> Function(String method, Map<String, Object?> params) caller,
   ) {
     _serviceCaller = caller;
+  }
+
+  void attachToolWindowOpener(
+    Future<void> Function(AppWindowArgs args) opener,
+  ) {
+    _toolWindowOpener = opener;
   }
 
   Future<void> initializeMain() async {
@@ -73,6 +80,19 @@ class WindowStateBridge {
           );
         }
         return caller(method.trim(), params);
+      case 'tool.open':
+        final args = _asMap(call.arguments);
+        final type = AppWindowTypeLabel.maybeFromId(args['type'] as String?);
+        final taskId = _optionalString(args['task_id'] ?? args['taskId']);
+        final opener = _toolWindowOpener;
+        if (type == null || opener == null) {
+          throw PlatformException(
+            code: 'tool_unavailable',
+            message: 'Tool window opener is not attached',
+          );
+        }
+        await opener(AppWindowArgs(type: type, taskId: taskId));
+        return {'ok': true, 'type': type.id, 'task_id': ?taskId};
       default:
         throw PlatformException(
           code: 'unknown_method',
@@ -81,12 +101,12 @@ class WindowStateBridge {
     }
   }
 
-  Future<AppSpikeState> requestSnapshot() async {
+  Future<AppWindowState> requestSnapshot() async {
     final channel = _channel;
     if (channel == null) return store.value;
     try {
       final result = await channel.invokeMethod<Object?>('state.snapshot');
-      return AppSpikeState.fromJson(result);
+      return AppWindowState.fromJson(result);
     } on Object {
       return store.value;
     }
@@ -104,9 +124,9 @@ class WindowStateBridge {
         'state.setTranslationDefault',
         {'label': label, 'configured': configured},
       );
-      store.replace(AppSpikeState.fromJson(result));
+      store.replace(AppWindowState.fromJson(result));
     } on Object {
-      // Keep the local optimistic state; the spike UI surfaces this manually.
+      // Keep the local optimistic state; the main window refreshes from service snapshots.
     }
   }
 
@@ -119,9 +139,9 @@ class WindowStateBridge {
         'state.setAsrDefault',
         {'label': label, 'configured': configured},
       );
-      store.replace(AppSpikeState.fromJson(result));
+      store.replace(AppWindowState.fromJson(result));
     } on Object {
-      // Keep the local optimistic state; the spike UI surfaces this manually.
+      // Keep the local optimistic state; the main window refreshes from service snapshots.
     }
   }
 
@@ -140,10 +160,46 @@ class WindowStateBridge {
         message: 'Local Service caller is not attached',
       );
     }
-    return channel.invokeMethod<Object?>('service.call', {
-      'method': method,
-      'params': params,
-    });
+    try {
+      return await channel.invokeMethod<Object?>('service.call', {
+        'method': method,
+        'params': params,
+      });
+    } on WindowChannelException catch (error) {
+      throw PlatformException(
+        code: 'service_unavailable',
+        message: 'Local Service caller is not available',
+        details: error.message,
+      );
+    }
+  }
+
+  Future<void> openToolWindow(AppWindowType type, {String? taskId}) async {
+    final args = AppWindowArgs(type: type, taskId: taskId);
+    final opener = _toolWindowOpener;
+    if (opener != null) {
+      await opener(args);
+      return;
+    }
+    final channel = _channel;
+    if (channel == null) {
+      throw PlatformException(
+        code: 'tool_unavailable',
+        message: 'Tool window opener is not attached',
+      );
+    }
+    try {
+      await channel.invokeMethod<Object?>('tool.open', {
+        'type': args.type.id,
+        if (args.taskId != null) 'task_id': args.taskId,
+      });
+    } on WindowChannelException catch (error) {
+      throw PlatformException(
+        code: 'tool_unavailable',
+        message: 'Tool window opener is not available',
+        details: error.message,
+      );
+    }
   }
 
   static Map<Object?, Object?> _asMap(Object? value) {
@@ -156,6 +212,12 @@ class WindowStateBridge {
     }
     return const <String, Object?>{};
   }
+}
+
+String? _optionalString(Object? value) {
+  if (value == null) return null;
+  final text = '$value'.trim();
+  return text.isEmpty ? null : text;
 }
 
 class WindowBridgeTransport implements AppServiceTransport {

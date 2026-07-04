@@ -9,7 +9,7 @@ class PathOpenException implements Exception {
   String toString() => message;
 }
 
-class PathOpener {
+abstract class PathOpener {
   Future<void> revealFile(String path) async {
     final trimmed = path.trim();
     if (trimmed.isEmpty) {
@@ -38,3 +38,5 @@ class PathOpener {
     await Process.start('xdg-open', [trimmed]);
   }
 }
+
+class SystemPathOpener extends PathOpener {}

@@ -93,7 +93,9 @@ class _ChromeButtonState extends State<_ChromeButton> {
   @override
   Widget build(BuildContext context) {
     final hoverBg = widget.danger ? T.danger : T.accentSoft;
-    final glyphColor = _hover && widget.danger ? const Color(0xFFFFFFFF) : T.ink;
+    final glyphColor = _hover && widget.danger
+        ? const Color(0xFFFFFFFF)
+        : T.ink;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),

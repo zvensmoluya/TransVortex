@@ -1,10 +1,45 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:io';
 
-import '../model/spike_state.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
+
+import '../model/startup_args.dart';
+import '../model/task_labels.dart';
+import '../model/window_state.dart';
 import '../services/app_service_client.dart';
+import '../services/local_service_controller.dart';
+import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
 import 'title_bar.dart';
+
+class _SmokeSettingsTransport implements AppServiceTransport {
+  _SmokeSettingsTransport(this.service);
+
+  final LocalServiceController service;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    await service.start();
+    final client = service.client;
+    if (client == null) {
+      throw PlatformException(
+        code: 'service_unavailable',
+        message: '本地服务未连接，无法执行设置窗口 smoke',
+      );
+    }
+    return client.call(method, params, timeout);
+  }
+
+  @override
+  Future<void> close() => service.shutdown();
+}
 
 class SettingsWindow extends StatefulWidget {
   const SettingsWindow({
@@ -12,11 +47,13 @@ class SettingsWindow extends StatefulWidget {
     required this.type,
     required this.store,
     required this.bridge,
+    this.smoke,
   });
 
-  final SpikeWindowType type;
+  final AppWindowType type;
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final AppSmokeArgs? smoke;
 
   @override
   State<SettingsWindow> createState() => _SettingsWindowState();
@@ -28,14 +65,18 @@ class _SettingsWindowState extends State<SettingsWindow> {
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
   final _device = TextEditingController(text: 'auto');
-  late final AppServiceClient _client = AppServiceClient(
-    WindowBridgeTransport(widget.bridge),
-  );
+  final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
+  LocalServiceController? _smokeService;
+  late final AppServiceClient _client;
 
   DesktopSnapshot? _snapshot;
+  List<TaskSummary>? _diagnosticTasks;
+  TaskResultWorkspace? _diagnosticResult;
+  String? _selectedDiagnosticTaskId;
   String? _selectedProvider;
   String? _selectedModel;
   String _selectedAsrProvider = 'faster_whisper_large_v3';
+  String? _selectedDiagnosticCheck;
   String? _message;
   String? _error;
   bool _loading = false;
@@ -44,25 +85,47 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _loadingModels = false;
   bool _testingProvider = false;
   bool _savingAsr = false;
+  bool _loadingDiagnosticTasks = false;
+  bool _loadingDiagnosticResult = false;
 
-  bool get _isTranslation =>
-      widget.type == SpikeWindowType.translationSettings;
+  bool get _isTranslation => widget.type == AppWindowType.translationSettings;
+  bool get _isAsr => widget.type == AppWindowType.asrSettings;
 
   @override
   void initState() {
     super.initState();
-    widget.bridge.initializeChild();
+    _client = AppServiceClient(_settingsTransport());
+    if (widget.smoke == null) {
+      widget.bridge.initializeChild();
+    }
     _loadConfig();
   }
 
   @override
   void dispose() {
+    _smokeService?.dispose();
     _baseUrl.dispose();
     _model.dispose();
     _key.dispose();
     _endpoint.dispose();
     _device.dispose();
     super.dispose();
+  }
+
+  AppServiceTransport _settingsTransport() {
+    final smoke = widget.smoke;
+    if (smoke == null) return WindowBridgeTransport(widget.bridge);
+    final service = LocalServiceController(
+      supervisor: LocalServiceSupervisor(serviceRoot: _serviceRoot(smoke)),
+    );
+    _smokeService = service;
+    return _SmokeSettingsTransport(service);
+  }
+
+  Directory? _serviceRoot(AppSmokeArgs smoke) {
+    final root = smoke.serviceRoot;
+    if (root == null || root.isEmpty) return null;
+    return Directory(root);
   }
 
   Future<void> _loadConfig() async {
@@ -75,23 +138,127 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (!mounted) return;
       setState(() {
         _snapshot = snapshot;
+        if (widget.type == AppWindowType.diagnostics) {
+          _diagnosticTasks = null;
+          _diagnosticResult = null;
+          _selectedDiagnosticTaskId = null;
+        }
         if (_isTranslation) {
-          _selectedProvider = snapshot.translationProvider ??
-              (snapshot.providers.isNotEmpty ? snapshot.providers.first.name : null);
-          _selectedModel = snapshot.translationModel;
+          final routedProvider = snapshot.translationProvider;
+          final routedProviderExists =
+              routedProvider != null &&
+              snapshot.providers.any(
+                (provider) => provider.name == routedProvider,
+              );
+          _selectedProvider = routedProviderExists
+              ? routedProvider
+              : (snapshot.providers.isNotEmpty
+                    ? snapshot.providers.first.name
+                    : null);
+          final selectedProvider = _providerByName(snapshot, _selectedProvider);
+          _selectedModel = routedProviderExists
+              ? snapshot.translationModel
+              : (selectedProvider.models.isNotEmpty
+                    ? selectedProvider.models.first
+                    : null);
           _loadProviderDraftFields();
-        } else {
-          _selectedAsrProvider =
-              snapshot.asrProviderName ?? 'faster_whisper_large_v3';
+        } else if (_isAsr) {
+          _selectedAsrProvider = _asrSelectionIdForProvider(
+            snapshot,
+            snapshot.asrProviderName,
+          );
           _loadAsrDraftFields();
+        } else if (widget.type == AppWindowType.diagnostics) {
+          _selectedDiagnosticCheck = _defaultDiagnosticSelection(snapshot);
         }
       });
       _syncMainLabels(snapshot);
+      if (widget.smoke != null) {
+        if (mounted) setState(() => _loading = false);
+        await _writeSettingsSmokeReport(snapshot);
+      }
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() {
+        _error = _friendlySettingsError(error);
+        _loading = false;
+      });
+      if (widget.smoke != null) {
+        await _writeSettingsSmokeReport(null, error: error);
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _writeSettingsSmokeReport(
+    DesktopSnapshot? snapshot, {
+    Object? error,
+  }) async {
+    final smoke = widget.smoke;
+    if (smoke == null) return;
+    final reportFile = File(smoke.reportPath);
+    await reportFile.parent.create(recursive: true);
+    final provider = _selectedProvider;
+    final selectedProviderOption = snapshot == null || provider == null
+        ? null
+        : _providerByName(snapshot, provider);
+    final selectedAsr = _selectedAsrProvider;
+    final diagnosticReport = _diagnosticReport(snapshot);
+    final diagnosticChecks = _diagnosticChecks(snapshot);
+    final payload = <String, Object?>{
+      'ok': error == null && snapshot != null,
+      'status': error == null ? 'ready' : 'error',
+      'window_type': widget.type.id,
+      'title': widget.type.title,
+      'translation_label': snapshot?.configReadiness.translationLabel ?? '',
+      'asr_label': snapshot?.configReadiness.asrLabel ?? '',
+      'provider_count': snapshot?.providers.length ?? 0,
+      'asr_provider_count': snapshot?.asrProviders.length ?? 0,
+      'selected_provider': provider ?? '',
+      'selected_model': _selectedModel ?? _model.text.trim(),
+      'selected_provider_model_count':
+          selectedProviderOption?.models.length ?? 0,
+      'selected_asr_provider': selectedAsr,
+      'diagnostic_status': _diagnosticStatus(snapshot),
+      'diagnostic_check_count': diagnosticChecks.length,
+      'diagnostic_fail_count': _diagnosticCount(diagnosticChecks, 'FAIL'),
+      'diagnostic_warn_count': _diagnosticCount(diagnosticChecks, 'WARN'),
+      'diagnostic_root_dir': _stringValue(diagnosticReport['root_dir']) ?? '',
+      'diagnostic_active_task': _diagnosticActiveTaskId(snapshot) ?? '',
+      'diagnostic_task_count': snapshot?.tasks.length ?? 0,
+      'diagnostic_queued_count': _diagnosticRuntimeIds(
+        snapshot,
+        'queued',
+      ).length,
+      'diagnostic_interrupted_count': _diagnosticRuntimeIds(
+        snapshot,
+        'interrupted',
+      ).length,
+      'error': error == null ? '' : '$error',
+      'finished_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    payload.addAll(
+      await captureSmokeRender(
+        boundaryKey: _renderKey,
+        path: smoke.screenshotPath,
+      ),
+    );
+    if (smoke.screenshotPath != null) {
+      payload['ok'] =
+          payload['ok'] == true && payload['render_capture_ok'] == true;
+    }
+    await reportFile.writeAsString(jsonEncode(payload), encoding: utf8);
+    final hold = smoke.postReportVisibleDuration;
+    if (hold > Duration.zero) {
+      await Future<void>.delayed(hold);
+    }
+    if (!mounted) return;
+    try {
+      await _smokeService?.shutdown();
+      await windowManager.close();
+    } on Object {
+      exit(0);
     }
   }
 
@@ -109,20 +276,47 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   @override
   Widget build(BuildContext context) {
-    final title = _isTranslation ? '翻译模型设置' : '语音识别设置';
-    final status = _isTranslation ? '配好模型服务，选定默认模型' : '视频没有现成字幕时，用它把语音转成字幕';
-    return Scaffold(
-      backgroundColor: T.bg,
-      body: Column(
-        children: [
-          TitleBar(title: title, status: status),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
-              child: _isTranslation ? _translationBody() : _asrBody(),
+    final title = switch (widget.type) {
+      AppWindowType.translationSettings => '翻译模型设置',
+      AppWindowType.asrSettings => '语音识别设置',
+      AppWindowType.diagnostics => '诊断',
+      AppWindowType.resultReview => '结果审看',
+      AppWindowType.taskHistory => '任务历史',
+      AppWindowType.taskDetail => '任务详情',
+      AppWindowType.main => 'TransVortex',
+    };
+    final status = switch (widget.type) {
+      AppWindowType.translationSettings => '配好模型服务，选定默认模型',
+      AppWindowType.asrSettings => '视频没有现成字幕时，用它把语音转成字幕',
+      AppWindowType.diagnostics => '检查本机运行环境、配置和翻译服务协议',
+      AppWindowType.resultReview => '读取完成任务的字幕片段',
+      AppWindowType.taskHistory => '查看最近任务，不占主窗口',
+      AppWindowType.taskDetail => '查看任务事件和上下文',
+      AppWindowType.main => '',
+    };
+    return RepaintBoundary(
+      key: _renderKey,
+      child: Scaffold(
+        backgroundColor: T.bg,
+        body: Column(
+          children: [
+            TitleBar(title: title, status: status),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
+                child: switch (widget.type) {
+                  AppWindowType.translationSettings => _translationBody(),
+                  AppWindowType.asrSettings => _asrBody(),
+                  AppWindowType.diagnostics => _diagnosticsBody(),
+                  AppWindowType.resultReview => _diagnosticsBody(),
+                  AppWindowType.taskHistory => _diagnosticsBody(),
+                  AppWindowType.taskDetail => _diagnosticsBody(),
+                  AppWindowType.main => _diagnosticsBody(),
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -135,9 +329,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _DefaultBar(
-          text: selected == null || _selectedModel == null
-              ? '还没选默认模型'
-              : '翻译默认：$selected · $_selectedModel',
+          text: _translationDefaultText(snapshot),
           busy: _loading || _savingDefault,
           error: _error,
           message: _message,
@@ -169,34 +361,53 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final provider = _selectedProvider == null || _snapshot == null
         ? const ProviderOption(name: '', models: [])
         : _providerByName(_snapshot!, _selectedProvider);
-    final model = _selectedModel ?? _model.text.trim();
+    final model = _translationModelSelection(provider);
     return _ToolPanel(
+      footer: [
+        _ActionButton(
+          label: _savingDefault ? '保存中' : '设为翻译默认',
+          strong: true,
+          onTap: _savingDefault ? null : _saveTranslationDefault,
+        ),
+        _ActionButton(
+          label: _loading ? '刷新中' : '刷新配置',
+          onTap: _loading ? null : _loadConfig,
+        ),
+      ],
+      footnote: '密钥只写入用户级凭据；服务配置只保存凭据引用、服务地址和模型名。',
       children: [
         Text(
-          provider.name.isEmpty ? '选择一个供应商' : provider.name,
+          provider.name.isEmpty ? '选择一个翻译服务' : provider.name,
           style: T.tSection,
         ),
         const SizedBox(height: T.s16),
-        _ReadonlyRow(label: '协议格式', value: provider.apiType.isEmpty ? 'openai-compatible' : provider.apiType),
+        _ReadonlyRow(
+          label: '协议格式',
+          value: _translationProtocolLabel(provider.apiType),
+        ),
         const SizedBox(height: T.s12),
-        _Input(label: 'Base URL', controller: _baseUrl),
+        _Input(label: '服务地址 (Base URL)', controller: _baseUrl),
         const SizedBox(height: T.s12),
-        _Input(label: 'API key（留空则沿用已保存凭据）', controller: _key, obscure: true),
+        _Input(
+          label: '密钥 (API key，留空则沿用已保存凭据)',
+          controller: _key,
+          obscure: true,
+        ),
         const SizedBox(height: T.s16),
-        Row(
+        Wrap(
+          spacing: T.s12,
+          runSpacing: T.s8,
           children: [
             _ActionButton(
               label: _loadingModels ? '拉取中' : '拉取模型列表',
               onTap: _loadingModels ? null : _fetchModels,
             ),
-            const SizedBox(width: T.s12),
             _ActionButton(
               label: _testingProvider ? '测试中' : '测试连接',
               onTap: _testingProvider ? null : _testProvider,
             ),
-            const SizedBox(width: T.s12),
             _ActionButton(
-              label: _savingProvider ? '保存中' : '保存供应商',
+              label: _savingProvider ? '保存中' : '保存翻译服务',
               onTap: _savingProvider ? null : _saveProvider,
             ),
           ],
@@ -215,32 +426,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
                 onTap: () {
                   setState(() {
                     _selectedModel = item;
-                    _model.text = item;
+                    _model.clear();
                   });
                 },
               ),
-            _InlineTextField(controller: _model, hint: '手动填写模型名'),
-          ],
-        ),
-        const SizedBox(height: T.s16),
-        Row(
-          children: [
-            _ActionButton(
-              label: _savingDefault ? '保存中' : '设为翻译默认',
-              strong: true,
-              onTap: _savingDefault ? null : _saveTranslationDefault,
-            ),
-            const SizedBox(width: T.s12),
-            _ActionButton(
-              label: _loading ? '刷新中' : '刷新配置',
-              onTap: _loading ? null : _loadConfig,
+            _InlineTextField(
+              controller: _model,
+              hint: provider.models.isEmpty ? '填写模型名' : '自定义模型名',
             ),
           ],
-        ),
-        const SizedBox(height: T.s8),
-        const Text(
-          'API key 写入用户级 auth.json；provider YAML 只保存 credential_id、base_url 和模型名。',
-          style: T.tCaption,
         ),
       ],
     );
@@ -289,68 +483,123 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final draft = _asrDraft(_selectedAsrProvider);
     final kind = '${draft['kind']}';
     return _ToolPanel(
+      footer: [
+        _ActionButton(
+          label: _savingAsr ? '保存中' : '保存识别默认',
+          strong: true,
+          onTap: _savingAsr ? null : _saveAsrProvider,
+        ),
+        _ActionButton(
+          label: _loading ? '刷新中' : '刷新配置',
+          onTap: _loading ? null : _loadConfig,
+        ),
+      ],
+      footnote: '本机和 FunASR 不需要密钥；云端密钥只写入用户级凭据。',
       children: [
         Text(_asrLabelForDraft(draft), style: T.tSection),
         const SizedBox(height: T.s12),
         if (kind == 'local_inprocess') ...[
           Row(
             children: [
-              Expanded(child: _Input(label: '模型规格', controller: _model)),
+              Expanded(
+                child: _Input(label: '模型规格', controller: _model),
+              ),
               const SizedBox(width: T.s12),
-              Expanded(child: _Input(label: '运算设备', controller: _device)),
+              Expanded(
+                child: _Input(label: '运算设备', controller: _device),
+              ),
             ],
           ),
           const SizedBox(height: T.s12),
-          const Text('保存后由诊断入口确认模型和 GPU 可用性。', style: T.tCaption),
+          const Text('保存后可在诊断入口确认本机语音识别依赖和当前配置。', style: T.tCaption),
         ] else ...[
           Row(
             children: [
               Expanded(
                 child: _Input(
-                  label: kind == 'local_server' ? '本地服务地址' : 'Base URL',
+                  label: kind == 'local_server' ? '本地服务地址' : '服务地址 (Base URL)',
                   controller: _baseUrl,
                 ),
               ),
               const SizedBox(width: T.s12),
-              Expanded(child: _Input(label: '模型', controller: _model)),
+              Expanded(
+                child: _Input(label: '模型', controller: _model),
+              ),
             ],
           ),
           const SizedBox(height: T.s12),
           Row(
             children: [
-              Expanded(child: _Input(label: 'Endpoint', controller: _endpoint)),
+              Expanded(
+                child: _Input(label: '接口路径 (Endpoint)', controller: _endpoint),
+              ),
               const SizedBox(width: T.s12),
               Expanded(
                 child: kind == 'remote'
                     ? _Input(
-                        label: 'API key（留空则沿用）',
+                        label: '密钥 (API key，留空则沿用)',
                         controller: _key,
                         obscure: true,
                       )
-                    : const _ReadonlyRow(label: 'API key', value: '本地服务不需要 key'),
+                    : const _ReadonlyRow(label: '密钥', value: '本地服务不需要密钥'),
               ),
             ],
           ),
         ],
-        const SizedBox(height: T.s12),
-        Row(
-          children: [
-            _ActionButton(
-              label: _savingAsr ? '保存中' : '保存识别默认',
-              strong: true,
-              onTap: _savingAsr ? null : _saveAsrProvider,
-            ),
-            const SizedBox(width: T.s12),
-            _ActionButton(
-              label: _loading ? '刷新中' : '刷新配置',
-              onTap: _loading ? null : _loadConfig,
-            ),
-          ],
+      ],
+    );
+  }
+
+  Widget _diagnosticsBody() {
+    final snapshot = _snapshot;
+    final checks = _diagnosticChecks(snapshot);
+    final report = _diagnosticReport(snapshot);
+    final selected = _selectedDiagnostic(checks);
+    final selectedName = selected == null ? null : _diagnosticId(selected);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DefaultBar(
+          text: _diagnosticHeader(snapshot),
+          busy: _loading,
+          error: _error,
+          message: _message,
         ),
-        const SizedBox(height: T.s8),
-        const Text(
-          '本机和 FunASR 不需要 key；云端 key 写入用户级 auth.json。',
-          style: T.tCaption,
+        const SizedBox(height: T.s16),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 230,
+                child: _DiagnosticSummaryList(
+                  checks: checks,
+                  selectedName: selectedName,
+                  onPick: _pickDiagnosticCheck,
+                ),
+              ),
+              const SizedBox(width: T.s32),
+              Expanded(
+                child: _DiagnosticDetails(
+                  snapshot: snapshot,
+                  tasks: _diagnosticTasks,
+                  selectedTaskId: _selectedDiagnosticTaskId,
+                  result: _diagnosticResult,
+                  report: report,
+                  checks: checks,
+                  highlighted: selected,
+                  onRefresh: _loading ? null : _loadConfig,
+                  onRefreshTasks: _loadingDiagnosticTasks
+                      ? null
+                      : _loadDiagnosticTasks,
+                  onOpenResult: _loadingDiagnosticResult
+                      ? null
+                      : _openDiagnosticResult,
+                  onOpenTool: _openDiagnosticTool,
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -374,17 +623,46 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final provider = snapshot == null
         ? const ProviderOption(name: '', models: [])
         : _providerByName(snapshot, _selectedProvider);
-    final model = _selectedModel ?? snapshot?.translationModel;
+    final model =
+        _selectedProvider != null &&
+            _selectedProvider == snapshot?.translationProvider
+        ? _selectedModel ?? snapshot?.translationModel
+        : _selectedModel;
     _baseUrl.text = provider.baseUrl;
-    _model.text = model ?? (provider.models.isNotEmpty ? provider.models.first : '');
+    final selectedModel =
+        model ?? (provider.models.isNotEmpty ? provider.models.first : '');
+    if (selectedModel.isNotEmpty && provider.models.contains(selectedModel)) {
+      _selectedModel = selectedModel;
+      _model.clear();
+    } else {
+      _model.text = selectedModel;
+    }
     _key.clear();
+  }
+
+  String _translationDefaultText(DesktopSnapshot? snapshot) {
+    final provider = snapshot?.translationProvider;
+    final model = snapshot?.translationModel;
+    if (provider == null || provider.isEmpty) return '还没选默认模型';
+    final label = model == null || model.isEmpty
+        ? provider
+        : '$provider · $model';
+    if (snapshot?.configReadiness.translationConfigured == true) {
+      return '翻译默认：$label';
+    }
+    final providerExists =
+        snapshot?.providers.any((item) => item.name == provider) ?? false;
+    return providerExists ? '翻译默认需配置：$label' : '还没选默认模型';
   }
 
   Future<void> _saveProvider() async {
     final provider = _selectedProvider;
-    final model = _model.text.trim();
+    final providerOption = _snapshot == null || provider == null
+        ? const ProviderOption(name: '', models: [])
+        : _providerByName(_snapshot!, provider);
+    final model = _translationModelSelection(providerOption);
     if (provider == null || provider.isEmpty) {
-      setState(() => _error = '需要先选择供应商');
+      setState(() => _error = '需要先选择翻译服务');
       return;
     }
     if (model.isEmpty) {
@@ -398,7 +676,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
     });
     try {
       await _client.providerSave(
-        providerDraft: _translationDraft(providerName: provider, models: _mergedModels(model)),
+        providerDraft: _translationDraft(
+          providerName: provider,
+          models: _mergedModels(model),
+        ),
         apiKey: _keyTextOrNull(),
         expectedVersion: _snapshot?.providersFileVersion,
       );
@@ -406,10 +687,14 @@ class _SettingsWindowState extends State<SettingsWindow> {
       await _saveRouting(provider, model);
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _message = '供应商已保存，并已设为当前翻译默认。');
+      setState(() {
+        _selectedModel = model;
+        if (providerOption.models.contains(model)) _model.clear();
+        _message = '翻译服务已保存，并已设为当前翻译默认。';
+      });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _savingProvider = false);
     }
@@ -417,11 +702,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   Future<void> _saveTranslationDefault() async {
     final provider = _selectedProvider;
-    final model = _model.text.trim().isNotEmpty
-        ? _model.text.trim()
-        : _selectedModel;
-    if (provider == null || provider.isEmpty || model == null || model.isEmpty) {
-      setState(() => _error = '需要先选择供应商和模型');
+    final providerOption = _snapshot == null || provider == null
+        ? const ProviderOption(name: '', models: [])
+        : _providerByName(_snapshot!, provider);
+    final model = _translationModelSelection(providerOption);
+    if (provider == null || provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先选择翻译服务和模型');
       return;
     }
     setState(() {
@@ -433,10 +719,14 @@ class _SettingsWindowState extends State<SettingsWindow> {
       await _saveRouting(provider, model);
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _message = '默认翻译已切换到 $provider · $model。');
+      setState(() {
+        _selectedModel = model;
+        if (providerOption.models.contains(model)) _model.clear();
+        _message = '默认翻译已切换到 $provider · $model。';
+      });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _savingDefault = false);
     }
@@ -456,7 +746,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   Future<void> _fetchModels() async {
     final provider = _selectedProvider;
     if (provider == null || provider.isEmpty) {
-      setState(() => _error = '需要先选择供应商');
+      setState(() => _error = '需要先选择翻译服务');
       return;
     }
     setState(() {
@@ -474,7 +764,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       setState(() {
         if (models.isNotEmpty) {
           _selectedModel = models.first;
-          _model.text = models.first;
+          _model.clear();
           _message = '已拉取到 ${models.length} 个模型，已选中第一个。';
         } else {
           _message = _stringValue(result['hint_zh']) ?? '没有解析到模型，可以手动填写模型名。';
@@ -482,7 +772,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _loadingModels = false);
     }
@@ -490,9 +780,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   Future<void> _testProvider() async {
     final provider = _selectedProvider;
-    final model = _model.text.trim();
+    final providerOption = _snapshot == null || provider == null
+        ? const ProviderOption(name: '', models: [])
+        : _providerByName(_snapshot!, provider);
+    final model = _translationModelSelection(providerOption);
     if (provider == null || provider.isEmpty || model.isEmpty) {
-      setState(() => _error = '需要先选择供应商和模型');
+      setState(() => _error = '需要先选择翻译服务和模型');
       return;
     }
     setState(() {
@@ -502,20 +795,26 @@ class _SettingsWindowState extends State<SettingsWindow> {
     });
     try {
       final result = await _client.providerTest(
-        providerDraft: _translationDraft(providerName: provider, models: _mergedModels(model)),
+        providerDraft: _translationDraft(
+          providerName: provider,
+          models: _mergedModels(model),
+        ),
         model: model,
         apiKey: _keyTextOrNull(),
       );
       final status = _stringValue(result['status']) ?? 'UNKNOWN';
       final checks = _objectList(result['checks']);
-      final first = checks.isEmpty ? const <String, Object?>{} : _stringMap(checks.first);
+      final first = checks.isEmpty
+          ? const <String, Object?>{}
+          : _stringMap(checks.first);
       if (!mounted) return;
       setState(() {
-        _message = '$status：${_stringValue(first['hint_zh']) ?? _stringValue(first['message']) ?? '连接测试完成'}';
+        _message =
+            '$status：${_stringValue(first['hint_zh']) ?? _stringValue(first['message']) ?? '连接测试完成'}';
       });
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _testingProvider = false);
     }
@@ -538,12 +837,27 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return {
       ...provider.raw,
       'name': providerName,
-      'base_url': _baseUrl.text.trim().isNotEmpty ? _baseUrl.text.trim() : provider.baseUrl,
-      'models': models ?? _mergedModels(_model.text.trim()),
-      'compat_mode': provider.compatMode.isNotEmpty ? provider.compatMode : 'openai_chat',
-      'api_type': provider.apiType.isNotEmpty ? provider.apiType : 'openai-compatible',
-      'credential_id': provider.credentialId.isNotEmpty ? provider.credentialId : providerName,
+      'base_url': _baseUrl.text.trim().isNotEmpty
+          ? _baseUrl.text.trim()
+          : provider.baseUrl,
+      'models': models ?? _mergedModels(_translationModelSelection(provider)),
+      'compat_mode': provider.compatMode.isNotEmpty
+          ? provider.compatMode
+          : 'openai_chat',
+      'api_type': provider.apiType.isNotEmpty
+          ? provider.apiType
+          : 'openai-compatible',
+      'credential_id': provider.credentialId.isNotEmpty
+          ? provider.credentialId
+          : providerName,
     };
+  }
+
+  String _translationModelSelection(ProviderOption provider) {
+    final customModel = _model.text.trim();
+    if (customModel.isNotEmpty) return customModel;
+    return _selectedModel ??
+        (provider.models.isNotEmpty ? provider.models.first : '');
   }
 
   List<String> _mergedModels(String model) {
@@ -579,7 +893,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _saveAsrProvider() async {
-    final providerName = _selectedAsrProvider;
+    final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
     setState(() {
       _savingAsr = true;
       _error = null;
@@ -594,23 +908,36 @@ class _SettingsWindowState extends State<SettingsWindow> {
         apiKey: _keyTextOrNull(),
         expectedVersion: latest.pipelineFileVersion,
       );
-      await widget.bridge.setAsrDefault(_asrLabelForDraft(draft), configured: true);
+      await widget.bridge.setAsrDefault(
+        _asrLabelForDraft(draft),
+        configured: true,
+      );
       await _loadConfig();
       if (!mounted) return;
       setState(() => _message = '识别默认已保存：${_asrLabelForDraft(draft)}。');
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = '$error');
+      setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _savingAsr = false);
     }
   }
 
-  Map<String, Object?> _asrDraft(String providerName, {bool useEditedFields = true}) {
-    final existing = _snapshot == null ? null : _asrProviderByName(_snapshot!, providerName);
+  Map<String, Object?> _asrDraft(
+    String selectedProvider, {
+    bool useEditedFields = true,
+  }) {
+    final providerName = _asrProviderNameForSelection(selectedProvider);
+    final existing = _snapshot == null
+        ? null
+        : _asrProviderByName(_snapshot!, providerName);
     final hasExisting = existing != null && existing.name.isNotEmpty;
-    final kind = hasExisting ? existing.kind : _defaultAsrKind(providerName);
-    final protocol = hasExisting ? existing.protocol : _defaultAsrProtocol(kind, providerName);
+    final kind = hasExisting
+        ? existing.kind
+        : _defaultAsrKind(selectedProvider);
+    final protocol = hasExisting
+        ? existing.protocol
+        : _defaultAsrProtocol(kind, selectedProvider);
     final editedModel = useEditedFields ? _model.text.trim() : '';
     final editedBaseUrl = useEditedFields ? _baseUrl.text.trim() : '';
     final editedEndpoint = useEditedFields ? _endpoint.text.trim() : '';
@@ -622,11 +949,19 @@ class _SettingsWindowState extends State<SettingsWindow> {
         : (hasExisting ? existing.baseUrl : _defaultAsrBaseUrl(kind, protocol));
     final endpoint = editedEndpoint.isNotEmpty
         ? editedEndpoint
-        : (hasExisting && existing.endpoint.isNotEmpty ? existing.endpoint : '/v1/audio/transcriptions');
-    final auth = hasExisting ? _stringMap(existing.raw['auth']) : const <String, Object?>{};
-    final local = hasExisting ? Map<String, Object?>.from(_stringMap(existing.raw['local'])) : <String, Object?>{};
+        : (hasExisting && existing.endpoint.isNotEmpty
+              ? existing.endpoint
+              : '/v1/audio/transcriptions');
+    final auth = hasExisting
+        ? _stringMap(existing.raw['auth'])
+        : const <String, Object?>{};
+    final local = hasExisting
+        ? Map<String, Object?>.from(_stringMap(existing.raw['local']))
+        : <String, Object?>{};
     local['model_size'] = model;
-    local['device'] = _device.text.trim().isEmpty ? 'auto' : _device.text.trim();
+    local['device'] = _device.text.trim().isEmpty
+        ? 'auto'
+        : _device.text.trim();
     return {
       if (hasExisting) ...existing.raw,
       'name': providerName,
@@ -638,7 +973,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (kind == 'remote')
         'auth': auth.isNotEmpty
             ? auth
-            : {'type': 'bearer', 'env_key': 'OPENAI_API_KEY', 'credential_id': providerName}
+            : {
+                'type': 'bearer',
+                'env_key': 'OPENAI_API_KEY',
+                'credential_id': providerName,
+              }
       else
         'auth': {'type': 'none'},
       if (kind == 'local_inprocess') 'local': local,
@@ -657,16 +996,65 @@ class _SettingsWindowState extends State<SettingsWindow> {
     );
   }
 
+  String _asrProviderNameForSelection(String selected) {
+    final snapshot = _snapshot;
+    if (snapshot != null) {
+      final selectedExisting = _asrProviderByName(snapshot, selected);
+      if (selectedExisting.name.isNotEmpty) return selectedExisting.name;
+      for (final provider in snapshot.asrProviders) {
+        if (_asrPresetIdFor(provider) == selected) return provider.name;
+      }
+    }
+    return selected;
+  }
+
+  String _asrSelectionIdForProvider(DesktopSnapshot snapshot, String? name) {
+    if (name == null || name.isEmpty) return 'faster_whisper_large_v3';
+    final provider = _asrProviderByName(snapshot, name);
+    return provider.name.isEmpty
+        ? _asrPresetIdForName(name)
+        : _asrPresetIdFor(provider);
+  }
+
+  String _asrPresetIdFor(AsrProviderOption provider) {
+    if (provider.kind == 'local_inprocess') return 'faster_whisper_large_v3';
+    if (provider.kind == 'local_server' ||
+        provider.protocol == 'funasr_openai') {
+      return 'funasr_sensevoice_local';
+    }
+    return 'openai_whisper';
+  }
+
   String _defaultAsrKind(String providerName) {
-    if (providerName == 'faster_whisper_large_v3') return 'local_inprocess';
-    if (providerName == 'funasr_sensevoice_local') return 'local_server';
+    final preset = _asrPresetIdForName(providerName);
+    if (preset == 'faster_whisper_large_v3') return 'local_inprocess';
+    if (preset == 'funasr_sensevoice_local') return 'local_server';
     return 'remote';
   }
 
   String _defaultAsrProtocol(String kind, String providerName) {
     if (kind == 'local_inprocess') return 'faster_whisper';
-    if (providerName == 'funasr_sensevoice_local') return 'funasr_openai';
+    if (kind == 'local_server' ||
+        _asrPresetIdForName(providerName) == 'funasr_sensevoice_local') {
+      return 'funasr_openai';
+    }
     return 'openai_transcriptions';
+  }
+
+  String _asrPresetIdForName(String providerName) {
+    final lower = providerName.toLowerCase();
+    if (providerName == 'faster_whisper_large_v3' ||
+        lower == 'local' ||
+        lower.contains('faster_whisper') ||
+        lower.contains('faster-whisper')) {
+      return 'faster_whisper_large_v3';
+    }
+    if (providerName == 'funasr_sensevoice_local' ||
+        lower.contains('funasr') ||
+        lower.contains('sensevoice')) {
+      return 'funasr_sensevoice_local';
+    }
+    return 'openai_whisper';
   }
 
   String _defaultAsrModel(String kind, String protocol) {
@@ -685,7 +1073,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String _asrLabelForDraft(Map<String, Object?> draft) {
     return switch (draft['kind']) {
       'local_inprocess' => '本机',
-      'local_server' => draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
+      'local_server' =>
+        draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
       'remote' => '云端',
       _ => '${draft['name']}',
     };
@@ -700,6 +1089,433 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final text = _key.text.trim();
     return text.isEmpty ? null : text;
   }
+
+  Map<String, Object?> _diagnosticReport(DesktopSnapshot? snapshot) {
+    return _stringMap(snapshot?.environment);
+  }
+
+  List<Map<String, Object?>> _diagnosticChecks(DesktopSnapshot? snapshot) {
+    return _objectList(
+      _diagnosticReport(snapshot)['checks'],
+    ).map(_stringMap).where((check) => check.isNotEmpty).toList();
+  }
+
+  String _diagnosticStatus(DesktopSnapshot? snapshot) {
+    final status = _stringValue(_diagnosticReport(snapshot)['status']);
+    return status == null || status.isEmpty ? 'UNKNOWN' : status;
+  }
+
+  String _diagnosticHeader(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return '诊断：等待服务';
+    final checks = _diagnosticChecks(snapshot);
+    final fail = _diagnosticCount(checks, 'FAIL');
+    final warn = _diagnosticCount(checks, 'WARN');
+    final pass = _diagnosticCount(checks, 'PASS');
+    return '诊断：${_diagnosticStatusLabel(_diagnosticStatus(snapshot))} · 通过 $pass / 警告 $warn / 失败 $fail';
+  }
+
+  String? _defaultDiagnosticSelection(DesktopSnapshot snapshot) {
+    final checks = _diagnosticChecks(snapshot);
+    if (checks.isEmpty) return null;
+    final current = _selectedDiagnosticCheck;
+    if (current != null &&
+        checks.any((check) => _diagnosticId(check) == current)) {
+      return current;
+    }
+    for (final check in checks) {
+      final status = _diagnosticCheckStatus(check);
+      if (status == 'FAIL' || status == 'WARN') {
+        return _diagnosticId(check);
+      }
+    }
+    return _diagnosticId(checks.first);
+  }
+
+  Map<String, Object?>? _selectedDiagnostic(List<Map<String, Object?>> checks) {
+    if (checks.isEmpty) return null;
+    final selectedName = _selectedDiagnosticCheck;
+    if (selectedName != null) {
+      for (final check in checks) {
+        if (_diagnosticId(check) == selectedName) return check;
+      }
+    }
+    return checks.first;
+  }
+
+  void _pickDiagnosticCheck(String name) {
+    setState(() {
+      _selectedDiagnosticCheck = name;
+      _message = null;
+      _error = null;
+    });
+  }
+
+  Future<void> _openDiagnosticTool(AppWindowType type) async {
+    try {
+      await widget.bridge.openToolWindow(type);
+      if (!mounted) return;
+      setState(() {
+        _message = '已打开${type.title}';
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = null;
+        _error = '打开${type.title}失败：${_friendlySettingsError(error)}';
+      });
+    }
+  }
+
+  Future<void> _loadDiagnosticTasks() async {
+    setState(() {
+      _loadingDiagnosticTasks = true;
+      _message = null;
+      _error = null;
+    });
+    try {
+      final tasks = await _client.taskList();
+      if (!mounted) return;
+      setState(() {
+        _diagnosticTasks = tasks;
+        _message = '已读取 ${tasks.length} 个最近任务。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _loadingDiagnosticTasks = false);
+    }
+  }
+
+  Future<void> _openDiagnosticResult(TaskSummary task) async {
+    if (!task.isDone) return;
+    setState(() {
+      _loadingDiagnosticResult = true;
+      _selectedDiagnosticTaskId = task.taskId;
+      _diagnosticResult = null;
+      _message = null;
+      _error = null;
+    });
+    try {
+      final result = await _client.openTaskResult(task.taskId);
+      if (!mounted) return;
+      setState(() {
+        _diagnosticResult = result;
+        _message = '已读取结果摘要。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _loadingDiagnosticResult = false);
+    }
+  }
+}
+
+int _diagnosticCount(List<Map<String, Object?>> checks, String status) {
+  return checks
+      .where((check) => _diagnosticCheckStatus(check) == status)
+      .length;
+}
+
+String _diagnosticCheckStatus(Map<String, Object?> check) {
+  final status = _stringValue(check['status'])?.toUpperCase();
+  return status == null || status.isEmpty ? 'UNKNOWN' : status;
+}
+
+String _diagnosticName(Map<String, Object?> check) {
+  return _stringValue(check['name']) ?? 'unknown';
+}
+
+String _diagnosticId(Map<String, Object?> check) {
+  return _stringValue(check['name']) ??
+      _stringValue(check['code']) ??
+      _diagnosticMessage(check);
+}
+
+String _diagnosticDisplayName(Map<String, Object?> check) {
+  final name = _diagnosticName(check);
+  final code = _stringValue(check['code']) ?? '';
+  final key = '$name $code'.toLowerCase();
+  if (key.contains('python')) return 'Python';
+  if (key.contains('transvortex_package')) return 'TransVortex 包';
+  if (key.contains('faster_whisper')) return '本机识别依赖';
+  if (key.contains('ffmpeg')) return 'FFmpeg';
+  if (key.contains('ffprobe')) return 'FFprobe';
+  if (key.contains('providers_file')) return '翻译配置文件';
+  if (key.contains('artifacts')) return '产物目录';
+  if (key.contains('asr_provider')) return '语音识别配置';
+  if (key.contains('provider')) return '翻译服务配置';
+  return name == 'unknown' ? '检查项' : name;
+}
+
+String _diagnosticStatusLabel(String status) {
+  return switch (status.toUpperCase()) {
+    'PASS' => '通过',
+    'WARN' => '警告',
+    'FAIL' => '失败',
+    _ => '未知',
+  };
+}
+
+String _diagnosticCodeLabel(String code) {
+  final lower = code.toLowerCase();
+  if (lower.contains('python_found')) return 'Python 可用';
+  if (lower.contains('python_missing')) return 'Python 不可用';
+  if (lower.contains('faster_whisper')) {
+    return lower.contains('missing')
+        ? 'faster-whisper 缺失'
+        : 'faster-whisper 可用';
+  }
+  if (lower.contains('ffmpeg')) {
+    return lower.contains('missing') ? 'FFmpeg 缺失' : 'FFmpeg 可用';
+  }
+  if (lower.contains('ffprobe')) {
+    return lower.contains('missing') ? 'FFprobe 缺失' : 'FFprobe 可用';
+  }
+  if (lower.contains('providers_file')) {
+    return lower.contains('missing') ? '翻译配置缺失' : '翻译配置可用';
+  }
+  if (lower.contains('artifacts')) {
+    return lower.contains('missing') ? '产物目录不可用' : '产物目录可用';
+  }
+  if (lower.contains('asr_provider')) {
+    return lower.contains('missing') ? '识别配置缺失' : '识别配置可用';
+  }
+  return code;
+}
+
+String _diagnosticHint(Map<String, Object?> check) {
+  return _localizeDiagnosticText(
+    _stringValue(check['hint_zh']) ??
+        _stringValue(check['hint']) ??
+        _diagnosticMessage(check),
+  );
+}
+
+String _diagnosticMessage(Map<String, Object?> check) {
+  final message = _stringValue(check['message']);
+  if (message == null || message.isEmpty) return '暂无详情';
+  final lower = message.toLowerCase();
+  if (lower == 'python is available') return 'Python 已可用。';
+  if (lower.contains('faster-whisper') && lower.contains('required')) {
+    return '本机识别需要安装 faster-whisper。';
+  }
+  if (lower.contains('transvortex package') && lower.contains('import')) {
+    return 'TransVortex 包已可用。';
+  }
+  if (lower.contains('ffmpeg') && lower.contains('available')) {
+    return 'FFmpeg 已可用。';
+  }
+  if (lower.contains('ffprobe') && lower.contains('available')) {
+    return 'FFprobe 已可用。';
+  }
+  return _localizeDiagnosticText(message);
+}
+
+String _localizeDiagnosticText(String text) {
+  return text
+      .replaceAll('ASR provider', '语音识别配置')
+      .replaceAll('asr provider', '语音识别配置')
+      .replaceAll('本地 ASR', '本机语音识别')
+      .replaceAll('本机 ASR', '本机语音识别')
+      .replaceAll('本机语音识别 需要', '本机语音识别需要')
+      .replaceAll('provider 配置文件', '翻译配置文件')
+      .replaceAll('Provider 配置文件', '翻译配置文件')
+      .replaceAll('provider 配置', '翻译服务配置')
+      .replaceAll('Provider 配置', '翻译服务配置')
+      .replaceAll('artifacts 目录', '产物目录')
+      .replaceAll('Artifacts 目录', '产物目录');
+}
+
+AppWindowType? _diagnosticRepairTarget(Map<String, Object?> check) {
+  final haystack = [
+    _diagnosticName(check),
+    _stringValue(check['code']) ?? '',
+    _diagnosticMessage(check),
+    _diagnosticHint(check),
+    ..._diagnosticDetailLines(check),
+  ].join(' ').toLowerCase();
+  if (haystack.contains('asr') ||
+      haystack.contains('whisper') ||
+      haystack.contains('funasr') ||
+      haystack.contains('faster')) {
+    return AppWindowType.asrSettings;
+  }
+  if (haystack.contains('routing') ||
+      haystack.contains('provider') ||
+      haystack.contains('env_key') ||
+      haystack.contains('credential') ||
+      haystack.contains('base_url') ||
+      haystack.contains('api key') ||
+      haystack.contains('api_key')) {
+    return AppWindowType.translationSettings;
+  }
+  return null;
+}
+
+String _diagnosticRepairLabel(AppWindowType type) {
+  return switch (type) {
+    AppWindowType.translationSettings => '去翻译模型设置',
+    AppWindowType.asrSettings => '去语音识别设置',
+    AppWindowType.diagnostics => '刷新诊断',
+    AppWindowType.resultReview => '查看结果',
+    AppWindowType.taskHistory => '查看任务历史',
+    AppWindowType.taskDetail => '查看任务详情',
+    AppWindowType.main => '回到主窗口',
+  };
+}
+
+List<String> _diagnosticDetailLines(Map<String, Object?> check) {
+  final details = _stringMap(check['details']);
+  return details.entries
+      .where((entry) => entry.value != null)
+      .map(
+        (entry) =>
+            '${_diagnosticDetailLabel(entry.key)}：${_diagnosticDetailValue(entry.key, entry.value)}',
+      )
+      .take(4)
+      .toList();
+}
+
+String _diagnosticDetailLabel(String key) {
+  return switch (key) {
+    'executable' => '可执行文件',
+    'version' => '版本',
+    'path' => '路径',
+    'provider' => '服务',
+    'kind' => '类型',
+    'protocol' => '协议',
+    'model' => '模型',
+    'base_url' => '服务地址',
+    _ => key,
+  };
+}
+
+String _diagnosticDetailValue(String key, Object? value) {
+  final text = '$value';
+  final lower = text.toLowerCase();
+  return switch (key) {
+    'provider' => _serviceValueLabel(lower, fallback: text),
+    'kind' => _serviceKindLabel(lower, fallback: text),
+    'protocol' => _serviceProtocolLabel(lower, fallback: text),
+    _ => _localizeDiagnosticText(text),
+  };
+}
+
+String _serviceValueLabel(String lower, {required String fallback}) {
+  if (lower == 'local' || lower.contains('faster_whisper')) {
+    return '本机语音识别';
+  }
+  if (lower.contains('funasr') || lower.contains('sensevoice')) {
+    return 'FunASR';
+  }
+  if (lower.contains('openai_whisper')) return 'OpenAI Whisper';
+  return fallback;
+}
+
+String _serviceKindLabel(String lower, {required String fallback}) {
+  return switch (lower) {
+    'local_inprocess' => '本机处理',
+    'local_server' => '本地服务',
+    'remote' => '云端服务',
+    _ => fallback,
+  };
+}
+
+String _serviceProtocolLabel(String lower, {required String fallback}) {
+  return switch (lower) {
+    'faster_whisper' => 'faster-whisper',
+    'funasr_openai' => 'FunASR 兼容接口',
+    'openai_transcriptions' => 'OpenAI 转写接口',
+    _ => _translationProtocolLabel(fallback),
+  };
+}
+
+String _translationProtocolLabel(String apiType) {
+  final normalized = apiType.trim().toLowerCase();
+  return switch (normalized) {
+    '' => 'OpenAI 兼容',
+    'openai-compatible' => 'OpenAI 兼容',
+    'openai_chat' => 'OpenAI Chat',
+    'gemini-compatible' => 'Gemini 兼容',
+    'gemini' => 'Gemini',
+    _ => apiType,
+  };
+}
+
+String? _diagnosticActiveTaskId(DesktopSnapshot? snapshot) {
+  final activeTask = _diagnosticActiveTask(snapshot);
+  if (activeTask != null) return _shortTaskId(activeTask.taskId);
+  final taskId = _diagnosticActiveTaskRawId(snapshot);
+  return taskId == null || taskId.isEmpty ? null : _shortTaskId(taskId);
+}
+
+String? _diagnosticActiveTaskRawId(DesktopSnapshot? snapshot) {
+  final runtime = _stringMap(snapshot?.runtime);
+  final active = _stringMap(runtime['active']);
+  return _stringValue(active['task_id']) ?? _stringValue(active['taskId']);
+}
+
+TaskSummary? _diagnosticActiveTask(DesktopSnapshot? snapshot) {
+  final tasks = snapshot?.tasks ?? const <TaskSummary>[];
+  if (tasks.isEmpty) return null;
+  final taskId = _diagnosticActiveTaskRawId(snapshot);
+  if (taskId != null && taskId.isNotEmpty) {
+    for (final task in tasks) {
+      if (task.taskId == taskId) return task;
+    }
+  }
+  return tasks.where((task) => task.isActive).firstOrNull;
+}
+
+List<String> _diagnosticRuntimeIds(DesktopSnapshot? snapshot, String key) {
+  final runtime = _stringMap(snapshot?.runtime);
+  return _objectList(runtime[key])
+      .map((item) {
+        if (item is String) return item;
+        final map = _stringMap(item);
+        return _stringValue(map['task_id']) ?? _stringValue(map['taskId']);
+      })
+      .whereType<String>()
+      .where((item) => item.isNotEmpty)
+      .toList();
+}
+
+TaskSummary? _diagnosticLatestTask(DesktopSnapshot? snapshot) {
+  final tasks = snapshot?.tasks ?? const <TaskSummary>[];
+  if (tasks.isEmpty) return null;
+  return _diagnosticActiveTask(snapshot) ?? tasks.first;
+}
+
+String _diagnosticTaskLabel(TaskSummary task) {
+  final filename = _basename(task.inputFile);
+  return filename.isEmpty ? '任务 ${_shortTaskId(task.taskId)}' : filename;
+}
+
+String _diagnosticTaskSummaryLabel(TaskSummary task) {
+  return '${_diagnosticTaskLabel(task)} · ${taskStatusLabel(task.status)}';
+}
+
+String _shortTaskId(String taskId) {
+  return shortTaskIdLabel(taskId);
+}
+
+String _basename(String path) {
+  if (path.isEmpty) return '';
+  final normalized = path.replaceAll('\\', '/');
+  final parts = normalized.split('/');
+  return parts.isEmpty ? path : parts.last;
+}
+
+Color _diagnosticStatusColor(String status) {
+  return switch (status) {
+    'PASS' => T.ok,
+    'WARN' => T.warn,
+    'FAIL' => T.danger,
+    _ => T.muted,
+  };
 }
 
 class _DefaultBar extends StatelessWidget {
@@ -728,9 +1544,21 @@ class _DefaultBar extends StatelessWidget {
           Expanded(child: Text(text, style: T.tSection)),
           if (busy) Text('同步中…', style: T.tCaption),
           if (!busy && error != null)
-            Flexible(child: Text(error!, style: T.tCaption.copyWith(color: T.danger), overflow: TextOverflow.ellipsis)),
+            Flexible(
+              child: Text(
+                error!,
+                style: T.tCaption.copyWith(color: T.danger),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           if (!busy && error == null && message != null)
-            Flexible(child: Text(message!, style: T.tCaption.copyWith(color: T.accentStrong), overflow: TextOverflow.ellipsis)),
+            Flexible(
+              child: Text(
+                message!,
+                style: T.tCaption.copyWith(color: T.accentStrong),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
         ],
       ),
     );
@@ -755,10 +1583,10 @@ class _ProviderList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('供应商', style: T.tSection),
+        const Text('翻译服务', style: T.tSection),
         const SizedBox(height: T.s12),
         if (providers.isEmpty)
-          const Text('还没有 provider', style: T.tCaption)
+          const Text('还没有翻译服务', style: T.tCaption)
         else
           Expanded(
             child: ListView(
@@ -769,8 +1597,8 @@ class _ProviderList extends StatelessWidget {
                     label: provider.name,
                     detail: [
                       if (provider.name == defaultProvider) '默认',
-                      if (provider.apiType.isNotEmpty) provider.apiType,
-                      provider.hasKey ? '已配置' : '缺 key',
+                      _translationProtocolLabel(provider.apiType),
+                      provider.hasKey ? '已配置' : '缺密钥',
                     ].join(' · '),
                     selected: provider.name == selected,
                     warn: !provider.hasKey,
@@ -841,7 +1669,8 @@ class _AsrSummaryList extends StatelessWidget {
                 for (final provider in providers)
                   _ChoiceRow(
                     label: provider.displayLabel,
-                    detail: '${provider.model}${provider.hasKey ? ' · 已配置' : ' · 缺 key'}',
+                    detail:
+                        '${provider.model}${provider.hasKey ? ' · 已配置' : ' · 缺密钥'}',
                     selected: provider.name == selected,
                     warn: !provider.hasKey,
                     onTap: () => onPick(provider.name),
@@ -854,18 +1683,587 @@ class _AsrSummaryList extends StatelessWidget {
   }
 }
 
-class _ToolPanel extends StatelessWidget {
-  const _ToolPanel({required this.children});
-  final List<Widget> children;
+class _DiagnosticSummaryList extends StatelessWidget {
+  const _DiagnosticSummaryList({
+    required this.checks,
+    required this.selectedName,
+    required this.onPick,
+  });
+
+  final List<Map<String, Object?>> checks;
+  final String? selectedName;
+  final ValueChanged<String> onPick;
 
   @override
   Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    final actionable = checks
+        .where((check) => _diagnosticCheckStatus(check) != 'PASS')
+        .length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('检查项', style: T.tSection),
+        const SizedBox(height: T.s12),
+        if (checks.isEmpty)
+          const Text('暂无诊断结果', style: T.tCaption)
+        else
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                for (final check in checks)
+                  _DiagnosticRow(
+                    label: _diagnosticDisplayName(check),
+                    detail: _diagnosticHint(check),
+                    status: _diagnosticCheckStatus(check),
+                    selected: _diagnosticId(check) == selectedName,
+                    onTap: () => onPick(_diagnosticId(check)),
+                  ),
+              ],
+            ),
+          ),
+        if (checks.isNotEmpty) ...[
+          const SizedBox(height: T.s12),
+          Text('需要处理：$actionable', style: T.tCaption),
+        ],
+      ],
+    );
+  }
+}
+
+class _DiagnosticRow extends StatelessWidget {
+  const _DiagnosticRow({
+    required this.label,
+    required this.detail,
+    required this.status,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String detail;
+  final String status;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _diagnosticStatusColor(status);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 46),
+          decoration: BoxDecoration(
+            color: selected ? T.accentSoft : const Color(0x00000000),
+            border: const Border(bottom: BorderSide(color: T.line, width: 1)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$label · ${_diagnosticStatusLabel(status)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tBody.copyWith(
+                        color: color,
+                        fontWeight: selected ? T.wBold : T.wMedium,
+                      ),
+                    ),
+                    if (detail.isNotEmpty)
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tCaption,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DiagnosticDetails extends StatelessWidget {
+  const _DiagnosticDetails({
+    required this.snapshot,
+    required this.tasks,
+    required this.selectedTaskId,
+    required this.result,
+    required this.report,
+    required this.checks,
+    required this.highlighted,
+    required this.onRefresh,
+    required this.onRefreshTasks,
+    required this.onOpenResult,
+    required this.onOpenTool,
+  });
+
+  final DesktopSnapshot? snapshot;
+  final List<TaskSummary>? tasks;
+  final String? selectedTaskId;
+  final TaskResultWorkspace? result;
+  final Map<String, Object?> report;
+  final List<Map<String, Object?>> checks;
+  final Map<String, Object?>? highlighted;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onRefreshTasks;
+  final ValueChanged<TaskSummary>? onOpenResult;
+  final ValueChanged<AppWindowType> onOpenTool;
+
+  @override
+  Widget build(BuildContext context) {
+    final rootDir = _stringValue(report['root_dir']) ?? '未知';
+    final providersFile = _stringValue(report['providers_file']) ?? '未知';
+    final artifactsDir = _stringValue(report['artifacts_dir']) ?? '未加载';
+    final check = highlighted;
+    final repairTarget = check == null ? null : _diagnosticRepairTarget(check);
+    return _ToolPanel(
+      footer: [
+        if (repairTarget != null)
+          _ActionButton(
+            label: _diagnosticRepairLabel(repairTarget),
+            onTap: () => onOpenTool(repairTarget),
+          ),
+        _ActionButton(
+          label: onRefresh == null ? '刷新中' : '刷新诊断',
+          strong: true,
+          onTap: onRefresh,
+        ),
+      ],
+      footnote: '诊断读取本机配置、依赖和翻译服务协议预检；不会上传音视频或密钥。',
+      children: [
+        _DiagnosticMetricStrip(checks: checks),
+        const SizedBox(height: T.s16),
+        _ReadonlyRow(label: '项目根目录', value: rootDir),
+        const SizedBox(height: T.s12),
+        _ReadonlyRow(label: '翻译配置文件', value: providersFile),
+        const SizedBox(height: T.s12),
+        _ReadonlyRow(label: '产物目录', value: artifactsDir),
+        const SizedBox(height: T.s24),
+        Text(
+          check == null ? '暂无需要处理的项目' : _diagnosticDisplayName(check),
+          style: T.tSection,
+        ),
+        const SizedBox(height: T.s8),
+        if (check == null)
+          const Text('当前没有诊断结果。', style: T.tCaption)
+        else ...[
+          Wrap(
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              _DiagnosticBadge(status: _diagnosticCheckStatus(check)),
+              if (_stringValue(check['code']) != null)
+                _DiagnosticCode(
+                  label: _diagnosticCodeLabel(_stringValue(check['code'])!),
+                ),
+            ],
+          ),
+          const SizedBox(height: T.s12),
+          Text(_diagnosticHint(check), style: T.tBody),
+          const SizedBox(height: T.s8),
+          Text(_diagnosticMessage(check), style: T.tCaption),
+          for (final line in _diagnosticDetailLines(check)) ...[
+            const SizedBox(height: T.s8),
+            Text(line, style: T.tCaption, overflow: TextOverflow.ellipsis),
+          ],
+        ],
+        const SizedBox(height: T.s24),
+        _DiagnosticTaskContext(snapshot: snapshot),
+        const SizedBox(height: T.s16),
+        _DiagnosticRecentTasks(
+          snapshot: snapshot,
+          tasks: tasks,
+          selectedTaskId: selectedTaskId,
+          result: result,
+          onRefreshTasks: onRefreshTasks,
+          onOpenResult: onOpenResult,
+        ),
+      ],
+    );
+  }
+}
+
+class _DiagnosticTaskContext extends StatelessWidget {
+  const _DiagnosticTaskContext({required this.snapshot});
+
+  final DesktopSnapshot? snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final activeTask = _diagnosticActiveTask(snapshot);
+    final activeTaskId = _diagnosticActiveTaskId(snapshot);
+    final activeTaskLabel = activeTask != null
+        ? _diagnosticTaskSummaryLabel(activeTask)
+        : activeTaskId == null
+        ? '无'
+        : '任务 $activeTaskId';
+    final latest = _diagnosticLatestTask(snapshot);
+    final taskCount = snapshot?.tasks.length ?? 0;
+    final queued = _diagnosticRuntimeIds(snapshot, 'queued');
+    final interrupted = _diagnosticRuntimeIds(snapshot, 'interrupted');
+    final latestLabel = latest == null
+        ? '无'
+        : _diagnosticTaskSummaryLabel(latest);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('任务上下文', style: T.tSection),
+          const SizedBox(height: T.s8),
+          _ReadonlyRow(label: '当前任务', value: activeTaskLabel),
+          const SizedBox(height: T.s8),
+          _ReadonlyRow(label: '任务数', value: '$taskCount'),
+          const SizedBox(height: T.s8),
+          _ReadonlyRow(label: '队列', value: '${queued.length} 个等待'),
+          const SizedBox(height: T.s8),
+          _ReadonlyRow(label: '中断任务', value: '${interrupted.length} 个'),
+          const SizedBox(height: T.s8),
+          _ReadonlyRow(label: '最新任务', value: latestLabel),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiagnosticRecentTasks extends StatelessWidget {
+  const _DiagnosticRecentTasks({
+    required this.snapshot,
+    required this.tasks,
+    required this.selectedTaskId,
+    required this.result,
+    required this.onRefreshTasks,
+    required this.onOpenResult,
+  });
+
+  final DesktopSnapshot? snapshot;
+  final List<TaskSummary>? tasks;
+  final String? selectedTaskId;
+  final TaskResultWorkspace? result;
+  final VoidCallback? onRefreshTasks;
+  final ValueChanged<TaskSummary>? onOpenResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleTasks = (tasks ?? snapshot?.tasks ?? const <TaskSummary>[])
+        .take(5)
+        .toList();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(child: Text('最近任务', style: T.tSection)),
+              _MiniTextButton(
+                label: onRefreshTasks == null ? '刷新中' : '刷新',
+                onTap: onRefreshTasks,
+              ),
+            ],
+          ),
+          const SizedBox(height: T.s8),
+          if (visibleTasks.isEmpty)
+            const Text('还没有任务记录', style: T.tCaption)
+          else
+            for (final task in visibleTasks) ...[
+              _DiagnosticTaskRow(
+                task: task,
+                selected: task.taskId == selectedTaskId,
+                onOpenResult: task.isDone && onOpenResult != null
+                    ? () => onOpenResult!(task)
+                    : null,
+              ),
+              const SizedBox(height: T.s8),
+            ],
+          if (result != null) ...[
+            const SizedBox(height: T.s4),
+            _DiagnosticResultSummary(result: result!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DiagnosticTaskRow extends StatelessWidget {
+  const _DiagnosticTaskRow({
+    required this.task,
+    required this.selected,
+    required this.onOpenResult,
+  });
+
+  final TaskSummary task;
+  final bool selected;
+  final VoidCallback? onOpenResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final canOpen = onOpenResult != null;
+    return Container(
+      decoration: BoxDecoration(
+        border: const Border(bottom: BorderSide(color: T.line)),
+      ),
+      padding: const EdgeInsets.only(bottom: T.s8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _diagnosticTaskLabel(task),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tBody.copyWith(
+                    color: selected ? T.accentStrong : T.ink,
+                    fontWeight: selected ? T.wBold : T.wMedium,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '状态：${taskStatusLabel(task.status)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: T.s8),
+          _MiniTextButton(label: canOpen ? '结果摘要' : '未完成', onTap: onOpenResult),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiagnosticResultSummary extends StatelessWidget {
+  const _DiagnosticResultSummary({required this.result});
+
+  final TaskResultWorkspace result;
+
+  @override
+  Widget build(BuildContext context) {
+    final formats = result.outputPaths.keys.join(' · ');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('结果摘要', style: T.tSection),
+        const SizedBox(height: T.s8),
+        _ReadonlyRow(label: '片段', value: '${result.segments.length}'),
+        const SizedBox(height: T.s8),
+        _ReadonlyRow(label: '问题', value: '${result.issueCount}'),
+        const SizedBox(height: T.s8),
+        _ReadonlyRow(label: '输出', value: formats.isEmpty ? '无记录' : formats),
+      ],
+    );
+  }
+}
+
+class _MiniTextButton extends StatelessWidget {
+  const _MiniTextButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: T.tCaption.copyWith(
+            color: enabled ? T.accentStrong : T.muted,
+            fontWeight: enabled ? T.wBold : T.wMedium,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DiagnosticMetricStrip extends StatelessWidget {
+  const _DiagnosticMetricStrip({required this.checks});
+
+  final List<Map<String, Object?>> checks;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: T.s8,
+      runSpacing: T.s8,
+      children: [
+        _DiagnosticCount(
+          status: 'PASS',
+          count: _diagnosticCount(checks, 'PASS'),
+        ),
+        _DiagnosticCount(
+          status: 'WARN',
+          count: _diagnosticCount(checks, 'WARN'),
+        ),
+        _DiagnosticCount(
+          status: 'FAIL',
+          count: _diagnosticCount(checks, 'FAIL'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DiagnosticCount extends StatelessWidget {
+  const _DiagnosticCount({required this.status, required this.count});
+
+  final String status;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _diagnosticStatusColor(status);
+    return Container(
+      constraints: const BoxConstraints(minWidth: 82),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: color, width: 1),
+      ),
+      child: Text(
+        '${_diagnosticStatusLabel(status)} $count',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: T.tBody.copyWith(color: color, fontWeight: T.wMedium),
+      ),
+    );
+  }
+}
+
+class _DiagnosticBadge extends StatelessWidget {
+  const _DiagnosticBadge({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _diagnosticStatusColor(status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 5),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: color, width: 1),
+      ),
+      child: Text(
+        _diagnosticStatusLabel(status),
+        style: T.tCaption.copyWith(color: color, fontWeight: T.wMedium),
+      ),
+    );
+  }
+}
+
+class _DiagnosticCode extends StatelessWidget {
+  const _DiagnosticCode({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 260),
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 5),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: T.tCaption.copyWith(color: T.ink),
+      ),
+    );
+  }
+}
+
+class _ToolPanel extends StatelessWidget {
+  const _ToolPanel({
+    required this.children,
+    required this.footer,
+    required this.footnote,
+  });
+  final List<Widget> children;
+  final List<Widget> footer;
+  final String footnote;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: ListView(padding: EdgeInsets.zero, children: children),
+        ),
+        const SizedBox(height: T.s12),
+        Wrap(spacing: T.s12, runSpacing: T.s8, children: footer),
+        const SizedBox(height: T.s8),
+        Text(
+          footnote,
+          style: T.tCaption,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
   }
 }
 
 class _Input extends StatelessWidget {
-  const _Input({required this.label, required this.controller, this.obscure = false});
+  const _Input({
+    required this.label,
+    required this.controller,
+    this.obscure = false,
+  });
   final String label;
   final TextEditingController controller;
   final bool obscure;
@@ -919,10 +2317,17 @@ class _InlineTextField extends StatelessWidget {
           isDense: true,
           filled: true,
           fillColor: T.surface,
-          contentPadding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 8),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: T.s8,
+            vertical: 8,
+          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(T.rSm),
             borderSide: const BorderSide(color: T.line),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rSm),
+            borderSide: const BorderSide(color: T.accent, width: 1.5),
           ),
         ),
       ),
@@ -940,14 +2345,20 @@ class _ReadonlyRow extends StatelessWidget {
     return Row(
       children: [
         SizedBox(width: 96, child: Text(label, style: T.tCaption)),
-        Expanded(child: Text(value, style: T.tBody, overflow: TextOverflow.ellipsis)),
+        Expanded(
+          child: Text(value, style: T.tBody, overflow: TextOverflow.ellipsis),
+        ),
       ],
     );
   }
 }
 
 class _ActionButton extends StatefulWidget {
-  const _ActionButton({required this.label, required this.onTap, this.strong = false});
+  const _ActionButton({
+    required this.label,
+    required this.onTap,
+    this.strong = false,
+  });
   final String label;
   final VoidCallback? onTap;
   final bool strong;
@@ -965,7 +2376,9 @@ class _ActionButtonState extends State<_ActionButton> {
     final bg = widget.strong
         ? (enabled ? (_hover ? T.accentStrong : T.accent) : T.line)
         : (_hover && enabled ? T.accentSoft : T.surface);
-    final fg = widget.strong ? const Color(0xFFFFFFFF) : (enabled ? T.accentStrong : T.muted);
+    final fg = widget.strong
+        ? const Color(0xFFFFFFFF)
+        : (enabled ? T.accentStrong : T.muted);
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
@@ -977,9 +2390,15 @@ class _ActionButtonState extends State<_ActionButton> {
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(color: widget.strong ? bg : (enabled ? T.accent : T.line), width: 1.2),
+            border: Border.all(
+              color: widget.strong ? bg : (enabled ? T.accent : T.line),
+              width: 1.2,
+            ),
           ),
-          child: Text(widget.label, style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium)),
+          child: Text(
+            widget.label,
+            style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium),
+          ),
         ),
       ),
     );
@@ -987,7 +2406,11 @@ class _ActionButtonState extends State<_ActionButton> {
 }
 
 class _ChoicePill extends StatefulWidget {
-  const _ChoicePill({required this.label, required this.selected, required this.onTap});
+  const _ChoicePill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -1013,13 +2436,18 @@ class _ChoicePillState extends State<_ChoicePill> {
           decoration: BoxDecoration(
             color: widget.selected || _hover ? T.accentSoft : T.surface,
             borderRadius: BorderRadius.circular(T.rSm),
-            border: Border.all(color: widget.selected ? T.accent : T.line, width: 1),
+            border: Border.all(
+              color: widget.selected ? T.accent : T.line,
+              width: 1,
+            ),
           ),
           child: Text(
             widget.label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: T.tCaption.copyWith(color: widget.selected ? T.accentStrong : T.ink),
+            style: T.tCaption.copyWith(
+              color: widget.selected ? T.accentStrong : T.ink,
+            ),
           ),
         ),
       ),
@@ -1062,7 +2490,10 @@ class _ChoiceRowState extends State<_ChoiceRow> {
           height: 44,
           decoration: BoxDecoration(
             border: Border(
-              left: BorderSide(color: widget.selected ? color : const Color(0x00000000), width: 3),
+              left: BorderSide(
+                color: widget.selected ? color : const Color(0x00000000),
+                width: 3,
+              ),
               bottom: const BorderSide(color: T.line, width: 1),
             ),
             color: _hover || widget.selected ? T.accentSoft : null,
@@ -1083,7 +2514,12 @@ class _ChoiceRowState extends State<_ChoiceRow> {
                 ),
               ),
               if (widget.detail != null && widget.detail!.isNotEmpty)
-                Text(widget.detail!, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.tCaption),
+                Text(
+                  widget.detail!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption,
+                ),
             ],
           ),
         ),
@@ -1121,16 +2557,27 @@ class _SegmentButtonState extends State<_SegmentButton> {
         onTap: widget.onTap,
         child: Container(
           width: 150,
-          padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
           decoration: BoxDecoration(
             color: widget.selected || _hover ? T.accentSoft : T.surface,
             borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(color: widget.selected ? T.accent : T.line, width: 1.2),
+            border: Border.all(
+              color: widget.selected ? T.accent : T.line,
+              width: 1.2,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(widget.label, style: T.tBody.copyWith(fontWeight: widget.selected ? T.wBold : T.wRegular)),
+              Text(
+                widget.label,
+                style: T.tBody.copyWith(
+                  fontWeight: widget.selected ? T.wBold : T.wRegular,
+                ),
+              ),
               const SizedBox(height: 2),
               Text(widget.detail, style: T.tCaption),
             ],
@@ -1161,4 +2608,34 @@ String? _stringValue(Object? value) {
   if (value == null) return null;
   final text = '$value';
   return text.isEmpty ? null : text;
+}
+
+String _friendlySettingsError(Object error) {
+  if (error is PlatformException) {
+    final rawMessage = error.message ?? '';
+    if (error.code == 'service_unavailable' ||
+        rawMessage.contains('Local Service caller')) {
+      return '需要从主窗口打开设置，才能连接本地服务。';
+    }
+    final message = rawMessage.trim();
+    if (message.isNotEmpty) return message;
+  }
+  if (error is RpcRemoteException) {
+    final details = _stringMap(error.details);
+    final info = _stringMap(details['error_info']);
+    final hint =
+        _stringValue(info['hint_zh']) ??
+        _stringValue(info['hint']) ??
+        _stringValue(details['hint_zh']) ??
+        _stringValue(details['hint']);
+    if (hint != null && hint.isNotEmpty) return hint;
+    final message = error.message.trim();
+    if (message.isNotEmpty) return message;
+  }
+  final text = '$error';
+  if (text.contains('CHANNEL_UNREGISTERED') ||
+      text.contains('WindowChannelException')) {
+    return '需要从主窗口打开设置，才能连接本地服务。';
+  }
+  return text;
 }

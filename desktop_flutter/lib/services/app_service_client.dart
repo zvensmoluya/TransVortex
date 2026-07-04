@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../model/task_labels.dart';
+
 abstract class AppServiceTransport {
   Future<Object?> call(
     String method, [
@@ -156,6 +158,7 @@ class JsonRpcTransport implements AppServiceTransport {
   }
 
   void _handleLine(String line) {
+    if (line.trim().isEmpty) return;
     Object? decoded;
     try {
       decoded = jsonDecode(line);
@@ -235,12 +238,14 @@ class LocalServiceLaunchException implements Exception {
 class LocalServiceSupervisor {
   LocalServiceSupervisor({
     this.repoRoot,
+    this.serviceRoot,
     ProcessStarter? processStarter,
     this.pythonExecutable = 'python',
     this.requestTimeout = const Duration(seconds: 8),
   }) : _processStarter = processStarter ?? _defaultProcessStarter;
 
   final Directory? repoRoot;
+  final Directory? serviceRoot;
   final ProcessStarter _processStarter;
   final String pythonExecutable;
   final Duration requestTimeout;
@@ -248,13 +253,12 @@ class LocalServiceSupervisor {
   Future<LocalServiceSession> start() async {
     final root = repoRoot ?? findRepoRoot();
     if (root == null) {
-      throw LocalServiceLaunchException(
-        'could not find repository root for Local Service',
-      );
+      throw LocalServiceLaunchException('找不到本地服务所需的仓库根目录');
     }
+    final runtimeRoot = serviceRoot ?? root;
     final process = await _processStarter(
       pythonExecutable,
-      ['-m', 'transvortex.app_service', '--root', root.path],
+      ['-m', 'transvortex.app_service', '--root', runtimeRoot.path],
       workingDirectory: root.path,
       environment: {
         'PYTHONIOENCODING': 'utf-8',
@@ -420,6 +424,10 @@ class AppServiceClient {
     );
   }
 
+  Future<List<TaskSummary>> taskList() async {
+    return _taskList(await _transport.call('tasks.list'));
+  }
+
   Future<Map<String, Object?>> authSet(String credentialId, String apiKey) {
     return call('auth.set', {
       'credential_id': credentialId,
@@ -495,9 +503,26 @@ class AppServiceClient {
     );
   }
 
+  Future<TaskResultWorkspace> openTaskResult(String taskId) async {
+    return TaskResultWorkspace.fromJson(await resultOpen(taskId));
+  }
+
+  Future<TaskResultWorkspace> resultSegmentsSave(
+    String taskId,
+    List<Map<String, Object?>> segments,
+  ) async {
+    return TaskResultWorkspace.fromJson(
+      await _transport.call('result.segments.save', {
+        'task_id': taskId,
+        'segments': segments,
+      }),
+    );
+  }
+
   Future<Map<String, Object?>> resultReexport(
     String taskId, {
     String outputFormat = 'both',
+    String? outputDir,
     bool bilingual = true,
     String? subtitleBilingualOrder,
     bool? subtitlePreferSingleLine,
@@ -505,6 +530,7 @@ class AppServiceClient {
     final params = <String, Object?>{
       'task_id': taskId,
       'output_format': outputFormat,
+      'output_dir': ?outputDir,
       'bilingual': bilingual,
       'subtitle_bilingual_order': ?subtitleBilingualOrder,
       'subtitle_prefer_single_line': ?subtitlePreferSingleLine,
@@ -571,7 +597,10 @@ class ServiceHealth {
     );
   }
 
-  bool get degraded => status == 'degraded' || pump['last_error'] != null;
+  bool get degraded {
+    final lastError = _stringValue(pump['last_error']);
+    return status == 'degraded' || (lastError != null && lastError.isNotEmpty);
+  }
 
   Map<String, Object?> get active {
     return _stringMap(runtime['active']);
@@ -581,8 +610,10 @@ class ServiceHealth {
     final taskId =
         _stringValue(active['task_id']) ?? _stringValue(active['taskId']);
     final status = _stringValue(active['status']);
-    if (taskId == null || taskId.isEmpty) return '无 active task';
-    return status == null ? taskId : '$taskId · $status';
+    if (taskId == null || taskId.isEmpty) return '无活动任务';
+    final taskLabel = shortTaskIdLabel(taskId);
+    if (status == null || status.trim().isEmpty) return taskLabel;
+    return '$taskLabel · ${taskStatusLabel(status)}';
   }
 
   String get pumpLabel {
@@ -631,8 +662,8 @@ class DesktopSnapshot {
 
   List<AsrProviderOption> get asrProviders {
     final source = _stringMap(config['asr_providers']);
-    return source.values
-        .map(AsrProviderOption.fromJson)
+    return source.entries
+        .map((entry) => AsrProviderOption.fromJson(entry.value, id: entry.key))
         .where((provider) => provider.name.isNotEmpty)
         .toList()
       ..sort((a, b) => a.name.compareTo(b.name));
@@ -693,7 +724,10 @@ class DesktopSnapshot {
     if (providerName == null) return null;
     final asrProviders = _stringMap(config['asr_providers']);
     final provider = _stringMap(asrProviders[providerName]);
-    return _stringValue(provider['model']) ?? _stringValue(provider['name']);
+    final local = _stringMap(provider['local']);
+    return _stringValue(provider['model']) ??
+        _stringValue(local['model_size']) ??
+        _stringValue(provider['name']);
   }
 
   String? get asrLabel {
@@ -701,8 +735,11 @@ class DesktopSnapshot {
     final providerName = _stringValue(pipeline['asr_provider']);
     if (providerName == null) return null;
     final asrProviders = _stringMap(config['asr_providers']);
-    final provider = _stringMap(asrProviders[providerName]);
-    return _stringValue(provider['name']) ?? providerName;
+    final provider = AsrProviderOption.fromJson(
+      asrProviders[providerName],
+      id: providerName,
+    );
+    return provider.name.isEmpty ? providerName : provider.displayLabel;
   }
 }
 
@@ -740,8 +777,12 @@ class ConfigReadiness {
     final selectedAsr = selectedAsrName == null
         ? const <String, Object?>{}
         : _stringMap(asrProviders[selectedAsrName]);
-    final asrLabel =
-        _stringValue(selectedAsr['name']) ?? selectedAsrName ?? '需配置';
+    final asrOption = selectedAsrName == null
+        ? null
+        : AsrProviderOption.fromJson(selectedAsr, id: selectedAsrName);
+    final asrLabel = asrOption == null || asrOption.name.isEmpty
+        ? selectedAsrName ?? '需配置'
+        : asrOption.displayLabel;
 
     return ConfigReadiness(
       translationConfigured: selectedProvider['has_key'] == true,
@@ -808,6 +849,7 @@ class AsrProviderOption {
     required this.kind,
     required this.protocol,
     required this.model,
+    this.displayName = '',
     this.baseUrl = '',
     this.endpoint = '',
     this.hasKey = false,
@@ -820,6 +862,7 @@ class AsrProviderOption {
   final String kind;
   final String protocol;
   final String model;
+  final String displayName;
   final String baseUrl;
   final String endpoint;
   final bool hasKey;
@@ -827,13 +870,20 @@ class AsrProviderOption {
   final String credentialSource;
   final Map<String, Object?> raw;
 
-  factory AsrProviderOption.fromJson(Object? value) {
+  factory AsrProviderOption.fromJson(Object? value, {String? id}) {
     final map = _stringMap(value);
+    final name =
+        id ?? _stringValue(map['id']) ?? _stringValue(map['name']) ?? '';
+    final kind = _stringValue(map['kind']) ?? _inferKind(name);
     return AsrProviderOption(
-      name: _stringValue(map['name']) ?? '',
-      kind: _stringValue(map['kind']) ?? 'remote',
-      protocol: _stringValue(map['protocol']) ?? 'openai_transcriptions',
-      model: _stringValue(map['model']) ?? '',
+      name: name,
+      displayName: _stringValue(map['name']) ?? '',
+      kind: kind,
+      protocol: _stringValue(map['protocol']) ?? _inferProtocol(kind, name),
+      model:
+          _stringValue(map['model']) ??
+          _stringValue(_stringMap(map['local'])['model_size']) ??
+          '',
       baseUrl:
           _stringValue(map['base_url']) ?? _stringValue(map['baseUrl']) ?? '',
       endpoint: _stringValue(map['endpoint']) ?? '',
@@ -855,8 +905,32 @@ class AsrProviderOption {
       'local_inprocess' => '本机',
       'local_server' => protocol == 'funasr_openai' ? 'FunASR' : '本地服务',
       'remote' => '云端',
-      _ => name,
+      _ => displayName.isNotEmpty ? displayName : name,
     };
+  }
+
+  static String _inferKind(String name) {
+    final lower = name.toLowerCase();
+    if (_looksLikeFasterWhisper(lower)) return 'local_inprocess';
+    if (lower.contains('funasr')) return 'local_server';
+    return 'remote';
+  }
+
+  static String _inferProtocol(String kind, String name) {
+    final lower = name.toLowerCase();
+    if (kind == 'local_inprocess' || _looksLikeFasterWhisper(lower)) {
+      return 'faster_whisper';
+    }
+    if (kind == 'local_server' || lower.contains('funasr')) {
+      return 'funasr_openai';
+    }
+    return 'openai_transcriptions';
+  }
+
+  static bool _looksLikeFasterWhisper(String lower) {
+    return lower == 'local' ||
+        lower.contains('faster_whisper') ||
+        lower.contains('faster-whisper');
   }
 }
 
@@ -965,6 +1039,7 @@ class TaskSummary {
     required this.bilingual,
     required this.createdAt,
     required this.updatedAt,
+    required this.taskDir,
     required this.outputPath,
     required this.outputPaths,
     required this.error,
@@ -982,6 +1057,7 @@ class TaskSummary {
   final bool bilingual;
   final String createdAt;
   final String updatedAt;
+  final String taskDir;
   final String? outputPath;
   final Map<String, String> outputPaths;
   final String? error;
@@ -1001,6 +1077,7 @@ class TaskSummary {
         bilingual: false,
         createdAt: '',
         updatedAt: '',
+        taskDir: '',
         outputPath: null,
         outputPaths: const {},
         error: null,
@@ -1035,6 +1112,8 @@ class TaskSummary {
           _stringValue(map['updated_at']) ??
           _stringValue(map['updatedAt']) ??
           '',
+      taskDir:
+          _stringValue(map['task_dir']) ?? _stringValue(map['taskDir']) ?? '',
       outputPath:
           _stringValue(map['output_path']) ?? _stringValue(map['outputPath']),
       outputPaths: _stringMap(
@@ -1052,7 +1131,18 @@ class TaskSummary {
   bool get isFailed => status == 'FAILED';
   bool get isCancelled => status == 'CANCELLED' || status == 'INTERRUPTED';
   bool get isActive =>
-      status == 'RUNNING' || status == 'QUEUED' || status == 'CANCEL_REQUESTED';
+      status == 'INIT' ||
+      status == 'QUEUED' ||
+      status == 'PRECHECK' ||
+      status == 'INGEST' ||
+      status == 'ASR' ||
+      status == 'SEGMENT' ||
+      status == 'TRANSLATE' ||
+      status == 'ALIGN' ||
+      status == 'QUALITY' ||
+      status == 'EXPORT' ||
+      status == 'RUNNING' ||
+      status == 'CANCEL_REQUESTED';
   bool get isTerminal => isDone || isFailed || isCancelled;
   bool get canCancel => runtime['can_cancel'] == true;
   bool get canResume => runtime['can_resume'] == true;
@@ -1073,6 +1163,118 @@ class TaskSummary {
     final checkpoint = _stringValue(raw['checkpoint_status']);
     if (checkpoint != null && checkpoint.isNotEmpty) return checkpoint;
     return status;
+  }
+}
+
+class TaskResultWorkspace {
+  const TaskResultWorkspace({
+    required this.task,
+    required this.segments,
+    required this.outputPaths,
+    required this.quality,
+    required this.delivery,
+    required this.reflow,
+    required this.memory,
+    required this.raw,
+  });
+
+  final TaskSummary task;
+  final List<ResultSegment> segments;
+  final Map<String, String> outputPaths;
+  final Map<String, Object?> quality;
+  final Map<String, Object?> delivery;
+  final Map<String, Object?> reflow;
+  final Map<String, Object?> memory;
+  final Map<String, Object?> raw;
+
+  factory TaskResultWorkspace.fromJson(Object? value) {
+    final map = _stringMap(value);
+    final outputPaths = _stringMap(
+      map['output_paths'],
+    ).map((key, value) => MapEntry(key, '$value'));
+    return TaskResultWorkspace(
+      task: TaskSummary.fromJson(map['task']),
+      segments: _objectList(map['segments'])
+          .map(ResultSegment.fromJson)
+          .where((segment) => segment.id >= 0)
+          .toList(),
+      outputPaths: outputPaths,
+      quality: _stringMap(map['quality']),
+      delivery: _stringMap(map['delivery']),
+      reflow: _stringMap(map['reflow']),
+      memory: _stringMap(map['memory']),
+      raw: map,
+    );
+  }
+
+  bool get hasSegments => segments.isNotEmpty;
+
+  int get issueCount {
+    return segments.fold<int>(
+      0,
+      (total, segment) =>
+          total + segment.issues.length + segment.qualityIssues.length,
+    );
+  }
+}
+
+class ResultSegment {
+  const ResultSegment({
+    required this.id,
+    required this.start,
+    required this.end,
+    required this.sourceText,
+    required this.targetText,
+    required this.provider,
+    required this.model,
+    required this.compatMode,
+    required this.chunkId,
+    required this.issues,
+    required this.qualityIssues,
+    required this.raw,
+  });
+
+  final int id;
+  final double start;
+  final double end;
+  final String sourceText;
+  final String targetText;
+  final String provider;
+  final String model;
+  final String compatMode;
+  final String chunkId;
+  final List<String> issues;
+  final List<Map<String, Object?>> qualityIssues;
+  final Map<String, Object?> raw;
+
+  factory ResultSegment.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return ResultSegment(
+      id: _intValue(map['id']) ?? -1,
+      start: _numValue(map['start'])?.toDouble() ?? 0,
+      end: _numValue(map['end'])?.toDouble() ?? 0,
+      sourceText:
+          _stringValue(map['text_src']) ??
+          _stringValue(map['sourceText']) ??
+          '',
+      targetText:
+          _stringValue(map['text_tgt']) ??
+          _stringValue(map['targetText']) ??
+          '',
+      provider: _stringValue(map['provider']) ?? '',
+      model: _stringValue(map['model']) ?? '',
+      compatMode: _stringValue(map['compat_mode']) ?? '',
+      chunkId: _stringValue(map['chunk_id']) ?? '',
+      issues: _stringList(map['issues']),
+      qualityIssues: _objectList(
+        map['quality_issues'],
+      ).map(_stringMap).where((issue) => issue.isNotEmpty).toList(),
+      raw: map,
+    );
+  }
+
+  String get timeRangeLabel {
+    return '${_formatTimestamp(start)} - ${_formatTimestamp(end)}';
   }
 }
 
@@ -1131,4 +1333,18 @@ num? _numValue(Object? value) {
   if (value is num) return value;
   if (value is String) return num.tryParse(value);
   return null;
+}
+
+String _formatTimestamp(double seconds) {
+  final safeSeconds = seconds.isFinite ? seconds.clamp(0, double.infinity) : 0;
+  final millis = (safeSeconds * 1000).round();
+  final duration = Duration(milliseconds: millis);
+  final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final secs = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = duration.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  final hours = duration.inHours;
+  if (hours > 0) {
+    return '${hours.toString().padLeft(2, '0')}:$minutes:$secs.$ms';
+  }
+  return '$minutes:$secs.$ms';
 }

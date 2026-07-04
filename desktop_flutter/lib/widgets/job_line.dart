@@ -36,14 +36,18 @@ class JobLine extends StatelessWidget {
             const Text('识别', style: T.tBody),
             _Word(
               label: view.asrConfigured ? view.asrLabel : '需配置',
+              fullLabel: view.asrConfigured ? view.asrLabel : null,
               warn: !view.asrConfigured,
               onPick: view.asrConfigured ? onPickAsr : onConfigureAsr,
             ),
             const Text(' · 翻译', style: T.tBody),
             _Word(
               label: view.translationConfigured
-                  ? view.translationLabel
+                  ? _compactEngineLabel(view.translationLabel)
                   : '需配置',
+              fullLabel: view.translationConfigured
+                  ? view.translationLabel
+                  : null,
               warn: !view.translationConfigured,
               onPick: view.translationConfigured
                   ? onPickTranslation
@@ -56,10 +60,7 @@ class JobLine extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text('将做成', style: T.tBody),
-            _Word(
-              label: view.bilingual ? '双语' : '单语',
-              onPick: onPickBilingual,
-            ),
+            _Word(label: view.bilingual ? '双语' : '单语', onPick: onPickBilingual),
             _Word(label: view.formats.join('·'), onPick: onPickFormats),
             const Text('字幕', style: T.tBody),
             const Text(' · 术语', style: T.tBody),
@@ -75,9 +76,15 @@ class JobLine extends StatelessWidget {
 }
 
 class _Word extends StatefulWidget {
-  const _Word({required this.label, required this.onPick, this.warn = false});
+  const _Word({
+    required this.label,
+    required this.onPick,
+    this.fullLabel,
+    this.warn = false,
+  });
 
   final String label;
+  final String? fullLabel;
   final VoidCallback onPick;
   final bool warn;
 
@@ -91,7 +98,7 @@ class _WordState extends State<_Word> {
   @override
   Widget build(BuildContext context) {
     final color = widget.warn ? T.warn : T.accentStrong;
-    return MouseRegion(
+    final content = MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -99,33 +106,59 @@ class _WordState extends State<_Word> {
         onTap: widget.onPick,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                const TextSpan(
-                  text: '〈',
-                  style: TextStyle(color: T.muted),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 190),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(
+                    text: '〈',
+                    style: TextStyle(color: T.muted),
+                  ),
+                  TextSpan(text: widget.label),
+                  if (widget.warn) const TextSpan(text: ' ●'),
+                  const TextSpan(
+                    text: '〉',
+                    style: TextStyle(color: T.muted),
+                  ),
+                ],
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: T.wMedium,
+                  color: color,
+                  decoration: _hover
+                      ? TextDecoration.underline
+                      : TextDecoration.none,
+                  decorationColor: color,
                 ),
-                TextSpan(text: widget.label),
-                if (widget.warn) const TextSpan(text: ' ●'),
-                const TextSpan(
-                  text: '〉',
-                  style: TextStyle(color: T.muted),
-                ),
-              ],
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: T.wMedium,
-                color: color,
-                decoration: _hover
-                    ? TextDecoration.underline
-                    : TextDecoration.none,
-                decorationColor: color,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
       ),
     );
+    final fullLabel = widget.fullLabel;
+    return fullLabel == null || fullLabel == widget.label
+        ? content
+        : Tooltip(message: fullLabel, child: content);
   }
+}
+
+String _compactEngineLabel(String label) {
+  final parts = label.split(' · ');
+  if (parts.length < 2) return label;
+  final provider = parts.first;
+  return _providerAlias(provider);
+}
+
+String _providerAlias(String provider) {
+  final lower = provider.toLowerCase();
+  if (lower.contains('deepseek')) return 'DeepSeek';
+  if (lower.contains('vertex')) return 'Vertex';
+  if (lower.contains('gemini')) return 'Gemini';
+  if (lower.contains('anthropic')) return 'Anthropic';
+  if (lower.contains('openai')) return 'OpenAI';
+  return provider;
 }

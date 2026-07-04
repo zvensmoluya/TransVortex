@@ -30,8 +30,7 @@ class SourceObjectPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     // 呼吸 + 拖入轻微放大（GPU 友好的纯变换，无 layout）。
-    final scale =
-        1 + 0.012 * math.sin(breathe * 2 * math.pi) + 0.05 * dragOver;
+    final scale = 1 + 0.012 * math.sin(breathe * 2 * math.pi) + 0.05 * dragOver;
 
     canvas.save();
     canvas.translate(center.dx, center.dy);
@@ -125,7 +124,10 @@ class SourceObjectPainter extends CustomPainter {
     final hh = body.height * 0.11;
     for (var i = 0; i < rows; i++) {
       final dy = body.top + body.height * (0.18 + 0.21 * i);
-      for (final dx in [body.left + body.width * 0.06, body.right - body.width * 0.06 - hw]) {
+      for (final dx in [
+        body.left + body.width * 0.06,
+        body.right - body.width * 0.06 - hw,
+      ]) {
         final r = RRect.fromRectAndRadius(
           Rect.fromLTWH(dx, dy, hw, hh),
           const Radius.circular(2),
@@ -172,7 +174,12 @@ class SourceObjectPainter extends CustomPainter {
   }
 
   // —— 已放入 / 受阻 / 运行 / 完成 的封套主体 ——
-  void _drawEnvelope(Canvas canvas, Rect body, {required Color tint, bool dim = false}) {
+  void _drawEnvelope(
+    Canvas canvas,
+    Rect body, {
+    required Color tint,
+    bool dim = false,
+  }) {
     final rrect = RRect.fromRectAndRadius(body, const Radius.circular(16));
     canvas.drawRRect(rrect, _fill(dim ? const Color(0xFFF7F1F3) : T.surface));
     canvas.drawRRect(rrect, _ink);
@@ -205,7 +212,13 @@ class SourceObjectPainter extends CustomPainter {
     final c = Offset(body.center.dx, body.top + body.height * 0.30);
     const r = 17.0;
     canvas.drawCircle(c, r, _fill(T.bg));
-    canvas.drawCircle(c, r, _ink..strokeWidth = 2.4..color = T.line);
+    canvas.drawCircle(
+      c,
+      r,
+      _ink
+        ..strokeWidth = 2.4
+        ..color = T.line,
+    );
     final sweep = 2 * math.pi * progress.clamp(0.0, 1.0);
     canvas.drawArc(
       Rect.fromCircle(center: c, radius: r),
@@ -241,7 +254,13 @@ class SourceObjectPainter extends CustomPainter {
   void _drawCheckBadge(Canvas canvas, Rect body) {
     final c = Offset(body.right - 6, body.top + 2);
     canvas.drawCircle(c, 15, _fill(T.accent));
-    canvas.drawCircle(c, 15, _ink..strokeWidth = 2..color = T.inkLine);
+    canvas.drawCircle(
+      c,
+      15,
+      _ink
+        ..strokeWidth = 2
+        ..color = T.inkLine,
+    );
     final tick = Path()
       ..moveTo(c.dx - 6, c.dy)
       ..lineTo(c.dx - 1.5, c.dy + 5)
@@ -261,7 +280,11 @@ class SourceObjectPainter extends CustomPainter {
   void _drawRepairPatch(Canvas canvas, Rect body) {
     final c = Offset(body.center.dx, body.center.dy + body.height * 0.06);
     final patch = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: c, width: body.width * 0.42, height: body.height * 0.3),
+      Rect.fromCenter(
+        center: c,
+        width: body.width * 0.42,
+        height: body.height * 0.3,
+      ),
       const Radius.circular(T.rSm),
     );
     canvas.save();

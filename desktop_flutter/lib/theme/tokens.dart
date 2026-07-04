@@ -30,6 +30,7 @@ class T {
   static const inkLine = Color(0xFF3A3340);
 
   // —— 字重：只用三档真实字重（§10.1）——
+  static const fontFamily = 'TransVortexNotoSansSC';
   static const wRegular = FontWeight.w400;
   static const wMedium = FontWeight.w500;
   static const wBold = FontWeight.w700;
@@ -49,20 +50,38 @@ class T {
 
   // —— 字阶（§10.2，CJK 下限正文 ≥12px）——
   static const tFilename = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 20,
     fontWeight: wBold,
     color: ink,
     height: 1.2,
   );
-  static const tCta = TextStyle(fontSize: 16, fontWeight: wBold, height: 1.0);
-  static const tBrand = TextStyle(fontSize: 14, fontWeight: wBold, color: ink);
+  static const tCta = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 16,
+    fontWeight: wBold,
+    height: 1.0,
+  );
+  static const tBrand = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 14,
+    fontWeight: wBold,
+    color: ink,
+  );
   static const tSection = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 13,
     fontWeight: wMedium,
     color: ink,
   );
-  static const tBody = TextStyle(fontSize: 13, fontWeight: wRegular, color: ink);
+  static const tBody = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 13,
+    fontWeight: wRegular,
+    color: ink,
+  );
   static const tCaption = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 12,
     fontWeight: wRegular,
     color: muted,

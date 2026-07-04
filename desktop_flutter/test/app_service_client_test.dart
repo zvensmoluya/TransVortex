@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:transvortex_desktop_flutter/model/task_labels.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
-import 'package:transvortex_desktop_flutter/model/spike_state.dart';
+import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 
 void main() {
@@ -51,6 +52,7 @@ void main() {
 
       final call = transport.call('missing.method');
       stdout.add(utf8.encode('not-json\n'));
+      stdout.add(utf8.encode('\n'));
       stdout.add(
         utf8.encode(
           '{"jsonrpc":"2.0","id":1,"error":{"code":"method_not_found","message":"missing"}}\n',
@@ -59,6 +61,7 @@ void main() {
 
       await expectLater(call, throwsA(isA<RpcRemoteException>()));
       expect(transport.diagnosticLines, contains('not-json'));
+      expect(transport.diagnosticLines, isNot(contains('')));
       await transport.close();
       await stdout.close();
     },
@@ -132,15 +135,52 @@ void main() {
 
       expect(info.protocolVersion, 1);
       expect(info.capabilities, contains('runtime_pump'));
-      expect(health.activeTaskLabel, 'tvx_1 · RUNNING');
+      expect(health.activeTaskLabel, 'tvx_1 · 制作中');
       expect(health.pumpLabel, 'running');
       expect(snapshot.tasks, hasLength(2));
       expect(snapshot.configReadiness.translationConfigured, isTrue);
       expect(snapshot.configReadiness.translationLabel, 'p2');
       expect(snapshot.configReadiness.asrConfigured, isTrue);
-      expect(snapshot.configReadiness.asrLabel, 'Local ASR');
+      expect(snapshot.configReadiness.asrLabel, '本机');
     },
   );
+
+  test('ServiceHealth ignores empty pump last_error', () {
+    final health = ServiceHealth.fromJson({
+      'service': 'transvortex.app_service',
+      'status': 'healthy',
+      'runtime': {},
+      'pump': {'enabled': true, 'last_error': ''},
+    });
+
+    expect(health.degraded, isFalse);
+    expect(health.pumpLabel, 'running');
+  });
+
+  test('ServiceHealth active task label uses user facing text', () {
+    final active = ServiceHealth.fromJson({
+      'service': 'transvortex.app_service',
+      'status': 'healthy',
+      'runtime': {
+        'active': {
+          'task_id': 'tvx_20260704_long_identifier_abcdef',
+          'status': 'TRANSLATE',
+        },
+      },
+      'pump': {'enabled': true},
+    });
+    final idle = ServiceHealth.fromJson({
+      'service': 'transvortex.app_service',
+      'status': 'healthy',
+      'runtime': {},
+      'pump': {'enabled': true},
+    });
+
+    expect(active.activeTaskLabel, 'tvx_2026…abcdef · 翻译字幕');
+    expect(active.activeTaskLabel, isNot(contains('TRANSLATE')));
+    expect(idle.activeTaskLabel, '无活动任务');
+    expect(idle.activeTaskLabel, isNot(contains('active task')));
+  });
 
   test(
     'ConfigReadiness does not fall back to another translation provider',
@@ -193,9 +233,70 @@ void main() {
       expect(snapshot.configReadiness.translationConfigured, isTrue);
       expect(snapshot.configReadiness.translationLabel, 'p1');
       expect(snapshot.configReadiness.asrConfigured, isFalse);
-      expect(snapshot.configReadiness.asrLabel, 'Selected ASR');
+      expect(snapshot.configReadiness.asrLabel, '云端');
     },
   );
+
+  test('DesktopSnapshot infers ASR engine labels from legacy provider ids', () {
+    final snapshot = DesktopSnapshot.fromJson({
+      'config': {
+        'pipeline': {'asr_provider': 'funasr_sensevoice_local'},
+        'asr_providers': {
+          'local': {'name': 'Local ASR', 'has_key': true},
+          'funasr_sensevoice_local': {
+            'name': 'SenseVoice local service',
+            'has_key': true,
+          },
+          'openai_whisper': {'name': 'Whisper', 'has_key': true},
+        },
+      },
+      'tasks': [],
+      'runtime': {},
+      'environment': {},
+    });
+
+    final byName = {
+      for (final option in snapshot.asrProviders) option.name: option,
+    };
+    expect(byName['local']?.displayLabel, '本机');
+    expect(byName['funasr_sensevoice_local']?.displayLabel, 'FunASR');
+    expect(byName['openai_whisper']?.displayLabel, '云端');
+    expect(snapshot.asrLabel, 'FunASR');
+  });
+
+  test('DesktopSnapshot reads local ASR model_size as selected model', () {
+    final snapshot = DesktopSnapshot.fromJson({
+      'config': {
+        'routing': {
+          'primary': {'provider': 'p1', 'model': 'model-a'},
+        },
+        'pipeline': {'asr_provider': 'local'},
+        'providers': [
+          {'name': 'p1', 'has_key': true},
+        ],
+        'asr_providers': {
+          'local': {
+            'name': 'local',
+            'kind': 'local_inprocess',
+            'protocol': 'faster_whisper',
+            'local': {'model_size': 'large-v3', 'device': 'auto'},
+            'has_key': true,
+          },
+        },
+      },
+      'tasks': [],
+      'runtime': {},
+      'environment': {},
+    });
+
+    expect(snapshot.asrModel, 'large-v3');
+    expect(snapshot.asrProviders.single.name, 'local');
+    expect(snapshot.asrProviders.single.displayName, 'local');
+    expect(snapshot.asrProviders.single.model, 'large-v3');
+    expect(snapshot.configReadiness.asrConfigured, isTrue);
+    expect(snapshot.configReadiness.asrLabel, '本机');
+    expect(snapshot.asrLabel, '本机');
+  });
 
   test('TaskEventsPage parses cursor payload', () {
     final page = TaskEventsPage.fromJson({
@@ -215,10 +316,63 @@ void main() {
     expect(page.hasMore, isTrue);
   });
 
+  test('TaskResultWorkspace parses result review payload', () {
+    final workspace = TaskResultWorkspace.fromJson({
+      'task': {
+        'task_id': 'tvx_done',
+        'status': 'DONE',
+        'input_file': r'D:\movie.srt',
+        'task_dir': r'D:\artifacts\tvx_done',
+      },
+      'segments': [
+        {
+          'id': 7,
+          'start': 1.2,
+          'end': 3.4,
+          'text_src': 'Hello',
+          'text_tgt': '你好',
+          'provider': 'p1',
+          'model': 'm1',
+          'compat_mode': 'openai_chat',
+          'chunk_id': 'chunk-1',
+          'issues': ['译文为空'],
+          'quality_issues': [
+            {'code': 'cps_high', 'message': 'too fast'},
+          ],
+        },
+      ],
+      'quality': {'hard_issues': 1},
+      'delivery': {
+        'srt': {'lines': 1},
+      },
+      'reflow': {'enabled': true},
+      'memory': {'entries': 2},
+      'output_paths': {'srt': r'D:\movie.zh-CN.srt'},
+    });
+
+    expect(workspace.task.taskId, 'tvx_done');
+    expect(workspace.task.taskDir, r'D:\artifacts\tvx_done');
+    expect(workspace.hasSegments, isTrue);
+    expect(workspace.segments.single.timeRangeLabel, '00:01.200 - 00:03.400');
+    expect(workspace.segments.single.sourceText, 'Hello');
+    expect(workspace.segments.single.targetText, '你好');
+    expect(workspace.segments.single.provider, 'p1');
+    expect(workspace.issueCount, 2);
+    expect(workspace.outputPaths, {'srt': r'D:\movie.zh-CN.srt'});
+  });
+
   test(
     'AppServiceClient calls runtime and result methods with typed payloads',
     () async {
       final transport = _RecordingTransport({
+        'tasks.list': [
+          {
+            'task_id': 'tvx_done',
+            'status': 'DONE',
+            'input_file': r'D:\done.mp4',
+            'task_dir': r'D:\artifacts\tvx_done',
+          },
+        ],
         'runtime.submitRun': {
           'ok': true,
           'task_id': 'tvx_1',
@@ -226,6 +380,20 @@ void main() {
           'task_dir': r'D:\artifacts\tvx_1',
           'terminal': false,
           'message': 'Task queued.',
+        },
+        'runtime.submitResume': {
+          'ok': true,
+          'task_id': 'tvx_1',
+          'status': 'QUEUED',
+          'task_dir': r'D:\artifacts\tvx_1',
+          'terminal': false,
+          'message': 'Resume queued.',
+        },
+        'runtime.cancel': {
+          'task_id': 'tvx_1',
+          'status': 'CANCEL_REQUESTED',
+          'input_file': r'D:\input.mp4',
+          'runtime': {'can_cancel': true},
         },
         'runtime.snapshot': {
           'active': {'task_id': 'tvx_1'},
@@ -242,7 +410,29 @@ void main() {
           'has_more': false,
         },
         'result.open': {
+          'task': {
+            'task_id': 'tvx_1',
+            'status': 'DONE',
+            'input_file': r'D:\input.mp4',
+          },
+          'segments': [
+            {'id': 1, 'start': 0, 'end': 1, 'text_src': 'Hi'},
+          ],
           'output_paths': {'srt': r'D:\out.srt'},
+        },
+        'result.segments.save': {
+          'task': {
+            'task_id': 'tvx_1',
+            'status': 'DONE',
+            'input_file': r'D:\input.mp4',
+          },
+          'segments': [
+            {'id': 1, 'start': 0, 'end': 1, 'text_src': 'Hi', 'text_tgt': '嗨'},
+          ],
+          'output_paths': {'srt': r'D:\out.srt'},
+        },
+        'result.reexport': {
+          'output_paths': {'srt': r'E:\fixed-output\out.srt'},
         },
       });
       final client = AppServiceClient(transport);
@@ -254,21 +444,334 @@ void main() {
         'overrides': {'output_format': 'both'},
       });
       final runtime = await client.runtimeSnapshot();
+      final tasks = await client.taskList();
       final events = await client.taskEvents('tvx_1', cursor: 0, limit: 10);
       final result = await client.resultOpen('tvx_1');
+      final workspace = await client.openTaskResult('tvx_1');
+      final savedWorkspace = await client.resultSegmentsSave('tvx_1', [
+        {'id': 1, 'start': 0, 'end': 1, 'text_src': 'Hi', 'text_tgt': '嗨'},
+      ]);
+      final reexported = await client.resultReexport(
+        'tvx_1',
+        outputFormat: 'srt',
+        outputDir: r'E:\fixed-output',
+        bilingual: false,
+      );
+      final resumed = await client.submitResume({
+        'request_version': 1,
+        'task_id': 'tvx_1',
+        'overrides': {'output_format': 'srt'},
+      });
+      final cancelled = await client.cancel('tvx_1');
 
       expect(submitted.taskId, 'tvx_1');
+      expect(resumed.message, 'Resume queued.');
+      expect(cancelled.status, 'CANCEL_REQUESTED');
       expect(runtime.activeTaskId, 'tvx_1');
       expect(runtime.queued, ['tvx_2']);
+      expect(tasks.single.taskId, 'tvx_done');
+      expect(tasks.single.taskDir, r'D:\artifacts\tvx_done');
       expect(events.events, hasLength(1));
       expect(result['output_paths'], {'srt': r'D:\out.srt'});
+      expect(workspace.task.taskId, 'tvx_1');
+      expect(workspace.segments.single.id, 1);
+      expect(savedWorkspace.segments.single.targetText, '嗨');
+      expect(reexported['output_paths'], {'srt': r'E:\fixed-output\out.srt'});
       expect(
         transport.calls.first.params['request'],
         containsPair('input', r'D:\input.mp4'),
       );
-      expect(transport.calls[2].params, containsPair('cursor', 0));
-      expect(transport.calls[2].params, containsPair('limit', 10));
+      expect(transport.calls[3].params, containsPair('cursor', 0));
+      expect(transport.calls[3].params, containsPair('limit', 10));
+      expect(transport.calls[6].method, 'result.segments.save');
+      expect(transport.calls[6].params, containsPair('task_id', 'tvx_1'));
+      expect(transport.calls[6].params['segments'], isA<List>());
+      expect(transport.calls[7].method, 'result.reexport');
+      expect(transport.calls[7].params, containsPair('task_id', 'tvx_1'));
+      expect(transport.calls[7].params, containsPair('output_format', 'srt'));
+      expect(
+        transport.calls[7].params,
+        containsPair('output_dir', r'E:\fixed-output'),
+      );
+      expect(transport.calls[7].params, containsPair('bilingual', false));
+      expect(transport.calls[8].method, 'runtime.submitResume');
+      expect(
+        transport.calls[8].params['request'],
+        containsPair('task_id', 'tvx_1'),
+      );
+      expect(transport.calls[9].method, 'runtime.cancel');
+      expect(transport.calls[9].params, containsPair('task_id', 'tvx_1'));
+      expect(transport.calls[9].params, containsPair('force', false));
     },
+  );
+
+  test('LocalServiceSupervisor talks to real app service process', () async {
+    final serviceRoot = await Directory.systemTemp.createTemp(
+      'transvortex_service_smoke_',
+    );
+    File(
+      '${serviceRoot.path}${Platform.pathSeparator}pipeline.yaml',
+    ).writeAsStringSync('artifacts_dir: artifacts\n', encoding: utf8);
+    File(
+      '${serviceRoot.path}${Platform.pathSeparator}providers.yaml',
+    ).writeAsStringSync('''
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: PROVIDER_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+''', encoding: utf8);
+    File(
+      '${serviceRoot.path}${Platform.pathSeparator}demo.mp4',
+    ).writeAsBytesSync(const [0, 1, 2, 3]);
+    final repoRoot = Directory.current.parent;
+    final supervisor = LocalServiceSupervisor(
+      repoRoot: repoRoot,
+      serviceRoot: serviceRoot,
+      pythonExecutable: Platform.isWindows ? 'python' : 'python3',
+      requestTimeout: const Duration(seconds: 10),
+    );
+    final session = await supervisor.start();
+    addTearDown(() async {
+      await session.shutdown();
+      await _deleteDirectoryWithRetries(serviceRoot);
+    });
+
+    final info = await session.client.info();
+    final snapshot = await session.client.desktopSnapshot();
+    final submitted = await session.client.submitRun({
+      'request_version': 1,
+      'input': '${serviceRoot.path}${Platform.pathSeparator}demo.mp4',
+      'source_lang': 'en',
+      'target_lang': 'zh-CN',
+      'provider': 'p1',
+      'model': 'm1',
+    });
+    final cancelled = await session.client.cancel(
+      submitted.taskId,
+      force: false,
+    );
+    final events = await session.client.taskEvents(submitted.taskId, limit: 10);
+
+    expect(info.service, 'transvortex.app_service');
+    expect(snapshot.configReadiness.translationLabel, 'p1');
+    expect(submitted.status, 'QUEUED');
+    expect(cancelled.status, 'CANCEL_REQUESTED');
+    expect(events.events, isNotEmpty);
+    expect(events.events.first, isA<Map>());
+  });
+
+  test(
+    'LocalServiceSupervisor runs a real embedded-subtitle worker to DONE',
+    () async {
+      final serviceRoot = await Directory.systemTemp.createTemp(
+        'transvortex_worker_smoke_',
+      );
+      File(
+        '${serviceRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsStringSync('artifacts_dir: artifacts\n', encoding: utf8);
+      File(
+        '${serviceRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsStringSync('''
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: PROVIDER_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+''', encoding: utf8);
+      final video = await _writeEmbeddedSubtitleVideo(serviceRoot);
+      final repoRoot = Directory.current.parent;
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: repoRoot,
+        serviceRoot: serviceRoot,
+        pythonExecutable: Platform.isWindows ? 'python' : 'python3',
+        requestTimeout: const Duration(seconds: 10),
+      );
+      final session = await supervisor.start();
+      String? submittedTaskId;
+      addTearDown(() async {
+        final taskId = submittedTaskId;
+        if (taskId != null) {
+          try {
+            final snapshot = await session.client.desktopSnapshot();
+            final task = snapshot.taskById(taskId);
+            if (task?.isTerminal != true) {
+              await session.client.cancel(taskId, force: true);
+            }
+          } on Object {
+            // Best effort cleanup for a worker smoke that may already be done.
+          }
+        }
+        await session.shutdown();
+        await _deleteDirectoryWithRetries(serviceRoot);
+      });
+
+      final submitted = await session.client.submitRun({
+        'request_version': 1,
+        'input_type': 'video_asr',
+        'input': video.path,
+        'source_lang': 'en',
+        'target_lang': 'zh-CN',
+        'source_mode': 'embedded_subtitle',
+      });
+      submittedTaskId = submitted.taskId;
+      final completed = await _waitForTerminalTask(
+        session.client,
+        submitted.taskId,
+      );
+      final events = await session.client.taskEvents(submitted.taskId);
+
+      expect(submitted.status, 'QUEUED');
+      expect(completed.status, 'DONE');
+      expect(completed.outputPath, isNotNull);
+      expect(completed.outputPaths['segments'], completed.outputPath);
+      final output = File(completed.outputPath!);
+      expect(output.existsSync(), isTrue);
+      expect(
+        output.readAsStringSync(encoding: utf8),
+        contains('Hello from subtitle'),
+      );
+      expect(
+        events.events.any((event) => event is Map && event['type'] == 'done'),
+        isTrue,
+      );
+    },
+    skip: _hasEmbeddedSubtitleSmokeTools()
+        ? false
+        : 'ffmpeg and ffprobe are required for the real worker smoke',
+  );
+
+  test(
+    'LocalServiceSupervisor drives a real worker cancel to CANCELLED',
+    () async {
+      final serviceRoot = await Directory.systemTemp.createTemp(
+        'transvortex_worker_cancel_smoke_',
+      );
+      final slowAsr = await _SlowAsrServer.start();
+      addTearDown(() => slowAsr.close());
+      File(
+        '${serviceRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsStringSync('''
+artifacts_dir: artifacts
+source_mode: asr
+asr:
+  provider: slow_asr
+asr_providers:
+  - name: slow_asr
+    kind: local_server
+    protocol: openai_transcriptions
+    base_url: http://127.0.0.1:${slowAsr.port}
+    endpoint: /v1/audio/transcriptions
+    model: whisper-test
+    auth:
+      type: none
+    execution:
+      concurrency: 1
+      timeout_seconds: 10
+      retry: 1
+    chunking:
+      mode: none
+      window_seconds: 30
+      max_window_seconds: 30
+      min_window_seconds: 1
+      overlap_seconds: 0
+      short_audio_seconds: 30
+    preprocessing:
+      trim_silence:
+        enabled: false
+''', encoding: utf8);
+      File(
+        '${serviceRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsStringSync('''
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: PROVIDER_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+''', encoding: utf8);
+      final video = await _writeAudioVideo(serviceRoot);
+      final repoRoot = Directory.current.parent;
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: repoRoot,
+        serviceRoot: serviceRoot,
+        pythonExecutable: Platform.isWindows ? 'python' : 'python3',
+        requestTimeout: const Duration(seconds: 10),
+      );
+      final session = await supervisor.start();
+      String? submittedTaskId;
+      addTearDown(() async {
+        final taskId = submittedTaskId;
+        if (taskId != null) {
+          try {
+            final snapshot = await session.client.desktopSnapshot();
+            final task = snapshot.taskById(taskId);
+            if (task?.isTerminal != true) {
+              await session.client.cancel(taskId, force: true);
+            }
+          } on Object {
+            // Best effort cleanup for a worker smoke that may already be done.
+          }
+        }
+        await session.shutdown();
+        await _deleteDirectoryWithRetries(serviceRoot);
+      });
+
+      final submitted = await session.client.submitRun({
+        'request_version': 1,
+        'input_type': 'video_asr',
+        'input': video.path,
+        'source_lang': 'en',
+        'target_lang': 'zh-CN',
+        'source_mode': 'asr',
+      });
+      submittedTaskId = submitted.taskId;
+      await _waitForSlowAsrRequestOrFail(
+        slowAsr,
+        client: session.client,
+        transport: session.transport,
+        serviceRoot: serviceRoot,
+        taskId: submitted.taskId,
+      );
+      final cancelRequested = await session.client.cancel(submitted.taskId);
+      slowAsr.release();
+      final terminal = await _waitForTerminalTask(
+        session.client,
+        submitted.taskId,
+      );
+      final events = await session.client.taskEvents(submitted.taskId);
+
+      expect(cancelRequested.status, 'CANCEL_REQUESTED');
+      expect(terminal.status, 'CANCELLED');
+      expect(
+        events.events.any(
+          (event) => event is Map && event['type'] == 'cancel_requested',
+        ),
+        isTrue,
+      );
+      expect(
+        events.events.any(
+          (event) => event is Map && event['type'] == 'cancelled',
+        ),
+        isTrue,
+      );
+      expect(
+        events.events.any((event) => event is Map && event['type'] == 'done'),
+        isFalse,
+      );
+    },
+    skip: _hasEmbeddedSubtitleSmokeTools()
+        ? false
+        : 'ffmpeg and ffprobe are required for the real worker smoke',
+    timeout: const Timeout(Duration(seconds: 90)),
   );
 
   test('AppServiceClient calls provider and ASR admin methods', () async {
@@ -371,6 +874,30 @@ void main() {
     expect(task.outputPaths['srt'], r'D:\out.srt');
   });
 
+  test('task labels localize runtime lifecycle stages', () {
+    expect(taskStatusLabel('INIT'), '等待中');
+    expect(taskStatusLabel('PRECHECK'), '检查环境');
+    expect(taskStatusLabel('ASR'), '识别语音');
+    expect(taskStatusLabel('TRANSLATE'), '翻译字幕');
+    expect(taskStatusLabel('EXPORT'), '写出字幕');
+    expect(taskStageLabel('checkpoint: translate'), '翻译字幕');
+    expect(languageLabel('en'), '英语');
+    expect(languageLabel('zh-CN'), '简体中文');
+    expect(languageLabel('zh_TW'), '繁体中文');
+
+    final initTask = TaskSummary.fromJson({
+      'task_id': 'tvx_init',
+      'status': 'INIT',
+    });
+    final asrTask = TaskSummary.fromJson({
+      'task_id': 'tvx_asr',
+      'status': 'ASR',
+    });
+
+    expect(initTask.isActive, isTrue);
+    expect(asrTask.isActive, isTrue);
+  });
+
   test(
     'WindowBridgeTransport delegates calls to the attached main bridge',
     () async {
@@ -396,6 +923,33 @@ void main() {
       expect(calls.single.params, isEmpty);
     },
   );
+
+  test('WindowStateBridge opens attached tool windows', () async {
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final opened = <AppWindowArgs>[];
+    bridge.attachToolWindowOpener((args) async {
+      opened.add(args);
+    });
+
+    await bridge.openToolWindow(AppWindowType.asrSettings);
+    await bridge.openToolWindow(
+      AppWindowType.resultReview,
+      taskId: 'tvx_result_1',
+    );
+    await bridge.openToolWindow(
+      AppWindowType.taskDetail,
+      taskId: 'tvx_detail_1',
+    );
+
+    expect(opened.map((args) => args.type), [
+      AppWindowType.asrSettings,
+      AppWindowType.resultReview,
+      AppWindowType.taskDetail,
+    ]);
+    expect(opened[1].taskId, 'tvx_result_1');
+    expect(opened.last.taskId, 'tvx_detail_1');
+  });
 }
 
 class _FakeTransport implements AppServiceTransport {
@@ -447,6 +1001,282 @@ class _RecordedCall {
 
   final String method;
   final Map<String, Object?> params;
+}
+
+bool _hasEmbeddedSubtitleSmokeTools() {
+  try {
+    final ffmpeg = Process.runSync('ffmpeg', const ['-version']);
+    final ffprobe = Process.runSync('ffprobe', const ['-version']);
+    return ffmpeg.exitCode == 0 && ffprobe.exitCode == 0;
+  } on Object {
+    return false;
+  }
+}
+
+Future<File> _writeEmbeddedSubtitleVideo(Directory root) async {
+  final subtitle = File('${root.path}${Platform.pathSeparator}demo.en.srt');
+  subtitle.writeAsStringSync(
+    '1\n'
+    '00:00:00,000 --> 00:00:00,800\n'
+    'Hello from subtitle\n',
+    encoding: utf8,
+  );
+  final video = File('${root.path}${Platform.pathSeparator}demo.mkv');
+  final result = await Process.run('ffmpeg', [
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=black:s=160x90:d=1',
+    '-f',
+    'srt',
+    '-i',
+    subtitle.path,
+    '-map',
+    '0:v:0',
+    '-map',
+    '1:s:0',
+    '-c:v',
+    'ffv1',
+    '-c:s',
+    'srt',
+    '-metadata:s:s:0',
+    'language=eng',
+    video.path,
+  ]);
+  if (result.exitCode != 0) {
+    fail('ffmpeg could not create embedded-subtitle fixture: ${result.stderr}');
+  }
+  return video;
+}
+
+Future<File> _writeAudioVideo(Directory root) async {
+  final video = File('${root.path}${Platform.pathSeparator}demo_audio.mkv');
+  final result = await Process.run('ffmpeg', [
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=black:s=160x90:d=1',
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=1',
+    '-map',
+    '0:v:0',
+    '-map',
+    '1:a:0',
+    '-c:v',
+    'ffv1',
+    '-c:a',
+    'aac',
+    '-shortest',
+    video.path,
+  ]);
+  if (result.exitCode != 0) {
+    fail('ffmpeg could not create audio-video fixture: ${result.stderr}');
+  }
+  return video;
+}
+
+Future<void> _waitForSlowAsrRequestOrFail(
+  _SlowAsrServer slowAsr, {
+  required AppServiceClient client,
+  required JsonRpcTransport transport,
+  required Directory serviceRoot,
+  required String taskId,
+  Duration timeout = const Duration(seconds: 45),
+}) async {
+  try {
+    await slowAsr.firstRequest.timeout(timeout);
+  } on TimeoutException catch (error) {
+    fail(
+      'slow ASR server did not receive a request within '
+      '${timeout.inSeconds}s: $error\n'
+      '${await _workerSmokeDiagnostics(client, transport, serviceRoot, taskId)}',
+    );
+  }
+}
+
+Future<String> _workerSmokeDiagnostics(
+  AppServiceClient client,
+  JsonRpcTransport transport,
+  Directory serviceRoot,
+  String taskId,
+) async {
+  final lines = <String>[];
+  try {
+    final health = await client.health();
+    lines.add('health=${health.status}; pump=${jsonEncode(health.pump)}');
+  } on Object catch (error) {
+    lines.add('health_error=$error');
+  }
+  try {
+    final snapshot = await client.desktopSnapshot();
+    final task = snapshot.taskById(taskId);
+    lines.add(
+      'task=${task?.status ?? 'missing'}; checkpoint=${task?.displayStatus ?? 'missing'}; '
+      'error=${task?.error ?? ''}; runtime=${jsonEncode(task?.runtime ?? {})}',
+    );
+    lines.add('runtime=${jsonEncode(snapshot.runtime)}');
+  } on Object catch (error) {
+    lines.add('snapshot_error=$error');
+  }
+  try {
+    final events = await client.taskEvents(taskId);
+    lines.add('events=${_eventTypeSummary(events.events)}');
+  } on Object catch (error) {
+    lines.add('events_error=$error');
+  }
+  lines.add('transport_diagnostics=${transport.diagnosticLines.join(' | ')}');
+  final taskDir = Directory(
+    '${serviceRoot.path}${Platform.pathSeparator}artifacts'
+    '${Platform.pathSeparator}$taskId',
+  );
+  for (final relativePath in const [
+    'runtime_request.json',
+    'worker.json',
+    'checkpoint.json',
+    'worker/stdout.log',
+    'worker/stderr.log',
+  ]) {
+    final file = File(
+      '${taskDir.path}${Platform.pathSeparator}'
+      '${relativePath.replaceAll('/', Platform.pathSeparator)}',
+    );
+    if (file.existsSync()) {
+      lines.add('$relativePath=${_tailFile(file)}');
+    } else {
+      lines.add('$relativePath=<missing>');
+    }
+  }
+  return lines.join('\n');
+}
+
+String _eventTypeSummary(List<Object?> events) {
+  if (events.isEmpty) return '<none>';
+  return events
+      .map((event) {
+        if (event is! Map) return '<non-map>';
+        final type = event['type'] ?? '?';
+        final stage = event['stage'] ?? '';
+        final message = event['message'] ?? '';
+        return '$type/$stage/$message';
+      })
+      .join(' | ');
+}
+
+String _tailFile(File file, {int maxChars = 4000}) {
+  try {
+    final text = file.readAsStringSync(encoding: utf8);
+    if (text.length <= maxChars) return text;
+    return text.substring(text.length - maxChars);
+  } on Object catch (error) {
+    return '<read_error: $error>';
+  }
+}
+
+class _SlowAsrServer {
+  _SlowAsrServer._(this._server);
+
+  final HttpServer _server;
+  final _firstRequest = Completer<void>();
+  final _release = Completer<void>();
+
+  int get port => _server.port;
+  Future<void> get firstRequest => _firstRequest.future;
+
+  static Future<_SlowAsrServer> start() async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final instance = _SlowAsrServer._(server);
+    unawaited(instance._serve());
+    return instance;
+  }
+
+  void release() {
+    if (!_release.isCompleted) {
+      _release.complete();
+    }
+  }
+
+  Future<void> close() async {
+    release();
+    await _server.close(force: true);
+  }
+
+  Future<void> _serve() async {
+    await for (final request in _server) {
+      unawaited(_handle(request));
+    }
+  }
+
+  Future<void> _handle(HttpRequest request) async {
+    try {
+      await request.drain<void>();
+      if (!_firstRequest.isCompleted) {
+        _firstRequest.complete();
+      }
+      await _release.future.timeout(const Duration(seconds: 20));
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+        jsonEncode({
+          'text': 'hello from slow asr',
+          'segments': [
+            {'start': 0.0, 'end': 0.8, 'text': 'hello from slow asr'},
+          ],
+        }),
+      );
+    } on Object catch (error, stackTrace) {
+      if (!_firstRequest.isCompleted) {
+        _firstRequest.completeError(error, stackTrace);
+      }
+      request.response.statusCode = HttpStatus.internalServerError;
+      request.response.write('slow asr error');
+    } finally {
+      await request.response.close();
+    }
+  }
+}
+
+Future<TaskSummary> _waitForTerminalTask(
+  AppServiceClient client,
+  String taskId, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  TaskSummary? latest;
+  while (DateTime.now().isBefore(deadline)) {
+    final snapshot = await client.desktopSnapshot();
+    latest = snapshot.taskById(taskId);
+    if (latest?.isTerminal == true) {
+      return latest!;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+  }
+  final status = latest == null
+      ? 'not found in desktop snapshot'
+      : '${latest.status}: ${latest.error ?? ''}';
+  fail('task $taskId did not reach a terminal state: $status');
+}
+
+Future<void> _deleteDirectoryWithRetries(Directory directory) async {
+  Object? lastError;
+  StackTrace? lastStackTrace;
+  for (var attempt = 0; attempt < 10; attempt += 1) {
+    if (!await directory.exists()) return;
+    try {
+      await directory.delete(recursive: true);
+      return;
+    } on Object catch (error, stackTrace) {
+      lastError = error;
+      lastStackTrace = stackTrace;
+      await Future<void>.delayed(Duration(milliseconds: 100 * (attempt + 1)));
+    }
+  }
+  if (lastError != null) {
+    Error.throwWithStackTrace(lastError, lastStackTrace ?? StackTrace.current);
+  }
 }
 
 class _FakeSink implements IOSink {

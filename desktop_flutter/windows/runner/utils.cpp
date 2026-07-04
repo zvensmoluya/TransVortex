@@ -3,6 +3,7 @@
 #include <flutter_windows.h>
 #include <io.h>
 #include <stdio.h>
+#include <ShObjIdl_core.h>
 #include <windows.h>
 
 #include <iostream>
@@ -19,6 +20,11 @@ void CreateAndAttachConsole() {
     std::ios::sync_with_stdio();
     FlutterDesktopResyncOutputStreams();
   }
+}
+
+void SetTransVortexAppUserModelId() {
+  // Best-effort shell identity for taskbar grouping and unpackaged toast paths.
+  (void)::SetCurrentProcessExplicitAppUserModelID(kTransVortexAppUserModelId);
 }
 
 std::vector<std::string> GetCommandLineArguments() {

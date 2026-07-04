@@ -3,8 +3,8 @@ import 'package:flutter/widgets.dart';
 import '../theme/tokens.dart';
 
 /// 主动作焦点 CTA（design spec §4.4）。样子 = 当前状态，承载全部六态。
-/// 三种观感：filled（主焦点，开始 / 重试 / 再做一个）、outline（次级，停下）、
-/// disabled（放入片源前）。hover / active / disabled 四态可读（G7）。
+/// 三种观感：filled（主焦点，选择片源 / 开始 / 重试）、outline（次级，停止任务）、
+/// disabled（保留给不可执行的未来状态）。hover / active / disabled 四态可读（G7）。
 enum CtaVariant { filled, outline, disabled }
 
 class PrimaryAction extends StatefulWidget {
@@ -40,9 +40,7 @@ class _PrimaryActionState extends State<PrimaryAction> {
       fg = T.muted;
       border = T.line;
     } else if (filled) {
-      bg = _down
-          ? T.accentStrong
-          : (_hover ? T.accentStrong : T.accent);
+      bg = _down ? T.accentStrong : (_hover ? T.accentStrong : T.accent);
       fg = const Color(0xFFFFFFFF);
       border = bg;
     } else {
@@ -53,9 +51,7 @@ class _PrimaryActionState extends State<PrimaryAction> {
     }
 
     return MouseRegion(
-      cursor: disabled
-          ? SystemMouseCursors.basic
-          : SystemMouseCursors.click,
+      cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() {
         _hover = false;
@@ -87,10 +83,7 @@ class _PrimaryActionState extends State<PrimaryAction> {
                 : null,
           ),
           alignment: Alignment.center,
-          child: Text(
-            widget.label,
-            style: T.tCta.copyWith(color: fg),
-          ),
+          child: Text(widget.label, style: T.tCta.copyWith(color: fg)),
         ),
       ),
     );

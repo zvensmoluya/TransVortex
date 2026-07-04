@@ -199,7 +199,9 @@ class LocalServiceController extends ChangeNotifier {
     _starting = null;
     if (session == null) {
       _set(
-        const LocalServiceSnapshot(status: LocalServiceConnectionStatus.stopped),
+        const LocalServiceSnapshot(
+          status: LocalServiceConnectionStatus.stopped,
+        ),
       );
       return;
     }
@@ -265,9 +267,7 @@ class LocalServiceController extends ChangeNotifier {
     if (!_isCurrentSession(session, generation)) return;
     _session = null;
     _nextGeneration();
-    final message = error == null
-        ? 'Local Service exited with code $code'
-        : 'Local Service exit monitor failed: $error';
+    final message = error == null ? '本地服务已退出，退出码 $code' : '本地服务退出监视失败：$error';
     _set(
       LocalServiceSnapshot(
         status: LocalServiceConnectionStatus.unavailable,

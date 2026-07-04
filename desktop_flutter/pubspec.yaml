@@ -1,5 +1,5 @@
 name: transvortex_desktop_flutter
-description: TransVortex Flutter desktop spike for validating native-feeling desktop workflows.
+description: TransVortex Flutter desktop app for native-feeling subtitle workflows.
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -13,12 +13,13 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  # Phase A spike dependencies: multi-window lifecycle/state, frameless fixed
-  # windows, OS drag-drop, and the system file dialog.
+  # Desktop dependencies: multi-window lifecycle/state, frameless fixed windows,
+  # OS drag-drop, and the system file dialog.
   desktop_multi_window: ^0.3.0
   window_manager: ^0.4.0
   desktop_drop: ^0.5.0
   file_picker: ^8.0.0
+  flutter_local_notifications: ^22.0.1
 
 dev_dependencies:
   flutter_test:
@@ -28,3 +29,13 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  fonts:
+    - family: TransVortexNotoSansSC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-VF.ttf
+          weight: 400
+        - asset: assets/fonts/NotoSansSC-VF.ttf
+          weight: 500
+        - asset: assets/fonts/NotoSansSC-VF.ttf
+          weight: 700

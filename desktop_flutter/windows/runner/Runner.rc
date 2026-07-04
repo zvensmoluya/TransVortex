@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "TransVortex" "\0"
-            VALUE "FileDescription", "transvortex_desktop_flutter" "\0"
+            VALUE "FileDescription", "TransVortex" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "transvortex_desktop_flutter" "\0"
+            VALUE "InternalName", "TransVortex" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 TransVortex. All rights reserved." "\0"
-            VALUE "OriginalFilename", "transvortex_desktop_flutter.exe" "\0"
-            VALUE "ProductName", "transvortex_desktop_flutter" "\0"
+            VALUE "OriginalFilename", "TransVortex.exe" "\0"
+            VALUE "ProductName", "TransVortex" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -6,6 +7,7 @@ import '../services/app_service_client.dart';
 import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import 'session.dart';
+import 'task_labels.dart';
 
 enum MainRecoveryTarget {
   retry,
@@ -14,6 +16,8 @@ enum MainRecoveryTarget {
   asrSettings,
   pickSource,
   outputDirectory,
+  reexport,
+  reexportDirectory,
 }
 
 @immutable
@@ -66,6 +70,7 @@ class MainWindowViewModel {
   const MainWindowViewModel({
     required this.state,
     required this.statusLine,
+    required this.taskId,
     required this.source,
     required this.translationLabel,
     required this.translationConfigured,
@@ -80,12 +85,14 @@ class MainWindowViewModel {
     required this.progress,
     required this.canceling,
     required this.outputPaths,
+    required this.outputDirectory,
     required this.failure,
     required this.submitting,
   });
 
   final MainState state;
   final String statusLine;
+  final String? taskId;
   final MainSourceDraft? source;
   final String translationLabel;
   final bool translationConfigured;
@@ -100,6 +107,7 @@ class MainWindowViewModel {
   final double progress;
   final bool canceling;
   final Map<String, String> outputPaths;
+  final String? outputDirectory;
   final MainFailureView? failure;
   final bool submitting;
 
@@ -111,7 +119,7 @@ class MainWindowController extends ChangeNotifier {
     required LocalServiceController service,
     PathOpener? pathOpener,
   }) : service = service,
-       _pathOpener = pathOpener ?? PathOpener() {
+       _pathOpener = pathOpener ?? SystemPathOpener() {
     service.addListener(_applyServiceSnapshot);
     _view = _buildView();
   }
@@ -125,6 +133,7 @@ class MainWindowController extends ChangeNotifier {
   bool _bilingual = true;
   List<String> _formats = const ['SRT', 'ASS'];
   bool _termsEnabled = true;
+  String? _outputDirectory;
   String? _taskId;
   bool _submitting = false;
   bool _canceling = false;
@@ -158,7 +167,8 @@ class MainWindowController extends ChangeNotifier {
   void pickSource(String path, {String? name}) {
     final displayName = name ?? _basename(path);
     final kind = _kindOf(displayName);
-    final unsupported = kind == SourceKind.subtitle &&
+    final unsupported =
+        kind == SourceKind.subtitle &&
             !displayName.toLowerCase().endsWith('.srt')
         ? '字幕输入暂时只支持 SRT；ASS / VTT 目前只能作为输出格式。'
         : null;
@@ -168,6 +178,7 @@ class MainWindowController extends ChangeNotifier {
       kind: kind,
       unsupportedReason: unsupported,
     );
+    _outputDirectory = null;
     _taskId = null;
     _statusText = null;
     _completed = false;
@@ -191,6 +202,7 @@ class MainWindowController extends ChangeNotifier {
     _taskPoll?.cancel();
     _taskPoll = null;
     _source = null;
+    _outputDirectory = null;
     _taskId = null;
     _statusText = null;
     _completed = false;
@@ -220,6 +232,14 @@ class MainWindowController extends ChangeNotifier {
     _publish();
   }
 
+  void setOutputDirectory(String? path) {
+    final normalized = path?.trim();
+    _outputDirectory = normalized == null || normalized.isEmpty
+        ? null
+        : normalized;
+    _publish();
+  }
+
   void selectTranslation(TaskOption option) {
     _selectedTranslation = option;
     _publish();
@@ -235,6 +255,11 @@ class MainWindowController extends ChangeNotifier {
     _failure = _failureFromError(error);
     _running = false;
     _completed = false;
+    _publish();
+  }
+
+  void applySmokeTask(TaskSummary task) {
+    _applyTask(task);
     _publish();
   }
 
@@ -273,7 +298,7 @@ class MainWindowController extends ChangeNotifier {
     try {
       await service.start();
       final client = service.client;
-      if (client == null) throw StateError('Local Service 未连接');
+      if (client == null) throw StateError('本地服务未连接');
       final result = await client.submitRun(buildRunRequest());
       _taskId = result.taskId;
       _statusText = result.status.isEmpty ? result.message : result.status;
@@ -312,6 +337,47 @@ class MainWindowController extends ChangeNotifier {
     } on Object catch (error) {
       _canceling = false;
       _failure = _failureFromError(error, fallbackAction: '重试取消');
+      _publish();
+    }
+  }
+
+  Future<void> resumeRun() async {
+    if (_submitting) return;
+    final taskId = _taskId;
+    if (taskId == null || taskId.isEmpty) {
+      _failure = const MainFailureView(
+        reason: '还没有可继续的任务',
+        actionLabel: '重试',
+        target: MainRecoveryTarget.retry,
+      );
+      _publish();
+      return;
+    }
+    _submitting = true;
+    _running = true;
+    _completed = false;
+    _canceling = false;
+    _statusText = '正在继续任务';
+    _failure = null;
+    _publish();
+    try {
+      await service.start();
+      final client = service.client;
+      if (client == null) throw StateError('本地服务未连接');
+      final result = await client.submitResume(buildResumeRequest());
+      _taskId = result.taskId.isEmpty ? taskId : result.taskId;
+      _statusText = result.status.isEmpty ? result.message : result.status;
+      _eventCursor = 0;
+      _recentEvents = const [];
+      _ensureTaskPolling();
+      await refreshSnapshot();
+    } on Object catch (error) {
+      _running = false;
+      _canceling = false;
+      _failure = _failureFromError(error);
+      _publish();
+    } finally {
+      _submitting = false;
       _publish();
     }
   }
@@ -357,27 +423,68 @@ class MainWindowController extends ChangeNotifier {
   }
 
   Future<void> openResultFile() async {
-    final path = await _primaryResultPath();
+    final path = await _existingPrimaryResultPath();
     if (path == null) throw StateError('还没有输出文件记录');
     await _pathOpener.revealFile(path);
   }
 
   Future<void> openResultFolder() async {
-    final path = await _primaryResultPath();
+    final path = await _existingPrimaryResultPath();
     final dir = path == null ? null : _parentPath(path);
     if (dir == null || dir.isEmpty) throw StateError('还没有输出目录记录');
     await _pathOpener.openDirectory(dir);
   }
 
   Future<void> reexportResult() async {
+    await _reexportResultTo(outputDirectory: null);
+  }
+
+  Future<void> reexportResultToDirectory(String outputDirectory) async {
+    final normalized = outputDirectory.trim();
+    if (normalized.isEmpty) {
+      _failure = const MainFailureView(
+        reason: '还没有选择输出目录',
+        actionLabel: '选择输出目录',
+        target: MainRecoveryTarget.outputDirectory,
+      );
+      _publish();
+      return;
+    }
+    _outputDirectory = normalized;
+    await _reexportResultTo(outputDirectory: normalized);
+  }
+
+  Future<void> _reexportResultTo({required String? outputDirectory}) async {
     final taskId = _taskId;
     if (taskId == null) throw StateError('还没有可重新导出的任务');
-    await service.client?.resultReexport(
-      taskId,
-      outputFormat: outputFormatValue(_formats),
-      bilingual: _bilingual,
-    );
-    await refreshSnapshot();
+    try {
+      final result = await service.client?.resultReexport(
+        taskId,
+        outputFormat: outputFormatValue(_formats),
+        outputDir: outputDirectory,
+        bilingual: _bilingual,
+      );
+      final outputs = _asStringMap(
+        result?['output_paths'],
+      ).map((key, value) => MapEntry(key, '$value'));
+      if (outputs.isNotEmpty) _outputPaths = outputs;
+      _failure = null;
+      _completed = true;
+      await refreshSnapshot();
+    } on Object catch (error) {
+      _completed = false;
+      _running = false;
+      final failure = _failureFromError(error, fallbackAction: '重新导出');
+      _failure = failure.target == MainRecoveryTarget.outputDirectory
+          ? MainFailureView(
+              reason: failure.reason,
+              actionLabel: failure.actionLabel,
+              target: MainRecoveryTarget.reexportDirectory,
+            )
+          : failure;
+      _publish();
+      rethrow;
+    }
   }
 
   Map<String, Object?> buildRunRequest() {
@@ -389,9 +496,12 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationOption(snapshot);
     final asr = _effectiveAsrOption(snapshot);
+    final outputDirectory = _effectiveOutputDirectory(source);
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
+      'allowSystemSuggestions': _termsEnabled,
+      'memory_enabled': _termsEnabled,
       'memory_bootstrap_enabled': _termsEnabled,
       'memory_patch_enabled': _termsEnabled,
       if (asr.provider != null && asr.provider!.isNotEmpty)
@@ -405,6 +515,38 @@ class MainWindowController extends ChangeNotifier {
       'source_lang': _sourceLang,
       'target_lang': _targetLang,
       'bilingual': _bilingual,
+      if (outputDirectory != null && outputDirectory.isNotEmpty)
+        'output_dir': outputDirectory,
+      if (translation.provider != null && translation.provider!.isNotEmpty)
+        'provider': translation.provider,
+      if (translation.model != null && translation.model!.isNotEmpty)
+        'model': translation.model,
+      'overrides': overrides,
+    };
+  }
+
+  Map<String, Object?> buildResumeRequest() {
+    final taskId = _taskId;
+    if (taskId == null || taskId.isEmpty) {
+      throw StateError('还没有可继续的任务');
+    }
+    final snapshot = service.snapshot.desktopSnapshot;
+    final translation = _effectiveTranslationOption(snapshot);
+    final asr = _effectiveAsrOption(snapshot);
+    final overrides = <String, Object?>{
+      'output_format': outputFormatValue(_formats),
+      'subtitle_quality_mode': 'balanced',
+      'allowSystemSuggestions': _termsEnabled,
+      'memory_enabled': _termsEnabled,
+      'memory_bootstrap_enabled': _termsEnabled,
+      'memory_patch_enabled': _termsEnabled,
+      if (asr.provider != null && asr.provider!.isNotEmpty)
+        'asr_provider': asr.provider,
+      if (asr.model != null && asr.model!.isNotEmpty) 'asr_model': asr.model,
+    };
+    return {
+      'request_version': 1,
+      'task_id': taskId,
       if (translation.provider != null && translation.provider!.isNotEmpty)
         'provider': translation.provider,
       if (translation.model != null && translation.model!.isNotEmpty)
@@ -415,13 +557,28 @@ class MainWindowController extends ChangeNotifier {
 
   void _applyServiceSnapshot() {
     final snapshot = service.snapshot.desktopSnapshot;
-    final taskId = _taskId;
-    final task = taskId == null ? null : snapshot?.taskById(taskId);
+    final task = _taskFromSnapshot(snapshot);
     if (task != null) _applyTask(task);
     _publish();
   }
 
+  TaskSummary? _taskFromSnapshot(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    final taskId = _taskId;
+    if (taskId != null) {
+      final selectedTask = snapshot.taskById(taskId);
+      if (selectedTask != null) return selectedTask;
+    }
+    if (_source != null || _submitting) return null;
+    return snapshot.latestActiveTask;
+  }
+
   void _applyTask(TaskSummary task) {
+    if (_taskId != task.taskId) {
+      _taskId = task.taskId;
+      _eventCursor = 0;
+      _recentEvents = const [];
+    }
     _source ??= MainSourceDraft(
       name: _basename(task.inputFile),
       path: task.inputFile,
@@ -436,10 +593,14 @@ class MainWindowController extends ChangeNotifier {
     _progress = task.isDone ? 1 : (task.latestProgress ?? _progress);
     _outputPaths = task.outputPaths;
     _statusText = _taskStatusLabel(task);
-    _failure = task.isFailed || task.isCancelled ? _failureFromTask(task) : null;
+    _failure = task.isFailed || task.isCancelled
+        ? _failureFromTask(task)
+        : null;
     if (task.isTerminal) {
       _taskPoll?.cancel();
       _taskPoll = null;
+    } else {
+      _ensureTaskPolling();
     }
   }
 
@@ -465,6 +626,7 @@ class MainWindowController extends ChangeNotifier {
     return MainWindowViewModel(
       state: state,
       statusLine: _statusLine(state),
+      taskId: _taskId,
       source: _source,
       translationLabel: translation.configured ? translation.label : '需配置',
       translationConfigured: translation.configured,
@@ -479,6 +641,7 @@ class MainWindowController extends ChangeNotifier {
       progress: _progress,
       canceling: _canceling,
       outputPaths: _outputPaths,
+      outputDirectory: _outputDirectory,
       failure: _failure,
       submitting: _submitting,
     );
@@ -507,9 +670,7 @@ class MainWindowController extends ChangeNotifier {
     final base = switch (state) {
       MainState.empty => '等待片源',
       MainState.ready => '就绪 · 可开始',
-      MainState.blocked => !translationConfigured
-          ? '需要先配置翻译'
-          : '需要先配置识别',
+      MainState.blocked => !translationConfigured ? '需要先配置翻译' : '需要先配置识别',
       MainState.running => '制作中',
       MainState.completed => '已完成',
       MainState.failed => '制作失败',
@@ -560,19 +721,19 @@ class MainWindowController extends ChangeNotifier {
     if (snapshot == null) return const [];
     return snapshot.providers
         .where((provider) => provider.hasKey)
-        .expand(
-          (provider) {
-            final models = provider.models.isEmpty ? [''] : provider.models;
-            return models.map(
-              (model) => TaskOption(
-                label: model.isEmpty ? provider.name : '${provider.name} · $model',
-                configured: true,
-                provider: provider.name,
-                model: model.isEmpty ? null : model,
-              ),
-            );
-          },
-        )
+        .expand((provider) {
+          final models = provider.models.isEmpty ? [''] : provider.models;
+          return models.map(
+            (model) => TaskOption(
+              label: model.isEmpty
+                  ? provider.name
+                  : '${provider.name} · $model',
+              configured: true,
+              provider: provider.name,
+              model: model.isEmpty ? null : model,
+            ),
+          );
+        })
         .toList(growable: false);
   }
 
@@ -617,7 +778,9 @@ class MainWindowController extends ChangeNotifier {
     final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
     final reason = hint.isNotEmpty
         ? hint
-        : (message.isNotEmpty ? message : _latestEventMessage(_recentEvents) ?? '制作失败');
+        : (message.isNotEmpty
+              ? message
+              : _latestEventMessage(_recentEvents) ?? '制作失败');
     final mapped = _recoveryForCode(code, task: task);
     return MainFailureView(
       reason: reason,
@@ -626,7 +789,10 @@ class MainWindowController extends ChangeNotifier {
     );
   }
 
-  MainFailureView _failureFromError(Object error, {String fallbackAction = '重试'}) {
+  MainFailureView _failureFromError(
+    Object error, {
+    String fallbackAction = '重试',
+  }) {
     if (error is RpcRemoteException) {
       final details = _asStringMap(error.details);
       final info = _asStringMap(details['error_info']);
@@ -646,7 +812,10 @@ class MainWindowController extends ChangeNotifier {
     );
   }
 
-  (String, MainRecoveryTarget) _recoveryForCode(String code, {TaskSummary? task}) {
+  (String, MainRecoveryTarget) _recoveryForCode(
+    String code, {
+    TaskSummary? task,
+  }) {
     final lower = code.toLowerCase();
     if (lower.contains('asr') || lower.contains('whisper')) {
       return ('去配置识别', MainRecoveryTarget.asrSettings);
@@ -654,9 +823,17 @@ class MainWindowController extends ChangeNotifier {
     if (lower.contains('provider') ||
         lower.contains('routing') ||
         lower.contains('credential') ||
+        lower.contains('missing_env') ||
+        lower.contains('env_key') ||
         lower.contains('api_key') ||
         lower.contains('key')) {
       return ('去配置翻译', MainRecoveryTarget.translationSettings);
+    }
+    if (lower.contains('result') ||
+        lower.contains('export') ||
+        lower.contains('moved') ||
+        lower.contains('deleted')) {
+      return ('重新导出', MainRecoveryTarget.reexport);
     }
     if (lower.contains('input') || lower.contains('not_found')) {
       return ('重新选择片源', MainRecoveryTarget.pickSource);
@@ -664,7 +841,7 @@ class MainWindowController extends ChangeNotifier {
     if (lower.contains('permission') ||
         lower.contains('output') ||
         lower.contains('writable')) {
-      return ('查看输出目录', MainRecoveryTarget.outputDirectory);
+      return ('选择输出目录', MainRecoveryTarget.outputDirectory);
     }
     if (task?.canResume == true || lower.contains('interrupt')) {
       return ('继续任务', MainRecoveryTarget.resume);
@@ -672,14 +849,36 @@ class MainWindowController extends ChangeNotifier {
     return ('重试', MainRecoveryTarget.retry);
   }
 
+  Future<String?> _existingPrimaryResultPath() async {
+    final path = await _primaryResultPath();
+    if (path == null) return null;
+    if (await File(path).exists()) return path;
+
+    final refreshed = await _refreshResultPaths();
+    if (refreshed != null && await File(refreshed).exists()) return refreshed;
+
+    _failure = const MainFailureView(
+      reason: '结果文件不在原位置了，可能被移动或删除。可以重新导出字幕。',
+      actionLabel: '重新导出',
+      target: MainRecoveryTarget.reexport,
+    );
+    _completed = false;
+    _publish();
+    throw StateError('结果文件不在原位置了，可以重新导出字幕');
+  }
+
   Future<String?> _primaryResultPath() async {
     if (_outputPaths.isNotEmpty) return primaryOutputPath(_outputPaths);
+    return _refreshResultPaths();
+  }
+
+  Future<String?> _refreshResultPaths() async {
     final taskId = _taskId;
     if (taskId == null) return null;
     final result = await service.client?.resultOpen(taskId);
-    final outputs = _asStringMap(result?['output_paths']).map(
-      (key, value) => MapEntry(key, '$value'),
-    );
+    final outputs = _asStringMap(
+      result?['output_paths'],
+    ).map((key, value) => MapEntry(key, '$value'));
     _outputPaths = outputs;
     return primaryOutputPath(outputs);
   }
@@ -727,7 +926,16 @@ class MainWindowController extends ChangeNotifier {
     final normalized = path.replaceAll(r'\', '/');
     final idx = normalized.lastIndexOf('/');
     if (idx <= 0) return null;
+    if (idx == 2 && normalized.length > 2 && normalized[1] == ':') {
+      return path.substring(0, 3);
+    }
     return path.substring(0, idx);
+  }
+
+  String? _effectiveOutputDirectory(MainSourceDraft source) {
+    final selected = _outputDirectory?.trim();
+    if (selected != null && selected.isNotEmpty) return selected;
+    return _parentPath(source.path);
   }
 
   static String _basename(String path) {
@@ -737,15 +945,12 @@ class MainWindowController extends ChangeNotifier {
   }
 
   static String _taskStatusLabel(TaskSummary task) {
-    return switch (task.status) {
-      'QUEUED' => '等待本地服务调度',
-      'CANCEL_REQUESTED' => '正在取消',
-      'DONE' => '字幕已生成',
-      'FAILED' => '制作失败',
-      'CANCELLED' => '已取消',
-      'INTERRUPTED' => '任务中断',
-      _ => task.displayStatus,
-    };
+    if (task.status == 'RUNNING' && task.displayStatus != task.status) {
+      final stage = _friendlyStageText(task.displayStatus);
+      if (stage != null) return stage;
+    }
+    return _friendlyStatusText(task.status) ??
+        taskStageLabel(task.displayStatus);
   }
 
   static Map<String, Object?> _asStringMap(Object? value) {
@@ -769,11 +974,66 @@ class MainWindowController extends ChangeNotifier {
 
   static String? _latestEventMessage(List<Map<String, Object?>> events) {
     for (final event in events.reversed) {
-      final message = '${event['message'] ?? ''}'.trim();
-      if (message.isNotEmpty) return message;
       final stage = '${event['stage'] ?? ''}'.trim();
-      if (stage.isNotEmpty) return stage;
+      final status = '${event['status'] ?? ''}'.trim();
+      final message = '${event['message'] ?? ''}'.trim();
+      final mapped = _friendlyEventText(stage, status, message);
+      if (mapped != null) return mapped;
+      if (message.isNotEmpty && !_looksInternalEventMessage(message)) {
+        return message;
+      }
+      if (status.isNotEmpty) return _friendlyStatusText(status) ?? status;
+      if (stage.isNotEmpty) return _friendlyStageText(stage) ?? stage;
     }
     return null;
+  }
+
+  static String? _friendlyEventText(
+    String stage,
+    String status,
+    String message,
+  ) {
+    final normalized = [
+      stage,
+      status,
+      message,
+    ].where((item) => item.trim().isNotEmpty).join(' ').toLowerCase();
+    if (normalized.isEmpty) return null;
+    if (normalized.contains('created') || normalized.contains('queued')) {
+      return '任务已创建，等待本地服务调度';
+    }
+    if (normalized.contains('asr') ||
+        normalized.contains('whisper') ||
+        normalized.contains('transcrib')) {
+      return '正在识别语音';
+    }
+    if (normalized.contains('translat')) return '正在翻译字幕';
+    if (normalized.contains('subtitle') || normalized.contains('render')) {
+      return '正在整理字幕';
+    }
+    if (normalized.contains('export') || normalized.contains('write')) {
+      return '正在写出字幕文件';
+    }
+    if (normalized.contains('done') || normalized.contains('complete')) {
+      return '字幕已生成';
+    }
+    return null;
+  }
+
+  static String? _friendlyStageText(String value) {
+    final label = taskStageLabel(value);
+    return label == value ? null : label;
+  }
+
+  static String? _friendlyStatusText(String value) {
+    final label = taskStatusLabel(value);
+    return label == value ? null : label;
+  }
+
+  static bool _looksInternalEventMessage(String value) {
+    final lower = value.toLowerCase();
+    return lower == 'task created' ||
+        lower == 'task queued' ||
+        lower.startsWith('task ');
   }
 }
