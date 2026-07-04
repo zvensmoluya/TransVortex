@@ -20,6 +20,8 @@ desktop/run-tauri-dev*.ps1
 docs/RESEARCH/
 tmp/imagegen/
 output/imagegen/logo-variants/
+output/flutter_spike_validation/
+output/imagegen/transvortex_frontend_assets/
 output/imagegen/*.png
 output/imagegen/*.jpg
 output/imagegen/*.jpeg

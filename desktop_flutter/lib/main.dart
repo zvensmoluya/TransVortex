@@ -584,10 +584,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       final failure = _controller.view.failure?.reason ?? 'unknown failure';
       throw StateError('Smoke controller submission failed: $failure');
     }
-    final client = _service.client;
-    if (client == null) {
-      throw StateError('本地服务未连接，无法等待 controller smoke 任务');
-    }
+    final client = await _ensureSmokeClient(deadline);
     final controllerTerminal = await _waitForControllerSmokeTask(deadline);
     final outputPaths = controllerTerminal.outputPaths;
     final outputPath = MainWindowController.primaryOutputPath(outputPaths);
@@ -619,7 +616,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     var resultOpenError = '';
     if (outputExists && outputContainsExpectedText) {
       try {
-        final opened = await client
+        final resultClient = await _ensureSmokeClient(deadline);
+        final opened = await resultClient
             .resultOpen(taskId)
             .timeout(_remaining(deadline));
         resultOpenOutputPaths = opened['output_paths'] is Map
@@ -762,11 +760,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           return true;
         }
       } on Object {
-        return false;
+        try {
+          client = await _ensureSmokeClient(eventDeadline);
+        } on Object {
+          return false;
+        }
       }
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
     return false;
+  }
+
+  Future<AppServiceClient> _ensureSmokeClient(DateTime deadline) async {
+    await _service.refresh().timeout(_remaining(deadline));
+    final client = _service.client;
+    if (client == null) {
+      throw StateError('本地服务未连接，无法执行 smoke 验证');
+    }
+    return client;
   }
 
   DateTime _earlierDeadline(DateTime a, DateTime b) {
