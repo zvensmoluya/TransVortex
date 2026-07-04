@@ -1,8 +1,10 @@
 # TransVortex Desktop Flutter
 
-This directory contains the Flutter desktop frontend candidate for TransVortex.
+This directory contains the main Flutter desktop frontend for TransVortex.
 
-It is currently in validation mode. It should not replace the existing Tauri frontend until the route-setting criteria are measured, but the directory and package names are intentionally stable so the code can become the main frontend without a path rename.
+The old Tauri desktop tree is frozen as a reference implementation. Active
+desktop delivery, release smoke checks, native notifications, and Local Service
+wiring live here.
 
 ## Local SDK
 
@@ -20,7 +22,7 @@ Current SDK:
 - Windows desktop target enabled
 
 `flutter doctor -v` confirms Visual Studio Build Tools 2022 is available at `D:\openai\vs-buildtools-2022`.
-Android and Chrome targets are not required for this desktop validation.
+Android and Chrome targets are not required for the desktop workflow.
 
 ## Run
 
@@ -40,20 +42,42 @@ flutter build windows --release
 
 ## Validation Scope
 
-The first implementation pass should stay small and answer only the route-setting questions:
+Current release validation focuses on proving the real desktop app path, not a
+temporary validation path:
 
 - Three-window model: main window, translation settings window, ASR settings window.
-- Cross-window state sync: settings changes should update the main window immediately.
+- Supporting tool windows: diagnostics, result review, task history, task detail.
+- Cross-window state sync: settings changes update the main window immediately.
 - Chinese IME behavior in Windows release builds.
-- Python JSON-RPC sidecar startup and line-based stdin/stdout calls.
-- Subtitle review performance with 1000 editable rows.
-- Release build sanity: app starts, windows open, sidecar path assumptions are visible.
+- Python Local Service startup through JSON-RPC line-based stdin/stdout.
+- Real task submission, cancellation, resume, result open, segment edit, and re-export.
+- Windows Toast notification wiring, AUMID shortcut identity, and release bundle contents.
+- Portable package layout: `TransVortex.exe` can find `src/transvortex/app_service.py`
+  from the package root, and package-root Local Service RPC responds to
+  `service.info`, `service.health`, and `service.shutdown`.
+- Portable user-level install check: the packaged `Install-TransVortex.ps1` can
+  copy the package to an install directory, create the AUMID shortcut, and rerun
+  Local Service RPC from the installed layout. This is not a formal installer.
 
-Packaging and notification are important but should not block the first environment setup.
+Useful checks from the repository root:
+
+```powershell
+flutter test
+flutter build windows
+.\scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity
+.\scripts\smoke_flutter_release_matrix.ps1 -SkipCompletedTask
+.\scripts\package_flutter_release.ps1 -OutputRoot "$env:TEMP\transvortex-release" -PackageName TransVortex-portable-test -Force -LaunchCheck
+.\scripts\install_flutter_portable_release.ps1 -SourceRoot "$env:TEMP\transvortex-release\TransVortex-portable-test" -InstallRoot "$env:TEMP\transvortex-installed" -ShortcutPath "$env:TEMP\TransVortex.lnk" -Force
+.\scripts\accept_flutter_release_manual.ps1 -LaunchCheck
+```
+
+The smoke scripts intentionally report `frontend_design_mvp_complete=false`.
+They prove wiring and release behavior; they do not replace full manual visible
+end-to-end acceptance.
 
 ## Non-goals
 
-- Do not rebuild the full TransVortex frontend here.
 - Do not port all existing Tauri UI code.
-- Do not create a second long-term frontend before the validation result is reviewed.
+- Do not revive a second long-term desktop frontend.
+- Do not use HTML mocks, static previews, or debug-only screenshots as release evidence.
 - Do not introduce a broad shared protocol layer unless repeated payload problems appear.

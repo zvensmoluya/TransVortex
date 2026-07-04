@@ -14,7 +14,7 @@
 
 凡本文档与归档材料冲突，以本文档为准。`../archive/2026-07-flutter-doc-consolidation/main-screen-mock.html` 与 `../archive/2026-07-flutter-doc-consolidation/color-system-preview.html` 是 v4 设计预览，用来辅助理解构图和校色；它们不是实现源码，也不是最终验收标准。最终验收必须回到真实 Flutter 桌面运行时窗口和本文档规格。
 
-本规格覆盖**三个窗口的 MVP**：主窗口、翻译模型设置窗、语音识别设置窗。其余能力（术语维护、诊断、历史、任务详情、结果审看、导出复核）属后续设计轮次，不在本规格内。
+本规格的核心 MVP 仍覆盖**三个主流程窗口**：主窗口、翻译模型设置窗、语音识别设置窗。当前实现另补了一个**最小诊断工具窗**，用来承接 `≡` 菜单里的 doctor 入口和语音识别就绪检查；它可把常见翻译 / 语音识别检查项跳转到已接线设置窗，展示活动任务、任务数、队列和中断任务的只读上下文摘要，并用真实 `tasks.list` / `result.open` 读取最近任务与完成任务结果摘要。完成态另有一个**最小结果审看编辑窗**，通过真实 `result.open` 展示任务摘要、字幕片段、输出格式和问题提示，支持按全部 / 有问题 / 空译文做最小片段筛查，通过 `result.segments.save` 保存片段译文，并通过 `result.reexport` 按用户选择的输出格式 / 单双语重新导出；任务历史另有一个**最小工具窗**，通过真实 `tasks.list` 展示最近任务，从完成任务进入结果审看，并打开任务目录 / 结果目录；任务详情另有一个**最小工具窗**，通过真实 `tasks.list` / `tasks.events` 展示任务上下文和事件流，可打开任务目录 / 结果目录，并对后端标记 `can_resume` 的任务调用真实 `runtime.submitResume` 继续任务。完整诊断修复台、术语维护、完整历史恢复矩阵、跨任务批量筛查、完整结果编辑器和高级导出复核仍属后续设计轮次。
 
 ---
 
@@ -30,7 +30,7 @@
 ## 2. 产品结构总览
 
 - **配置分两层，各有各的家（关键决策）**：
-  - **准备配置（基础，配一次）**：定义「有哪些东西可用」——加供应商 / 填 key / base_url / 选 ASR 引擎。家在**标题栏 `≡` 菜单 → 各自独立工具窗**。
+  - **准备配置（基础，配一次）**：定义「有哪些东西可用」——加翻译服务 / 填 key / base_url / 选语音识别引擎。家在**标题栏 `≡` 菜单 → 各自独立工具窗**。
   - **任务配置（运行，每单可选）**：在已备好的里**选这一单用哪个**——用 Opus 还是 Haiku、双语否、出什么格式。家在**主窗口 job 描述里的可点词（选择器）**。
 - **主窗口 = 一次任务，单主体就地变化**：放片源 → 它从「生的」变「带字幕的」，六态都发生在这一个主体上。无左右分栏、无平行输出/日志面板、无路由。
 - 主窗口里**没有准备配置**，只有「这一部片怎么跑 + 启动 + 结果」；准备配置一律走 `≡`。
@@ -61,7 +61,7 @@
 ### 4.1 标题栏（薄，只有 chrome）
 
 - 自绘二次元标题栏：左=品牌点 + 标题 + 一行轻状态字；右=窗控簇 `≡ — ✕`，标题栏拖拽区行为像原生窗口。
-- **`≡` = 准备配置的门**（单个 app 菜单，在窗控簇里 = 窗口 chrome）：翻译模型设置 / 语音识别设置 / 术语管理 / 任务历史 / 诊断。
+- **`≡` = 准备配置与诊断的门**（单个 app 菜单，在窗控簇里 = 窗口 chrome）：当前只放真实接线入口——翻译模型设置 / 语音识别设置 / 诊断 / 任务历史。术语管理等后续窗口在真实接线前不得作为假菜单项出现。
 - **顶栏不出现任何「一排具名入口」**（翻译·识别·术语 横排）——那是顶栏导航的软变体，禁。一个 `≡` 汉堡可以，一排标签不行。
 
 ### 4.2 主体（唯一主角，居中）
@@ -69,7 +69,7 @@
 - **空态**：「片源投递口」开着，中心「放入片源」，副「拖进来，或点击选择 · 视频 / 音频 / 字幕」。
 - **已放入**：投递口收成片源封套，显**文件名**（大、优雅单行截断）+ **类型签**（视频/音频/字幕）+ 已知则语言方向小签。
 - 行为：整窗可拖入（使用当前桌面运行时的原生拖放路径），drag-over 强反馈；点击→系统原生文件 dialog；右键→换片源/移除。
-- 边界：**不是路径输入框**；完整路径走 hover tooltip / 右键。
+- 边界：**不是路径输入框**；hover 只给「文件名 + 压缩后的所在位置」这类短提示，完整路径只通过显式复制 / 打开所在文件夹等动作处理，不在主视觉上横向铺开。
 
 ### 4.3 job 描述 = 任务配置（主体下方，两行可点词）
 
@@ -82,7 +82,7 @@
 ### 4.4 主动作（焦点 CTA，主体最下）
 
 - 一个显眼主动作，**样子 = 当前状态**，承载全部六态（见 §8），就地呈现，失败/完成不另起区域。
-- 标签随态：`放入片源(禁用) / 开始译制 / 去配置翻译 / 停下 / 再做一个 / 重试`。
+- 标签随态：`选择片源 / 开始译制 / 去配置翻译 / 停止任务 / 处理新片源 / 重试`。
 
 ### 4.5 角色位（可选）
 
@@ -96,15 +96,15 @@
 
 ## 5. 翻译模型设置窗规格
 
-它是**模型配置**（成熟模型设置那套：供应商列 + 详情 + 默认模型）。独立工具窗，比主窗口大，横向容两栏。允许「稍微违规」地像原生模型设置面板（表单密度允许），但 ① 无圆角卡片容器 ② 原生工具窗非网页 modal ③ 表单气质不泄漏回主窗口。
+它是**模型配置**（成熟模型设置那套：翻译服务列 + 详情 + 默认模型）。独立工具窗，比主窗口大，横向容两栏。允许「稍微违规」地像原生模型设置面板（表单密度允许），但 ① 无圆角卡片容器 ② 原生工具窗非网页 modal ③ 表单气质不泄漏回主窗口。
 
 字段只做现有的（`ProviderConfig`，[models.py:64](src/transvortex/app/models.py#L64)）。
 
 ### 5.1 分区
 
 - **Z0 标题栏**：「翻译模型设置」，副「配好模型服务，选定默认模型」，右=关闭。
-- **Z1 默认模型条（顶部，常驻结论）**：「翻译默认：<供应商 · 模型>　备用：<… / 无>」。未设时提示「还没选默认模型」。整窗唯一全局生效项，独立常驻。
-- **Z2 供应商扁平列（左，窄）**：内置 OpenAI / Anthropic / Google Gemini / Google Vertex / …，+ 自定义。每行=名称 + 协议标 + 状态点 + 启用态；**选中=整行高亮（左强调边或底色），不是卡片**；行间靠分隔线/留白。底部「+ 添加供应商」（选协议格式 + base_url + key）。多供应商时此窄列可滚（侧列滚动，非卡片台）。
+- **Z1 默认模型条（顶部，常驻结论）**：「翻译默认：<翻译服务 · 模型>　备用：<… / 无>」。未设时提示「还没选默认模型」。整窗唯一全局生效项，独立常驻。
+- **Z2 翻译服务扁平列（左，窄）**：内置 OpenAI / Anthropic / Google Gemini / Google Vertex / …，+ 自定义。每行=名称 + 协议标 + 状态点 + 启用态；**选中=整行高亮（左强调边或底色），不是卡片**；行间靠分隔线/留白。底部「+ 添加翻译服务」（选协议格式 + base_url + key）。多服务时此窄列可滚（侧列滚动，非卡片台）。
 - **Z3 详情面板（右，宽，表单字段，分组靠小标题/分隔/留白，无卡片容器）**：
   - 协议格式 `api_type`：内置固定显示；自定义可选（openai 兼容 / anthropic / gemini / vertex…）。
   - Base URL：可改，内置带默认。
@@ -123,7 +123,7 @@
 
 ## 6. 语音识别设置窗规格
 
-ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻译窗小。引擎映射对过代码（[asr.py:373](src/transvortex/core/asr.py#L373)）。
+语音识别不是翻译服务列，是**选一个识别引擎**。独立工具窗，比翻译窗小。引擎映射对过代码（[asr.py:373](src/transvortex/core/asr.py#L373)）。
 
 ### 6.1 分区
 
@@ -134,16 +134,16 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
   - **云端识别（OpenAI Whisper）** — `remote` + `openai_transcriptions`，要 key。
   - 旁边一句「当前：本机」点明结论。
 - **Z2 选中引擎参数（表单字段，分隔/小标题分组，无卡片容器）**：
-  - 本机：模型规格 `model_size`（large-v3 / medium…）、运算设备 `device`（自动 / GPU / CPU）、就绪状态（模型是否就绪、GPU 是否可用，一行诊断）。无 key。
+  - 本机：模型规格 `model_size`（large-v3 / medium…）、运算设备 `device`（自动 / GPU / CPU）、基础诊断（语音识别配置、faster-whisper 依赖和版本）。无 key。
   - FunASR：Base URL（本地服务地址，如 `http://127.0.0.1:…`）、模型（SenseVoice，默认/可不暴露）、**无 key**；测试=服务是否可连接；提示「需先启动本地 FunASR 服务」。
   - 云端：协议（OpenAI 转写，固定）、Base URL（默认 api.openai.com）、模型（whisper-1）、API key（不回显，`auth.json`）、Endpoint（高级，一般不动）、测试。
 - **Z3 装置位（可选）**：识别小机形象，先留位。
 
 ### 6.2 行为与任务时策略
 
-- 默认 faster-whisper，零 key，丢个视频即可跑（就绪状态反映模型是否已下载/GPU 可用）。FunASR / 云端可选。配好任一 → 主窗口「ASR」变「已配好」。
+- 默认 faster-whisper，零 key，丢个视频即可跑；诊断入口先反映本机语音识别依赖、翻译服务配置和基础连通性，不承诺提前证明模型已下载或 GPU 可用。FunASR / 云端可选。配好任一 → 主窗口「识别」显示已配置。
 - **任务时自动判断字幕来源**（默认不暴露）：丢字幕文件不转写、有内置字幕轨优先用、否则用配好的引擎转写。
-- 强制旁路 / 指定字幕轨 = 高级，延后；ASR 失败由修复件给选项（换云端 / 选已有字幕）。
+- 强制旁路 / 指定字幕轨 = 高级，延后；语音识别失败由修复件给选项（换云端 / 选已有字幕）。
 - 本轮**只做 FunASR 专属**，不暴露抽象的「通用本地 OpenAI server」。
 
 ---
@@ -155,7 +155,7 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 - **长任务跑完 / 失败，尤其窗口不在前台 → 发系统通知**（右下角 toast / 通知中心）：「字幕已生成 · 点击打开」「制作失败 · 点击查看」，点击聚焦 App。
 - **窗口在前台**：任务安静落到完成态（系统通知可抑制）；失败在窗内以**修复件**给可操作动作。
 - 窗内只保留极少、统一色调内的轻状态标识，颜色不当主要喊话手段。
-- **实现待接**：系统通知与打包 / Windows 应用身份同属后续验证项。Flutter 路线需接对应 Windows toast 插件与安装身份方案，不用网页 toast 代替。
+- **当前实现**：Flutter 已接 Windows Toast 插件，任务从运行态进入完成 / 失败且窗口不在前台时会发系统通知；通知点击会尝试聚焦主窗口；通知 payload 使用 task id / 本地 hash，不携带完整源文件路径；release 包已包含通知 DLL。release smoke 已覆盖一次真实任务状态转移经主窗口通知 observer 触发 Windows 插件初始化、toast `show` 调用、AUMID / GUID registry 注册和 Windows Notifications Settings key 校验；Windows runner 已设置进程级 AUMID，`scripts\install_flutter_desktop_shortcut.ps1` 可创建并校验带同一 AUMID 的用户级开始菜单快捷方式，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；`scripts\package_flutter_release.ps1` 可生成包含通知 DLL、快捷方式辅助脚本和用户级安装脚本的 portable 包，并验证包内 Local Service RPC、用户级脚本安装与可选窗口启动。后续仍需补正式 MSIX / installer 分发路径下的通知中心行为；不能用网页 toast 或窗内轻提示替代。
 
 ---
 
@@ -163,10 +163,10 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 
 | 状态 | 就地呈现 | 系统通知 |
 | --- | --- | --- |
-| 空（无片源） | 主体=投递口；无 job 描述；主动作禁用「放入片源」 | 无 |
-| 就绪（有片源 + 翻译/ASR 已配） | 主体=封套；job 描述显当前选择；「开始译制」高亮 | 无 |
-| 受阻（翻译或 ASR 需配） | job 描述对应可点词变 `需配置 ●`（warn）gate；主动作=「去配置翻译/识别」；picker 引到准备配置 | 无 |
-| 制作中 | 主体处就地显进度 + 当前动作短句（「正在识别语音… / 正在翻译…」）+「停下」 | 无 |
+| 空（无片源） | 主体=投递口；无 job 描述；主动作「选择片源」可打开系统文件对话框 | 无 |
+| 就绪（有片源 + 翻译/识别已配） | 主体=封套；job 描述显当前选择；「开始译制」高亮 | 无 |
+| 受阻（翻译或识别需配） | job 描述对应可点词变 `需配置 ●`（warn）gate；主动作=「去配置翻译/识别」；picker 引到准备配置 | 无 |
+| 制作中 | 主体处就地显进度 + 当前动作短句（「正在识别语音… / 正在翻译…」）+「停止任务」 | 无 |
 | 完成 | 主体变交付态 + 〔打开字幕〕〔打开所在文件夹〕；主视觉落到结果 | 后台时发「字幕已生成·点击打开」 |
 | 失败 | 修理贴贴在主体下：一句话阻塞点 + 恢复动作（「目录不可写 →〔选文件夹〕」「翻译连不上 →〔去配置〕」）；数据由 doctor 的 `code`/`hint_zh`/`details.path` 喂 | 后台时发「制作失败·点击查看」 |
 
@@ -223,6 +223,7 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 ### 10.1 字体与字重
 
 - **打包一套带真实多档字重的字体**（随桌面客户端分发，打包体积不约束）。
+- 当前 Flutter 包内已随包 `NotoSansSC-VF.ttf`（OFL 1.1），注册为 `TransVortexNotoSansSC`，由 `ThemeData.fontFamily` 和 `T.*` 文本 token 统一使用。
 - 只用三档真实字重：**Regular 400**（正文）、**Medium 500**（标签/小标题）、**Bold 700**（强调/CTA/品牌）。**禁用 950/930/880 这类渲染不出的精细字重。**
 
 ### 10.2 字阶（CJK 下限：正文 ≥12px，不出现 10/11px 承载有效信息）
@@ -284,10 +285,12 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 每个里程碑按 `../rules/FRONTEND_FAILURE_RECOVERY_RULES.md` 和本节逐条过，重点：
 
 - 无路由 / URL / history / 纵向滚动文档 / 响应式回流。
-- 三窗均**无圆角卡片容器**、无 `overflow:auto` 卡片台、无 provider 表格直铺、无网页 modal。
+- 三窗均**无圆角卡片容器**、无 `overflow:auto` 卡片台、无翻译服务表格直铺、无网页 modal。
 - **无顶栏导航及其软变体**：不出现「一排具名入口」；准备配置只走窗控簇里的单个 `≡`。
 - **主窗口无左右分栏 / 无平行输出 / 日志面板**；状态就地落在单主体上（§4 / §8）。
 - 状态以「当前任务的态 + 系统通知」呈现，**不靠状态灯（纯色编码）**、不铺色、不做错误页/海报。
+- 可见文案优先使用用户概念：语言显示「英语 / 简体中文」而不是 `en / zh-CN`；任务阶段显示「翻译字幕 / 写出字幕」而不是 `TRANSLATE / EXPORT`；任务编号只作为兜底或短辅助信息，不当作主摘要。
+- 路径和内部标识不过度外露：主窗口、任务历史、任务详情、结果审看不得把完整本地路径、完整 `task_id`、原始事件消息作为主要文字或 hover 浮层；诊断窗可以展示关键路径，但必须服务于定位问题，且路径要可截断。
 - 在真实 Flutter 桌面运行时窗口验收；不以 debug 结果替代 Windows release 文件夹运行；最坏内容下零碰撞、零意外裁切。
 - 辅助预览：归档的主窗口 v4 预览和配色预览。预览用于理解方向，不取代真实桌面运行时窗口验收、资产校验与最坏内容验证。
 
@@ -297,10 +300,14 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 
 > 本节部分条目原用旧栈（Tauri / web）措辞。凡针对**已冻结 `desktop/` 树**的清理（旧路由、`lucide-react`、DOM 死分支）均已失效——该树不交付，无需清理；Flutter 主体验只需自身不引入对应结构。以下为对 Flutter 仍有效的待接项：
 
-- 系统通知进入后续验证：Flutter 接对应 Windows toast 插件与安装身份方案（§7）。
-- 打包真实字重字体（§10.1）。
-- 主窗口「术语」开关改为驱动 `allowSystemSuggestions`（§3）。
-- 重做两个配置窗，把现有 `SingleChildScrollView` 滚动表单台替换为 §5 / §6 的主从工具窗结构。
+- 系统通知已接 Windows Toast 路径和点击聚焦回调；release smoke 已覆盖任务状态转移触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；portable 包脚本可验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为验收（§7）。
+- 已打包真实多档字重字体：`desktop_flutter/assets/fonts/NotoSansSC-VF.ttf`，release 构建的 `FontManifest.json` 可验证 `TransVortexNotoSansSC` 注册。
+- 主窗口「术语」开关已写入 `allowSystemSuggestions` 及相关 memory 运行参数；后续仍需结合术语维护窗口校准“生成→回流使用”的完整产品语义。
+- 两个配置窗已改为主从工具窗结构；右侧详情区允许局部滚动，release 主菜单路径已验证能打开翻译 / 语音识别设置窗并读取服务数据；诊断工具窗已能从 `desktop.snapshot.environment` 读取 doctor 报告并展示 PASS / WARN / FAIL 检查项，也能从 `desktop.snapshot` 展示活动任务、任务数、队列和中断任务的只读上下文摘要，并可通过真实 `tasks.list` 刷新最近任务、通过 `result.open` 读取完成任务结果摘要；结果审看窗已能从完成态入口打开，通过真实 `result.open` 展示字幕片段和问题提示，按全部 / 有问题 / 空译文筛查片段，通过 `result.segments.save` 保存片段译文，并通过 `result.reexport` 按用户选择的输出格式 / 单双语重新导出；任务历史窗已有最小入口，通过真实 `tasks.list` 展示最近任务，并能从完成任务进入结果审看、打开任务目录和结果目录；任务详情窗已有最小入口，通过真实 `tasks.list` / `tasks.events` 展示任务上下文和事件，可打开任务目录 / 结果目录，并能对可恢复任务调用真实 `runtime.submitResume`。release exe 隔离 smoke 已覆盖启动 Local Service、读取配置摘要，并通过主窗口 controller 的正常 `runtime.submitRun` 路径提交内嵌字幕视频，使用临时本地 OpenAI-compatible 翻译服务跑 `video_asr_translate` 到真实 worker `DONE`，产出 SRT / ASS；单次 smoke 成功报告会写入 `frontend_design_mvp_complete=false`、自动化覆盖范围和仍需人工验收清单；`-WindowType translationSettings` / `-WindowType asrSettings` / `-WindowType diagnostics` / `-WindowType resultReview` / `-WindowType taskHistory` / `-WindowType taskDetail` 已覆盖 release 工具窗启动、读取临时配置、诊断报告、完成任务结果、最近任务列表或任务事件、Flutter 渲染树截图和 Flutter overflow 警告条检查，其中 `resultReview` 会保存一次片段译文编辑，选择 ASS / 单语重新导出，确认导出字幕包含编辑文本，并校验所选导出参数传入 `result.reexport`；`taskDetail` 会从失败任务详情触发真实 `runtime.submitResume` 并确认任务重新排队。无翻译配置、缺凭据阻塞、翻译服务测试失败、语音识别空保存方案、诊断窗读取 doctor 报告、任务上下文摘要、最近任务刷新、结果摘要、结果审看、片段筛查、结果编辑保存、选择导出格式 / 单双语、重新导出、任务历史、任务目录 / 结果目录打开和任务详情已有自动化覆盖；后续 G1 继续做真实可见 release 窗口完整任务端到端人工验收。
+- `scripts\smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态和六个工具窗渲染截图固化为单命令，矩阵 summary 会记录每个 case 的截图路径、渲染尺寸、非背景采样、Flutter overflow 警告条采样、通知 show 调用、AUMID / GUID registry 和通知设置 key 结果；传入 `-CheckDesktopComposite` 时还会记录桌面合成层截图采样。summary 也会写入 `frontend_design_mvp_complete=false`、自动化覆盖范围和仍需人工验收清单，明确自动 smoke 绿灯不能直接推出“前端设计 MVP 完成”。
+- `resultReview` release smoke 的临时结果包含空译文片段，会通过真实 `result.open` 产生问题计数并在截图里显示“译文为空”，用于证明问题提示和最小片段筛查的数据链路不是前端假数据。
+- 主窗口运行 / 失败态已补长文件名和长恢复提示的防溢出回归；取消、继续任务、结果文件缺失转重新导出修复态、重新导出失败后选择新目录对同一任务重新导出、Windows Toast 通知触发已有防回归覆盖；Dart 到真实 Python Local Service 的 submit/cancel/events smoke 已通过，内嵌字幕 `video_asr` 已覆盖 Local Service pump → 真实 worker → `DONE` 输出，慢语音识别已覆盖真实 worker 取消到 `CANCELLED`；release exe smoke 也已覆盖主窗口 controller 提交链路、翻译输出文本校验、完成态 controller state、`result.open` 打开结果沿用原输出目录、`result.reexport` 重新导出事件和重新导出沿用原输出目录，并可选导出完成态 Flutter 渲染树截图；结果审看 release smoke 已覆盖保存编辑后选择 ASS / 单语重新导出；`-MainPhase empty|ready|blockedTranslation|blockedAsr|running|failed -ScreenshotPath` 已覆盖 release 主窗口等待片源、就绪、翻译受阻、识别受阻、制作中和失败态状态矩阵截图，校验非空界面像素和 Flutter overflow 警告条；portable 包脚本已验证换到包目录后 `python -m transvortex.app_service --no-pump` 能响应 `service.info` / `service.health` / `service.shutdown`，用户级安装脚本可复制安装目录、创建 AUMID 快捷方式并复跑 Local Service RPC，`TransVortex.exe` 也仍能启动窗口；本机 `smoke_external_services.ps1` 已用真实凭据跑通外部翻译、`DemoTest/英文视频.mp4` 媒体任务和 ASR 产物证据；`-CheckNotifications -CheckAppIdentity` 已覆盖通知路径和用户级 AUMID 快捷方式身份。后续仍需真实可见 release 窗口完整任务端到端人工运行、其他目标用户环境的外部服务复跑，以及正式 MSIX / installer 分发路径验收。
+- 真实可见窗口仍是独立验收项：本机 `scripts\smoke_flutter_release_matrix.ps1 -CheckDesktopComposite` 已覆盖 15 个 release case，包括完成态、完成态通知、主窗口六态和六个工具窗；所有 case 的 Flutter 渲染树截图、桌面合成层截图和 JSON 报告均保存到矩阵输出目录，且 `desktop_composite_ok=true`、`desktop_composite_overflow_stripe_samples=0`。这补足了自动窗口区域截图证据，但不覆盖人工选择片源 / 提交 / 观察运行 / 完成 / 打开结果 / 审看结果的完整路径；该路径用 `scripts\accept_flutter_release_manual.ps1` 记录逐步确认、窗口截图和 JSON 报告，通过 G1 前仍要做人工直接观察。
 - 拖拽收敛为 Flutter 桌面原生单路径。
 
 ---
@@ -308,8 +315,9 @@ ASR 不是供应商列，是**选一个识别引擎**。独立工具窗，比翻
 ## 13. 留待后续设计（不在本规格）
 
 - 使用术语 / 术语维护 / 预设术语表（并接通「生成→回流翻译」）。
+- 完整诊断修复台、自动修复动作、运行队列检查、任务详情诊断和更完整环境修复台。
 - 模型自定义参数 / reasoning effort（高级位）。
 - 字幕整形（质量）详细设置。
 - 强制旁路 / 指定字幕轨。
 - 通用本地 OpenAI server（本轮只做 FunASR 专属）。
-- 任务历史 / 任务详情 / 事件 / 结果审看 / 导出复核的窗口与世界归位。
+- 任务历史 / 任务详情 / 事件 / 跨任务批量筛查 / 完整结果编辑器 / 高级导出复核的窗口与世界归位。

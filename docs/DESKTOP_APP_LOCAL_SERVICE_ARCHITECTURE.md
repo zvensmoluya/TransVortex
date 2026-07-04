@@ -102,6 +102,7 @@ Python 后端已经是一套相对成熟、但按 agent 用途打磨的能力，
 - `DesktopApi.dispatch`（`src/transvortex/app/desktop_api.py`）已覆盖约三十个方法：`desktop.snapshot`、`config.get`、`tasks.list`、`tasks.events`、`runtime.snapshot/reconcile/submitRun/submitResume/acquireNext/releaseActive/cancel`、`provider.*`、`auth.*`、`prompt.asr.*`、`result.*`、`memory.exportPreset`、`catalog.*` 等。
 - `transvortex.artifacts.runtime.TaskRuntime` 已实现任务队列（catalog + `QUEUED`）、单活动锁 `.runtime/active.json`、Worker 心跳、跨平台 pid 存活检测（含 Windows）、`reconcile` 崩溃恢复、`INTERRUPTED` 分类，以及带宽限期的 `force_cancel`。
 - `transvortex.cli` 的 `_spawn_detached_worker` 已能以分离进程方式拉起 Worker，并把日志重定向到 `task_dir/worker/`，长期被 CLI 路径使用。
+- `kind: local_server` 的 ASR HTTP 调用已显式绕过环境代理，避免 `HTTP_PROXY` / `HTTPS_PROXY` 把 localhost 请求转发到代理后返回 502；远程翻译 provider 和远程 ASR 仍按用户环境代理配置运行。
 
 需要澄清一个容易被误解的点：`DesktopApi` 当前是无状态的——每个请求都现场 `load_app_config` 并新建 `TaskRuntime`，不持有持久的内存权威状态。权威状态全部在磁盘上（见 9.1）。
 
@@ -115,19 +116,19 @@ Python 后端已经是一套相对成熟、但按 agent 用途打磨的能力，
 
 ### 6.2 Flutter 前端
 
-当前 `desktop_flutter/` 仍是 Phase A spike。它验证了主窗口、设置窗口、跨窗口状态同步、中文输入、sidecar 探针和字幕审看小样等方向。
+当前 `desktop_flutter/` 已经从 Phase A 早期验证收束到正式候选前端路径。主窗口、设置窗口和跨窗口状态同步仍继承了早期验证阶段确认的技术方向，但活跃代码已移除旧验证状态命名、临时探针和演示入口。
 
-当前 Flutter sidecar 逻辑仍是探针式：
+当前 Flutter 服务接线走正式 Local Service client：
 
-- 点击按钮时临时 `Process.start('python', ...)`。
-- 发起 `desktop.snapshot` 和一个错误方法。
-- 关闭 stdin 后等待进程退出。
+- 主窗口由 `LocalServiceController` 启动 Python Local Service。
+- Dart 侧通过 `AppServiceClient` 调用 `desktop.snapshot`、`runtime.submitRun`、`tasks.events`、`runtime.cancel`、`result.*` 等真实 RPC。
+- release smoke 已覆盖启动 Local Service、读取配置摘要、提交任务到真实 worker、等待 `DONE`、校验输出文件和重新导出。
 
-因此它还不是正式 Local Service client。
+因此它不再是“临时探针式验证”。当前本机已补真实外部翻译服务 / 语音识别证据、系统通知横幅人工确认、AppUserModelID 开始菜单快捷方式自动创建 / 校验，以及 portable release 包内 Local Service RPC 检查、用户级脚本安装检查和包目录启动检查。portable 包会把 Flutter release bundle 与 `src/`、`prompts/`、`pipeline.yaml` 和由 `providers.example.yaml` 复制出的 `providers.yaml` 放在同一包根，因为 Dart 侧 Local Service supervisor 会从当前目录和 exe 目录向上查找 `src/transvortex/app_service.py`；打包脚本会从包根启动 `python -m transvortex.app_service --no-pump` 验证 `service.info` / `service.health` / `service.shutdown`，包根 `Install-TransVortex.ps1` 或仓库脚本 `scripts\install_flutter_portable_release.ps1` 可把 portable 包复制到用户级安装目录、创建 AUMID 快捷方式并在安装目录复跑 Local Service RPC。仍未完成的系统级证明是通过 `scripts\accept_flutter_release_manual.ps1` 完成完整真实可见 release 窗口人工端到端，以及正式 MSIX / installer 分发包下的新机器安装验收。
 
 ### 6.3 Flutter 多窗口
 
-`desktop_multi_window` 的每个窗口是独立 Flutter engine。跨窗口通过 `WindowMethodChannel` 进行方法调用。目前项目中只有一个轻量的 `transvortex.state` 通道，用于 spike 状态同步。
+`desktop_multi_window` 的每个窗口是独立 Flutter engine。跨窗口通过 `WindowMethodChannel` 进行方法调用。当前项目中有轻量的 `transvortex.state` 通道，用于主窗口和设置工具窗同步配置摘要。
 
 这类跨窗口通信适合 UI 状态协调，不应直接升级为业务后端总线。正式设计必须定义唯一权威状态源，避免多个窗口各自维护服务连接、任务状态和配置副本。
 
@@ -189,12 +190,12 @@ Python 后端已经是一套相对成熟、但按 agent 用途打磨的能力，
 
 - 展示当前服务状态、任务状态、配置状态和结果。
 - 收集用户输入。
-- 发起用户命令，例如保存配置、测试 provider、提交任务、取消任务、打开结果。
+- 发起用户命令，例如保存配置、测试翻译服务、提交任务、取消任务、打开结果。
 - 订阅或刷新服务状态。
 
 约束：
 
-- 不直接启动 Python sidecar。
+- UI 页面不直接临时启动 Python 后端进程。
 - 不直接维护权威任务状态。
 - 不跨窗口传递 secret。
 - 不依赖另一个设置窗口作为配置真实来源。
@@ -250,7 +251,7 @@ result.*
 
 ### 8.2 服务端并发与非阻塞约束
 
-目标是让控制通道（尤其 `service.health`）不被慢请求卡死，而不是让服务全面并发。当前 stdin/stdout 主循环严格串行（`serve` 逐行读、dispatch、逐行写），慢 handler（`provider.test` / `provider.models` 走网络、`runtime.cancel` 宽限等待 `sleep` 轮询）会连 `service.health` 一起卡死。在串行阻塞的服务上做「超时即重启」会误杀正在进行的操作。
+目标是让控制通道（尤其 `service.health`）不被慢请求卡死，而不是让服务全面并发。当前 stdin/stdout 主循环严格串行（`serve` 逐行读、dispatch、逐行写），慢 handler（主要是 `provider.test` / `provider.models` 这类网络探测）会连 `service.health` 一起卡死。在串行阻塞的服务上做「超时即重启」会误杀正在进行的操作。`runtime.cancel` 已改为非阻塞写取消请求后立即返回，不能再把它当作慢 handler。
 
 但放开并发有硬前提：当前文件 I/O 原语不支持随意并发。`write_json`（`src/transvortex/utils.py`）是 `write_text`、非原子写；TaskStore / TaskRuntime 的 task、runtime、events 文件没有跨进程锁，而 Worker、Local Service、CLI 可能同时写同一批文件。在这个前提下引入写操作线程池只会放大跨进程竞态和「读到半写 JSON」的风险——只加「进程内锁」不够。
 
@@ -332,7 +333,7 @@ Flutter state store 只是缓存和展示层。窗口重新打开时必须能从
 - `desktop.snapshot`：首屏和重连时获取配置、任务、runtime、environment。
 - `config.get` / `provider.*`：配置和 provider 专用刷新。
 - `runtime.snapshot`：任务运行态刷新。
-- `tasks.events`：单任务事件读取，应支持增量读取（`since_seq` / offset / cursor）。注意当前事件（`TaskStore.append_event`）没有稳定的 `seq` 字段，只有 JSONL 行序；需先补事件游标设计——加单调递增 `seq`，或以行偏移作为 cursor——不能假设 `seq` 已存在。events 是 append-only JSONL，全量读会随任务变长而变慢。
+- `tasks.events`：单任务事件读取，当前 `TaskStore.read_events_page` 已使用 JSONL 有效事件行号作为 `cursor` / `next_cursor`，避免 UI 每次全量读取。注意这不是稳定事件 `seq`，如果未来要支持事件压缩、删除、跨存储迁移或多客户端长连接，再升级为 `seq`、byte offset 或 opaque cursor。
 - 后续可加事件订阅或轻量轮询，不急于引入复杂 event bus。
 
 ### 9.3 Secret
@@ -393,12 +394,12 @@ UI -> AppServiceClient -> Local Service -> runtime.submitRun   （写入 QUEUED 
 Local Service pump 线程 -> runtime.acquireNext -> 取得 launch payload
 Local Service pump 线程 -> spawn 分离 Worker（复用 transvortex.cli 的 _spawn_detached_worker）
 Worker -> register_worker / heartbeat / 写 events、artifacts
-UI -> Local Service -> tasks.events(since_seq) / runtime.snapshot
+UI -> Local Service -> tasks.events(cursor) / runtime.snapshot
 ```
 
 Worker spawn 的**近期推荐实现**是 Local Service 的 pump 线程（不是 UI 页面）：`transvortex.cli` 的 `_spawn_detached_worker` 已处理分离进程、`CREATE_NO_WINDOW`、UTF-8 环境和日志重定向，Phase 1 可直接复用，避免在 Dart 侧复刻平台细节。但这**不是「最终 worker lifecycle 所有者」的定论**：托盘、退出策略、服务重启，以及「退出但继续任务 / 取消任务」等语义与 App Host / Supervisor 的最终归属绑定（见 13、16），需在 Supervisor 阶段一并确定。当前只承诺两点：spawn 属于轻量控制动作、不违反「Local Service 不跑重计算」；UI 页面绝不直接 spawn。Worker 以分离进程拉起、父进程退出通常不连带终止它，reconcile 依据磁盘上的 `worker.json` 恢复状态；但完整的进程树 / job object 生命周期仍需设计（见 10.4、12）。
 
-取消流程必须非阻塞：`runtime.cancel` 请求取消后立即返回，不在 handler 内 `sleep` 等待宽限期（当前实现会阻塞，属于待修正项）。宽限→强杀的升级由 pump 线程执行：
+取消流程必须非阻塞：`runtime.cancel` 请求取消后立即返回，不在 handler 内 `sleep` 等待宽限期。当前实现会在 task store 写入取消请求并返回 `CANCEL_REQUESTED`；`force_after_grace` 信息写入 `cancel.requested`，宽限→强杀由 `TaskRuntime.force_cancel_expired` 这类泵/轮询路径执行。
 
 ```text
 UI -> runtime.cancel(task_id)              立即返回，仅置 cancel 请求
@@ -417,7 +418,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - `transvortex` Python 包如何定位。
 - FFmpeg 如何提供或检测。
 - artifact、日志、配置、凭据目录如何定位。
-- Windows 托盘、通知、快捷方式和 AppUserModelID 如何建立。
+- Windows 托盘、正式安装包、通知中心和分发路径如何建立；当前 AppUserModelID 开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 建立并校验，portable 包可由 `scripts\package_flutter_release.ps1` 生成，并验证包内 Local Service RPC、用户级脚本安装与可选窗口启动，但它不等于正式安装器。
 
 这些问题不属于“UI 细节”，而是 App Host / Local Service 架构的一部分。
 
@@ -428,7 +429,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 优点：
 
 - 最少改动。
-- 能快速把当前 Flutter spike 接入真实 Local Service。
+- 能快速把当前 Flutter 正式候选前端接入真实 Local Service。
 - 适合验证完整产品流。
 
 缺点：
@@ -475,7 +476,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 - App Host 最终放在主 Flutter engine、Windows native runner，还是独立 supervisor 进程。
 - Worker 是否使用 Windows job object，以及如何实现进程树清理。
-- 事件增量读取使用 `seq`、byte offset，还是 opaque cursor。
+- 事件增量读取是否从当前 JSONL 行号 cursor 升级为 `seq`、byte offset 或 opaque cursor。
 - 文件锁使用哪种库或平台机制。
 - Windows 安装包使用 MSIX、Inno、NSIS 或其他方案。
 - 未来是否从 stdin/stdout JSON-RPC 升级为 named pipe / local socket / localhost HTTP。
@@ -499,15 +500,15 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - 让控制通道不被慢请求卡死：默认串行处理，仅对只读请求放开有限并发，`service.health` 必须快速返回；写操作暂不进线程池（见 8.2）。
 - 前置工程：给 `write_json` 加原子写、给 runtime 写操作加跨进程锁，作为放开写并发的前提。
 - 增加驱动队列的 pump 线程（acquire → spawn → reconcile）；Phase 1 推荐复用 `transvortex.cli` 的 `_spawn_detached_worker`（最终 worker lifecycle 归属见 16 待决策）。
-- 将 `runtime.cancel` 的宽限→强杀移出 handler。
-- 补事件游标（`seq` 或行 offset），`tasks.events` 支持增量读取。
+- 保持 `runtime.cancel` 非阻塞；宽限→强杀由 pump / 轮询路径执行。
+- 保持 `tasks.events` 的行号 cursor 增量读取；后续如需更强稳定性，再升级为 `seq`、byte offset 或 opaque cursor。
 - 梳理现有 desktop API 的 request / response 文档，统一错误结构和 redaction 边界。
 - 补充相关 Python tests。
 
 ### Phase 2：实现 Dart AppServiceClient
 
 - 新增 `LocalServiceSupervisor` 和 `JsonRpcTransport`。
-- 替换当前 sidecar probe 的临时 `Process.start`。
+- 早期临时探针式 `Process.start` 已被 `LocalServiceSupervisor` / `JsonRpcTransport` 替换；后续继续保持 typed client 边界。
 - 支持启动、健康检查、请求调用、超时、stderr 收集和关闭。
 - 请求按 id 匹配响应；重启判据以管道 EOF / 进程退出为准，不以请求超时为准。
 - 不回显携带 secret 的请求内容。
@@ -516,9 +517,9 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 ### Phase 3：接入真实主流程
 
 - 主窗口从 `desktop.snapshot` 水合真实配置和任务。
-- 配置窗口保存 provider / 凭据时调用 Local Service。
+- 配置窗口保存翻译服务 / 凭据时调用 Local Service。
 - 主窗口提交任务、取消任务、读取任务状态和事件。
-- 现有假进度和 spike 状态逐步退出。
+- 现有假进度和旧验证状态已经退出活跃构建路径，后续继续补齐真实失败恢复和系统级验收。
 
 ### Phase 4：Supervisor 与托盘
 
@@ -530,7 +531,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 ### Phase 5：打包与发布验证
 
 - 验证 release 构建能定位 Python runtime、资源、配置和 artifact。
-- 建立 Windows 安装包、快捷方式、AUMID、托盘和通知。
+- 建立 Windows 安装包、托盘和分发路径通知中心验收；当前 raw release exe 的 AUMID 开始菜单快捷方式已有脚本化建立 / 校验入口，portable 包脚本已能验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动。
 - 验证新机器安装后首启、配置、运行、关闭窗口继续任务、退出策略。
 
 ## 15. 验收标准
@@ -576,11 +577,11 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - Worker spawn 与 lifecycle 的最终所有者：Phase 1 推荐由 Local Service pump spawn 并复用 `_spawn_detached_worker`，但最终归属与 App Host / Supervisor 决策、退出策略绑定（见 11、13）。
 - 放开服务端写并发的前提工程：`write_json` 原子写、runtime 写操作跨进程锁（见 8.2）。
 - Worker 进程生命周期：job object、进程树清理、退出时保留 / 终止 Worker 的策略（见 10.4、12）。
-- 事件游标设计：事件加单调递增 `seq` 或以行 offset 作为 cursor，以支持增量读取（见 9.2）。
+- 事件游标升级策略：当前已使用 JSONL 行号 cursor；后续如需更强稳定性，再升级为单调递增 `seq`、byte offset 或 opaque cursor（见 9.2）。
 - App Host / Supervisor 最终放在主 Flutter engine、Windows native runner，还是独立 supervisor 进程（见 13）。
 - 通信是否在未来升级为 named pipe / local socket / localhost HTTP（仅当需要窗口全关后仍运行或多客户端并发时再评估）。
 - 任务并发模型：当前 `active.json` 强制单活动 Worker、任务串行；是否支持多 Worker 并发是后续产品决策。
-- release 包是否内置 Python runtime、FFmpeg，以及如何管理体积和升级。
+- release 包是否内置 Python runtime、FFmpeg，以及如何管理体积和升级；当前 portable 包明确不内置二者，只验证文件布局、包内 Local Service RPC、用户级脚本安装和启动链路。
 - macOS / Linux 是否作为早期目标，还是 Windows 优先。
 
 ## 17. 当前建议
@@ -598,4 +599,4 @@ Local Service Integration Milestone
 3. 然后让 Flutter 主流程接真实服务数据。
 4. 最后推进托盘、Supervisor 和打包验证。
 
-这样可以避免在 UI spike 中继续消耗团队精力，同时把真正决定稳定性和性能的核心层收拢到可审核、可测试、可演进的架构边界上。
+这样可以避免在 UI 早期验证路径上继续消耗团队精力，同时把真正决定稳定性和性能的核心层收拢到可审核、可测试、可演进的架构边界上。

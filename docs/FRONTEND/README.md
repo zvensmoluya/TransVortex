@@ -5,6 +5,7 @@
 当前结论：
 
 > Flutter 是主体验前端。历史桌面前端只证明后端对接可行，不再作为视觉、页面骨架或兼容约束。
+> 早期 Flutter 验证已经收束到正式候选实现路径；这不等于“前端设计 MVP 已完成”，真实可见 release 窗口、外部服务和系统通知仍需单独验收。
 
 ## 当前有效文档
 
@@ -20,8 +21,8 @@
    - 当前可实现设计规格。
    - 定义主窗口、翻译模型设置窗、语音识别设置窗的产品结构、交互和视觉边界。
 4. `current/FRONTEND_IMPLEMENTATION_CONTRACT.md`
-   - Flutter spike 收束为正式 MVP 的实施边界。
-   - 明确哪些服务接线保留、哪些 spike UI 重做，以及用户动作到后端 RPC 的契约。
+   - 早期 Flutter 验证收束为正式候选前端的实施边界。
+   - 明确哪些服务接线保留、哪些临时 UI 已重写，以及用户动作到后端 RPC 的契约。
 5. `current/FLUTTER_FRONTEND_IMPLEMENTATION_CHECKLIST.md`
    - Flutter MVP 施工清单。
    - 用于跟进真实任务流、配置流、结果流和验证项。
