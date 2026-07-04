@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from transvortex.app.desktop_api import DesktopApi
-from transvortex.app_service import LocalServicePump, handle_line
+from transvortex.app_service import LocalServicePump, handle_line, serve
 from transvortex.artifacts.runtime import TaskRuntime
 from transvortex.cli import main as cli_main
 from transvortex.utils import write_json
@@ -66,6 +67,28 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert shutdown["result"] == {"ok": True, "shutdown": "requested"}
     assert service.shutdown_requested is True
     assert stopped == [True]
+
+
+def test_app_service_serve_tolerates_utf8_bom_on_first_line(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    stdin = io.StringIO(
+        "\ufeff"
+        + _request("service.info", request_id=1)
+        + "\n"
+        + _request("service.shutdown", request_id=2)
+        + "\n"
+    )
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+
+    serve(service, root_dir=tmp_path)
+
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert responses[0]["result"]["service"] == "transvortex.app_service"
+    assert responses[1]["result"]["ok"] is True
+    assert "error" not in responses[0]
 
 
 def test_app_service_health_reads_active_without_snapshot(tmp_path: Path, monkeypatch) -> None:
@@ -158,6 +181,39 @@ def test_app_service_desktop_snapshot_contains_control_plane_payloads(tmp_path: 
     assert "runtime" in response["result"]
     assert "environment" in response["result"]
     assert response["result"]["config"]["pipeline_file_version"]
+
+
+def test_app_service_desktop_snapshot_preserves_translation_when_asr_config_invalid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("PROVIDER_KEY", "configured")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  provider: missing_local
+asr_providers:
+  - name: local
+    kind: local_inprocess
+    protocol: faster_whisper
+    model: large-v3
+        """.strip(),
+        encoding="utf-8",
+    )
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+
+    result = response["result"]
+    config = result["config"]
+    assert "ASR provider not found: missing_local" in result["config_error"]
+    assert config["routing"]["primary"] == {"provider": "p1", "model": "m1"}
+    assert config["providers"][0]["name"] == "p1"
+    assert config["providers"][0]["has_key"] is True
+    assert config["pipeline"]["asr_provider"] == "missing_local"
+    assert "local" in config["asr_providers"]
 
 
 def test_app_service_runtime_submit_and_acquire(tmp_path: Path) -> None:

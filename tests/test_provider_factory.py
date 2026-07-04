@@ -95,9 +95,10 @@ def test_request_json_adds_product_headers(monkeypatch) -> None:
     captured = {}
 
     class FakeClient:
-        def __init__(self, timeout, http2):
+        def __init__(self, timeout, http2, trust_env=True):
             captured["timeout"] = timeout
             captured["http2"] = http2
+            captured["trust_env"] = trust_env
 
         def __enter__(self):
             return self
@@ -124,6 +125,7 @@ def test_request_json_adds_product_headers(monkeypatch) -> None:
     assert "Content-Type" not in captured["headers"]
     assert captured["timeout"] == 30.0
     assert captured["http2"] is tvx_http.http2_enabled(True)
+    assert captured["trust_env"] is True
 
 
 def test_classify_error_treats_gateway_timeout_as_retryable_provider_error() -> None:
@@ -136,8 +138,8 @@ def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) 
     captured = {}
 
     class FakeClient:
-        def __init__(self, timeout, http2):
-            pass
+        def __init__(self, timeout, http2, trust_env=True):
+            captured["trust_env"] = trust_env
 
         def __enter__(self):
             return self
@@ -165,6 +167,7 @@ def test_request_json_allows_provider_headers_to_override_defaults(monkeypatch) 
     assert normalized["user-agent"] == "CustomClient/1.0"
     assert normalized["accept"] == "application/vnd.test+json"
     assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["trust_env"] is True
 
 
 def test_provider_request_meta_records_http2_switch(monkeypatch) -> None:

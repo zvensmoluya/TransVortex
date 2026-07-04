@@ -117,6 +117,16 @@ World
     assert task.status == "DONE"
     assert task.settings["input_type"] == "srt_translate"
     assert set(task.output_paths) == {"srt", "ass"}
+    external_base = root / "fixture" / "demo.zh-CN"
+    store.update_task_status(
+        task_id,
+        task.status,
+        output_path=str(external_base.with_suffix(".srt")),
+        output_paths={
+            "srt": str(external_base.with_suffix(".srt")),
+            "ass": str(external_base.with_suffix(".ass")),
+        },
+    )
     assert (store.task_dir(task_id) / "source" / "segments.normalized.jsonl").exists()
     assert not (store.task_dir(task_id) / "media" / "audio_full.m4a").exists()
 
@@ -131,11 +141,30 @@ World
     saved = save_task_segments(root_dir=root, task_id=task_id, segments_payload=edited)
     assert saved["segments"][0]["text_tgt"] == "改过的译文"
     reexported = reexport_task(root_dir=root, task_id=task_id, output_format="srt")
+    assert reexported["output_paths"]["srt"] == str(external_base.with_suffix(".srt"))
     assert Path(reexported["output_paths"]["srt"]).read_text(encoding="utf-8").find("改过的译文") >= 0
     reexported_plain = reexport_task(root_dir=root, task_id=task_id, output_format="srt", bilingual=False)
     plain_body = Path(reexported_plain["output_paths"]["srt"]).read_text(encoding="utf-8")
     assert "Hello" not in plain_body
     assert reexported_plain["bilingual"] is False
+    recovery_dir = root / "fixed-output"
+    store.update_task_status(
+        task_id,
+        "FAILED",
+        error="output path is not writable",
+        error_info={"code": "output_not_writable", "hint_zh": "输出目录不可写。"},
+    )
+    reexported_elsewhere = reexport_task(
+        root_dir=root,
+        task_id=task_id,
+        output_format="srt",
+        output_dir=str(recovery_dir),
+    )
+    assert reexported_elsewhere["output_paths"]["srt"] == str(recovery_dir / f"{srt_file.stem}.zh-CN.srt")
+    recovered_task = store.load_task(task_id)
+    assert recovered_task.status == "DONE"
+    assert recovered_task.error is None
+    assert recovered_task.error_info is None
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)

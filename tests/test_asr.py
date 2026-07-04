@@ -80,6 +80,35 @@ def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch)
     assert captured["timeout"] == 12.0
     assert captured["http2"] is True
     assert captured["retry"] == 2
+    assert captured["trust_env"] is True
+
+
+def test_local_server_asr_bypasses_environment_proxy(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    captured = {}
+
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return {"text": "ok"}, {"transport": "httpx"}
+
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    client = OpenAITranscriptionsAsrClient(
+        AsrProviderConfig(
+            name="local_whisper",
+            kind="local_server",
+            base_url="http://127.0.0.1:8899",
+            auth=SimpleNamespace(type="none", env_key="", credential_id=""),
+        )
+    )
+
+    payload, _meta = client._call_openai_transcriptions(audio, api_key="")
+
+    assert payload == {"text": "ok"}
+    assert captured["url"] == "http://127.0.0.1:8899/v1/audio/transcriptions"
+    assert captured["trust_env"] is False
 
 
 def test_cloud_asr_request_sends_configured_form_fields(tmp_path, monkeypatch) -> None:

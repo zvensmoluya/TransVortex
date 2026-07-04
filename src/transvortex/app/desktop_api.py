@@ -31,7 +31,7 @@ from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
 from .asr_admin import pipeline_file_version, save_asr_provider_config
-from .config import load_app_config, resolve_providers_file
+from .config import _read_yaml, load_app_config, resolve_providers_file
 from .credentials import (
     auth_file_path,
     provider_credential_id,
@@ -165,14 +165,24 @@ class DesktopApi:
         return config_payload(self.root_dir, self.providers_file)
 
     def desktop_snapshot(self, _params: dict[str, Any]) -> dict[str, Any]:
-        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
-        runtime = TaskRuntime(config.pipeline.artifacts_dir)
+        config_error = ""
+        try:
+            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+            artifacts_dir = config.pipeline.artifacts_dir
+            config_view = config_payload(self.root_dir, self.providers_file, config=config)
+        except Exception as exc:  # noqa: BLE001 - desktop snapshot should still expose recoverable config state
+            config = None
+            config_error = str(exc)
+            artifacts_dir = _fallback_artifacts_dir(self.root_dir)
+            config_view = config_payload(self.root_dir, self.providers_file, error=config_error)
+        runtime = TaskRuntime(artifacts_dir)
         runtime.reconcile()
         return {
-            "config": config_payload(self.root_dir, self.providers_file),
-            "tasks": _catalog_task_payloads(config.pipeline.artifacts_dir),
+            "config": config_view,
+            "tasks": _catalog_task_payloads(artifacts_dir),
             "runtime": runtime.snapshot(),
             "environment": doctor_report(root_dir=self.root_dir, providers_file=self.providers_file),
+            "config_error": config_error,
         }
 
     def catalog_status(self, _params: dict[str, Any]) -> dict[str, Any]:
@@ -314,6 +324,7 @@ class DesktopApi:
             root_dir=self.root_dir,
             task_id=_required_text(params, "task_id", "taskId"),
             output_format=_required_text(params, "output_format", "outputFormat"),
+            output_dir=_optional_text(params, "output_dir", "outputDir"),
             bilingual=_optional_bool(params, "bilingual"),
             subtitle_bilingual_order=_optional_text(params, "subtitle_bilingual_order", "subtitleBilingualOrder"),
             subtitle_prefer_single_line=_optional_bool(params, "subtitle_prefer_single_line", "subtitlePreferSingleLine"),
@@ -348,9 +359,19 @@ class DesktopApi:
         return TaskRuntime(config.pipeline.artifacts_dir)
 
 
-def config_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
+def config_payload(
+    root: Path,
+    providers_file: Path | None,
+    *,
+    config: Any | None = None,
+    error: str = "",
+) -> dict[str, Any]:
     resolved_providers_file = resolve_providers_file(root, providers_file)
-    config = load_app_config(root_dir=root, providers_file=providers_file)
+    if config is None:
+        try:
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+        except Exception as exc:  # noqa: BLE001 - settings UI needs partial config to guide repair
+            return _partial_config_payload(root, resolved_providers_file, str(exc) if not error else error)
     providers = []
     for provider in config.providers.values():
         credential = resolve_provider_credential(provider, root_dir=root)
@@ -412,6 +433,107 @@ def config_payload(root: Path, providers_file: Path | None) -> dict[str, Any]:
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
         "asr_providers": asr_providers,
+        "config_error": error,
+    }
+
+
+def _fallback_artifacts_dir(root: Path) -> Path:
+    raw = _read_yaml(root / "pipeline.yaml")
+    artifacts = raw.get("artifacts_dir", "artifacts") if isinstance(raw, dict) else "artifacts"
+    path = Path(str(artifacts or "artifacts"))
+    return path if path.is_absolute() else root / path
+
+
+def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dict[str, Any]:
+    providers_raw = _read_yaml(providers_file)
+    pipeline_raw = _read_yaml(root / "pipeline.yaml")
+    if not isinstance(providers_raw, dict):
+        providers_raw = {}
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+
+    providers = []
+    for row in providers_raw.get("providers") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        env_key = str(row.get("env_key") or "").strip()
+        credential_id = str(row.get("credential_id") or name).strip()
+        credential = resolve_credential(
+            env_key=env_key,
+            credential_id=credential_id,
+            provider_name=name,
+            root_dir=root,
+        )
+        providers.append(
+            {
+                "name": name,
+                "api_type": str(row.get("api_type") or ""),
+                "compat_mode": str(row.get("compat_mode") or ""),
+                "base_url": str(row.get("base_url") or ""),
+                "env_key": env_key,
+                "credential_id": credential_id,
+                "credential_source": credential.source,
+                "has_key": credential.found,
+                "models": [str(item) for item in (row.get("models") or [])],
+            }
+        )
+
+    asr_raw = pipeline_raw.get("asr") if isinstance(pipeline_raw.get("asr"), dict) else {}
+    asr_provider_name = str(asr_raw.get("provider") or "faster_whisper_large_v3")
+    asr_providers = {}
+    for row in pipeline_raw.get("asr_providers") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        auth = row.get("auth") if isinstance(row.get("auth"), dict) else {}
+        auth_type = str(auth.get("type") or "bearer")
+        env_key = str(auth.get("env_key") or row.get("env_key") or "TVX_MODEL_API_KEY")
+        credential_id = str(auth.get("credential_id") or row.get("credential_id") or name)
+        if auth_type == "none":
+            credential_source = "not_required"
+            has_key = True
+        else:
+            credential = resolve_credential(
+                env_key=env_key,
+                credential_id=credential_id,
+                provider_name=name,
+                root_dir=root,
+            )
+            credential_source = credential.source
+            has_key = credential.found
+        asr_providers[name] = {
+            **row,
+            "credential_source": credential_source,
+            "has_key": has_key,
+        }
+
+    return {
+        "root_dir": str(root),
+        "auth_file": str(auth_file_path()),
+        "providers_file": str(providers_file),
+        "providers_file_version": providers_file_version(providers_file),
+        "pipeline_file_version": pipeline_file_version(root / "pipeline.yaml"),
+        "artifacts_dir": str(_fallback_artifacts_dir(root)),
+        "pipeline": {
+            "artifacts_dir": str(_fallback_artifacts_dir(root)),
+            "asr_provider": asr_provider_name,
+        },
+        "routing": providers_raw.get("routing") if isinstance(providers_raw.get("routing"), dict) else {},
+        "active_routing_profile": "",
+        "routing_profiles": [],
+        "routing_profile_next_seq": 1,
+        "protocol_templates": protocol_templates_payload(),
+        "provider_presets": provider_presets_payload(),
+        "custom_adapter_template": custom_adapter_template_payload(),
+        "provider_templates": provider_templates_payload(),
+        "providers": sorted(providers, key=lambda row: row["name"]),
+        "asr_providers": asr_providers,
+        "config_error": error,
     }
 
 

@@ -1904,6 +1904,7 @@ def _execute_task(
                 else:
                     all_segments = load_source_segments(paths)
                 if input_type == "video_asr":
+                    _check_cancel(store, task_id)
                     checkpoint["status"] = "DONE"
                     checkpoint.pop("error", None)
                     checkpoint.pop("error_info", None)
@@ -2088,6 +2089,7 @@ def _execute_task(
                 )
 
                 if input_type == "video_asr":
+                    _check_cancel(store, task_id)
                     checkpoint["status"] = "DONE"
                     checkpoint.pop("error", None)
                     checkpoint.pop("error_info", None)

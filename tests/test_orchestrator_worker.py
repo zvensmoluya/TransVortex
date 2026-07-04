@@ -16,6 +16,7 @@ from transvortex.app.config import load_app_config
 from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
 from transvortex.http import HttpTransportError
+from transvortex.protocol.errors import PipelineTaskError
 
 
 def _write_config(root: Path) -> None:
@@ -1818,6 +1819,56 @@ def test_video_auto_source_uses_matching_embedded_subtitle_and_skips_asr(tmp_pat
     warning = next(event for event in events if "Auto-selected embedded subtitle stream" in event.get("message", ""))
     assert warning["level"] == "warning"
     assert warning["details"]["stream"]["index"] == 2
+
+
+def test_video_asr_embedded_subtitle_honors_cancel_before_done(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "demo.mkv"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_list_subtitle_streams(_path: Path) -> list[dict]:
+        return [
+            {
+                "index": 2,
+                "codec_name": "subrip",
+                "language": "en",
+                "title": "English",
+                "default": True,
+                "forced": False,
+                "supported": True,
+            }
+        ]
+
+    def fake_extract_subtitle_stream(_video_path: Path, output_srt: Path, *, stream_index: int) -> None:
+        assert stream_index == 2
+        output_srt.parent.mkdir(parents=True, exist_ok=True)
+        output_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+        store = TaskStore(root / "artifacts")
+        [task] = store.list_tasks()
+        store.request_cancel(task.task_id)
+
+    monkeypatch.setattr("transvortex.core.orchestrator.list_subtitle_streams", fake_list_subtitle_streams)
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_subtitle_stream", fake_extract_subtitle_stream)
+
+    try:
+        run_pipeline(
+            root_dir=root,
+            input_file=input_file,
+            source_lang="en",
+            target_lang="zh-CN",
+            input_type="video_asr",
+            cli_overrides={"source_mode": "embedded_subtitle"},
+        )
+    except PipelineTaskError:
+        pass
+    else:
+        raise AssertionError("video_asr should not finish after cancellation")
+
+    [task] = TaskStore(root / "artifacts").list_tasks()
+    assert task.status == "CANCELLED"
 
 
 def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -> None:

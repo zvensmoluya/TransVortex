@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def serve(service: DesktopApi, *, root_dir: Path) -> None:
     for raw in sys.stdin:
-        line = raw.strip()
+        line = raw.strip().lstrip("\ufeff")
         if not line:
             continue
         response = handle_line(service, line, root_dir=root_dir)
@@ -194,7 +194,7 @@ def handle_line(service: DesktopApi, line: str, *, root_dir: Path) -> dict[str, 
         return _error_response(None, "parse_error", f"Invalid JSON: {exc.msg}", root_dir=root_dir)
     except DesktopApiError as exc:
         return _error_response(request_id, exc.code, exc.message, details=exc.details, root_dir=root_dir)
-    except Exception as exc:  # noqa: BLE001 - sidecar must never crash on handler errors
+    except Exception as exc:  # noqa: BLE001 - Local Service must report handler errors
         print(traceback.format_exc(), file=sys.stderr, flush=True)
         err = classify_exception(exc)
         return _error_response(

@@ -84,10 +84,12 @@ def build_httpx_client(
     timeout: httpx.Timeout | float | int,
     limits: httpx.Limits | None = None,
     http2: bool = True,
+    trust_env: bool = True,
 ) -> httpx.Client:
     kwargs: dict[str, Any] = {
         "timeout": timeout,
         "http2": http2_enabled(http2),
+        "trust_env": bool(trust_env),
     }
     if limits is not None:
         kwargs["limits"] = limits
@@ -100,11 +102,12 @@ def get_shared_httpx_client(
     timeout: httpx.Timeout | float | int,
     limits: httpx.Limits | None = None,
     http2: bool = True,
+    trust_env: bool = True,
 ) -> httpx.Client:
-    cache_key = (key, http2_enabled(http2))
+    cache_key = (key, http2_enabled(http2), bool(trust_env))
     client = _CLIENTS.get(cache_key)
     if client is None or client.is_closed:
-        client = build_httpx_client(timeout=timeout, limits=limits, http2=http2)
+        client = build_httpx_client(timeout=timeout, limits=limits, http2=http2, trust_env=trust_env)
         _CLIENTS[cache_key] = client
     return client
 
@@ -282,11 +285,12 @@ def request_json_with_retry(
     retry: int = 1,
     client: httpx.Client | None = None,
     context: str = "upstream",
+    trust_env: bool = True,
 ) -> tuple[Any, dict[str, Any]]:
     attempts = max(1, int(retry or 1))
     request_headers = _request_headers(headers, json_body=json_payload is not None)
     owned_client = client is None
-    active_client = client or build_httpx_client(timeout=timeout, limits=limits, http2=http2)
+    active_client = client or build_httpx_client(timeout=timeout, limits=limits, http2=http2, trust_env=trust_env)
     try:
         last_exc: Exception | None = None
         for attempt in range(attempts):

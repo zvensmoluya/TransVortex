@@ -254,11 +254,26 @@ def _optional_bool(value: bool | str | None, default: bool) -> bool:
     return default
 
 
+def _primary_output_base(task: Any, paths: dict[str, Path], output_dir: str | None = None) -> Path:
+    if output_dir and output_dir.strip():
+        stem = Path(task.input_file).stem
+        return Path(output_dir).expanduser().resolve() / f"{stem}.{task.target_lang}"
+    for fmt in ("srt", "ass", "vtt"):
+        value = task.output_paths.get(fmt) if isinstance(task.output_paths, dict) else None
+        if isinstance(value, str) and value.strip():
+            return Path(value).with_suffix("")
+    if task.output_path:
+        return Path(task.output_path).with_suffix("")
+    stem = Path(task.input_file).stem
+    return paths["output"] / f"{stem}.{task.target_lang}"
+
+
 def reexport_task(
     *,
     root_dir: Path,
     task_id: str,
     output_format: str | None = None,
+    output_dir: str | None = None,
     bilingual: bool | str | None = None,
     subtitle_bilingual_order: str | None = None,
     subtitle_prefer_single_line: bool | str | None = None,
@@ -283,8 +298,8 @@ def reexport_task(
     normalized = "vtt" if normalized == "webvtt" else normalized
     normalized = normalized if normalized in {"srt", "ass", "vtt", "both"} else "srt"
     effective_bilingual = _optional_bool(bilingual, task.bilingual)
-    stem = Path(task.input_file).stem
-    base = paths["output"] / f"{stem}.{task.target_lang}"
+    base = _primary_output_base(task, paths, output_dir=output_dir)
+    base.parent.mkdir(parents=True, exist_ok=True)
     output_paths: dict[str, Path] = {}
     if normalized in {"srt", "both"}:
         output_paths["srt"] = base.parent / f"{base.name}.srt"
@@ -308,7 +323,7 @@ def reexport_task(
         write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
     output_payload = {key: str(path) for key, path in output_paths.items()}
     primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt")
-    store.update_task_status(task_id, task.status, output_path=primary, output_paths=output_payload)
+    store.update_task_status(task_id, "DONE", output_path=primary, output_paths=output_payload)
     task = store.load_task(task_id)
     task.settings["edited"] = bool(task.settings.get("edited", False))
     task.settings["output_format"] = normalized
