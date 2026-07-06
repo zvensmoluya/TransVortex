@@ -63,9 +63,12 @@ class JobLine extends StatelessWidget {
             _Word(label: view.bilingual ? '双语' : '单语', onPick: onPickBilingual),
             _Word(label: view.formats.join('·'), onPick: onPickFormats),
             const Text('字幕', style: T.tBody),
-            const Text(' · 术语建议', style: T.tBody),
+            const Text(' · 生成术语建议', style: T.tBody),
             _Word(
-              label: view.termsEnabled ? '自动生成' : '不生成',
+              label: view.termsEnabled ? '允许' : '关闭',
+              tooltip: view.termsEnabled
+                  ? '本次允许系统自动积累术语建议；人工术语表和预设术语表留在后续术语窗口。'
+                  : '本次不自动积累术语建议；不会关闭已有人工术语表或预设术语表。',
               onPick: onToggleTerms,
             ),
           ],
@@ -80,11 +83,13 @@ class _Word extends StatefulWidget {
     required this.label,
     required this.onPick,
     this.fullLabel,
+    this.tooltip,
     this.warn = false,
   });
 
   final String label;
   final String? fullLabel;
+  final String? tooltip;
   final VoidCallback onPick;
   final bool warn;
 
@@ -139,7 +144,7 @@ class _WordState extends State<_Word> {
         ),
       ),
     );
-    final fullLabel = widget.fullLabel;
+    final fullLabel = widget.tooltip ?? widget.fullLabel;
     return fullLabel == null || fullLabel == widget.label
         ? content
         : Tooltip(message: fullLabel, child: content);

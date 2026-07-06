@@ -277,7 +277,7 @@ MVP 先控制在两层：
 - `subtitle_bilingual_order`
 - `subtitle_prefer_single_line`
 - `subtitle_quality_mode`
-- 主窗口术语建议生成：`allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时可补 `memory_enabled=true`，关闭生成时不写 `memory_enabled=false`
+- 主窗口生成术语建议：`allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时可补 `memory_enabled=true`，关闭生成时不写 `memory_enabled=false`
 - 后续术语使用 / 维护窗口再映射：`memory_enabled`、`memory_inject_enabled`、`memory_intensity`、`memory_patch_window_chunks`
 
 ### 仍需谨慎的

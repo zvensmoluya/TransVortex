@@ -321,6 +321,26 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('picked-video.mp4'), findsOneWidget);
+    expect(find.textContaining('生成术语建议'), findsOneWidget);
+    final allowTerms = find.textContaining('允许');
+    expect(allowTerms, findsOneWidget);
+    final enabledTooltips = tester
+        .widgetList<Tooltip>(find.byType(Tooltip))
+        .map((tooltip) => tooltip.message)
+        .whereType<String>()
+        .toList();
+    expect(enabledTooltips, contains('本次允许系统自动积累术语建议；人工术语表和预设术语表留在后续术语窗口。'));
+
+    await tester.tap(allowTerms);
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('关闭'), findsOneWidget);
+    final disabledTooltips = tester
+        .widgetList<Tooltip>(find.byType(Tooltip))
+        .map((tooltip) => tooltip.message)
+        .whereType<String>()
+        .toList();
+    expect(disabledTooltips, contains('本次不自动积累术语建议；不会关闭已有人工术语表或预设术语表。'));
     expect(find.text('开始译制'), findsOneWidget);
     expectNoFlutterException();
   });
