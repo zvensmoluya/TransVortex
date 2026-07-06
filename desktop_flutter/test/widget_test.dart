@@ -1844,8 +1844,13 @@ void main() {
             status: 'FAILED',
             inputFile: r'D:\media\processing-failed.mp4',
             taskDir: r'D:\artifacts\tvx_processing_failed_123456',
-            errorInfo: {'hint_zh': '可以继续任务。'},
-            runtime: {'can_resume': true},
+            errorInfo: {
+              'hint_zh': '可以继续任务。',
+              'code': 'provider_connection_failed',
+              'stage': 'TRANSLATE',
+              'retryable': true,
+            },
+            runtime: {'can_resume': true, 'state': 'stale'},
             createdAt: '2026-07-05T08:00:00',
             updatedAt: '2026-07-05T08:30:00',
           ),
@@ -2057,6 +2062,13 @@ void main() {
     expect(find.text('processing-failed.mp4'), findsWidgets);
     expect(find.text('processing-running.mp4'), findsNothing);
     expect(find.text('操作 可继续任务'), findsOneWidget);
+    expect(find.text('失败线索'), findsOneWidget);
+    expect(find.text('提示 可以继续任务。'), findsOneWidget);
+    expect(find.text('错误码 provider_connection_failed'), findsOneWidget);
+    expect(find.text('阶段 翻译字幕'), findsOneWidget);
+    expect(find.text('重试性 可重试'), findsOneWidget);
+    expect(find.text('运行状态 记录过期'), findsOneWidget);
+    expect(find.text('恢复 可继续任务'), findsOneWidget);
 
     await tester.tap(find.text('继续任务'));
     await tester.pump(const Duration(milliseconds: 100));

@@ -1414,6 +1414,7 @@ class _TaskPreview extends StatelessWidget {
           (event) => _eventMatchesSearch(_eventMap(event), eventSearchQuery),
         )
         .toList(growable: false);
+    final diagnosticClues = _taskDiagnosticClues(task);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1481,6 +1482,13 @@ class _TaskPreview extends StatelessWidget {
           const Text('在这里取消运行任务、继续失败任务，或进入字幕编辑。', style: T.tCaption),
         const SizedBox(height: T.s16),
         _TaskSummaryPanel(task: task),
+        if (diagnosticClues.isNotEmpty) ...[
+          const SizedBox(height: T.s12),
+          _TaskDiagnosticsPanel(
+            title: _taskDiagnosticTitle(task),
+            clues: diagnosticClues,
+          ),
+        ],
         const SizedBox(height: T.s16),
         Row(
           children: [
@@ -1613,15 +1621,18 @@ class _InfoPill extends StatelessWidget {
     required this.label,
     required this.value,
     this.danger = false,
+    this.maxLines = 1,
   });
 
   final String label;
   final String value;
   final bool danger;
+  final int maxLines;
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: const BoxConstraints(maxWidth: 420),
       padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 6),
       decoration: BoxDecoration(
         border: Border.all(color: danger ? T.danger : T.line),
@@ -1629,12 +1640,66 @@ class _InfoPill extends StatelessWidget {
       ),
       child: Text(
         '$label ${value.isEmpty ? '未知' : value}',
-        maxLines: 1,
+        maxLines: maxLines,
         overflow: TextOverflow.ellipsis,
         style: T.tCaption.copyWith(color: danger ? T.danger : T.ink),
       ),
     );
   }
+}
+
+class _TaskDiagnosticsPanel extends StatelessWidget {
+  const _TaskDiagnosticsPanel({required this.title, required this.clues});
+
+  final String title;
+  final List<_TaskDiagnosticClue> clues;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: T.surface,
+        border: Border.all(color: T.line),
+        borderRadius: BorderRadius.circular(T.rSm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: T.tSection),
+          const SizedBox(height: T.s8),
+          Wrap(
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              for (final clue in clues)
+                _InfoPill(
+                  label: clue.label,
+                  value: clue.value,
+                  danger: clue.danger,
+                  maxLines: clue.maxLines,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskDiagnosticClue {
+  const _TaskDiagnosticClue({
+    required this.label,
+    required this.value,
+    this.danger = false,
+    this.maxLines = 1,
+  });
+
+  final String label;
+  final String value;
+  final bool danger;
+  final int maxLines;
 }
 
 class _EventPreviewRow extends StatelessWidget {
@@ -1825,6 +1890,7 @@ bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
     ?task.error,
     taskErrorLabel(task.error, task.errorInfo),
     ...task.errorInfo.values.map((value) => '$value'),
+    for (final clue in _taskDiagnosticClues(task)) ...[clue.label, clue.value],
     task.createdAt,
     task.updatedAt,
   ].join('\n').toLowerCase();
@@ -1857,6 +1923,122 @@ String _taskActionabilityLabel(TaskSummary task) {
 
 bool _taskActionabilityDanger(TaskSummary task) {
   return (task.isFailed || task.isRuntimeStale) && !task.canResume;
+}
+
+String _taskDiagnosticTitle(TaskSummary task) {
+  if (task.isFailed) return '失败线索';
+  if (task.status == 'INTERRUPTED') return '中断线索';
+  if (task.isRuntimeStale) return '运行线索';
+  return '处理线索';
+}
+
+List<_TaskDiagnosticClue> _taskDiagnosticClues(TaskSummary task) {
+  final hasError = (task.error ?? '').trim().isNotEmpty;
+  final hasDiagnosticInfo = task.errorInfo.isNotEmpty;
+  final shouldShow =
+      task.isFailed ||
+      task.isCancelled ||
+      task.isRuntimeStale ||
+      hasError ||
+      hasDiagnosticInfo;
+  if (!shouldShow) return const [];
+
+  final clues = <_TaskDiagnosticClue>[];
+  final summary = hasError || hasDiagnosticInfo
+      ? taskErrorLabel(task.error, task.errorInfo)
+      : '';
+  if (summary.trim().isNotEmpty) {
+    clues.add(
+      _TaskDiagnosticClue(
+        label: '提示',
+        value: summary,
+        danger: task.isFailed || task.isRuntimeStale,
+        maxLines: 2,
+      ),
+    );
+  }
+
+  final code = _firstDiagnosticText(task.errorInfo, const [
+    'code',
+    'error_code',
+    'kind',
+  ]);
+  if (code != null) {
+    clues.add(_TaskDiagnosticClue(label: '错误码', value: code, danger: true));
+  }
+
+  final stage = _firstDiagnosticText(task.errorInfo, const [
+    'stage',
+    'failed_stage',
+    'last_stage',
+  ]);
+  if (stage != null) {
+    clues.add(_TaskDiagnosticClue(label: '阶段', value: taskStageLabel(stage)));
+  }
+
+  final retryable = _firstDiagnosticBool(task.errorInfo, const [
+    'retryable',
+    'recoverable',
+    'can_retry',
+  ]);
+  if (retryable != null) {
+    clues.add(
+      _TaskDiagnosticClue(
+        label: '重试性',
+        value: retryable ? '可重试' : '不可重试',
+        danger: !retryable,
+      ),
+    );
+  }
+
+  final runtimeState = _runtimeStateLabel(task.runtimeState);
+  if (runtimeState.isNotEmpty &&
+      (task.isRuntimeStale ||
+          task.isRuntimeActive ||
+          task.status == 'INTERRUPTED')) {
+    clues.add(
+      _TaskDiagnosticClue(
+        label: '运行状态',
+        value: runtimeState,
+        danger: task.isRuntimeStale,
+      ),
+    );
+  }
+
+  if (task.canResume) {
+    clues.add(const _TaskDiagnosticClue(label: '恢复', value: '可继续任务'));
+  } else if (task.isFailed || task.isRuntimeStale) {
+    clues.add(
+      const _TaskDiagnosticClue(label: '恢复', value: '暂无可用恢复动作', danger: true),
+    );
+  } else if (task.isCancelled) {
+    clues.add(const _TaskDiagnosticClue(label: '恢复', value: '任务已结束'));
+  }
+
+  return clues;
+}
+
+String? _firstDiagnosticText(
+  Map<String, Object?> values,
+  Iterable<String> keys,
+) {
+  for (final key in keys) {
+    final value = _stringValue(values[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+bool? _firstDiagnosticBool(Map<String, Object?> values, Iterable<String> keys) {
+  for (final key in keys) {
+    final value = values[key];
+    if (value is bool) return value;
+    final text = _stringValue(value)?.toLowerCase();
+    if (text == null) continue;
+    if (text == 'true' || text == 'yes' || text == '1') return true;
+    if (text == 'false' || text == 'no' || text == '0') return false;
+  }
+  return null;
 }
 
 String _taskFilterLabel(_TaskFilter filter) {
