@@ -392,6 +392,7 @@ function Add-WindowCaptureTypes {
     $captureCode = @(
         'using System;',
         'using System.Drawing;',
+        'using System.Threading;',
         '',
         'public static class TransVortexWindowCapture',
         '{',
@@ -408,6 +409,36 @@ function Add-WindowCaptureTypes {
         '',
         '    [System.Runtime.InteropServices.DllImport("user32.dll")]',
         '    public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);',
+        '',
+        '    [System.Runtime.InteropServices.DllImport("user32.dll")]',
+        '    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);',
+        '',
+        '    [System.Runtime.InteropServices.DllImport("user32.dll")]',
+        '    public static extern bool SetForegroundWindow(IntPtr hWnd);',
+        '',
+        '    [System.Runtime.InteropServices.DllImport("user32.dll")]',
+        '    public static extern bool BringWindowToTop(IntPtr hWnd);',
+        '',
+        '    [System.Runtime.InteropServices.DllImport("user32.dll")]',
+        '    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
+        '',
+        '    public static void ActivateWindow(IntPtr handle)',
+        '    {',
+        '        if (handle == IntPtr.Zero)',
+        '        {',
+        '            throw new InvalidOperationException("Release process has no main window handle.");',
+        '        }',
+        '        const int SW_RESTORE = 9;',
+        '        const uint SWP_NOSIZE = 0x0001;',
+        '        const uint SWP_NOMOVE = 0x0002;',
+        '        const uint SWP_SHOWWINDOW = 0x0040;',
+        '        IntPtr HWND_TOPMOST = new IntPtr(-1);',
+        '        ShowWindow(handle, SW_RESTORE);',
+        '        BringWindowToTop(handle);',
+        '        SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);',
+        '        SetForegroundWindow(handle);',
+        '        Thread.Sleep(500);',
+        '    }',
         '',
         '    public static int[] WindowRect(IntPtr handle)',
         '    {',
@@ -514,6 +545,9 @@ function Capture-DesktopCompositeScreenshot {
             error = "release process has no main window handle"
         }
     }
+    [TransVortexWindowCapture]::ActivateWindow($Process.MainWindowHandle)
+    Start-Sleep -Milliseconds 500
+    $Process.Refresh()
     $rect = [TransVortexWindowCapture]::WindowRect($Process.MainWindowHandle)
     $input = "ddagrab=output_idx=0:framerate=1:offset_x=$($rect[0]):offset_y=$($rect[1]):video_size=$($rect[2])x$($rect[3])"
     & $ffmpeg.Source @(
@@ -540,9 +574,55 @@ function Capture-DesktopCompositeScreenshot {
     }
     $stats = [TransVortexWindowCapture]::ImageStats($screenshotFile.FullName)
     $looksBlank = $stats[3] -lt 240
-    $errorText = if ($looksBlank) { "desktop composite capture appears blank; Flutter render-tree screenshot remains authoritative for automated smoke in this environment" } else { "" }
+    $backgroundLikeSamples = $stats[2] - $stats[3]
+    $minBackgroundLikeSamples = [Math]::Max(360, [int]($stats[2] * 0.12))
+    $looksOccluded = $backgroundLikeSamples -lt $minBackgroundLikeSamples
+    for ($attempt = 1; ($looksBlank -or $looksOccluded) -and $attempt -le 2; $attempt++) {
+        [TransVortexWindowCapture]::ActivateWindow($Process.MainWindowHandle)
+        Start-Sleep -Milliseconds (700 + (300 * $attempt))
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -eq [IntPtr]::Zero) {
+            break
+        }
+        $rect = [TransVortexWindowCapture]::WindowRect($Process.MainWindowHandle)
+        $input = "ddagrab=output_idx=0:framerate=1:offset_x=$($rect[0]):offset_y=$($rect[1]):video_size=$($rect[2])x$($rect[3])"
+        & $ffmpeg.Source @(
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-f", "lavfi",
+            "-i", $input,
+            "-vf", "hwdownload,format=bgra",
+            "-frames:v", "1",
+            $screenshotFile.FullName
+        )
+        if ($LASTEXITCODE -ne 0 -or -not $screenshotFile.Exists) {
+            return [pscustomobject]@{
+                ok = $false
+                source = "windows_desktop_duplication"
+                path = $screenshotFile.FullName
+                x = $rect[0]
+                y = $rect[1]
+                width = $rect[2]
+                height = $rect[3]
+                error = "ffmpeg ddagrab failed"
+            }
+        }
+        $stats = [TransVortexWindowCapture]::ImageStats($screenshotFile.FullName)
+        $looksBlank = $stats[3] -lt 240
+        $backgroundLikeSamples = $stats[2] - $stats[3]
+        $minBackgroundLikeSamples = [Math]::Max(360, [int]($stats[2] * 0.12))
+        $looksOccluded = $backgroundLikeSamples -lt $minBackgroundLikeSamples
+    }
+    $errorText = if ($looksBlank) {
+        "desktop composite capture appears blank; Flutter render-tree screenshot remains authoritative for automated smoke in this environment"
+    } elseif ($looksOccluded) {
+        "desktop composite capture does not resemble the TransVortex light workspace; the release window may be occluded or not foregrounded"
+    } else {
+        ""
+    }
     return [pscustomobject]@{
-        ok = -not $looksBlank
+        ok = -not ($looksBlank -or $looksOccluded)
         source = "windows_desktop_duplication"
         path = $screenshotFile.FullName
         x = $rect[0]
@@ -551,6 +631,8 @@ function Capture-DesktopCompositeScreenshot {
         height = $stats[1]
         samples = $stats[2]
         non_background_samples = $stats[3]
+        background_like_samples = $backgroundLikeSamples
+        min_background_like_samples = $minBackgroundLikeSamples
         dark_samples = $stats[4]
         bright_samples = $stats[5]
         pink_samples = $stats[6]
@@ -645,7 +727,7 @@ if ($WindowType -eq "main") {
 
 try {
     $showWindow = -not [string]::IsNullOrWhiteSpace($ScreenshotPath) -or $CheckDesktopComposite
-    $postReportSeconds = if ($showWindow) { 6 } else { 0 }
+    $postReportSeconds = if ($CheckDesktopComposite) { 24 } elseif ($showWindow) { 6 } else { 0 }
     $appArgs = @()
     if ($WindowType -ne "main") {
         $appArgs += "--tvx-window-type=$WindowType"
@@ -800,6 +882,12 @@ try {
             }
             $desktopComposite = Capture-DesktopCompositeScreenshot -Process $process -Path $desktopCompositePath
             $report | Add-Member -NotePropertyName desktop_composite -NotePropertyValue $desktopComposite
+            if ($desktopComposite.ok -ne $true) {
+                throw "Release desktop composite capture failed: $($desktopComposite | ConvertTo-Json -Compress -Depth 5)"
+            }
+            if ($desktopComposite.flutter_overflow_stripe_samples -ge 24) {
+                throw "Release desktop composite screenshot contains a Flutter overflow warning stripe: $($desktopComposite | ConvertTo-Json -Compress -Depth 5)"
+            }
         }
     }
     if (-not $process.HasExited) {

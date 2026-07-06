@@ -179,7 +179,9 @@ foreach ($case in $cases) {
         desktop_composite_ok = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.ok } else { "" }
         desktop_composite_path = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.path } else { "" }
         desktop_composite_non_background_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.non_background_samples } else { "" }
+        desktop_composite_background_like_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.background_like_samples } else { "" }
         desktop_composite_overflow_stripe_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.flutter_overflow_stripe_samples } else { "" }
+        desktop_composite_error = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.error } else { "" }
     }) | Out-Null
 }
 
