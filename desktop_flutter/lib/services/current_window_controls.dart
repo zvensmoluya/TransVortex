@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../model/window_state.dart';
@@ -41,9 +44,12 @@ WindowGeometry windowGeometryFor(AppWindowArgs args) {
   final type = args.type;
   final role = _roleFor(type);
   final size = _defaultSize(type);
-  final offset = args.parentBounds == null
+  final proposedPosition = args.parentBounds == null
       ? null
       : _positionFromParent(args.parentBounds!, type);
+  final position = proposedPosition == null
+      ? null
+      : clampWindowPosition(proposedPosition, size, args.visibleBounds);
   return switch (role) {
     WindowRole.main => WindowGeometry(
       role: role,
@@ -57,8 +63,8 @@ WindowGeometry windowGeometryFor(AppWindowArgs args) {
       size: size,
       minimumSize: _minimumSize(type),
       center: false,
-      position: offset,
-      alignment: offset == null ? Alignment.topRight : null,
+      position: position,
+      alignment: position == null ? Alignment.topRight : null,
       resizable: true,
       maximizable: false,
     ),
@@ -66,12 +72,68 @@ WindowGeometry windowGeometryFor(AppWindowArgs args) {
       role: role,
       size: size,
       minimumSize: _minimumSize(type),
-      center: offset == null,
-      position: offset,
+      center: position == null,
+      position: position,
       resizable: true,
       maximizable: true,
     ),
   };
+}
+
+@visibleForTesting
+Offset clampWindowPosition(
+  Offset position,
+  Size windowSize,
+  Rect? visibleBounds,
+) {
+  if (visibleBounds == null || visibleBounds.isEmpty) return position;
+  final maxLeft =
+      visibleBounds.right -
+      (windowSize.width > visibleBounds.width
+          ? visibleBounds.width
+          : windowSize.width);
+  final maxTop =
+      visibleBounds.bottom -
+      (windowSize.height > visibleBounds.height
+          ? visibleBounds.height
+          : windowSize.height);
+  return Offset(
+    position.dx.clamp(visibleBounds.left, maxLeft).toDouble(),
+    position.dy.clamp(visibleBounds.top, maxTop).toDouble(),
+  );
+}
+
+Future<Rect?> currentDisplayVisibleBoundsFor(Rect? anchorBounds) async {
+  try {
+    final displays = await screenRetriever.getAllDisplays();
+    if (displays.isEmpty) return null;
+    final primaryDisplay = await screenRetriever.getPrimaryDisplay();
+    final primaryBounds = _visibleBoundsForDisplay(primaryDisplay);
+    final anchor = anchorBounds?.center;
+    if (anchor != null) {
+      for (final display in displays) {
+        final bounds = _visibleBoundsForDisplay(display);
+        if (bounds.contains(anchor)) return bounds;
+      }
+    }
+    if (anchorBounds != null) {
+      Rect? bestBounds;
+      var bestArea = 0.0;
+      for (final display in displays) {
+        final bounds = _visibleBoundsForDisplay(display);
+        final area = bounds.intersect(anchorBounds).size;
+        final overlap = math.max(0.0, area.width) * math.max(0.0, area.height);
+        if (overlap > bestArea) {
+          bestArea = overlap;
+          bestBounds = bounds;
+        }
+      }
+      if (bestBounds != null) return bestBounds;
+    }
+    return primaryBounds;
+  } on Object {
+    return null;
+  }
 }
 
 @visibleForTesting
@@ -136,6 +198,12 @@ Offset _positionFromParent(Rect parent, AppWindowType type) {
   final dx = isWorkbench ? 112.0 : 72.0 + step * 28.0;
   final dy = isWorkbench ? 56.0 : 48.0 + step * 24.0;
   return Offset(parent.left + dx, parent.top + dy);
+}
+
+Rect _visibleBoundsForDisplay(Display display) {
+  final position = display.visiblePosition ?? Offset.zero;
+  final size = display.visibleSize ?? display.size;
+  return position & size;
 }
 
 Future<void> registerCurrentWindowControls() async {

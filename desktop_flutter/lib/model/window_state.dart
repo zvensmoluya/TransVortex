@@ -54,11 +54,17 @@ extension AppWindowTypeLabel on AppWindowType {
 
 @immutable
 class AppWindowArgs {
-  const AppWindowArgs({required this.type, this.taskId, this.parentBounds});
+  const AppWindowArgs({
+    required this.type,
+    this.taskId,
+    this.parentBounds,
+    this.visibleBounds,
+  });
 
   final AppWindowType type;
   final String? taskId;
   final Rect? parentBounds;
+  final Rect? visibleBounds;
 
   String encode() {
     final normalizedTaskId = taskId?.trim();
@@ -67,6 +73,7 @@ class AppWindowArgs {
       if (normalizedTaskId != null && normalizedTaskId.isNotEmpty)
         'task_id': normalizedTaskId,
       if (parentBounds != null) 'parent_bounds': _rectToJson(parentBounds!),
+      if (visibleBounds != null) 'visible_bounds': _rectToJson(visibleBounds!),
     });
   }
 
@@ -92,6 +99,9 @@ class AppWindowArgs {
           taskId: _optionalString(decoded['task_id'] ?? decoded['taskId']),
           parentBounds: _rectFromJson(
             decoded['parent_bounds'] ?? decoded['parentBounds'],
+          ),
+          visibleBounds: _rectFromJson(
+            decoded['visible_bounds'] ?? decoded['visibleBounds'],
           ),
         );
       }

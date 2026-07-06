@@ -1374,10 +1374,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _openToolWindow(AppWindowType type, {String? taskId}) async {
+    final parentBounds = await _currentWindowBounds();
     final args = AppWindowArgs(
       type: type,
       taskId: taskId,
-      parentBounds: await _currentWindowBounds(),
+      parentBounds: parentBounds,
+      visibleBounds: await currentDisplayVisibleBoundsFor(parentBounds),
     );
     final windowKey = _toolWindowKey(type, taskId: taskId);
     final existing = _toolWindows[windowKey];

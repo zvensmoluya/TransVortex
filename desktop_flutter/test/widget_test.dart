@@ -113,13 +113,18 @@ void main() {
     expect(reviewArgs.type, AppWindowType.taskProcessing);
     expect(reviewArgs.taskId, 'tvx_review_123');
     final positionedArgs = AppWindowArgs.parse(
-      '{"type":"translationSettings","parent_bounds":{"x":40,"y":60,"width":720,"height":520}}',
+      '{"type":"translationSettings","parent_bounds":{"x":40,"y":60,"width":720,"height":520},"visible_bounds":{"x":0,"y":0,"width":1920,"height":1080}}',
     );
     expect(positionedArgs.type, AppWindowType.translationSettings);
     expect(positionedArgs.parentBounds, const Rect.fromLTWH(40, 60, 720, 520));
+    expect(positionedArgs.visibleBounds, const Rect.fromLTWH(0, 0, 1920, 1080));
     expect(
       AppWindowArgs.parse(positionedArgs.encode()).parentBounds,
       const Rect.fromLTWH(40, 60, 720, 520),
+    );
+    expect(
+      AppWindowArgs.parse(positionedArgs.encode()).visibleBounds,
+      const Rect.fromLTWH(0, 0, 1920, 1080),
     );
     expect(
       AppStartupArgs.parse(
@@ -213,6 +218,35 @@ void main() {
     expect(taskProcessingGeometry.size, const Size(1040, 720));
     expect(taskProcessingGeometry.position, const Offset(212, 256));
     expect(taskProcessingGeometry.maximizable, isTrue);
+
+    final visibleBounds = const Rect.fromLTWH(0, 0, 1920, 1080);
+    final lowerRightParent = const Rect.fromLTWH(1760, 960, 720, 520);
+    final clampedToolGeometry = windowGeometryFor(
+      AppWindowArgs(
+        type: AppWindowType.translationSettings,
+        parentBounds: lowerRightParent,
+        visibleBounds: visibleBounds,
+      ),
+    );
+    expect(clampedToolGeometry.position, const Offset(1100, 480));
+
+    final clampedWorkbenchGeometry = windowGeometryFor(
+      AppWindowArgs(
+        type: AppWindowType.taskProcessing,
+        parentBounds: lowerRightParent,
+        visibleBounds: visibleBounds,
+      ),
+    );
+    expect(clampedWorkbenchGeometry.position, const Offset(880, 360));
+
+    expect(
+      clampWindowPosition(
+        const Offset(-200, -80),
+        const Size(1040, 720),
+        const Rect.fromLTWH(0, 0, 800, 600),
+      ),
+      Offset.zero,
+    );
   });
 
   testWidgets('app uses packaged CJK font family', (tester) async {
