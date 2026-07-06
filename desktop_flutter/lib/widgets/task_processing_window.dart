@@ -88,6 +88,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   late final PathOpener _pathOpener;
   late final DirectoryWriteProbe _directoryProbe;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'task-processing-smoke');
+  final TextEditingController _taskSearchController = TextEditingController();
   LocalServiceController? _smokeService;
   List<TaskSummary> _tasks = const [];
   TaskEventsPage? _eventsPage;
@@ -131,6 +132,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
     _selectedTaskId = widget.taskId?.trim();
     _editingTaskId = widget.taskId?.trim();
+    _taskSearchController.addListener(_handleTaskSearchChanged);
     if (widget.smoke == null) {
       unawaited(widget.bridge.initializeChild());
     }
@@ -141,6 +143,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   @override
   void dispose() {
     registerCurrentWindowRetargetHandler(null);
+    _taskSearchController.dispose();
     _smokeService?.dispose();
     super.dispose();
   }
@@ -170,7 +173,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     try {
       final tasks = await _client.taskList();
       if (!mounted) return;
-      final selected = _selectedTask(_visibleTasksFor(tasks, _taskFilter));
+      final selected = _selectedTask(
+        _visibleTasksFor(tasks, _taskFilter, _taskSearchController.text),
+      );
       setState(() {
         _tasks = tasks;
         _selectedTaskId = selected?.taskId;
@@ -218,6 +223,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (args.type != AppWindowType.taskProcessing) return;
     final taskId = args.taskId?.trim();
     if (taskId != null && taskId.isNotEmpty) {
+      _setTaskSearchTextSilently('');
       _selectedTaskId = taskId;
       _editingTaskId = taskId;
       _taskFilter = _TaskFilter.all;
@@ -228,16 +234,30 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   List<TaskSummary> _visibleTasksFor(
     List<TaskSummary> tasks,
     _TaskFilter filter,
+    String searchQuery,
   ) {
     return tasks
-        .where((task) => _taskMatchesFilter(task, filter))
+        .where(
+          (task) =>
+              _taskMatchesFilter(task, filter) &&
+              _taskMatchesSearch(task, searchQuery),
+        )
         .toList(growable: false);
   }
 
-  Map<_TaskFilter, int> _taskFilterCounts(List<TaskSummary> tasks) {
+  Map<_TaskFilter, int> _taskFilterCounts(
+    List<TaskSummary> tasks,
+    String searchQuery,
+  ) {
     return {
       for (final filter in _TaskFilter.values)
-        filter: tasks.where((task) => _taskMatchesFilter(task, filter)).length,
+        filter: tasks
+            .where(
+              (task) =>
+                  _taskMatchesFilter(task, filter) &&
+                  _taskMatchesSearch(task, searchQuery),
+            )
+            .length,
     };
   }
 
@@ -254,7 +274,11 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   Future<void> _setTaskFilter(_TaskFilter filter) async {
     if (_taskFilter == filter) return;
-    final visibleTasks = _visibleTasksFor(_tasks, filter);
+    final visibleTasks = _visibleTasksFor(
+      _tasks,
+      filter,
+      _taskSearchController.text,
+    );
     final selected = _selectedTask(visibleTasks);
     setState(() {
       _taskFilter = filter;
@@ -266,6 +290,35 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (selected != null) {
       await _loadEvents(selected.taskId);
     }
+  }
+
+  void _handleTaskSearchChanged() {
+    if (!mounted) return;
+    final visibleTasks = _visibleTasksFor(
+      _tasks,
+      _taskFilter,
+      _taskSearchController.text,
+    );
+    final selected = _selectedTask(visibleTasks);
+    final previousTaskId = _selectedTaskId;
+    final nextTaskId = selected?.taskId;
+    setState(() {
+      _selectedTaskId = nextTaskId;
+      if (previousTaskId != nextTaskId) {
+        _editingTaskId = null;
+      }
+      _message = null;
+      _error = null;
+    });
+    if (selected != null && previousTaskId != nextTaskId) {
+      unawaited(_loadEvents(selected.taskId));
+    }
+  }
+
+  void _setTaskSearchTextSilently(String text) {
+    _taskSearchController.removeListener(_handleTaskSearchChanged);
+    _taskSearchController.text = text;
+    _taskSearchController.addListener(_handleTaskSearchChanged);
   }
 
   Future<void> _selectTask(TaskSummary task) async {
@@ -651,7 +704,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   @override
   Widget build(BuildContext context) {
-    final visibleTasks = _visibleTasksFor(_tasks, _taskFilter);
+    final searchQuery = _taskSearchController.text;
+    final visibleTasks = _visibleTasksFor(_tasks, _taskFilter, searchQuery);
     final selected = _selectedTask(visibleTasks);
     final selectedEventsPage = _eventsPage?.taskId == selected?.taskId
         ? _eventsPage
@@ -678,7 +732,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   tasks: visibleTasks,
                   totalTaskCount: _tasks.length,
                   filter: _taskFilter,
-                  filterCounts: _taskFilterCounts(_tasks),
+                  filterCounts: _taskFilterCounts(_tasks, searchQuery),
+                  searchController: _taskSearchController,
                   selected: selected,
                   events: events,
                   editingTaskId: editingTaskId == selected?.taskId
@@ -698,6 +753,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onRefresh: _loadTasks,
                   onFilterChanged: (filter) =>
                       unawaited(_setTaskFilter(filter)),
+                  onClearSearch: _taskSearchController.clear,
                   onSelectTask: (task) => unawaited(_selectTask(task)),
                   onLoadMoreEvents: selected == null
                       ? null
@@ -737,6 +793,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.totalTaskCount,
     required this.filter,
     required this.filterCounts,
+    required this.searchController,
     required this.selected,
     required this.events,
     required this.editingTaskId,
@@ -753,6 +810,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onFilterChanged,
+    required this.onClearSearch,
     required this.onSelectTask,
     required this.onLoadMoreEvents,
     required this.onOpenResult,
@@ -768,6 +826,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final int totalTaskCount;
   final _TaskFilter filter;
   final Map<_TaskFilter, int> filterCounts;
+  final TextEditingController searchController;
   final TaskSummary? selected;
   final List<Object?> events;
   final String? editingTaskId;
@@ -784,6 +843,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<_TaskFilter> onFilterChanged;
+  final VoidCallback onClearSearch;
   final ValueChanged<TaskSummary> onSelectTask;
   final VoidCallback? onLoadMoreEvents;
   final ValueChanged<TaskSummary> onOpenResult;
@@ -805,10 +865,12 @@ class _TaskProcessingBody extends StatelessWidget {
             totalTaskCount: totalTaskCount,
             filter: filter,
             filterCounts: filterCounts,
+            searchController: searchController,
             selectedTaskId: selected?.taskId,
             loading: loadingTasks,
             onRefresh: onRefresh,
             onFilterChanged: onFilterChanged,
+            onClearSearch: onClearSearch,
             onSelect: onSelectTask,
           ),
         ),
@@ -851,10 +913,12 @@ class _TaskStripList extends StatelessWidget {
     required this.totalTaskCount,
     required this.filter,
     required this.filterCounts,
+    required this.searchController,
     required this.selectedTaskId,
     required this.loading,
     required this.onRefresh,
     required this.onFilterChanged,
+    required this.onClearSearch,
     required this.onSelect,
   });
 
@@ -862,17 +926,21 @@ class _TaskStripList extends StatelessWidget {
   final int totalTaskCount;
   final _TaskFilter filter;
   final Map<_TaskFilter, int> filterCounts;
+  final TextEditingController searchController;
   final String? selectedTaskId;
   final bool loading;
   final VoidCallback onRefresh;
   final ValueChanged<_TaskFilter> onFilterChanged;
+  final VoidCallback onClearSearch;
   final ValueChanged<TaskSummary> onSelect;
 
   @override
   Widget build(BuildContext context) {
+    final searchQuery = searchController.text.trim();
+    final hasSearch = searchQuery.isNotEmpty;
     final summary = totalTaskCount == 0
         ? '完成、失败和制作中的任务会出现在这里。'
-        : filter == _TaskFilter.all
+        : filter == _TaskFilter.all && !hasSearch
         ? '最近 $totalTaskCount 个任务'
         : '显示 ${tasks.length} / $totalTaskCount 个任务';
     return Column(
@@ -896,6 +964,12 @@ class _TaskStripList extends StatelessWidget {
             counts: filterCounts,
             onChanged: onFilterChanged,
           ),
+          const SizedBox(height: T.s12),
+          _TaskSearchField(
+            controller: searchController,
+            enabled: !loading,
+            onClear: onClearSearch,
+          ),
         ],
         const SizedBox(height: T.s16),
         Expanded(
@@ -906,7 +980,10 @@ class _TaskStripList extends StatelessWidget {
                   child: Text(
                     totalTaskCount == 0
                         ? '还没有任务记录。'
-                        : _taskFilterEmptyText(filter),
+                        : _taskListEmptyText(filter, searchQuery),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
                     style: T.tBody,
                   ),
                 )
@@ -925,6 +1002,61 @@ class _TaskStripList extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+}
+
+class _TaskSearchField extends StatelessWidget {
+  const _TaskSearchField({
+    required this.controller,
+    required this.enabled,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasSearch = controller.text.trim().isNotEmpty;
+    return TextField(
+      controller: controller,
+      enabled: enabled,
+      minLines: 1,
+      maxLines: 1,
+      style: T.tCaption,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: '搜索任务',
+        prefixIcon: const Icon(Icons.search, size: 16),
+        suffixIcon: hasSearch
+            ? IconButton(
+                tooltip: '清除任务搜索',
+                icon: const Icon(Icons.close, size: 16),
+                onPressed: enabled ? onClear : null,
+              )
+            : null,
+        filled: true,
+        fillColor: T.surface,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: T.s8,
+          vertical: T.s8,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.line),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.line),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.accentStrong, width: 1.4),
+        ),
+      ),
     );
   }
 }
@@ -1188,68 +1320,58 @@ class _TaskPreview extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        Text(
+          _basename(task.inputFile).isEmpty
+              ? shortTaskIdLabel(task.taskId)
+              : _basename(task.inputFile),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: T.tFilename,
+        ),
+        const SizedBox(height: T.s8),
+        Text(
+          _taskSubtitle(task),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: T.tCaption,
+        ),
+        const SizedBox(height: T.s12),
+        Wrap(
+          spacing: T.s8,
+          runSpacing: T.s8,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _basename(task.inputFile).isEmpty
-                        ? shortTaskIdLabel(task.taskId)
-                        : _basename(task.inputFile),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: T.tFilename,
-                  ),
-                  const SizedBox(height: T.s8),
-                  Text(_taskSubtitle(task), style: T.tCaption),
-                ],
-              ),
+            _TaskActionButton(label: '刷新', onTap: onRefresh),
+            _TaskActionButton(
+              label: task.isDone ? '编辑字幕' : '编辑字幕',
+              onTap: task.isDone ? () => onOpenResult(task) : null,
             ),
-            const SizedBox(width: T.s16),
-            Wrap(
-              spacing: T.s8,
-              runSpacing: T.s8,
-              alignment: WrapAlignment.end,
-              children: [
-                _TaskActionButton(label: '刷新', onTap: onRefresh),
-                _TaskActionButton(
-                  label: task.isDone ? '编辑字幕' : '编辑字幕',
-                  onTap: task.isDone ? () => onOpenResult(task) : null,
-                ),
-                _TaskActionButton(
-                  label: resuming ? '继续中' : '继续任务',
-                  onTap: task.canResume && !resuming
-                      ? () => onResume(task)
-                      : null,
-                ),
-                _TaskActionButton(
-                  label: cancelling ? '取消中' : '取消任务',
-                  onTap: task.canCancel && cancellingTaskId == null
-                      ? () => onCancel(task)
-                      : null,
-                ),
-                _TaskActionButton(
-                  label: '任务目录',
-                  onTap: task.taskDir.trim().isNotEmpty
-                      ? () => onOpenTaskDirectory(task)
-                      : null,
-                ),
-                _TaskActionButton(
-                  label: '结果目录',
-                  onTap: outputDir == null
-                      ? null
-                      : () => onOpenOutputDirectory(task),
-                ),
-                _TaskActionButton(
-                  label: checkingOutputDirectory ? '检查中' : '检查结果目录',
-                  onTap: outputDir == null || checkingOutputDirectory
-                      ? null
-                      : () => onCheckOutputDirectory(task),
-                ),
-              ],
+            _TaskActionButton(
+              label: resuming ? '继续中' : '继续任务',
+              onTap: task.canResume && !resuming ? () => onResume(task) : null,
+            ),
+            _TaskActionButton(
+              label: cancelling ? '取消中' : '取消任务',
+              onTap: task.canCancel && cancellingTaskId == null
+                  ? () => onCancel(task)
+                  : null,
+            ),
+            _TaskActionButton(
+              label: '任务目录',
+              onTap: task.taskDir.trim().isNotEmpty
+                  ? () => onOpenTaskDirectory(task)
+                  : null,
+            ),
+            _TaskActionButton(
+              label: '结果目录',
+              onTap: outputDir == null
+                  ? null
+                  : () => onOpenOutputDirectory(task),
+            ),
+            _TaskActionButton(
+              label: checkingOutputDirectory ? '检查中' : '检查结果目录',
+              onTap: outputDir == null || checkingOutputDirectory
+                  ? null
+                  : () => onCheckOutputDirectory(task),
             ),
           ],
         ),
@@ -1516,6 +1638,43 @@ bool _taskMatchesFilter(TaskSummary task, _TaskFilter filter) {
   };
 }
 
+bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
+  final terms = searchQuery
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((term) => term.isNotEmpty)
+      .toList(growable: false);
+  if (terms.isEmpty) return true;
+  final outputDir = _outputDirectoryFor(task);
+  final searchText = [
+    task.taskId,
+    shortTaskIdLabel(task.taskId),
+    task.status,
+    taskStatusLabel(task.status),
+    task.displayStatus,
+    taskStatusLabel(task.displayStatus),
+    task.sourceLang,
+    task.targetLang,
+    languageLabel(task.sourceLang),
+    languageLabel(task.targetLang),
+    task.inputFile,
+    _basename(task.inputFile),
+    task.taskDir,
+    ?task.outputPath,
+    ?outputDir,
+    ...task.outputPaths.keys,
+    ...task.outputPaths.values,
+    subtitleFormatListLabel(task.outputPaths.keys),
+    ?task.error,
+    taskErrorLabel(task.error, task.errorInfo),
+    ...task.errorInfo.values.map((value) => '$value'),
+    task.createdAt,
+    task.updatedAt,
+  ].join('\n').toLowerCase();
+  return terms.every((term) => searchText.contains(term));
+}
+
 String _taskFilterLabel(_TaskFilter filter) {
   return switch (filter) {
     _TaskFilter.all => '全部',
@@ -1532,6 +1691,12 @@ String _taskFilterEmptyText(_TaskFilter filter) {
     _TaskFilter.needsAction => '没有需要处理的失败或中断任务。',
     _TaskFilter.done => '还没有完成的任务。',
   };
+}
+
+String _taskListEmptyText(_TaskFilter filter, String searchQuery) {
+  final query = searchQuery.trim();
+  if (query.isNotEmpty) return '没有匹配“$query”的任务。';
+  return _taskFilterEmptyText(filter);
 }
 
 String _taskSubtitle(TaskSummary task) {

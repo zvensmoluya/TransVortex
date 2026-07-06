@@ -1966,6 +1966,27 @@ void main() {
     expect(find.text('待处理 1'), findsOneWidget);
     expect(find.text('已完成 1'), findsOneWidget);
 
+    final taskSearch = find.widgetWithText(TextField, '搜索任务');
+    expect(taskSearch, findsOneWidget);
+    await tester.enterText(taskSearch, 'failed');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('显示 1 / 3 个任务'), findsOneWidget);
+    expect(find.text('全部 1'), findsOneWidget);
+    expect(find.text('待处理 1'), findsOneWidget);
+    expect(find.text('processing-failed.mp4'), findsWidgets);
+    expect(find.text('processing-done.mp4'), findsNothing);
+    expect(find.text('processing-running.mp4'), findsNothing);
+
+    await tester.tap(find.byTooltip('清除任务搜索'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('最近 3 个任务'), findsOneWidget);
+    expect(find.text('全部 3'), findsOneWidget);
+    expect(find.text('processing-done.mp4'), findsOneWidget);
+    expect(find.text('processing-failed.mp4'), findsWidgets);
+    expect(find.text('processing-running.mp4'), findsOneWidget);
+
     await tester.tap(find.text('制作中 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
