@@ -1705,6 +1705,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('有未保存修改'), findsOneWidget);
 
+    await tester.tap(find.text('放弃修改'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('已放弃未保存修改'), findsOneWidget);
+    expect(find.text('早上好。'), findsOneWidget);
+    expect(paramsByMethod.containsKey('result.segments.save'), isFalse);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, '输入译文').first,
+      '早上好，欢迎回来。',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('有未保存修改'), findsOneWidget);
+
     await tester.tap(find.text('保存修改'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpAndSettle();

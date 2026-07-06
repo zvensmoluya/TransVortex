@@ -169,6 +169,22 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     });
   }
 
+  void _discardEdits() {
+    final result = _result;
+    if (result == null || !_dirty || _saving || _reexporting) return;
+    for (final segment in result.segments) {
+      final controller = _controllerFor(segment);
+      if (controller.text != segment.targetText) {
+        controller.text = segment.targetText;
+      }
+    }
+    setState(() {
+      _dirty = false;
+      _notice = '已放弃未保存修改';
+      _error = null;
+    });
+  }
+
   Future<TaskResultWorkspace?> _saveEdits() async {
     final result = _result;
     if (result == null || _saving) return result;
@@ -333,6 +349,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onBilingualChanged: _setBilingual,
       onFilterChanged: (filter) => setState(() => _filter = filter),
       onClearSearch: _searchController.clear,
+      onDiscardEdits: _discardEdits,
       onReexport: () => unawaited(_reexport()),
     );
   }
@@ -359,6 +376,7 @@ class _ResultReviewBody extends StatelessWidget {
     required this.onBilingualChanged,
     required this.onFilterChanged,
     required this.onClearSearch,
+    required this.onDiscardEdits,
     required this.onReexport,
   });
 
@@ -379,6 +397,7 @@ class _ResultReviewBody extends StatelessWidget {
   final ValueChanged<bool> onBilingualChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
   final VoidCallback onClearSearch;
+  final VoidCallback onDiscardEdits;
   final VoidCallback onReexport;
 
   @override
@@ -409,6 +428,7 @@ class _ResultReviewBody extends StatelessWidget {
           onBilingualChanged: onBilingualChanged,
           onFilterChanged: onFilterChanged,
           onClearSearch: onClearSearch,
+          onDiscardEdits: onDiscardEdits,
           onReexport: onReexport,
         ),
         const SizedBox(height: T.s16),
@@ -457,6 +477,7 @@ class _ResultHeader extends StatelessWidget {
     required this.onBilingualChanged,
     required this.onFilterChanged,
     required this.onClearSearch,
+    required this.onDiscardEdits,
     required this.onReexport,
   });
 
@@ -476,6 +497,7 @@ class _ResultHeader extends StatelessWidget {
   final ValueChanged<bool> onBilingualChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
   final VoidCallback onClearSearch;
+  final VoidCallback onDiscardEdits;
   final VoidCallback onReexport;
 
   @override
@@ -530,6 +552,12 @@ class _ResultHeader extends StatelessWidget {
                   label: saving ? '保存中' : '保存修改',
                   icon: Icons.save_outlined,
                   onTap: () => unawaited(onSave()),
+                  enabled: dirty && !saving && !reexporting,
+                ),
+                _ReviewButton(
+                  label: '放弃修改',
+                  icon: Icons.undo,
+                  onTap: onDiscardEdits,
                   enabled: dirty && !saving && !reexporting,
                 ),
                 _ReviewButton(
