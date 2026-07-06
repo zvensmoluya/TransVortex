@@ -1650,6 +1650,13 @@ void main() {
     expect(find.text('Good morning.'), findsNothing);
     expect(find.text('Welcome back.'), findsOneWidget);
     expect(find.text('欢迎回来。'), findsOneWidget);
+    expect(find.text('还原片段'), findsOneWidget);
+
+    await tester.tap(find.text('还原片段'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('没有已修改片段。'), findsOneWidget);
+    expect(find.text('已还原片段修改'), findsOneWidget);
+    expect(find.text('欢迎回来。'), findsNothing);
     expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });

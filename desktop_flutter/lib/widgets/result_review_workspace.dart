@@ -133,14 +133,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       final existing = _segmentControllers[segment.id];
       if (existing == null) {
         final controller = TextEditingController(text: segment.targetText);
-        controller.addListener(() {
-          if (!_dirty && mounted) {
-            setState(() {
-              _dirty = true;
-              _notice = '';
-            });
-          }
-        });
+        controller.addListener(_handleSegmentTextChanged);
         _segmentControllers[segment.id] = controller;
       } else if (!_dirty && existing.text != segment.targetText) {
         existing.text = segment.targetText;
@@ -157,15 +150,30 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   TextEditingController _controllerFor(ResultSegment segment) {
     return _segmentControllers.putIfAbsent(segment.id, () {
       final controller = TextEditingController(text: segment.targetText);
-      controller.addListener(() {
-        if (!_dirty && mounted) {
-          setState(() {
-            _dirty = true;
-            _notice = '';
-          });
-        }
-      });
+      controller.addListener(_handleSegmentTextChanged);
       return controller;
+    });
+  }
+
+  bool _hasModifiedSegments(TaskResultWorkspace result) {
+    return result.segments.any(
+      (segment) => _controllerFor(segment).text != segment.targetText,
+    );
+  }
+
+  void _handleSegmentTextChanged() {
+    if (!mounted) return;
+    final result = _result;
+    if (result == null) return;
+    final dirty = _hasModifiedSegments(result);
+    final shouldRebuild =
+        _dirty != dirty ||
+        _notice.isNotEmpty ||
+        _filter == _SegmentFilter.modified;
+    if (!shouldRebuild) return;
+    setState(() {
+      _dirty = dirty;
+      if (dirty) _notice = '';
     });
   }
 
@@ -181,6 +189,20 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() {
       _dirty = false;
       _notice = '已放弃未保存修改';
+      _error = null;
+    });
+  }
+
+  void _restoreSegment(ResultSegment segment) {
+    final result = _result;
+    if (result == null || _saving || _reexporting) return;
+    final controller = _controllerFor(segment);
+    if (controller.text == segment.targetText) return;
+    controller.text = segment.targetText;
+    final dirty = _hasModifiedSegments(result);
+    setState(() {
+      _dirty = dirty;
+      _notice = dirty ? '' : '已还原片段修改';
       _error = null;
     });
   }
@@ -350,6 +372,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onFilterChanged: (filter) => setState(() => _filter = filter),
       onClearSearch: _searchController.clear,
       onDiscardEdits: _discardEdits,
+      onRestoreSegment: _restoreSegment,
       onReexport: () => unawaited(_reexport()),
     );
   }
@@ -377,6 +400,7 @@ class _ResultReviewBody extends StatelessWidget {
     required this.onFilterChanged,
     required this.onClearSearch,
     required this.onDiscardEdits,
+    required this.onRestoreSegment,
     required this.onReexport,
   });
 
@@ -398,6 +422,7 @@ class _ResultReviewBody extends StatelessWidget {
   final ValueChanged<_SegmentFilter> onFilterChanged;
   final VoidCallback onClearSearch;
   final VoidCallback onDiscardEdits;
+  final ValueChanged<ResultSegment> onRestoreSegment;
   final VoidCallback onReexport;
 
   @override
@@ -451,6 +476,7 @@ class _ResultReviewBody extends StatelessWidget {
                     segment: filteredSegments[index],
                     controller: controllerFor(filteredSegments[index]),
                     enabled: !saving && !reexporting,
+                    onRestore: () => onRestoreSegment(filteredSegments[index]),
                   ),
                 ),
         ),
@@ -624,11 +650,13 @@ class _SegmentRow extends StatelessWidget {
     required this.segment,
     required this.controller,
     required this.enabled,
+    required this.onRestore,
   });
 
   final ResultSegment segment;
   final TextEditingController controller;
   final bool enabled;
+  final VoidCallback onRestore;
 
   @override
   Widget build(BuildContext context) {
@@ -641,77 +669,90 @@ class _SegmentRow extends StatelessWidget {
       segment.provider,
       segment.model,
     ].where((part) => part.trim().isNotEmpty).join(' · ');
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 96,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('#${segment.id}', style: T.tSection),
-              const SizedBox(height: T.s4),
-              Text(segment.timeRangeLabel, style: T.tCaption),
-            ],
-          ),
-        ),
-        const SizedBox(width: T.s16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (segment.sourceText.isNotEmpty) ...[
-                Text(segment.sourceText, style: T.tBody),
-                const SizedBox(height: T.s8),
-              ],
-              TextField(
-                controller: controller,
-                enabled: enabled,
-                minLines: 1,
-                maxLines: 4,
-                style: T.tBody.copyWith(fontWeight: T.wMedium),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: '输入译文',
-                  filled: true,
-                  fillColor: T.surface,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: T.s12,
-                    vertical: T.s8,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(T.rSm),
-                    borderSide: const BorderSide(color: T.line),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(T.rSm),
-                    borderSide: const BorderSide(color: T.line),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(T.rSm),
-                    borderSide: const BorderSide(
-                      color: T.accentStrong,
-                      width: 1.4,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: T.s8),
-              Wrap(
-                spacing: T.s8,
-                runSpacing: T.s4,
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final modified = controller.text != segment.targetText;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 96,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (engine.isNotEmpty) _SoftLabel(label: engine),
-                  for (final issue in issueLabels.take(3))
-                    _SoftLabel(label: issue, warning: true),
-                  if (issueLabels.length > 3)
-                    _SoftLabel(label: '+${issueLabels.length - 3}'),
+                  Text('#${segment.id}', style: T.tSection),
+                  const SizedBox(height: T.s4),
+                  Text(segment.timeRangeLabel, style: T.tCaption),
                 ],
               ),
-            ],
-          ),
-        ),
-      ],
+            ),
+            const SizedBox(width: T.s16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (segment.sourceText.isNotEmpty) ...[
+                    Text(segment.sourceText, style: T.tBody),
+                    const SizedBox(height: T.s8),
+                  ],
+                  TextField(
+                    controller: controller,
+                    enabled: enabled,
+                    minLines: 1,
+                    maxLines: 4,
+                    style: T.tBody.copyWith(fontWeight: T.wMedium),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: '输入译文',
+                      filled: true,
+                      fillColor: T.surface,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: T.s12,
+                        vertical: T.s8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(T.rSm),
+                        borderSide: const BorderSide(color: T.line),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(T.rSm),
+                        borderSide: const BorderSide(color: T.line),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(T.rSm),
+                        borderSide: const BorderSide(
+                          color: T.accentStrong,
+                          width: 1.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: T.s8),
+                  Wrap(
+                    spacing: T.s8,
+                    runSpacing: T.s4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (modified)
+                        _MiniActionButton(
+                          label: '还原片段',
+                          icon: Icons.undo,
+                          onTap: enabled ? onRestore : null,
+                        ),
+                      if (engine.isNotEmpty) _SoftLabel(label: engine),
+                      for (final issue in issueLabels.take(3))
+                        _SoftLabel(label: issue, warning: true),
+                      if (issueLabels.length > 3)
+                        _SoftLabel(label: '+${issueLabels.length - 3}'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -990,6 +1031,66 @@ class _MetricPill extends StatelessWidget {
             style: T.tSection,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MiniActionButton extends StatefulWidget {
+  const _MiniActionButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  State<_MiniActionButton> createState() => _MiniActionButtonState();
+}
+
+class _MiniActionButtonState extends State<_MiniActionButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final color = enabled ? T.accentStrong : T.muted;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) {
+        if (enabled) setState(() => _hover = true);
+      },
+      onExit: (_) {
+        if (enabled) setState(() => _hover = false);
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 3),
+          decoration: BoxDecoration(
+            color: _hover && enabled
+                ? T.accentSoft
+                : T.accent.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: color.withValues(alpha: 0.8)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(widget.icon, size: 13, color: color),
+              const SizedBox(width: T.s4),
+              Text(
+                widget.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: T.tCaption.copyWith(color: T.ink),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
