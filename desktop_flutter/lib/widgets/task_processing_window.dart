@@ -704,6 +704,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'error': error == null ? '' : '$error',
       'finished_at': DateTime.now().toUtc().toIso8601String(),
     };
+    payload.addAll(_taskDiagnosticSmokeFields(selected));
     payload.addAll(
       await captureSmokeRender(
         boundaryKey: _renderKey,
@@ -2018,6 +2019,66 @@ List<_TaskDiagnosticClue> _taskDiagnosticClues(TaskSummary task) {
   }
 
   return clues;
+}
+
+Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
+  if (task == null) {
+    return const <String, Object?>{
+      'task_processing_diagnostic_title': '',
+      'task_processing_diagnostic_clue_count': 0,
+      'task_processing_diagnostic_prompt': '',
+      'task_processing_diagnostic_code': '',
+      'task_processing_diagnostic_stage': '',
+      'task_processing_diagnostic_stage_label': '',
+      'task_processing_diagnostic_retryable': null,
+      'task_processing_diagnostic_runtime_state': '',
+      'task_processing_diagnostic_runtime_state_label': '',
+      'task_processing_diagnostic_can_resume': false,
+      'task_processing_diagnostic_recovery': '',
+    };
+  }
+  final clues = _taskDiagnosticClues(task);
+  final stage = _firstDiagnosticText(task.errorInfo, const [
+    'stage',
+    'failed_stage',
+    'last_stage',
+  ]);
+  final runtimeState = task.runtimeState;
+  return <String, Object?>{
+    'task_processing_diagnostic_title': clues.isEmpty
+        ? ''
+        : _taskDiagnosticTitle(task),
+    'task_processing_diagnostic_clue_count': clues.length,
+    'task_processing_diagnostic_prompt': _diagnosticClueValue(clues, '提示'),
+    'task_processing_diagnostic_code':
+        _firstDiagnosticText(task.errorInfo, const [
+          'code',
+          'error_code',
+          'kind',
+        ]) ??
+        '',
+    'task_processing_diagnostic_stage': stage ?? '',
+    'task_processing_diagnostic_stage_label': stage == null
+        ? ''
+        : taskStageLabel(stage),
+    'task_processing_diagnostic_retryable': _firstDiagnosticBool(
+      task.errorInfo,
+      const ['retryable', 'recoverable', 'can_retry'],
+    ),
+    'task_processing_diagnostic_runtime_state': runtimeState,
+    'task_processing_diagnostic_runtime_state_label': _runtimeStateLabel(
+      runtimeState,
+    ),
+    'task_processing_diagnostic_can_resume': task.canResume,
+    'task_processing_diagnostic_recovery': _diagnosticClueValue(clues, '恢复'),
+  };
+}
+
+String _diagnosticClueValue(List<_TaskDiagnosticClue> clues, String label) {
+  for (final clue in clues) {
+    if (clue.label == label) return clue.value;
+  }
+  return '';
 }
 
 String? _firstDiagnosticText(

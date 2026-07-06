@@ -552,7 +552,8 @@ function Add-WindowCaptureTypes {
 function Capture-DesktopCompositeScreenshot {
     param(
         [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
-        [Parameter(Mandatory = $true)][string]$Path
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$WindowType = ""
     )
     Add-WindowCaptureTypes
     $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
@@ -605,7 +606,8 @@ function Capture-DesktopCompositeScreenshot {
         }
     }
     $stats = [TransVortexWindowCapture]::ImageStats($screenshotFile.FullName)
-    $looksBlank = $stats[3] -lt 240
+    $minNonBackgroundSamples = if ($WindowType -eq "taskProcessing") { 120 } else { 240 }
+    $looksBlank = $stats[3] -lt $minNonBackgroundSamples
     $backgroundLikeSamples = $stats[2] - $stats[3]
     $minBackgroundLikeSamples = [Math]::Max(360, [int]($stats[2] * 0.12))
     $looksOccluded = $backgroundLikeSamples -lt $minBackgroundLikeSamples
@@ -641,7 +643,8 @@ function Capture-DesktopCompositeScreenshot {
             }
         }
         $stats = [TransVortexWindowCapture]::ImageStats($screenshotFile.FullName)
-        $looksBlank = $stats[3] -lt 240
+        $minNonBackgroundSamples = if ($WindowType -eq "taskProcessing") { 120 } else { 240 }
+        $looksBlank = $stats[3] -lt $minNonBackgroundSamples
         $backgroundLikeSamples = $stats[2] - $stats[3]
         $minBackgroundLikeSamples = [Math]::Max(360, [int]($stats[2] * 0.12))
         $looksOccluded = $backgroundLikeSamples -lt $minBackgroundLikeSamples
@@ -663,6 +666,7 @@ function Capture-DesktopCompositeScreenshot {
         height = $stats[1]
         samples = $stats[2]
         non_background_samples = $stats[3]
+        min_non_background_samples = $minNonBackgroundSamples
         background_like_samples = $backgroundLikeSamples
         min_background_like_samples = $minBackgroundLikeSamples
         dark_samples = $stats[4]
@@ -889,8 +893,8 @@ try {
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $false)) {
             throw "Release task processing edit smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
-        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false)) {
-            throw "Release task processing failure smoke did not stay on the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false -or $report.task_processing_diagnostic_clue_count -lt 5 -or $report.task_processing_diagnostic_code -ne $fixtureErrorCode -or $report.task_processing_diagnostic_stage -ne $fixtureErrorStage -or $report.task_processing_diagnostic_retryable -ne $true -or $report.task_processing_diagnostic_can_resume -ne $true)) {
+            throw "Release task processing failure smoke did not stay on the failed task with diagnostic clues: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"
@@ -915,7 +919,7 @@ try {
             } else {
                 $DesktopCompositePath
             }
-            $desktopComposite = Capture-DesktopCompositeScreenshot -Process $process -Path $desktopCompositePath
+            $desktopComposite = Capture-DesktopCompositeScreenshot -Process $process -Path $desktopCompositePath -WindowType $WindowType
             $report | Add-Member -NotePropertyName desktop_composite -NotePropertyValue $desktopComposite
             if ($desktopComposite.ok -ne $true) {
                 throw "Release desktop composite capture failed: $($desktopComposite | ConvertTo-Json -Compress -Depth 5)"

@@ -146,8 +146,8 @@
 
 ## 10. 迁移成本（如实标注）
 
-- 此前 release smoke 是**按窗口类型逐个驱动**的（[`main.dart`](../../../desktop_flutter/lib/main.dart) 的 `_runStartupSmoke` 带 `window_type`；`smoke_flutter_release_matrix.ps1` 原有 `-WindowType translationSettings/asrSettings/diagnostics/resultReview/taskHistory/taskDetail` 六个非主窗口 case）。当前已收敛为正式工具窗 `translationSettings` / `asrSettings` / `diagnostics`、任务处理窗 `taskProcessing` 以及 `taskProcessing` browse / edit / resume 覆盖；旧 `resultReview` / `taskHistory` / `taskDetail` 独立窗口类型和 release smoke case 已移除。
-- **任务历史 / 任务详情 / 结果审看三种旧窗合并成任务处理窗**、几何按角色重写后，这些 smoke 入口要**改写**：`taskHistory` / `taskDetail` / `resultReview` 三个 `-WindowType` case 收敛为任务处理窗的**任务片列浏览态（含失败 / 可继续任务 detail）+ 编辑态**两个核心 case，工作台改为可缩放。原 `taskDetail` smoke 覆盖的 `runtime.submitResume` 继续任务能力，要迁到任务片选中失败任务后的 detail / 轻动作里。**这是本次改动里最大的一块工作量，且属验证层不是 UI 层**，需在实施计划里单列。
+- 此前 release smoke 是**按窗口类型逐个驱动**的（[`main.dart`](../../../desktop_flutter/lib/main.dart) 的 `_runStartupSmoke` 带 `window_type`；`smoke_flutter_release_matrix.ps1` 原有 `-WindowType translationSettings/asrSettings/diagnostics/resultReview/taskHistory/taskDetail` 六个非主窗口 case）。当前已收敛为正式工具窗 `translationSettings` / `asrSettings` / `diagnostics`、任务处理窗 `taskProcessing` 以及 `taskProcessing` browse / edit / failure / resume / cancel 覆盖；旧 `resultReview` / `taskHistory` / `taskDetail` 独立窗口类型和 release smoke case 已移除。
+- **任务历史 / 任务详情 / 结果审看三种旧窗合并成任务处理窗**、几何按角色重写后，这些 smoke 入口已经改写：`taskHistory` / `taskDetail` / `resultReview` 三个 `-WindowType` case 收敛为任务处理窗的浏览态 / 编辑态 / 失败线索停留态 / 失败恢复态 / 运行中取消态，工作台改为可缩放；原 `taskDetail` smoke 覆盖的 `runtime.submitResume` 继续任务能力已迁到任务片选中失败任务后的轻动作里。剩余验证重点不再是旧窗口兼容，而是继续补完整真实可见任务链路和后续恢复矩阵。
 
 建议实施拆成四步，不要一次全吞：
 

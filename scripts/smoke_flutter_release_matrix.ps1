@@ -159,6 +159,12 @@ foreach ($case in $cases) {
         task_processing_resume_ok = if ($report.PSObject.Properties.Name -contains "task_processing_resume_ok") { $report.task_processing_resume_ok } else { "" }
         task_processing_cancel_ok = if ($report.PSObject.Properties.Name -contains "task_processing_cancel_ok") { $report.task_processing_cancel_ok } else { "" }
         task_processing_output_dir_writable = if ($report.PSObject.Properties.Name -contains "task_processing_output_dir_writable") { $report.task_processing_output_dir_writable } else { "" }
+        task_processing_diagnostic_clue_count = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_clue_count") { $report.task_processing_diagnostic_clue_count } else { "" }
+        task_processing_diagnostic_code = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_code") { $report.task_processing_diagnostic_code } else { "" }
+        task_processing_diagnostic_stage = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_stage") { $report.task_processing_diagnostic_stage } else { "" }
+        task_processing_diagnostic_retryable = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_retryable") { $report.task_processing_diagnostic_retryable } else { "" }
+        task_processing_diagnostic_runtime_state = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_runtime_state") { $report.task_processing_diagnostic_runtime_state } else { "" }
+        task_processing_diagnostic_can_resume = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_can_resume") { $report.task_processing_diagnostic_can_resume } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }
@@ -179,6 +185,7 @@ foreach ($case in $cases) {
         desktop_composite_ok = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.ok } else { "" }
         desktop_composite_path = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.path } else { "" }
         desktop_composite_non_background_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.non_background_samples } else { "" }
+        desktop_composite_min_non_background_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.min_non_background_samples } else { "" }
         desktop_composite_background_like_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.background_like_samples } else { "" }
         desktop_composite_overflow_stripe_samples = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.flutter_overflow_stripe_samples } else { "" }
         desktop_composite_error = if ($report.PSObject.Properties.Name -contains "desktop_composite") { $report.desktop_composite.error } else { "" }
