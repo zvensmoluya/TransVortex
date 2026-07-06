@@ -1604,6 +1604,18 @@ void main() {
     expect(find.text('Welcome back.'), findsOneWidget);
     expect(find.text('字幕阅读速度偏快'), findsOneWidget);
 
+    final segmentSearch = find.widgetWithText(TextField, '搜索源文或译文');
+    expect(segmentSearch, findsOneWidget);
+    await tester.enterText(segmentSearch, 'welcome');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Good morning.'), findsNothing);
+    expect(find.text('Welcome back.'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('清除搜索'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Good morning.'), findsOneWidget);
+    expect(find.text('Welcome back.'), findsOneWidget);
+
     await tester.tap(find.text('有问题'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Good morning.'), findsOneWidget);
@@ -1686,7 +1698,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.enterText(find.byType(TextField).first, '早上好，欢迎回来。');
+    await tester.enterText(
+      find.widgetWithText(TextField, '输入译文').first,
+      '早上好，欢迎回来。',
+    );
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('有未保存修改'), findsOneWidget);
 

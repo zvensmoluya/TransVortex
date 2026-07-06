@@ -25,6 +25,7 @@ class ResultReviewWorkspace extends StatefulWidget {
 
 class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   late final AppServiceClient _client;
+  final TextEditingController _searchController = TextEditingController();
   final Map<int, TextEditingController> _segmentControllers = {};
   TaskResultWorkspace? _result;
   String? _error;
@@ -43,6 +44,9 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void initState() {
     super.initState();
     _client = AppServiceClient(_resultTransport());
+    _searchController.addListener(() {
+      if (mounted) setState(() {});
+    });
     unawaited(widget.bridge.initializeChild());
     unawaited(_loadResult());
   }
@@ -55,6 +59,9 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       controller.dispose();
     }
     _segmentControllers.clear();
+    if (_searchController.text.isNotEmpty) {
+      _searchController.clear();
+    }
     setState(() {
       _result = null;
       _error = null;
@@ -72,6 +79,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     for (final controller in _segmentControllers.values) {
       controller.dispose();
     }
@@ -317,12 +325,14 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       selectedOutputFormat: _exportFormatFor(result),
       selectedBilingual: _exportBilingualFor(result),
       filter: _filter,
+      searchController: _searchController,
       controllerFor: _controllerFor,
       onRefresh: _loadResult,
       onSave: _saveEdits,
       onOutputFormatChanged: _setOutputFormat,
       onBilingualChanged: _setBilingual,
       onFilterChanged: (filter) => setState(() => _filter = filter),
+      onClearSearch: _searchController.clear,
       onReexport: () => unawaited(_reexport()),
     );
   }
@@ -341,12 +351,14 @@ class _ResultReviewBody extends StatelessWidget {
     required this.selectedOutputFormat,
     required this.selectedBilingual,
     required this.filter,
+    required this.searchController,
     required this.controllerFor,
     required this.onRefresh,
     required this.onSave,
     required this.onOutputFormatChanged,
     required this.onBilingualChanged,
     required this.onFilterChanged,
+    required this.onClearSearch,
     required this.onReexport,
   });
 
@@ -359,19 +371,23 @@ class _ResultReviewBody extends StatelessWidget {
   final String selectedOutputFormat;
   final bool selectedBilingual;
   final _SegmentFilter filter;
+  final TextEditingController searchController;
   final TextEditingController Function(ResultSegment segment) controllerFor;
   final VoidCallback onRefresh;
   final Future<TaskResultWorkspace?> Function() onSave;
   final ValueChanged<String> onOutputFormatChanged;
   final ValueChanged<bool> onBilingualChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
+  final VoidCallback onClearSearch;
   final VoidCallback onReexport;
 
   @override
   Widget build(BuildContext context) {
     final segments = result.segments;
+    final searchQuery = searchController.text;
     final filteredSegments = segments
         .where((segment) => _matchesFilter(segment, filter, controllerFor))
+        .where((segment) => _matchesSearch(segment, searchQuery, controllerFor))
         .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -386,11 +402,13 @@ class _ResultReviewBody extends StatelessWidget {
           selectedOutputFormat: selectedOutputFormat,
           selectedBilingual: selectedBilingual,
           filter: filter,
+          searchController: searchController,
           onRefresh: onRefresh,
           onSave: onSave,
           onOutputFormatChanged: onOutputFormatChanged,
           onBilingualChanged: onBilingualChanged,
           onFilterChanged: onFilterChanged,
+          onClearSearch: onClearSearch,
           onReexport: onReexport,
         ),
         const SizedBox(height: T.s16),
@@ -398,7 +416,12 @@ class _ResultReviewBody extends StatelessWidget {
           child: segments.isEmpty
               ? const Center(child: Text('结果里没有字幕片段。', style: T.tBody))
               : filteredSegments.isEmpty
-              ? Center(child: Text(_emptyFilterText(filter), style: T.tBody))
+              ? Center(
+                  child: Text(
+                    _emptyFilterText(filter, searchQuery),
+                    style: T.tBody,
+                  ),
+                )
               : ListView.separated(
                   padding: EdgeInsets.zero,
                   itemCount: filteredSegments.length,
@@ -427,11 +450,13 @@ class _ResultHeader extends StatelessWidget {
     required this.selectedOutputFormat,
     required this.selectedBilingual,
     required this.filter,
+    required this.searchController,
     required this.onRefresh,
     required this.onSave,
     required this.onOutputFormatChanged,
     required this.onBilingualChanged,
     required this.onFilterChanged,
+    required this.onClearSearch,
     required this.onReexport,
   });
 
@@ -444,11 +469,13 @@ class _ResultHeader extends StatelessWidget {
   final String selectedOutputFormat;
   final bool selectedBilingual;
   final _SegmentFilter filter;
+  final TextEditingController searchController;
   final VoidCallback onRefresh;
   final Future<TaskResultWorkspace?> Function() onSave;
   final ValueChanged<String> onOutputFormatChanged;
   final ValueChanged<bool> onBilingualChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
+  final VoidCallback onClearSearch;
   final VoidCallback onReexport;
 
   @override
@@ -536,8 +563,10 @@ class _ResultHeader extends StatelessWidget {
         const SizedBox(height: T.s8),
         _FilterControls(
           selected: filter,
+          searchController: searchController,
           enabled: !saving && !reexporting,
           onChanged: onFilterChanged,
+          onClearSearch: onClearSearch,
         ),
         if (dirty || notice.isNotEmpty) ...[
           const SizedBox(height: T.s8),
@@ -734,16 +763,21 @@ class _ExportControls extends StatelessWidget {
 class _FilterControls extends StatelessWidget {
   const _FilterControls({
     required this.selected,
+    required this.searchController,
     required this.enabled,
     required this.onChanged,
+    required this.onClearSearch,
   });
 
   final _SegmentFilter selected;
+  final TextEditingController searchController;
   final bool enabled;
   final ValueChanged<_SegmentFilter> onChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
+    final hasSearch = searchController.text.trim().isNotEmpty;
     return Wrap(
       spacing: T.s8,
       runSpacing: T.s8,
@@ -780,6 +814,47 @@ class _FilterControls extends StatelessWidget {
                   : T.line;
               return BorderSide(color: color, width: 1.2);
             }),
+          ),
+        ),
+        SizedBox(
+          width: 220,
+          child: TextField(
+            controller: searchController,
+            enabled: enabled,
+            minLines: 1,
+            maxLines: 1,
+            style: T.tCaption,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: '搜索源文或译文',
+              prefixIcon: const Icon(Icons.search, size: 16),
+              suffixIcon: hasSearch
+                  ? IconButton(
+                      tooltip: '清除搜索',
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: enabled ? onClearSearch : null,
+                    )
+                  : null,
+              filled: true,
+              fillColor: T.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: T.s8,
+                vertical: T.s8,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(T.rSm),
+                borderSide: const BorderSide(color: T.line),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(T.rSm),
+                borderSide: const BorderSide(color: T.line),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(T.rSm),
+                borderSide: const BorderSide(color: T.accentStrong, width: 1.4),
+              ),
+            ),
           ),
         ),
       ],
@@ -987,7 +1062,34 @@ bool _matchesFilter(
   };
 }
 
-String _emptyFilterText(_SegmentFilter filter) {
+bool _matchesSearch(
+  ResultSegment segment,
+  String query,
+  TextEditingController Function(ResultSegment segment) controllerFor,
+) {
+  final needle = query.trim().toLowerCase();
+  if (needle.isEmpty) return true;
+  final haystack = [
+    segment.sourceText,
+    controllerFor(segment).text,
+    segment.provider,
+    segment.model,
+    ...segment.issues,
+    for (final issue in segment.qualityIssues) ..._issueSearchTerms(issue),
+  ].join('\n').toLowerCase();
+  return haystack.contains(needle);
+}
+
+Iterable<String> _issueSearchTerms(Map<String, Object?> issue) sync* {
+  for (final key in const ['code', 'message', 'hint_zh', 'hint']) {
+    final value = _stringValue(issue[key]);
+    if (value != null) yield value;
+  }
+}
+
+String _emptyFilterText(_SegmentFilter filter, String searchQuery) {
+  final query = searchQuery.trim();
+  if (query.isNotEmpty) return '没有匹配“$query”的片段。';
   return switch (filter) {
     _SegmentFilter.all => '结果里没有字幕片段。',
     _SegmentFilter.issues => '没有带问题提示的片段。',

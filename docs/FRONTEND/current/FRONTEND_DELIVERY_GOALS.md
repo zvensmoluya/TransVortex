@@ -62,7 +62,7 @@
 完成标准：
 
 - 完成态可以进入结果审看入口。
-- 当前已有任务处理窗内嵌的结果审看 / 编辑工作台，可通过真实 `result.open` 展示任务摘要、片段、输出格式和问题提示，可按全部 / 有问题 / 空译文筛查片段，通过 `result.segments.save` 保存片段译文，并通过 `result.reexport` 按用户选择的输出格式 / 单双语重新导出当前结果；旧 `resultReview` 独立窗已移除，后续再补跨任务批量筛查、完整编辑器和高级导出复核。
+- 当前已有任务处理窗内嵌的结果审看 / 编辑工作台，可通过真实 `result.open` 展示任务摘要、片段、输出格式和问题提示，可按全部 / 有问题 / 空译文筛查片段，并可按源文 / 译文 / 问题提示搜索片段；通过 `result.segments.save` 保存片段译文，并通过 `result.reexport` 按用户选择的输出格式 / 单双语重新导出当前结果；旧 `resultReview` 独立窗已移除，后续再补跨任务批量筛查、完整编辑器和高级导出复核。
 - 重新导出能明确使用当前结果和用户选择的输出格式。
 - 结果缺失、导出失败、目标文件被移动时有可理解的恢复路径；当前已覆盖目标文件缺失 / 被移动时的重新导出修复动作，以及重新导出失败时选择新输出目录并对同一任务重新导出的恢复动作，跨任务批量筛查、完整结果编辑器与高级导出复核仍属后续。
 
@@ -136,7 +136,7 @@
 - `scripts\smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态、4 个非主窗口基础 case、`taskProcessing` 编辑 / 恢复 / 取消三个追加 case 和长模型名设置窗固化为单命令，并保存每个 case 的截图、报告和矩阵 summary；summary 记录渲染尺寸、非背景采样、Flutter overflow 警告条采样、任务处理窗选中状态、编辑 / 重导出 / 恢复 / 取消结果、诊断窗 / 任务处理窗结果目录可写性、通知 show 调用和 registry 结果，传入 `-CheckDesktopComposite` 时还会记录桌面合成层截图采样，专门用于回归截图里暴露过的布局 / overflow 问题和通知接线；summary 也写入 `frontend_design_mvp_complete=false`、自动化覆盖范围和仍需人工验收清单，作为防止误报完成的机器边界。
 - `scripts\package_flutter_release.ps1` 是当前 portable release 包入口：它把 Flutter release bundle、`src/`、`prompts/`、`pipeline.yaml`、由 `providers.example.yaml` 复制出的 `providers.yaml`、`README_PORTABLE.txt`、用户级安装脚本和开始菜单快捷方式辅助脚本打包到同一目录，并排除 `.env`、`providers.local.yaml`、`auth.json` 等本地凭据文件；脚本默认从包根启动 `python -m transvortex.app_service --no-pump`，验证 `service.info` / `service.health` / `service.shutdown`，再清理检查产生的 `__pycache__` 和包根 `artifacts`；`-LaunchCheck` 额外从包目录启动 `TransVortex.exe`，验证 release 窗口。`scripts\install_flutter_portable_release.ps1` 和包根 `Install-TransVortex.ps1` 可把包复制到用户级安装目录、创建 AUMID 快捷方式并在安装目录复跑 Local Service RPC。它输出的 manifest 同样写入 `frontend_design_mvp_complete=false`，并明确 `installer=false`、`formal_installer=false`、`python_runtime_included=false`、`ffmpeg_included=false`；该包不是正式 MSIX/MSI/NSIS/Inno 安装器。
 - `scripts\smoke_external_services.ps1` 是真实外部服务验收入口：默认用 `providers.local.yaml` 和用户级凭据跑 `probe-provider --strict` + 样本 `translate --json`，证明真实翻译服务可用；传入 `-InputPath <video>` 时额外跑媒体任务，并检查 `source/asr` 产物或 ASR 事件来补真实语音识别 / 端到端证据；`-PlanOnly` 只输出计划，不算验收。本机已用 `google_vertex_gemini · gemini-3.5-flash` 跑通真实 provider probe、样本翻译、`DemoTest/英文视频.mp4` 媒体任务和 ASR 产物证据。
-- `taskProcessing -TaskProcessingScenario edit` release smoke 的临时结果包含空译文片段，会通过真实 `result.open` 产生问题计数，并在内嵌结果编辑器里覆盖最小片段筛查、保存编辑和重新导出的数据来源。
+- `taskProcessing -TaskProcessingScenario edit` release smoke 的临时结果包含空译文片段，会通过真实 `result.open` 产生问题计数，为最小片段筛查 / 搜索提供数据来源，并覆盖保存编辑和重新导出。
 - 当前 `scripts\smoke_flutter_release_matrix.ps1 -CheckDesktopComposite` 已用 ffmpeg `ddagrab` 记录 Windows 桌面合成层窗口区域；脚本会前置 release 窗口并用浅色工作区采样校验避免误抓背后的桌面内容；完整矩阵覆盖 16 个 release case，包含主流程完成态、完成态通知、主窗口六态、4 个非主窗口基础 case、`taskProcessing` edit / resume / cancel 和长模型名设置窗；本机已通过带桌面合成层采样的 16 case release matrix，16/16 个 case 写出有效桌面合成层截图，Flutter 渲染树与桌面合成层 overflow 警告条采样均为 0，通知 show、结果编辑重导出、失败任务恢复和运行中任务取消动作仍为通过。该项补充真实窗口区域证据，但不替代 G1 的人工选择片源 / 提交 / 观察运行 / 完成或取消 / 打开结果 / 审看结果。
 - `scripts\accept_flutter_release_manual.ps1 -InputPath <video>` 是 G1 真实可见 release 窗口人工验收入口：它启动真实 release exe，要求人工逐项确认可见 release 窗口、人工选择片源、人工开始、观察运行、完成、打开结果和打开结果审看，并保存窗口截图与 `manual_release_acceptance.json`。本机已通过 `-LaunchCheck`，确认脚本能拉起 release 窗口、写出初始窗口截图和报告，但报告仍写入 `manual_visible_e2e_ok=false`；该检查不替代完整人工端到端。完整人工报告通过后仍要与自动 smoke、外部服务、通知和 AUMID 证据一起判断，不单独宣布“前端设计 MVP 完成”。
 - 如果某项验收被暂缓，必须写清楚暂缓原因和下次恢复入口。
