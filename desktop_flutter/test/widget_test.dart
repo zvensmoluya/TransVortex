@@ -1710,6 +1710,13 @@ void main() {
     expect(calls, contains('result.open'));
     expect(opened, isEmpty);
 
+    await tester.tap(find.text('返回概览'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('结果目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(pathOpener.openedDirectories, [r'D:\media']);
+    expect(find.text('已打开结果目录'), findsOneWidget);
+
     await tester.tap(find.text('processing-failed.mp4'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
@@ -1726,6 +1733,7 @@ void main() {
     await tester.tap(find.text('任务目录'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [
+      r'D:\media',
       r'D:\artifacts\tvx_processing_failed_123456',
     ]);
     expectNoFlutterException();
