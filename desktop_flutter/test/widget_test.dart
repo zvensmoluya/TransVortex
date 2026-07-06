@@ -101,6 +101,11 @@ void main() {
     expect(flagStartup.smoke?.checkNotifications, isTrue);
     expect(flagStartup.smoke?.mainPhase, SmokeMainPhase.blockedAsr);
     expect(flagStartup.smoke?.taskProcessingScenario, 'edit');
+    final cancelFlagStartup = AppStartupArgs.fromSources(null, [
+      '--tvx-smoke-report=D:/tmp/report.json',
+      '--tvx-smoke-task-processing-scenario=cancel',
+    ]);
+    expect(cancelFlagStartup.smoke?.taskProcessingScenario, 'cancel');
 
     final emptyScreenshotStartup = AppStartupArgs.fromSources(null, [
       '--tvx-smoke-report=D:/tmp/report.json',
@@ -1730,6 +1735,7 @@ void main() {
     final paramsByMethod = <String, Map<String, Object?>>{};
     final opened = <AppWindowArgs>[];
     var targetText = '早上好。';
+    var runningStatus = 'RUNNING';
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       paramsByMethod[method] = params;
@@ -1749,6 +1755,13 @@ void main() {
             taskDir: r'D:\artifacts\tvx_processing_failed_123456',
             errorInfo: {'hint_zh': '可以继续任务。'},
             runtime: {'can_resume': true},
+          ),
+          _task(
+            taskId: 'tvx_processing_running_123456',
+            status: runningStatus,
+            inputFile: r'D:\media\processing-running.mp4',
+            taskDir: r'D:\artifacts\tvx_processing_running_123456',
+            runtime: {'can_cancel': true, 'state': 'running'},
           ),
         ];
       }
@@ -1778,6 +1791,16 @@ void main() {
           'status': 'QUEUED',
           'message': '任务已重新排队。',
         };
+      }
+      if (method == 'runtime.cancel') {
+        runningStatus = 'CANCEL_REQUESTED';
+        return _task(
+          taskId: 'tvx_processing_running_123456',
+          status: runningStatus,
+          inputFile: r'D:\media\processing-running.mp4',
+          taskDir: r'D:\artifacts\tvx_processing_running_123456',
+          runtime: {'can_cancel': true, 'state': 'running'},
+        );
       }
       if (method == 'result.open') {
         return {
@@ -1849,6 +1872,7 @@ void main() {
     expect(find.text('任务片列'), findsOneWidget);
     expect(find.text('processing-done.mp4'), findsWidgets);
     expect(find.text('processing-failed.mp4'), findsOneWidget);
+    expect(find.text('processing-running.mp4'), findsOneWidget);
     expect(find.text('字幕编辑'), findsOneWidget);
     expect(find.text('导出格式'), findsOneWidget);
     expect(calls, contains('result.open'));
@@ -1879,6 +1903,21 @@ void main() {
         'task_id': 'tvx_processing_failed_123456',
       },
     });
+    await tester.tap(find.text('processing-running.mp4'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('取消任务'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(paramsByMethod['runtime.cancel'], {
+      'task_id': 'tvx_processing_running_123456',
+      'force': false,
+    });
+    expect(find.text('已请求取消任务。'), findsOneWidget);
+
+    await tester.tap(find.text('processing-failed.mp4'));
+    await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.text('任务目录'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [

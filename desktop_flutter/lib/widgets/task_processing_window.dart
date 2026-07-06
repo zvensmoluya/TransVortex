@@ -95,6 +95,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingTasks = false;
   bool _loadingEvents = false;
   bool _resuming = false;
+  String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
   String? _editingTaskId;
   String _smokeScenario = 'browse';
@@ -109,6 +110,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _smokeResumeAttempted = false;
   bool _smokeResumeOk = false;
   String _smokeResumeStatus = '';
+  bool _smokeCancelAttempted = false;
+  bool _smokeCancelOk = false;
+  String _smokeCancelStatus = '';
   bool _smokeOutputDirectoryChecked = false;
   bool _smokeOutputDirectoryWritable = false;
   String _smokeOutputDirectoryPath = '';
@@ -181,7 +185,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
         var reportSelected = selected;
         if (selected != null) {
           await _runSmokeScenario(selected);
-          if (_smokeScenario == 'resume') {
+          if (_smokeScenario == 'resume' || _smokeScenario == 'cancel') {
             reportTasks = await _client.taskList();
             reportSelected = _selectedTask(reportTasks);
             if (mounted) {
@@ -296,6 +300,40 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
   }
 
+  Future<void> _cancelTask(TaskSummary task) async {
+    if (!task.canCancel || _cancellingTaskId != null) return;
+    setState(() {
+      _cancellingTaskId = task.taskId;
+      _message = '正在请求取消任务…';
+      _error = null;
+    });
+    try {
+      final cancelled = await _client.cancel(task.taskId);
+      if (!mounted) return;
+      final message = cancelled.status == 'CANCEL_REQUESTED'
+          ? '已请求取消任务。'
+          : '任务已更新为${taskStatusLabel(cancelled.status)}。';
+      setState(() {
+        _selectedTaskId = cancelled.taskId.isEmpty
+            ? task.taskId
+            : cancelled.taskId;
+        _cancellingTaskId = null;
+      });
+      await _loadTasks();
+      if (!mounted || _error != null) return;
+      setState(() {
+        _message = message;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = '取消任务失败：${_friendlyTaskProcessingError(error)}';
+        _message = null;
+        _cancellingTaskId = null;
+      });
+    }
+  }
+
   Future<void> _openTaskDirectory(TaskSummary task) async {
     final dir = task.taskDir.trim();
     if (dir.isEmpty) {
@@ -386,6 +424,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       await _runSmokeEditFlow(selected);
     } else if (_smokeScenario == 'resume') {
       await _runSmokeResumeFlow(selected);
+    } else if (_smokeScenario == 'cancel') {
+      await _runSmokeCancelFlow(selected);
     } else {
       await _runSmokeOutputDirectoryCheck(selected);
     }
@@ -453,6 +493,16 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _smokeResumeStatus = result.status;
   }
 
+  Future<void> _runSmokeCancelFlow(TaskSummary task) async {
+    if (!task.canCancel) return;
+    _smokeCancelAttempted = true;
+    final result = await _client.cancel(task.taskId);
+    _smokeCancelOk =
+        result.taskId == task.taskId &&
+        (result.status == 'CANCEL_REQUESTED' || result.status == 'CANCELLED');
+    _smokeCancelStatus = result.status;
+  }
+
   Future<void> _runSmokeOutputDirectoryCheck(TaskSummary task) async {
     final dir = _outputDirectoryFor(task);
     if (dir == null || dir.isEmpty) return;
@@ -492,6 +542,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_resume_attempted': _smokeResumeAttempted,
       'task_processing_resume_ok': _smokeResumeOk,
       'task_processing_resume_status': _smokeResumeStatus,
+      'task_processing_cancel_attempted': _smokeCancelAttempted,
+      'task_processing_cancel_ok': _smokeCancelOk,
+      'task_processing_cancel_status': _smokeCancelStatus,
       'task_processing_output_dir_checked': _smokeOutputDirectoryChecked,
       'task_processing_output_dir_writable': _smokeOutputDirectoryWritable,
       'task_processing_output_dir_path': _smokeOutputDirectoryPath,
@@ -560,12 +613,14 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   loadingTasks: _loadingTasks,
                   loadingEvents: _loadingEvents,
                   resuming: _resuming,
+                  cancellingTaskId: _cancellingTaskId,
                   checkingOutputDirectory: _checkingOutputDirectory,
                   onRefresh: _loadTasks,
                   onSelectTask: (task) => unawaited(_selectTask(task)),
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => setState(() => _editingTaskId = null),
                   onResume: (task) => unawaited(_resumeTask(task)),
+                  onCancel: (task) => unawaited(_cancelTask(task)),
                   onOpenTaskDirectory: (task) =>
                       unawaited(_openTaskDirectory(task)),
                   onOpenOutputDirectory: (task) =>
@@ -604,12 +659,14 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.loadingTasks,
     required this.loadingEvents,
     required this.resuming,
+    required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onSelectTask,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
+    required this.onCancel,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -626,12 +683,14 @@ class _TaskProcessingBody extends StatelessWidget {
   final bool loadingTasks;
   final bool loadingEvents;
   final bool resuming;
+  final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onSelectTask;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
+  final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -663,11 +722,13 @@ class _TaskProcessingBody extends StatelessWidget {
             loadingTasks: loadingTasks,
             loadingEvents: loadingEvents,
             resuming: resuming,
+            cancellingTaskId: cancellingTaskId,
             checkingOutputDirectory: checkingOutputDirectory,
             onRefresh: onRefresh,
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResume: onResume,
+            onCancel: onCancel,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
             onCheckOutputDirectory: onCheckOutputDirectory,
@@ -824,11 +885,13 @@ class _TaskPreview extends StatelessWidget {
     required this.loadingTasks,
     required this.loadingEvents,
     required this.resuming,
+    required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
+    required this.onCancel,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -844,11 +907,13 @@ class _TaskPreview extends StatelessWidget {
   final bool loadingTasks;
   final bool loadingEvents;
   final bool resuming;
+  final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
+  final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -890,6 +955,7 @@ class _TaskPreview extends StatelessWidget {
       );
     }
     final outputDir = _outputDirectoryFor(task);
+    final cancelling = cancellingTaskId == task.taskId;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -931,6 +997,12 @@ class _TaskPreview extends StatelessWidget {
                       : null,
                 ),
                 _TaskActionButton(
+                  label: cancelling ? '取消中' : '取消任务',
+                  onTap: task.canCancel && cancellingTaskId == null
+                      ? () => onCancel(task)
+                      : null,
+                ),
+                _TaskActionButton(
                   label: '任务目录',
                   onTap: task.taskDir.trim().isNotEmpty
                       ? () => onOpenTaskDirectory(task)
@@ -958,7 +1030,7 @@ class _TaskPreview extends StatelessWidget {
         else if (message != null)
           Text(message!, style: T.tCaption)
         else
-          const Text('在这里处理任务、继续失败任务，或进入字幕编辑。', style: T.tCaption),
+          const Text('在这里取消运行任务、继续失败任务，或进入字幕编辑。', style: T.tCaption),
         const SizedBox(height: T.s16),
         _TaskSummaryPanel(task: task),
         const SizedBox(height: T.s16),
@@ -1238,6 +1310,7 @@ String _normalizedSmokeScenario(String? value) {
   return switch ((value ?? '').trim().toLowerCase()) {
     'edit' => 'edit',
     'resume' => 'resume',
+    'cancel' => 'cancel',
     _ => 'browse',
   };
 }

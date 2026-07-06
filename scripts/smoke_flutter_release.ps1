@@ -9,7 +9,7 @@ param(
     [string]$MainPhase = "normal",
     [ValidateSet("normal", "longModels")]
     [string]$TranslationScenario = "normal",
-    [ValidateSet("browse", "edit", "resume")]
+    [ValidateSet("browse", "edit", "resume", "cancel")]
     [string]$TaskProcessingScenario = "browse",
     [switch]$CheckNotifications,
     [switch]$CheckAppIdentity,
@@ -269,6 +269,48 @@ function Write-SmokeTaskEvent {
     [System.IO.File]::AppendAllText((Join-Path $TaskDir "events.jsonl"), "$line`n", $utf8NoBom)
 }
 
+function Write-SmokeTaskRuntimeActive {
+    param(
+        [Parameter(Mandatory = $true)][string]$TaskDir
+    )
+
+    $taskId = Split-Path -Leaf $TaskDir
+    $now = (Get-Date).ToUniversalTime().ToString("o")
+    $workerPayload = [ordered]@{
+        task_id = $taskId
+        pid = $PID
+        owner = "release_smoke"
+        command = "smoke"
+        state = "running"
+        started_at = $now
+        last_seen = $now
+        ended_at = ""
+        exit_code = $null
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $TaskDir "worker.json"),
+        ($workerPayload | ConvertTo-Json -Depth 6),
+        $utf8NoBom
+    )
+
+    $runtimeDir = Join-Path (Join-Path $serviceRoot "artifacts") ".runtime"
+    New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+    $activePayload = [ordered]@{
+        task_id = $taskId
+        pid = $PID
+        owner = "release_smoke"
+        command = "smoke"
+        state = "running"
+        started_at = $now
+        last_seen = $now
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $runtimeDir "active.json"),
+        ($activePayload | ConvertTo-Json -Depth 6),
+        $utf8NoBom
+    )
+}
+
 $smokeContextTaskId = "tvx_demo_context_task"
 
 if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
@@ -285,7 +327,13 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         [System.IO.File]::WriteAllText($diagnosticOutputPath, "1`n00:00:00,000 --> 00:00:01,000`n诊断 smoke 字幕`n", $utf8NoBom)
         $taskOutputPaths = @{srt = $diagnosticOutputPath}
     }
-    $contextStatus = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "FAILED" } else { "DONE" }
+    $contextStatus = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") {
+        "FAILED"
+    } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
+        "RUNNING"
+    } else {
+        "DONE"
+    }
     $contextFixtureArgs = @{
         TaskId = $smokeTaskId
         InputFile = Join-Path $fixtureRoot $contextFileName
@@ -299,6 +347,9 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
     if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "error" -Stage "FAILED" -Message "Smoke detail resumable failure"
+    } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
+        Write-SmokeTaskEvent -TaskDir $taskDir -Type "stage" -Stage "RUNNING" -Message "Task running" -Progress 0.4
+        Write-SmokeTaskRuntimeActive -TaskDir $taskDir
     } else {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "done" -Stage "DONE" -Message "Task done" -Progress 1.0
     }
@@ -715,10 +766,10 @@ try {
         if ($WindowType -eq "diagnostics" -and ($report.diagnostic_output_dir_checked -ne $true -or $report.diagnostic_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.diagnostic_output_dir_path))) {
             throw "Release diagnostics smoke did not verify the latest task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
-        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "resume" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
+        if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
             throw "Release task processing smoke did not read and select the completed task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
-        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "resume" -and ($report.task_processing_output_dir_checked -ne $true -or $report.task_processing_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.task_processing_output_dir_path))) {
+        if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_output_dir_checked -ne $true -or $report.task_processing_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.task_processing_output_dir_path))) {
             throw "Release task processing smoke did not verify the selected task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $false)) {
@@ -726,6 +777,9 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel" -and ($report.task_processing_cancel_attempted -ne $true -or $report.task_processing_cancel_ok -ne $true -or $report.task_processing_cancel_status -ne "CANCEL_REQUESTED" -or $report.task_processing_selected_status -ne "CANCEL_REQUESTED")) {
+            throw "Release task processing cancel smoke did not cancel the running task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
     }
     if ($showWindow) {
