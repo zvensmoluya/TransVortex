@@ -14,7 +14,7 @@ import '../theme/tokens.dart';
 
 Future<void> Function(AppWindowArgs args)? _retargetHandler;
 _WindowGeometryMemoryListener? _geometryMemoryListener;
-AppWindowType? _configuredWindowType;
+AppWindowArgs? _configuredWindowArgs;
 WindowGeometryMemory? _windowGeometryMemory = WindowGeometryMemory.userStore();
 
 void registerCurrentWindowRetargetHandler(
@@ -26,7 +26,7 @@ void registerCurrentWindowRetargetHandler(
 Future<void> configureCurrentWindow(AppWindowArgs args) async {
   await windowManager.ensureInitialized();
 
-  _configuredWindowType = args.type;
+  _configuredWindowArgs = args;
   final rememberedBounds = await _windowGeometryMemory?.readBounds(args.type);
   final geometry = windowGeometryFor(args, rememberedBounds: rememberedBounds);
   final options = WindowOptions(
@@ -164,6 +164,19 @@ class WindowGeometryMemory {
 @visibleForTesting
 Future<void> resetStoredWindowGeometry([AppWindowType? type]) async {
   await _windowGeometryMemory?.reset(type);
+}
+
+Future<void> _resetCurrentWindowGeometry() async {
+  final args = _configuredWindowArgs;
+  if (args == null) return;
+  await resetStoredWindowGeometry(args.type);
+  final geometry = windowGeometryFor(args);
+  await windowManager.setSize(geometry.size);
+  if (geometry.position != null) {
+    await windowManager.setPosition(geometry.position!);
+  } else if (geometry.alignment != null) {
+    await windowManager.setAlignment(geometry.alignment!);
+  }
 }
 
 @visibleForTesting
@@ -382,7 +395,7 @@ Future<void> registerCurrentWindowControls() async {
           await windowManager.close();
           return null;
         case 'window_reset_geometry':
-          await resetStoredWindowGeometry(_configuredWindowType);
+          await _resetCurrentWindowGeometry();
           return {'ok': true};
         default:
           throw MissingPluginException('No handler for ${call.method}');
