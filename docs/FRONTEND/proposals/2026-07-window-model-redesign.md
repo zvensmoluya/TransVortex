@@ -156,7 +156,7 @@
 3. **再把结果编辑器嵌入处理窗**：复用旧结果审看窗已验证的 `result.open` / `result.segments.save` / `result.reexport` 能力，但作为任务处理窗右侧工作台显示，不再从任务片列 spawn 新结果窗；旧 `resultReview` 窗口类型短期只作为 release smoke / 回退路径保留。
 4. **最后迁移并删除旧窗入口**：把 `resultReview`、`taskHistory`、`taskDetail` 的 release smoke 收敛到任务处理窗的浏览态 / 编辑态 / 可恢复失败态；确认 `runtime.submitResume`、`result.segments.save`、`result.reexport` 覆盖不掉线后，再移除旧窗口类型和旧 smoke case。
 
-**当前进度（2026-07-07）：** 第 1～4 步已落地；任务处理窗已按窗口类型单例打开，主窗完成态和菜单优先进入同一个任务处理窗，结果编辑器已内嵌到右侧工作台。子窗口创建参数会携带主窗 bounds 和当前显示器可见工作区，角色化几何在按主窗偏移后会把工具窗 / 工作台夹回可见区域，避免窗口落到不可触达位置。release smoke 已收敛到 `taskProcessing` browse / edit / resume 三类场景：浏览并选中 DONE 任务、在右侧内嵌结果编辑器保存片段译文并重新导出、对失败任务触发真实 `runtime.submitResume` 重新排队；旧 `resultReview` / `taskHistory` / `taskDetail` 独立窗口类型和旧 smoke case 已移除。为避免旧启动参数把用户带回主窗，`resultReview` / `taskHistory` / `taskDetail` 旧 ID 会兼容解析到 `taskProcessing`。
+**当前进度（2026-07-07）：** 第 1～4 步已落地；任务处理窗已按窗口类型单例打开，主窗完成态和菜单优先进入同一个任务处理窗，结果编辑器已内嵌到右侧工作台。子窗口创建参数会携带主窗 bounds 和当前显示器可见工作区，角色化几何在按主窗偏移后会把工具窗 / 工作台夹回可见区域，避免窗口落到不可触达位置。工具窗和任务处理工作台的几何已按 `role:type` 记忆到用户级 `.transvortex/desktop_window_geometry.json`，不按 `task_id` 生成多份历史位置；内部窗口命令可清掉当前窗口类型的记忆几何并恢复默认。release smoke 已收敛到 `taskProcessing` browse / edit / resume 三类场景：浏览并选中 DONE 任务、在右侧内嵌结果编辑器保存片段译文并重新导出、对失败任务触发真实 `runtime.submitResume` 重新排队；旧 `resultReview` / `taskHistory` / `taskDetail` 独立窗口类型和旧 smoke case 已移除。为避免旧启动参数把用户带回主窗，`resultReview` / `taskHistory` / `taskDetail` 旧 ID 会兼容解析到 `taskProcessing`。
 
 ## 11. 留待决定（评审时定）
 
