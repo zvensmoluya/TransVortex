@@ -9,7 +9,7 @@ param(
     [string]$MainPhase = "normal",
     [ValidateSet("normal", "longModels")]
     [string]$TranslationScenario = "normal",
-    [ValidateSet("browse", "edit", "resume", "cancel")]
+    [ValidateSet("browse", "edit", "failure", "resume", "cancel")]
     [string]$TaskProcessingScenario = "browse",
     [switch]$CheckNotifications,
     [switch]$CheckAppIdentity,
@@ -207,7 +207,9 @@ function Write-SmokeTaskFixture {
         [hashtable]$OutputPaths = @{},
         [string]$ErrorMessage = "",
         [string]$ErrorCode = "",
-        [string]$ErrorHint = ""
+        [string]$ErrorHint = "",
+        [string]$ErrorStage = "",
+        [string]$ErrorRetryable = ""
     )
 
     $taskDir = Join-Path (Join-Path $serviceRoot "artifacts") $TaskId
@@ -229,11 +231,18 @@ function Write-SmokeTaskFixture {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
-        $taskPayload | Add-Member -NotePropertyName error -NotePropertyValue $ErrorMessage
-        $taskPayload | Add-Member -NotePropertyName error_info -NotePropertyValue ([pscustomobject]@{
+        $errorInfo = [ordered]@{
             code = $ErrorCode
             hint_zh = $ErrorHint
-        })
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ErrorStage)) {
+            $errorInfo.stage = $ErrorStage
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ErrorRetryable)) {
+            $errorInfo.retryable = $ErrorRetryable -eq "true"
+        }
+        $taskPayload | Add-Member -NotePropertyName error -NotePropertyValue $ErrorMessage
+        $taskPayload | Add-Member -NotePropertyName error_info -NotePropertyValue ([pscustomobject]$errorInfo)
     }
     [System.IO.File]::WriteAllText(
         (Join-Path $taskDir "task.json"),
@@ -327,25 +336,48 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         [System.IO.File]::WriteAllText($diagnosticOutputPath, "1`n00:00:00,000 --> 00:00:01,000`n诊断 smoke 字幕`n", $utf8NoBom)
         $taskOutputPaths = @{srt = $diagnosticOutputPath}
     }
-    $contextStatus = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") {
+    $isTaskProcessingFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -in @("failure", "resume")
+    $contextStatus = if ($isTaskProcessingFailure) {
         "FAILED"
     } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
         "RUNNING"
     } else {
         "DONE"
     }
+    $fixtureErrorMessage = ""
+    $fixtureErrorCode = ""
+    $fixtureErrorHint = ""
+    $fixtureErrorStage = ""
+    $fixtureErrorRetryable = ""
+    if ($isTaskProcessingFailure) {
+        $fixtureErrorMessage = "Smoke detail resumable failure"
+        $fixtureErrorCode = "smoke_detail_resumable"
+        $fixtureErrorHint = -join @(
+            [char]0x53EF,
+            [char]0x4EE5,
+            [char]0x7EE7,
+            [char]0x7EED,
+            [char]0x4EFB,
+            [char]0x52A1,
+            [char]0x3002
+        )
+        $fixtureErrorStage = "TRANSLATE"
+        $fixtureErrorRetryable = "true"
+    }
     $contextFixtureArgs = @{
         TaskId = $smokeTaskId
         InputFile = Join-Path $fixtureRoot $contextFileName
         Status = $contextStatus
         OutputPaths = $taskOutputPaths
-        ErrorMessage = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "Smoke detail resumable failure" } else { "" }
-        ErrorCode = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "smoke_detail_resumable" } else { "" }
-        ErrorHint = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "Resume this task from detail." } else { "" }
+        ErrorMessage = $fixtureErrorMessage
+        ErrorCode = $fixtureErrorCode
+        ErrorHint = $fixtureErrorHint
+        ErrorStage = $fixtureErrorStage
+        ErrorRetryable = $fixtureErrorRetryable
     }
     $taskDir = Write-SmokeTaskFixture @contextFixtureArgs
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
-    if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") {
+    if ($isTaskProcessingFailure) {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "error" -Stage "FAILED" -Message "Smoke detail resumable failure"
     } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "stage" -Stage "RUNNING" -Message "Task running" -Progress 0.4
@@ -856,6 +888,9 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $false)) {
             throw "Release task processing edit smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false)) {
+            throw "Release task processing failure smoke did not stay on the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"

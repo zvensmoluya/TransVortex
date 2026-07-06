@@ -572,6 +572,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     );
     if (_smokeScenario == 'edit') {
       await _runSmokeEditFlow(selected);
+    } else if (_smokeScenario == 'failure') {
+      return;
     } else if (_smokeScenario == 'resume') {
       await _runSmokeResumeFlow(selected);
     } else if (_smokeScenario == 'cancel') {
@@ -2111,6 +2113,7 @@ String _dirname(String path) {
 String _normalizedSmokeScenario(String? value) {
   return switch ((value ?? '').trim().toLowerCase()) {
     'edit' => 'edit',
+    'failure' => 'failure',
     'resume' => 'resume',
     'cancel' => 'cancel',
     _ => 'browse',
