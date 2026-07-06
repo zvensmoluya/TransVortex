@@ -207,8 +207,8 @@ $steps = @(
     },
     @{
         id = "result_reviewed"
-        title = "Result review opened"
-        instruction = "Open the result review window, confirm subtitle segments and output/problem information are visible, then return to the main flow."
+        title = "Result review workspace opened"
+        instruction = "Open the task processing window's embedded result review/edit workspace, confirm subtitle segments and output/problem information are visible, then return to the main flow."
         required = $true
     }
 )

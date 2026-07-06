@@ -154,7 +154,7 @@
 | 审看结果 | `result.open` / `result.segments.save` / `result.reexport` | 优先打开任务处理窗并定位任务，在右侧内嵌结果审看 / 编辑工作台读取任务摘要、字幕片段、输出格式和问题提示；允许编辑并保存片段译文，再按用户选择的输出格式 / 单双语重新导出；旧 `resultReview` 启动 ID 兼容进入任务处理窗 |
 | 打开字幕 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
 | 打开目录 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
-| 重新导出 | `result.reexport` | 刷新 result paths 和任务事件；默认沿用原输出目录，结果审看窗可选择 SRT / ASS / SRT+ASS / VTT 和单双语；若重新导出失败且指向输出目录不可写，失败修复件可让用户选择新目录，并把 `output_dir` 传给同一任务的 `result.reexport` |
+| 重新导出 | `result.reexport` | 刷新 result paths 和任务事件；默认沿用原输出目录，任务处理窗右侧的结果审看 / 编辑工作台可选择 SRT / ASS / SRT+ASS / VTT 和单双语；若重新导出失败且指向输出目录不可写，失败修复件可让用户选择新目录，并把 `output_dir` 传给同一任务的 `result.reexport` |
 | 保存翻译服务 | `provider.save` | 刷新 `config.get` 或 `desktop.snapshot` |
 | 拉模型 | `provider.models` | 更新当前详情 draft |
 | 测试翻译服务 | `provider.test` | 显示测试结果 |
