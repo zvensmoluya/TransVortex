@@ -1748,6 +1748,7 @@ void main() {
     );
     final calls = <String>[];
     final paramsByMethod = <String, Map<String, Object?>>{};
+    final eventParams = <Map<String, Object?>>[];
     final opened = <AppWindowArgs>[];
     var targetText = '早上好。';
     var runningStatus = 'RUNNING';
@@ -1781,22 +1782,26 @@ void main() {
         ];
       }
       if (method == 'tasks.events') {
+        eventParams.add(Map<String, Object?>.from(params));
         final taskId = params['task_id'];
+        final cursor = params['cursor'] as int? ?? 0;
         return {
           'task_id': taskId,
           'events': [
             {
               'type': 'stage',
-              'stage': 'EXPORT',
-              'message': taskId == 'tvx_processing_done_123456'
-                  ? 'done export'
-                  : 'failed export',
+              'stage': cursor == 0 ? 'EXPORT' : 'QUALITY',
+              'message': cursor == 0
+                  ? taskId == 'tvx_processing_done_123456'
+                        ? 'done export'
+                        : 'failed export'
+                  : 'older event',
               'created_at': '2026-07-06T10:00:00Z',
             },
           ],
-          'cursor': 0,
-          'next_cursor': 1,
-          'has_more': false,
+          'cursor': cursor,
+          'next_cursor': cursor + 1,
+          'has_more': taskId == 'tvx_processing_done_123456' && cursor == 0,
         };
       }
       if (method == 'runtime.submitResume') {
@@ -1895,6 +1900,16 @@ void main() {
 
     await tester.tap(find.text('返回概览'));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('阶段'), findsOneWidget);
+    expect(find.text('加载更多事件'), findsOneWidget);
+    await tester.tap(find.text('加载更多事件'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('阶段'), findsNWidgets(2));
+    expect(find.text('older event'), findsOneWidget);
+    expect(find.text('加载更多事件'), findsNothing);
+    expect(eventParams, contains(containsPair('cursor', 1)));
+
     await tester.tap(find.text('结果目录'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [r'D:\media']);

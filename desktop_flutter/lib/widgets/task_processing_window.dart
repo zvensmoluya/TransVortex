@@ -97,6 +97,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String? _error;
   bool _loadingTasks = false;
   bool _loadingEvents = false;
+  bool _loadingMoreEvents = false;
   bool _resuming = false;
   String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
@@ -283,6 +284,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   Future<void> _loadEvents(String taskId) async {
     setState(() {
       _loadingEvents = true;
+      _loadingMoreEvents = false;
     });
     try {
       final events = await _client.taskEvents(taskId, limit: 40);
@@ -290,12 +292,47 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       setState(() {
         _eventsPage = events;
         _loadingEvents = false;
+        _loadingMoreEvents = false;
       });
     } on Object catch (_) {
       if (!mounted) return;
       setState(() {
         _eventsPage = null;
         _loadingEvents = false;
+        _loadingMoreEvents = false;
+      });
+    }
+  }
+
+  Future<void> _loadMoreEvents(String taskId) async {
+    final current = _eventsPage;
+    if (current == null || !current.hasMore || _loadingMoreEvents) return;
+    setState(() {
+      _loadingMoreEvents = true;
+      _error = null;
+    });
+    try {
+      final next = await _client.taskEvents(
+        taskId,
+        cursor: current.nextCursor,
+        limit: 40,
+      );
+      if (!mounted || _selectedTaskId != taskId) return;
+      setState(() {
+        _eventsPage = TaskEventsPage(
+          taskId: next.taskId.isEmpty ? taskId : next.taskId,
+          events: [...current.events, ...next.events],
+          cursor: current.cursor,
+          nextCursor: next.nextCursor,
+          hasMore: next.hasMore,
+        );
+        _loadingMoreEvents = false;
+      });
+    } on Object catch (error) {
+      if (!mounted || _selectedTaskId != taskId) return;
+      setState(() {
+        _error = '读取更多事件失败：${_friendlyTaskProcessingError(error)}';
+        _loadingMoreEvents = false;
       });
     }
   }
@@ -616,9 +653,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   Widget build(BuildContext context) {
     final visibleTasks = _visibleTasksFor(_tasks, _taskFilter);
     final selected = _selectedTask(visibleTasks);
-    final events = _eventsPage?.taskId == selected?.taskId
-        ? _eventsPage?.events ?? const <Object?>[]
-        : const <Object?>[];
+    final selectedEventsPage = _eventsPage?.taskId == selected?.taskId
+        ? _eventsPage
+        : null;
+    final events = selectedEventsPage?.events ?? const <Object?>[];
     final editingTaskId = selected?.isDone == true
         ? _editingTaskId?.trim()
         : null;
@@ -652,6 +690,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   error: _error,
                   loadingTasks: _loadingTasks,
                   loadingEvents: _loadingEvents,
+                  loadingMoreEvents: _loadingMoreEvents,
+                  eventsHasMore: selectedEventsPage?.hasMore == true,
                   resuming: _resuming,
                   cancellingTaskId: _cancellingTaskId,
                   checkingOutputDirectory: _checkingOutputDirectory,
@@ -659,6 +699,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onFilterChanged: (filter) =>
                       unawaited(_setTaskFilter(filter)),
                   onSelectTask: (task) => unawaited(_selectTask(task)),
+                  onLoadMoreEvents: selected == null
+                      ? null
+                      : () => unawaited(_loadMoreEvents(selected.taskId)),
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => setState(() => _editingTaskId = null),
                   onResume: (task) => unawaited(_resumeTask(task)),
@@ -703,12 +746,15 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.error,
     required this.loadingTasks,
     required this.loadingEvents,
+    required this.loadingMoreEvents,
+    required this.eventsHasMore,
     required this.resuming,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onFilterChanged,
     required this.onSelectTask,
+    required this.onLoadMoreEvents,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
@@ -731,12 +777,15 @@ class _TaskProcessingBody extends StatelessWidget {
   final String? error;
   final bool loadingTasks;
   final bool loadingEvents;
+  final bool loadingMoreEvents;
+  final bool eventsHasMore;
   final bool resuming;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<_TaskFilter> onFilterChanged;
   final ValueChanged<TaskSummary> onSelectTask;
+  final VoidCallback? onLoadMoreEvents;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
@@ -775,10 +824,13 @@ class _TaskProcessingBody extends StatelessWidget {
             error: error,
             loadingTasks: loadingTasks,
             loadingEvents: loadingEvents,
+            loadingMoreEvents: loadingMoreEvents,
+            eventsHasMore: eventsHasMore,
             resuming: resuming,
             cancellingTaskId: cancellingTaskId,
             checkingOutputDirectory: checkingOutputDirectory,
             onRefresh: onRefresh,
+            onLoadMoreEvents: onLoadMoreEvents,
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResume: onResume,
@@ -1055,10 +1107,13 @@ class _TaskPreview extends StatelessWidget {
     required this.error,
     required this.loadingTasks,
     required this.loadingEvents,
+    required this.loadingMoreEvents,
+    required this.eventsHasMore,
     required this.resuming,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
+    required this.onLoadMoreEvents,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
@@ -1077,10 +1132,13 @@ class _TaskPreview extends StatelessWidget {
   final String? error;
   final bool loadingTasks;
   final bool loadingEvents;
+  final bool loadingMoreEvents;
+  final bool eventsHasMore;
   final bool resuming;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
+  final VoidCallback? onLoadMoreEvents;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
@@ -1214,11 +1272,21 @@ class _TaskPreview extends StatelessWidget {
               ? const Center(child: Text('还没有事件记录。', style: T.tBody))
               : ListView.separated(
                   padding: EdgeInsets.zero,
-                  itemCount: events.length,
+                  itemCount: events.length + (eventsHasMore ? 1 : 0),
                   separatorBuilder: (_, _) =>
                       const Divider(height: T.s24, color: T.line),
-                  itemBuilder: (context, index) =>
-                      _EventPreviewRow(event: _eventMap(events[index])),
+                  itemBuilder: (context, index) {
+                    if (index >= events.length) {
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: _TaskActionButton(
+                          label: loadingMoreEvents ? '读取中' : '加载更多事件',
+                          onTap: loadingMoreEvents ? null : onLoadMoreEvents,
+                        ),
+                      );
+                    }
+                    return _EventPreviewRow(event: _eventMap(events[index]));
+                  },
                 ),
         ),
       ],
