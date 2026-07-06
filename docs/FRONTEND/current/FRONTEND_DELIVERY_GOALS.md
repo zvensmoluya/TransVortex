@@ -84,7 +84,7 @@
 
 完成标准：
 
-- 主窗口里的术语开关只表达本单是否允许系统生成术语建议，驱动 `allowSystemSuggestions` 相关运行时选项。
+- 主窗口里的术语建议开关只表达本单是否允许系统生成术语建议，驱动 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时可补 `memory_enabled=true`，关闭生成时不得写 `memory_enabled=false`，避免误伤后续“使用术语 / 预设术语表”。
 - 使用术语 / 术语维护 / 预设术语表进入独立后续窗口或工具面，不塞进主窗口。
 - 明确“生成的术语如何回流到翻译使用”的产品语义，再进入 UI 实现。
 - 人工术语、受保护条目、运行时术语库的优先级在界面文案里不含糊。

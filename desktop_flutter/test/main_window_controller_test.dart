@@ -324,7 +324,7 @@ void main() {
 
     expect(controller.view.termsEnabled, isFalse);
     expect(overrides['allowSystemSuggestions'], isFalse);
-    expect(overrides['memory_enabled'], isFalse);
+    expect(overrides.containsKey('memory_enabled'), isFalse);
     expect(overrides['memory_bootstrap_enabled'], isFalse);
     expect(overrides['memory_patch_enabled'], isFalse);
   });
@@ -573,7 +573,7 @@ void main() {
   );
 
   test(
-    'controller carries disabled memory generation into resume payload',
+    'controller disables only memory generation through resume payload',
     () async {
       final handle = _FakeHandle(
         _desktopSnapshot(
@@ -600,7 +600,7 @@ void main() {
               as Map<String, Object?>;
       final overrides = request['overrides'] as Map<String, Object?>;
       expect(overrides['allowSystemSuggestions'], isFalse);
-      expect(overrides['memory_enabled'], isFalse);
+      expect(overrides.containsKey('memory_enabled'), isFalse);
       expect(overrides['memory_bootstrap_enabled'], isFalse);
       expect(overrides['memory_patch_enabled'], isFalse);
     },

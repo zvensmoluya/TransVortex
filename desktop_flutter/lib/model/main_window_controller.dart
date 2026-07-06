@@ -500,10 +500,7 @@ class MainWindowController extends ChangeNotifier {
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
-      'allowSystemSuggestions': _termsEnabled,
-      'memory_enabled': _termsEnabled,
-      'memory_bootstrap_enabled': _termsEnabled,
-      'memory_patch_enabled': _termsEnabled,
+      ..._memoryGenerationOverrides(),
       if (asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
       if (asr.model != null && asr.model!.isNotEmpty) 'asr_model': asr.model,
@@ -536,10 +533,7 @@ class MainWindowController extends ChangeNotifier {
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
-      'allowSystemSuggestions': _termsEnabled,
-      'memory_enabled': _termsEnabled,
-      'memory_bootstrap_enabled': _termsEnabled,
-      'memory_patch_enabled': _termsEnabled,
+      ..._memoryGenerationOverrides(),
       if (asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
       if (asr.model != null && asr.model!.isNotEmpty) 'asr_model': asr.model,
@@ -554,6 +548,13 @@ class MainWindowController extends ChangeNotifier {
       'overrides': overrides,
     };
   }
+
+  Map<String, Object?> _memoryGenerationOverrides() => {
+    'allowSystemSuggestions': _termsEnabled,
+    if (_termsEnabled) 'memory_enabled': true,
+    'memory_bootstrap_enabled': _termsEnabled,
+    'memory_patch_enabled': _termsEnabled,
+  };
 
   void _applyServiceSnapshot() {
     final snapshot = service.snapshot.desktopSnapshot;

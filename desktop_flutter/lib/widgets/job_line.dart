@@ -63,7 +63,7 @@ class JobLine extends StatelessWidget {
             _Word(label: view.bilingual ? '双语' : '单语', onPick: onPickBilingual),
             _Word(label: view.formats.join('·'), onPick: onPickFormats),
             const Text('字幕', style: T.tBody),
-            const Text(' · 术语', style: T.tBody),
+            const Text(' · 术语建议', style: T.tBody),
             _Word(
               label: view.termsEnabled ? '自动生成' : '不生成',
               onPick: onToggleTerms,
