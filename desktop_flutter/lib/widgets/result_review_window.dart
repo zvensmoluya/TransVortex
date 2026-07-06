@@ -390,8 +390,8 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
     final payload = <String, Object?>{
       'ok': error == null && result != null,
       'status': error == null ? 'ready' : 'error',
-      'window_type': AppWindowType.resultReview.id,
-      'title': AppWindowType.resultReview.title,
+      'window_type': 'resultReview',
+      'title': '结果审看',
       'task_id': _taskId,
       'result_segment_count': result?.segments.length ?? 0,
       'result_issue_count': result?.issueCount ?? 0,

@@ -42,7 +42,7 @@ foreach ($phase in @("empty", "ready", "blockedTranslation", "blockedAsr", "runn
         check_notifications = $false
     })
 }
-foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "taskProcessing", "resultReview", "taskHistory", "taskDetail")) {
+foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "taskProcessing")) {
     $cases.Add([ordered]@{
         name = $windowType
         window_type = $windowType

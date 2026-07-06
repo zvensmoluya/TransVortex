@@ -103,12 +103,9 @@ enum WindowRole { main, tool, workbench }
 WindowRole _roleFor(AppWindowType type) => switch (type) {
   AppWindowType.main => WindowRole.main,
   AppWindowType.taskProcessing => WindowRole.workbench,
-  AppWindowType.resultReview => WindowRole.workbench,
   AppWindowType.translationSettings ||
   AppWindowType.asrSettings ||
-  AppWindowType.diagnostics ||
-  AppWindowType.taskHistory ||
-  AppWindowType.taskDetail => WindowRole.tool,
+  AppWindowType.diagnostics => WindowRole.tool,
 };
 
 Size _defaultSize(AppWindowType type) => switch (type) {
@@ -117,9 +114,6 @@ Size _defaultSize(AppWindowType type) => switch (type) {
   AppWindowType.asrSettings => const Size(760, 560),
   AppWindowType.diagnostics => const Size(780, 580),
   AppWindowType.taskProcessing => const Size(1040, 720),
-  AppWindowType.resultReview => const Size(1040, 720),
-  AppWindowType.taskHistory => const Size(840, 620),
-  AppWindowType.taskDetail => const Size(860, 620),
 };
 
 Size _minimumSize(AppWindowType type) => switch (type) {
@@ -128,9 +122,6 @@ Size _minimumSize(AppWindowType type) => switch (type) {
   AppWindowType.asrSettings => const Size(700, 500),
   AppWindowType.diagnostics => const Size(720, 520),
   AppWindowType.taskProcessing => const Size(900, 640),
-  AppWindowType.resultReview => const Size(900, 640),
-  AppWindowType.taskHistory => const Size(760, 540),
-  AppWindowType.taskDetail => const Size(780, 560),
 };
 
 Offset _positionFromParent(Rect parent, AppWindowType type) {
@@ -139,14 +130,9 @@ Offset _positionFromParent(Rect parent, AppWindowType type) {
     AppWindowType.asrSettings => 1,
     AppWindowType.diagnostics => 2,
     AppWindowType.taskProcessing => 2,
-    AppWindowType.taskHistory => 3,
-    AppWindowType.taskDetail => 4,
-    AppWindowType.resultReview => 2,
     AppWindowType.main => 0,
   };
-  final isWorkbench =
-      type == AppWindowType.taskProcessing ||
-      type == AppWindowType.resultReview;
+  final isWorkbench = type == AppWindowType.taskProcessing;
   final dx = isWorkbench ? 112.0 : 72.0 + step * 28.0;
   final dy = isWorkbench ? 56.0 : 48.0 + step * 24.0;
   return Offset(parent.left + dx, parent.top + dy);

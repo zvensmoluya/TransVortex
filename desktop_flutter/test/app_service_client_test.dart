@@ -980,24 +980,12 @@ routing:
       AppWindowType.taskProcessing,
       taskId: 'tvx_processing_1',
     );
-    await bridge.openToolWindow(
-      AppWindowType.resultReview,
-      taskId: 'tvx_result_1',
-    );
-    await bridge.openToolWindow(
-      AppWindowType.taskDetail,
-      taskId: 'tvx_detail_1',
-    );
 
     expect(opened.map((args) => args.type), [
       AppWindowType.asrSettings,
       AppWindowType.taskProcessing,
-      AppWindowType.resultReview,
-      AppWindowType.taskDetail,
     ]);
     expect(opened[1].taskId, 'tvx_processing_1');
-    expect(opened[2].taskId, 'tvx_result_1');
-    expect(opened.last.taskId, 'tvx_detail_1');
   });
 }
 

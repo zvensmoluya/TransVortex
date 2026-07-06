@@ -9,9 +9,6 @@ enum AppWindowType {
   asrSettings,
   diagnostics,
   taskProcessing,
-  resultReview,
-  taskHistory,
-  taskDetail,
 }
 
 extension AppWindowTypeLabel on AppWindowType {
@@ -21,9 +18,6 @@ extension AppWindowTypeLabel on AppWindowType {
     AppWindowType.asrSettings => 'asrSettings',
     AppWindowType.diagnostics => 'diagnostics',
     AppWindowType.taskProcessing => 'taskProcessing',
-    AppWindowType.resultReview => 'resultReview',
-    AppWindowType.taskHistory => 'taskHistory',
-    AppWindowType.taskDetail => 'taskDetail',
   };
 
   String get title => switch (this) {
@@ -32,9 +26,6 @@ extension AppWindowTypeLabel on AppWindowType {
     AppWindowType.asrSettings => '语音识别设置',
     AppWindowType.diagnostics => '诊断',
     AppWindowType.taskProcessing => '任务处理',
-    AppWindowType.resultReview => '结果审看',
-    AppWindowType.taskHistory => '任务历史',
-    AppWindowType.taskDetail => '任务详情',
   };
 
   static AppWindowType fromId(String? id) => switch (id) {
@@ -42,9 +33,9 @@ extension AppWindowTypeLabel on AppWindowType {
     'asrSettings' => AppWindowType.asrSettings,
     'diagnostics' => AppWindowType.diagnostics,
     'taskProcessing' => AppWindowType.taskProcessing,
-    'resultReview' => AppWindowType.resultReview,
-    'taskHistory' => AppWindowType.taskHistory,
-    'taskDetail' => AppWindowType.taskDetail,
+    'resultReview' ||
+    'taskHistory' ||
+    'taskDetail' => AppWindowType.taskProcessing,
     _ => AppWindowType.main,
   };
 
@@ -54,9 +45,9 @@ extension AppWindowTypeLabel on AppWindowType {
     'asrSettings' => AppWindowType.asrSettings,
     'diagnostics' => AppWindowType.diagnostics,
     'taskProcessing' => AppWindowType.taskProcessing,
-    'resultReview' => AppWindowType.resultReview,
-    'taskHistory' => AppWindowType.taskHistory,
-    'taskDetail' => AppWindowType.taskDetail,
+    'resultReview' ||
+    'taskHistory' ||
+    'taskDetail' => AppWindowType.taskProcessing,
     _ => null,
   };
 }

@@ -281,9 +281,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
       AppWindowType.asrSettings => '语音识别设置',
       AppWindowType.diagnostics => '诊断',
       AppWindowType.taskProcessing => '任务处理',
-      AppWindowType.resultReview => '结果审看',
-      AppWindowType.taskHistory => '任务历史',
-      AppWindowType.taskDetail => '任务详情',
       AppWindowType.main => 'TransVortex',
     };
     final status = switch (widget.type) {
@@ -291,9 +288,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
       AppWindowType.asrSettings => '视频没有现成字幕时，用它把语音转成字幕',
       AppWindowType.diagnostics => '检查本机运行环境、配置和翻译服务协议',
       AppWindowType.taskProcessing => '查看、修复和审看最近任务',
-      AppWindowType.resultReview => '读取完成任务的字幕片段',
-      AppWindowType.taskHistory => '查看最近任务，不占主窗口',
-      AppWindowType.taskDetail => '查看任务事件和上下文',
       AppWindowType.main => '',
     };
     return RepaintBoundary(
@@ -311,9 +305,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
                   AppWindowType.asrSettings => _asrBody(),
                   AppWindowType.diagnostics => _diagnosticsBody(),
                   AppWindowType.taskProcessing => _diagnosticsBody(),
-                  AppWindowType.resultReview => _diagnosticsBody(),
-                  AppWindowType.taskHistory => _diagnosticsBody(),
-                  AppWindowType.taskDetail => _diagnosticsBody(),
                   AppWindowType.main => _diagnosticsBody(),
                 },
               ),
@@ -1364,9 +1355,6 @@ String _diagnosticRepairLabel(AppWindowType type) {
     AppWindowType.asrSettings => '去语音识别设置',
     AppWindowType.diagnostics => '刷新诊断',
     AppWindowType.taskProcessing => '查看任务处理',
-    AppWindowType.resultReview => '查看结果',
-    AppWindowType.taskHistory => '查看任务历史',
-    AppWindowType.taskDetail => '查看任务详情',
     AppWindowType.main => '回到主窗口',
   };
 }

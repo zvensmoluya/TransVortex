@@ -25,10 +25,7 @@ import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
 import 'widgets/job_line.dart';
 import 'widgets/primary_action.dart';
-import 'widgets/result_review_window.dart';
 import 'widgets/settings_window.dart';
-import 'widgets/task_detail_window.dart';
-import 'widgets/task_history_window.dart';
 import 'widgets/task_processing_window.dart';
 import 'widgets/title_bar.dart';
 
@@ -131,25 +128,6 @@ class TransVortexApp extends StatelessWidget {
           smoke: smoke,
         ),
         AppWindowType.taskProcessing => TaskProcessingWindow(
-          taskId: taskId,
-          store: appStore,
-          bridge: appBridge,
-          pathOpener: pathOpener,
-          smoke: smoke,
-        ),
-        AppWindowType.resultReview => ResultReviewWindow(
-          taskId: taskId,
-          store: appStore,
-          bridge: appBridge,
-          smoke: smoke,
-        ),
-        AppWindowType.taskHistory => TaskHistoryWindow(
-          store: appStore,
-          bridge: appBridge,
-          pathOpener: pathOpener,
-          smoke: smoke,
-        ),
-        AppWindowType.taskDetail => TaskDetailWindow(
           taskId: taskId,
           store: appStore,
           bridge: appBridge,

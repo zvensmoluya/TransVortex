@@ -16,6 +16,7 @@ import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
+import 'package:transvortex_desktop_flutter/widgets/result_review_window.dart';
 
 void main() {
   test('window argument parser falls back to CLI args when window args empty', () {
@@ -109,7 +110,7 @@ void main() {
     final reviewArgs = AppWindowArgs.parse(
       '{"type":"resultReview","task_id":"tvx_review_123"}',
     );
-    expect(reviewArgs.type, AppWindowType.resultReview);
+    expect(reviewArgs.type, AppWindowType.taskProcessing);
     expect(reviewArgs.taskId, 'tvx_review_123');
     final positionedArgs = AppWindowArgs.parse(
       '{"type":"translationSettings","parent_bounds":{"x":40,"y":60,"width":720,"height":520}}',
@@ -136,7 +137,7 @@ void main() {
       '--tvx-window-type=resultReview',
       '--tvx-task-id=tvx_review_flagged',
     ]);
-    expect(flaggedStartup.window.type, AppWindowType.resultReview);
+    expect(flaggedStartup.window.type, AppWindowType.taskProcessing);
     expect(flaggedStartup.window.taskId, 'tvx_review_flagged');
     expect(
       AppStartupArgs.fromSources(null, [
@@ -163,13 +164,13 @@ void main() {
       AppStartupArgs.fromSources(null, [
         '--tvx-window-type=taskHistory',
       ]).window.type,
-      AppWindowType.taskHistory,
+      AppWindowType.taskProcessing,
     );
     final detailStartup = AppStartupArgs.fromSources(null, [
       '--tvx-window-type=taskDetail',
       '--tvx-task-id=tvx_detail_789',
     ]);
-    expect(detailStartup.window.type, AppWindowType.taskDetail);
+    expect(detailStartup.window.type, AppWindowType.taskProcessing);
     expect(detailStartup.window.taskId, 'tvx_detail_789');
   });
 
@@ -204,16 +205,6 @@ void main() {
     expect(directToolGeometry.center, isFalse);
     expect(directToolGeometry.position, isNull);
     expect(directToolGeometry.alignment, Alignment.topRight);
-
-    final workbenchGeometry = windowGeometryFor(
-      AppWindowArgs(type: AppWindowType.resultReview, parentBounds: parent),
-    );
-    expect(workbenchGeometry.role, WindowRole.workbench);
-    expect(workbenchGeometry.size, const Size(1040, 720));
-    expect(workbenchGeometry.center, isFalse);
-    expect(workbenchGeometry.position, const Offset(212, 256));
-    expect(workbenchGeometry.resizable, isTrue);
-    expect(workbenchGeometry.maximizable, isTrue);
 
     final taskProcessingGeometry = windowGeometryFor(
       AppWindowArgs(type: AppWindowType.taskProcessing, parentBounds: parent),
@@ -1444,11 +1435,12 @@ void main() {
     });
 
     await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.resultReview,
-        taskId: 'tvx_review_done_123456',
-        store: store,
-        bridge: bridge,
+      MaterialApp(
+        home: ResultReviewWindow(
+          taskId: 'tvx_review_done_123456',
+          store: store,
+          bridge: bridge,
+        ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
@@ -1538,11 +1530,12 @@ void main() {
     });
 
     await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.resultReview,
-        taskId: 'tvx_review_edit_123456',
-        store: store,
-        bridge: bridge,
+      MaterialApp(
+        home: ResultReviewWindow(
+          taskId: 'tvx_review_edit_123456',
+          store: store,
+          bridge: bridge,
+        ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
@@ -1579,111 +1572,6 @@ void main() {
     });
     expect(calls.where((method) => method == 'result.open').length, 2);
     expect(find.text('已重新导出字幕'), findsOneWidget);
-    expectNoFlutterException();
-  });
-
-  testWidgets('task history window reads tasks and opens result review', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(820, 600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    final pathOpener = _RecordingPathOpener();
-    final calls = <String>[];
-    final opened = <AppWindowArgs>[];
-    bridge.attachServiceCaller((method, params) async {
-      calls.add(method);
-      if (method == 'tasks.list') {
-        return [
-          _task(
-            taskId: 'tvx_history_done_123456',
-            status: 'DONE',
-            inputFile: r'D:\media\history-done.mp4',
-            taskDir: r'D:\artifacts\tvx_history_done_123456',
-            outputPaths: {'srt': r'D:\media\history-done.zh-CN.srt'},
-          ),
-          _task(
-            taskId: 'tvx_history_running_123456',
-            status: 'RUNNING',
-            inputFile: r'D:\media\history-running.mp4',
-            runtime: {'state': 'running'},
-          ),
-          _task(
-            taskId: 'tvx_history_init_123456',
-            status: 'INIT',
-            inputFile: r'D:\media\history-init.mp4',
-          ),
-          _task(
-            taskId: 'tvx_history_failed_123456',
-            status: 'FAILED',
-            inputFile: r'D:\media\history-failed.mp4',
-            errorInfo: {'hint_zh': '任务失败，等待处理。'},
-          ),
-        ];
-      }
-      throw RpcRemoteException('method_not_found', method);
-    });
-    bridge.attachToolWindowOpener((args) async {
-      opened.add(args);
-    });
-
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.taskHistory,
-        store: store,
-        bridge: bridge,
-        pathOpener: pathOpener,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(calls, contains('tasks.list'));
-    expect(find.text('任务历史'), findsOneWidget);
-    expect(find.text('history-done.mp4'), findsOneWidget);
-    expect(find.text('history-running.mp4'), findsOneWidget);
-    expect(find.text('history-init.mp4'), findsOneWidget);
-    expect(find.text('history-failed.mp4'), findsOneWidget);
-    expect(find.text('已完成'), findsOneWidget);
-    expect(find.text('制作中'), findsOneWidget);
-    expect(find.text('等待中'), findsOneWidget);
-    expect(find.textContaining('简体中文'), findsWidgets);
-    expect(find.textContaining('zh-CN'), findsNothing);
-    expect(find.text('失败'), findsWidgets);
-    expect(find.text('1'), findsNWidgets(2));
-    expect(find.text('2'), findsOneWidget);
-    expect(find.text('INIT'), findsNothing);
-    expect(find.text('DONE'), findsNothing);
-    expect(find.text('RUNNING'), findsNothing);
-    await tester.tap(find.text('详情').first);
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(opened, hasLength(1));
-    expect(opened.single.type, AppWindowType.taskDetail);
-    expect(opened.single.taskId, 'tvx_history_done_123456');
-    await tester.tap(find.text('任务目录').first);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(pathOpener.openedDirectories, [
-      r'D:\artifacts\tvx_history_done_123456',
-    ]);
-    expect(find.text('已打开任务目录'), findsOneWidget);
-
-    await tester.tap(find.text('结果目录').first);
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(pathOpener.openedDirectories, [
-      r'D:\artifacts\tvx_history_done_123456',
-      r'D:\media',
-    ]);
-    expect(find.text('已打开结果目录'), findsOneWidget);
-
-    await tester.tap(find.text('审看结果').first);
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(opened, hasLength(2));
-    expect(opened.last.type, AppWindowType.resultReview);
-    expect(opened.last.taskId, 'tvx_history_done_123456');
-    expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -1840,203 +1728,6 @@ void main() {
     expect(pathOpener.openedDirectories, [
       r'D:\artifacts\tvx_processing_failed_123456',
     ]);
-    expectNoFlutterException();
-  });
-
-  testWidgets('task detail window reads task list and event page', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(860, 620));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    final pathOpener = _RecordingPathOpener();
-    final calls = <String>[];
-    final opened = <AppWindowArgs>[];
-    bridge.attachServiceCaller((method, params) async {
-      calls.add(method);
-      if (method == 'tasks.list') {
-        return [
-          _task(
-            taskId: 'tvx_detail_done_123456',
-            status: 'DONE',
-            inputFile: r'D:\media\detail-done.mp4',
-            taskDir: r'D:\artifacts\tvx_detail_done_123456',
-            outputPaths: {'srt': r'D:\media\detail-done.zh-CN.srt'},
-          ),
-        ];
-      }
-      if (method == 'tasks.events') {
-        expect(params['task_id'], 'tvx_detail_done_123456');
-        return {
-          'task_id': 'tvx_detail_done_123456',
-          'cursor': 0,
-          'next_cursor': 2,
-          'has_more': false,
-          'events': [
-            {
-              'type': 'task_created',
-              'stage': 'QUEUED',
-              'message': 'Task created',
-              'created_at': '2026-01-01T00:00:00Z',
-            },
-            {
-              'type': 'done',
-              'stage': 'DONE',
-              'message': 'Task done',
-              'created_at': '2026-01-01T00:00:02Z',
-            },
-          ],
-        };
-      }
-      throw RpcRemoteException('method_not_found', method);
-    });
-    bridge.attachToolWindowOpener((args) async {
-      opened.add(args);
-    });
-
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.taskDetail,
-        taskId: 'tvx_detail_done_123456',
-        store: store,
-        bridge: bridge,
-        pathOpener: pathOpener,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(calls, containsAllInOrder(['tasks.list', 'tasks.events']));
-    expect(find.text('任务详情'), findsOneWidget);
-    expect(find.text('detail-done.mp4'), findsOneWidget);
-    expect(find.text('源语 英语'), findsOneWidget);
-    expect(find.text('目标 简体中文'), findsOneWidget);
-    expect(find.text('源语 en'), findsNothing);
-    expect(find.text('目标 zh-CN'), findsNothing);
-    expect(find.text('任务已创建，等待调度'), findsOneWidget);
-    expect(find.text('字幕已生成'), findsOneWidget);
-    expect(find.text('Task created'), findsNothing);
-    expect(find.text('Task done'), findsNothing);
-    await tester.tap(find.text('任务目录'));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(pathOpener.openedDirectories, [
-      r'D:\artifacts\tvx_detail_done_123456',
-    ]);
-    expect(find.text('已打开任务目录'), findsOneWidget);
-
-    await tester.tap(find.text('结果目录'));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(pathOpener.openedDirectories, [
-      r'D:\artifacts\tvx_detail_done_123456',
-      r'D:\media',
-    ]);
-    expect(find.text('已打开结果目录'), findsOneWidget);
-
-    await tester.tap(find.text('审看结果'));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(opened, hasLength(1));
-    expect(opened.single.type, AppWindowType.resultReview);
-    expect(opened.single.taskId, 'tvx_detail_done_123456');
-    expect(find.textContaining('method_not_found'), findsNothing);
-    expectNoFlutterException();
-  });
-
-  testWidgets('task detail window resumes a resumable task', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(860, 620));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    final calls = <String>[];
-    var resumed = false;
-    bridge.attachServiceCaller((method, params) async {
-      calls.add(method);
-      if (method == 'tasks.list') {
-        return [
-          _task(
-            taskId: 'tvx_detail_failed_123456',
-            status: resumed ? 'QUEUED' : 'FAILED',
-            inputFile: r'D:\media\detail-failed.mp4',
-            checkpointStatus: resumed ? 'INIT' : null,
-            errorInfo: {'hint_zh': '可以继续任务。'},
-            runtime: {'can_resume': !resumed},
-          ),
-        ];
-      }
-      if (method == 'tasks.events') {
-        return {
-          'task_id': 'tvx_detail_failed_123456',
-          'cursor': 0,
-          'next_cursor': resumed ? 2 : 1,
-          'has_more': false,
-          'events': [
-            {
-              'type': 'error',
-              'stage': 'FAILED',
-              'message': 'Task failed',
-              'created_at': '2026-01-01T00:00:01Z',
-            },
-            if (resumed)
-              {
-                'type': 'resume_requested',
-                'stage': 'QUEUED',
-                'message': 'Resume requested',
-                'created_at': '2026-01-01T00:00:02Z',
-              },
-          ],
-        };
-      }
-      if (method == 'runtime.submitResume') {
-        final request = params['request'] as Map<String, Object?>;
-        expect(request['request_version'], 1);
-        expect(request['task_id'], 'tvx_detail_failed_123456');
-        resumed = true;
-        return {
-          'ok': true,
-          'task_id': 'tvx_detail_failed_123456',
-          'status': 'QUEUED',
-          'terminal': false,
-          'message': 'Task queued.',
-        };
-      }
-      throw RpcRemoteException('method_not_found', method);
-    });
-
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.taskDetail,
-        taskId: 'tvx_detail_failed_123456',
-        store: store,
-        bridge: bridge,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.text('detail-failed.mp4'), findsOneWidget);
-    expect(find.text('继续任务'), findsOneWidget);
-    await tester.tap(find.text('继续任务'));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(calls, contains('runtime.submitResume'));
-    expect(resumed, isTrue);
-    expect(find.text('已请求继续任务'), findsOneWidget);
-    expect(find.text('等待中'), findsOneWidget);
-    expect(find.textContaining('INIT'), findsNothing);
-    expect(find.text('已继续'), findsOneWidget);
-    expect(find.text('继续中'), findsNothing);
-    expect(find.text('Resume requested'), findsNothing);
-    expect(find.text('QUEUED'), findsNothing);
-    expect(find.textContaining('method_not_found'), findsNothing);
-    final tooltipMessages = tester
-        .widgetList<Tooltip>(find.byType(Tooltip))
-        .map((tooltip) => tooltip.message)
-        .whereType<String>()
-        .toList();
-    expect(tooltipMessages, isNot(contains('tvx_detail_failed_123456')));
-    expect(tooltipMessages, contains('任务编号：tvx_deta…123456'));
     expectNoFlutterException();
   });
 }

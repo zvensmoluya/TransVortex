@@ -3,7 +3,7 @@ param(
     [int]$TimeoutSeconds = 60,
     [string]$ScreenshotPath = "",
     [string]$DesktopCompositePath = "",
-    [ValidateSet("main", "translationSettings", "asrSettings", "diagnostics", "taskProcessing", "resultReview", "taskHistory", "taskDetail")]
+    [ValidateSet("main", "translationSettings", "asrSettings", "diagnostics", "taskProcessing")]
     [string]$WindowType = "main",
     [ValidateSet("normal", "empty", "ready", "blockedTranslation", "blockedAsr", "running", "failed")]
     [string]$MainPhase = "normal",
@@ -271,37 +271,34 @@ function Write-SmokeTaskEvent {
 
 $smokeContextTaskId = "tvx_demo_context_task"
 
-if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
     $smokeTaskId = $smokeContextTaskId
     $contextFileName = switch ($WindowType) {
         "taskProcessing" { "sample-task-processing-session.mp4" }
-        "resultReview" { "sample-review-session.mp4" }
-        "taskHistory" { "sample-evening-dialogue.mp4" }
-        "taskDetail" { "sample-resume-needed.mp4" }
         default { "sample-diagnostics-context.mp4" }
     }
     $taskOutputPaths = @{}
-    if ($WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+    if ($WindowType -eq "taskProcessing") {
         $taskOutputPaths = @{srt = (Join-Path $fixtureRoot "result-review.zh-CN.srt")}
     }
-    $contextStatus = if ($WindowType -eq "taskDetail" -or ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume")) { "FAILED" } else { "DONE" }
+    $contextStatus = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "FAILED" } else { "DONE" }
     $contextFixtureArgs = @{
         TaskId = $smokeTaskId
         InputFile = Join-Path $fixtureRoot $contextFileName
         Status = $contextStatus
         OutputPaths = $taskOutputPaths
-        ErrorMessage = if ($WindowType -eq "taskDetail" -or ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume")) { "Smoke detail resumable failure" } else { "" }
-        ErrorCode = if ($WindowType -eq "taskDetail" -or ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume")) { "smoke_detail_resumable" } else { "" }
-        ErrorHint = if ($WindowType -eq "taskDetail" -or ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume")) { "Resume this task from detail." } else { "" }
+        ErrorMessage = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "Smoke detail resumable failure" } else { "" }
+        ErrorCode = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "smoke_detail_resumable" } else { "" }
+        ErrorHint = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "Resume this task from detail." } else { "" }
     }
     $taskDir = Write-SmokeTaskFixture @contextFixtureArgs
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
-    if ($WindowType -eq "taskDetail" -or ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume")) {
+    if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "error" -Stage "FAILED" -Message "Smoke detail resumable failure"
     } else {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "done" -Stage "DONE" -Message "Task done" -Progress 1.0
     }
-    if ($WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+    if ($WindowType -eq "taskProcessing") {
         New-Item -ItemType Directory -Force -Path (Join-Path $taskDir "final") | Out-Null
         $reviewSourceOne = "The train leaves in ten minutes."
         $reviewTargetOne = "$([char]0x5217)$([char]0x8F66)$([char]0x5341)$([char]0x5206)$([char]0x949F)$([char]0x540E)$([char]0x51FA)$([char]0x53D1)$([char]0x3002)"
@@ -329,23 +326,6 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing" -or $Wind
             ($segments | ConvertTo-Json -Depth 8),
             $utf8NoBom
         )
-    }
-    if ($WindowType -eq "taskHistory") {
-        $runningFixtureArgs = @{
-            TaskId = "tvx_release_history_running"
-            InputFile = Join-Path $fixtureRoot "episode-03-work-in-progress.mp4"
-            Status = "RUNNING"
-        }
-        Write-SmokeTaskFixture @runningFixtureArgs | Out-Null
-
-        $failedFixtureArgs = @{
-            TaskId = "tvx_release_history_failed"
-            InputFile = Join-Path $fixtureRoot "interview-clip-needs-retry.mp4"
-            Status = "FAILED"
-            ErrorMessage = "Task failed"
-            ErrorCode = "smoke_history_failure"
-        }
-        Write-SmokeTaskFixture @failedFixtureArgs | Out-Null
     }
 }
 
@@ -546,15 +526,6 @@ function Test-ReleaseRenderScreenshot {
     } elseif ($WindowType -eq "taskProcessing") {
         $minWidth = 900
         $minHeight = 640
-    } elseif ($WindowType -eq "resultReview") {
-        $minWidth = 860
-        $minHeight = 600
-    } elseif ($WindowType -eq "taskHistory") {
-        $minWidth = 780
-        $minHeight = 560
-    } elseif ($WindowType -eq "taskDetail") {
-        $minWidth = 820
-        $minHeight = 580
     }
     if ($stats[0] -lt $minWidth -or $stats[1] -lt $minHeight) {
         throw "Release render screenshot is unexpectedly small: $($stats[0])x$($stats[1])"
@@ -623,9 +594,6 @@ try {
     $appArgs = @()
     if ($WindowType -ne "main") {
         $appArgs += "--tvx-window-type=$WindowType"
-    }
-    if ($WindowType -eq "resultReview" -or $WindowType -eq "taskDetail") {
-        $appArgs += "--tvx-task-id=$smokeContextTaskId"
     }
     if ($WindowType -eq "taskProcessing") {
         $appArgs += "--tvx-smoke-task-processing-scenario=$TaskProcessingScenario"
@@ -748,24 +716,6 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "resultReview" -and ($report.result_segment_count -lt 1 -or [string]::IsNullOrWhiteSpace([string]$report.task_id))) {
-            throw "Release result review smoke did not read task result: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "resultReview" -and ($report.result_issue_count -lt 1)) {
-            throw "Release result review smoke did not expose segment issues: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "resultReview" -and ($report.result_edit_saved -ne $true -or $report.result_reexported -ne $true -or $report.result_reexport_output_contains_edit -ne $true)) {
-            throw "Release result review smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "resultReview" -and ($report.result_reexport_format -ne "ass" -or $report.result_reexport_bilingual -ne $false)) {
-            throw "Release result review smoke did not use the selected export options: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "taskHistory" -and ($report.history_task_count -lt 3 -or $report.history_done_count -lt 1 -or $report.history_active_count -lt 1 -or $report.history_failed_count -lt 1)) {
-            throw "Release task history smoke did not read tasks.list: $($report | ConvertTo-Json -Compress -Depth 5)"
-        }
-        if ($WindowType -eq "taskDetail" -and ($report.task_detail_event_count -lt 1 -or [string]::IsNullOrWhiteSpace([string]$report.task_id) -or $report.task_detail_resume_attempted -ne $true -or $report.task_detail_resume_ok -ne $true -or $report.task_detail_status -ne "QUEUED")) {
-            throw "Release task detail smoke did not read tasks.events and resume the task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
     }
     if ($showWindow) {
