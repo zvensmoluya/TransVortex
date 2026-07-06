@@ -1962,6 +1962,20 @@ void main() {
     expect(find.text('加载更多事件'), findsNothing);
     expect(eventParams, contains(containsPair('cursor', 1)));
 
+    final eventSearch = find.widgetWithText(TextField, '搜索事件');
+    expect(eventSearch, findsOneWidget);
+    await tester.enterText(eventSearch, 'older');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('older event'), findsOneWidget);
+    expect(find.text('正在写出字幕文件'), findsNothing);
+    expect(find.text('阶段'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('清除事件搜索'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('older event'), findsOneWidget);
+    expect(find.text('正在写出字幕文件'), findsOneWidget);
+    expect(find.text('阶段'), findsNWidgets(2));
+
     await tester.tap(find.text('结果目录'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [r'D:\media']);

@@ -89,6 +89,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   late final DirectoryWriteProbe _directoryProbe;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'task-processing-smoke');
   final TextEditingController _taskSearchController = TextEditingController();
+  final TextEditingController _eventSearchController = TextEditingController();
   LocalServiceController? _smokeService;
   List<TaskSummary> _tasks = const [];
   TaskEventsPage? _eventsPage;
@@ -133,6 +134,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _selectedTaskId = widget.taskId?.trim();
     _editingTaskId = widget.taskId?.trim();
     _taskSearchController.addListener(_handleTaskSearchChanged);
+    _eventSearchController.addListener(_handleEventSearchChanged);
     if (widget.smoke == null) {
       unawaited(widget.bridge.initializeChild());
     }
@@ -144,6 +146,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   void dispose() {
     registerCurrentWindowRetargetHandler(null);
     _taskSearchController.dispose();
+    _eventSearchController.dispose();
     _smokeService?.dispose();
     super.dispose();
   }
@@ -176,9 +179,13 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       final selected = _selectedTask(
         _visibleTasksFor(tasks, _taskFilter, _taskSearchController.text),
       );
+      final previousTaskId = _selectedTaskId;
       setState(() {
         _tasks = tasks;
         _selectedTaskId = selected?.taskId;
+        if (previousTaskId != selected?.taskId) {
+          _setEventSearchTextSilently('');
+        }
         _loadingTasks = false;
         _message = tasks.isEmpty ? '还没有任务记录。' : '已读取 ${tasks.length} 个任务。';
       });
@@ -224,6 +231,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     final taskId = args.taskId?.trim();
     if (taskId != null && taskId.isNotEmpty) {
       _setTaskSearchTextSilently('');
+      _setEventSearchTextSilently('');
       _selectedTaskId = taskId;
       _editingTaskId = taskId;
       _taskFilter = _TaskFilter.all;
@@ -280,10 +288,14 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       _taskSearchController.text,
     );
     final selected = _selectedTask(visibleTasks);
+    final previousTaskId = _selectedTaskId;
     setState(() {
       _taskFilter = filter;
       _selectedTaskId = selected?.taskId;
       _editingTaskId = null;
+      if (previousTaskId != selected?.taskId) {
+        _setEventSearchTextSilently('');
+      }
       _message = null;
       _error = null;
     });
@@ -306,6 +318,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       _selectedTaskId = nextTaskId;
       if (previousTaskId != nextTaskId) {
         _editingTaskId = null;
+        _setEventSearchTextSilently('');
       }
       _message = null;
       _error = null;
@@ -321,6 +334,16 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _taskSearchController.addListener(_handleTaskSearchChanged);
   }
 
+  void _handleEventSearchChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _setEventSearchTextSilently(String text) {
+    _eventSearchController.removeListener(_handleEventSearchChanged);
+    _eventSearchController.text = text;
+    _eventSearchController.addListener(_handleEventSearchChanged);
+  }
+
   Future<void> _selectTask(TaskSummary task) async {
     if (_selectedTaskId == task.taskId && _eventsPage?.taskId == task.taskId) {
       return;
@@ -328,6 +351,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     setState(() {
       _selectedTaskId = task.taskId;
       _editingTaskId = null;
+      _setEventSearchTextSilently('');
       _message = null;
       _error = null;
     });
@@ -736,6 +760,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   searchController: _taskSearchController,
                   selected: selected,
                   events: events,
+                  eventSearchController: _eventSearchController,
                   editingTaskId: editingTaskId == selected?.taskId
                       ? editingTaskId
                       : null,
@@ -758,6 +783,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onLoadMoreEvents: selected == null
                       ? null
                       : () => unawaited(_loadMoreEvents(selected.taskId)),
+                  onClearEventSearch: _eventSearchController.clear,
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => setState(() => _editingTaskId = null),
                   onResume: (task) => unawaited(_resumeTask(task)),
@@ -796,6 +822,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.searchController,
     required this.selected,
     required this.events,
+    required this.eventSearchController,
     required this.editingTaskId,
     required this.bridge,
     required this.resultTransportOverride,
@@ -813,6 +840,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onClearSearch,
     required this.onSelectTask,
     required this.onLoadMoreEvents,
+    required this.onClearEventSearch,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
@@ -829,6 +857,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final TextEditingController searchController;
   final TaskSummary? selected;
   final List<Object?> events;
+  final TextEditingController eventSearchController;
   final String? editingTaskId;
   final WindowStateBridge bridge;
   final AppServiceTransport resultTransportOverride;
@@ -846,6 +875,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final VoidCallback onClearSearch;
   final ValueChanged<TaskSummary> onSelectTask;
   final VoidCallback? onLoadMoreEvents;
+  final VoidCallback onClearEventSearch;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
@@ -879,6 +909,7 @@ class _TaskProcessingBody extends StatelessWidget {
           child: _TaskPreview(
             task: selected,
             events: events,
+            eventSearchController: eventSearchController,
             editingTaskId: editingTaskId,
             bridge: bridge,
             resultTransportOverride: resultTransportOverride,
@@ -893,6 +924,7 @@ class _TaskProcessingBody extends StatelessWidget {
             checkingOutputDirectory: checkingOutputDirectory,
             onRefresh: onRefresh,
             onLoadMoreEvents: onLoadMoreEvents,
+            onClearEventSearch: onClearEventSearch,
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResume: onResume,
@@ -1034,6 +1066,61 @@ class _TaskSearchField extends StatelessWidget {
         suffixIcon: hasSearch
             ? IconButton(
                 tooltip: '清除任务搜索',
+                icon: const Icon(Icons.close, size: 16),
+                onPressed: enabled ? onClear : null,
+              )
+            : null,
+        filled: true,
+        fillColor: T.surface,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: T.s8,
+          vertical: T.s8,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.line),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.line),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(T.rSm),
+          borderSide: const BorderSide(color: T.accentStrong, width: 1.4),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventSearchField extends StatelessWidget {
+  const _EventSearchField({
+    required this.controller,
+    required this.enabled,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasSearch = controller.text.trim().isNotEmpty;
+    return TextField(
+      controller: controller,
+      enabled: enabled,
+      minLines: 1,
+      maxLines: 1,
+      style: T.tCaption,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: '搜索事件',
+        prefixIcon: const Icon(Icons.search, size: 16),
+        suffixIcon: hasSearch
+            ? IconButton(
+                tooltip: '清除事件搜索',
                 icon: const Icon(Icons.close, size: 16),
                 onPressed: enabled ? onClear : null,
               )
@@ -1232,6 +1319,7 @@ class _TaskPreview extends StatelessWidget {
   const _TaskPreview({
     required this.task,
     required this.events,
+    required this.eventSearchController,
     required this.editingTaskId,
     required this.bridge,
     required this.resultTransportOverride,
@@ -1246,6 +1334,7 @@ class _TaskPreview extends StatelessWidget {
     required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onLoadMoreEvents,
+    required this.onClearEventSearch,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
@@ -1257,6 +1346,7 @@ class _TaskPreview extends StatelessWidget {
 
   final TaskSummary? task;
   final List<Object?> events;
+  final TextEditingController eventSearchController;
   final String? editingTaskId;
   final WindowStateBridge bridge;
   final AppServiceTransport resultTransportOverride;
@@ -1271,6 +1361,7 @@ class _TaskPreview extends StatelessWidget {
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final VoidCallback? onLoadMoreEvents;
+  final VoidCallback onClearEventSearch;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
@@ -1317,6 +1408,12 @@ class _TaskPreview extends StatelessWidget {
     }
     final outputDir = _outputDirectoryFor(task);
     final cancelling = cancellingTaskId == task.taskId;
+    final eventSearchQuery = eventSearchController.text.trim();
+    final visibleEvents = events
+        .where(
+          (event) => _eventMatchesSearch(_eventMap(event), eventSearchQuery),
+        )
+        .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1385,20 +1482,58 @@ class _TaskPreview extends StatelessWidget {
         const SizedBox(height: T.s16),
         _TaskSummaryPanel(task: task),
         const SizedBox(height: T.s16),
-        Text('最近事件', style: T.tSection),
+        Row(
+          children: [
+            Expanded(child: Text('最近事件', style: T.tSection)),
+            const SizedBox(width: T.s8),
+            Flexible(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: _EventSearchField(
+                    controller: eventSearchController,
+                    enabled: !loadingEvents && events.isNotEmpty,
+                    onClear: onClearEventSearch,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: T.s8),
         Expanded(
           child: loadingEvents && events.isEmpty
               ? const Center(child: Text('读取事件中…', style: T.tBody))
               : events.isEmpty
               ? const Center(child: Text('还没有事件记录。', style: T.tBody))
+              : visibleEvents.isEmpty && eventSearchQuery.isNotEmpty
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '没有匹配“$eventSearchQuery”的事件。',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: T.tBody,
+                    ),
+                    if (eventsHasMore) ...[
+                      const SizedBox(height: T.s12),
+                      _TaskActionButton(
+                        label: loadingMoreEvents ? '读取中' : '加载更多事件',
+                        onTap: loadingMoreEvents ? null : onLoadMoreEvents,
+                      ),
+                    ],
+                  ],
+                )
               : ListView.separated(
                   padding: EdgeInsets.zero,
-                  itemCount: events.length + (eventsHasMore ? 1 : 0),
+                  itemCount: visibleEvents.length + (eventsHasMore ? 1 : 0),
                   separatorBuilder: (_, _) =>
                       const Divider(height: T.s24, color: T.line),
                   itemBuilder: (context, index) {
-                    if (index >= events.length) {
+                    if (index >= visibleEvents.length) {
                       return Align(
                         alignment: Alignment.centerLeft,
                         child: _TaskActionButton(
@@ -1407,7 +1542,9 @@ class _TaskPreview extends StatelessWidget {
                         ),
                       );
                     }
-                    return _EventPreviewRow(event: _eventMap(events[index]));
+                    return _EventPreviewRow(
+                      event: _eventMap(visibleEvents[index]),
+                    );
                   },
                 ),
         ),
@@ -1827,6 +1964,41 @@ String _eventText(
   if (value == null) return fallback;
   final text = '$value'.trim();
   return text.isEmpty ? fallback : text;
+}
+
+bool _eventMatchesSearch(Map<String, Object?> event, String searchQuery) {
+  final terms = searchQuery
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((term) => term.isNotEmpty)
+      .toList(growable: false);
+  if (terms.isEmpty) return true;
+  final type = _eventText(event, 'type', fallback: 'event');
+  final stage = _eventText(event, 'stage');
+  final status = _eventText(event, 'status');
+  final message = _eventText(event, 'message');
+  final createdAt = taskTimestampLabel(_eventText(event, 'created_at'));
+  final progress = taskProgressLabel(event['progress']);
+  final searchText = [
+    type,
+    taskEventTypeLabel(type),
+    stage,
+    taskStageLabel(stage),
+    status,
+    taskStatusLabel(status),
+    message,
+    taskEventMessageLabel(
+      type: type,
+      stage: stage,
+      status: status,
+      message: message,
+    ),
+    createdAt,
+    progress,
+    ...event.values.map((value) => '$value'),
+  ].join('\n').toLowerCase();
+  return terms.every((term) => searchText.contains(term));
 }
 
 String _friendlyTaskProcessingError(Object error) {
