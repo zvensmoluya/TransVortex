@@ -3,7 +3,7 @@ param(
     [int]$TimeoutSeconds = 60,
     [string]$ScreenshotPath = "",
     [string]$DesktopCompositePath = "",
-    [ValidateSet("main", "translationSettings", "asrSettings", "diagnostics", "resultReview", "taskHistory", "taskDetail")]
+    [ValidateSet("main", "translationSettings", "asrSettings", "diagnostics", "taskProcessing", "resultReview", "taskHistory", "taskDetail")]
     [string]$WindowType = "main",
     [ValidateSet("normal", "empty", "ready", "blockedTranslation", "blockedAsr", "running", "failed")]
     [string]$MainPhase = "normal",
@@ -269,16 +269,17 @@ function Write-SmokeTaskEvent {
 
 $smokeContextTaskId = "tvx_demo_context_task"
 
-if ($WindowType -eq "diagnostics" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
     $smokeTaskId = $smokeContextTaskId
     $contextFileName = switch ($WindowType) {
+        "taskProcessing" { "sample-task-processing-session.mp4" }
         "resultReview" { "sample-review-session.mp4" }
         "taskHistory" { "sample-evening-dialogue.mp4" }
         "taskDetail" { "sample-resume-needed.mp4" }
         default { "sample-diagnostics-context.mp4" }
     }
     $taskOutputPaths = @{}
-    if ($WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+    if ($WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
         $taskOutputPaths = @{srt = (Join-Path $fixtureRoot "result-review.zh-CN.srt")}
     }
     $contextStatus = if ($WindowType -eq "taskDetail") { "FAILED" } else { "DONE" }
@@ -298,7 +299,7 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "resultReview" -or $Window
     } else {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "done" -Stage "DONE" -Message "Task done" -Progress 1.0
     }
-    if ($WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
+    if ($WindowType -eq "taskProcessing" -or $WindowType -eq "resultReview" -or $WindowType -eq "taskHistory" -or $WindowType -eq "taskDetail") {
         New-Item -ItemType Directory -Force -Path (Join-Path $taskDir "final") | Out-Null
         $reviewSourceOne = "The train leaves in ten minutes."
         $reviewTargetOne = "$([char]0x5217)$([char]0x8F66)$([char]0x5341)$([char]0x5206)$([char]0x949F)$([char]0x540E)$([char]0x51FA)$([char]0x53D1)$([char]0x3002)"
@@ -540,6 +541,9 @@ function Test-ReleaseRenderScreenshot {
     } elseif ($WindowType -eq "asrSettings" -or $WindowType -eq "diagnostics") {
         $minWidth = 720
         $minHeight = 520
+    } elseif ($WindowType -eq "taskProcessing") {
+        $minWidth = 900
+        $minHeight = 640
     } elseif ($WindowType -eq "resultReview") {
         $minWidth = 860
         $minHeight = 600
@@ -730,6 +734,9 @@ try {
         }
         if ($WindowType -eq "diagnostics" -and ($report.diagnostic_task_count -lt 1)) {
             throw "Release diagnostics smoke did not read task context: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
+            throw "Release task processing smoke did not read and select the completed task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "resultReview" -and ($report.result_segment_count -lt 1 -or [string]::IsNullOrWhiteSpace([string]$report.task_id))) {
             throw "Release result review smoke did not read task result: $($report | ConvertTo-Json -Compress -Depth 5)"

@@ -137,6 +137,13 @@ void main() {
       ]).window.type,
       AppWindowType.taskProcessing,
     );
+    final rawFlagStartup = AppStartupArgs.fromSources(
+      '--tvx-window-type=taskProcessing --tvx-task-id=tvx_processing_raw',
+      ['--tvx-smoke-report=D:/tmp/task-processing.json'],
+    );
+    expect(rawFlagStartup.window.type, AppWindowType.taskProcessing);
+    expect(rawFlagStartup.window.taskId, 'tvx_processing_raw');
+    expect(rawFlagStartup.smoke?.reportPath, 'D:/tmp/task-processing.json');
     expect(
       AppStartupArgs.fromSources(null, [
         '--tvx-window-type=taskProcessing',

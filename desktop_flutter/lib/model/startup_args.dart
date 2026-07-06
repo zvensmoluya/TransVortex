@@ -21,6 +21,7 @@ class AppStartupArgs {
     String? windowArguments,
     List<String> args,
   ) {
+    final rawWindowArgument = windowArgumentFromSources(windowArguments, args);
     final reportArg = _optionValue(args, '--tvx-smoke-report');
     final rootArg = _optionValue(args, '--tvx-service-root');
     final timeoutArg = _optionValue(args, '--tvx-smoke-timeout');
@@ -41,11 +42,13 @@ class AppStartupArgs {
       '--tvx-smoke-check-notifications',
     );
     final mainPhaseArg = _optionValue(args, '--tvx-smoke-main-phase');
-    final explicitWindowType = _optionValue(args, '--tvx-window-type');
-    final explicitTaskId = _optionValue(args, '--tvx-task-id');
-    final parsedWindow = AppWindowArgs.parse(
-      windowArgumentFromSources(windowArguments, args),
-    );
+    final explicitWindowType =
+        _optionValue(args, '--tvx-window-type') ??
+        _optionValueFromRaw(rawWindowArgument, '--tvx-window-type');
+    final explicitTaskId =
+        _optionValue(args, '--tvx-task-id') ??
+        _optionValueFromRaw(rawWindowArgument, '--tvx-task-id');
+    final parsedWindow = AppWindowArgs.parse(rawWindowArgument);
     final window = _windowWithOverrides(
       parsedWindow,
       explicitWindowType: explicitWindowType,
@@ -84,9 +87,7 @@ class AppStartupArgs {
         ),
       );
     }
-    final startup = AppStartupArgs.parse(
-      windowArgumentFromSources(windowArguments, args),
-    );
+    final startup = AppStartupArgs.parse(rawWindowArgument);
     return AppStartupArgs(
       window: _windowWithOverrides(
         startup.window,
@@ -264,6 +265,16 @@ String? _optionValue(List<String> args, String name) {
     if (arg.startsWith(prefix)) return arg.substring(prefix.length);
   }
   return null;
+}
+
+String? _optionValueFromRaw(String raw, String name) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return null;
+  final escaped = RegExp.escape(name);
+  final match = RegExp('(?:^|\\s)$escaped(?:=|\\s+)(\\S+)').firstMatch(
+    trimmed,
+  );
+  return match?.group(1);
 }
 
 bool _boolOption(String? value) {

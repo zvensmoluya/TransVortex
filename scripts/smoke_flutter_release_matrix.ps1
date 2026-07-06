@@ -42,7 +42,7 @@ foreach ($phase in @("empty", "ready", "blockedTranslation", "blockedAsr", "runn
         check_notifications = $false
     })
 }
-foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "resultReview", "taskHistory", "taskDetail")) {
+foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "taskProcessing", "resultReview", "taskHistory", "taskDetail")) {
     $cases.Add([ordered]@{
         name = $windowType
         window_type = $windowType
@@ -136,6 +136,8 @@ foreach ($case in $cases) {
         selected_provider_model_count = if ($report.PSObject.Properties.Name -contains "selected_provider_model_count") { $report.selected_provider_model_count } else { "" }
         history_active_count = if ($report.PSObject.Properties.Name -contains "history_active_count") { $report.history_active_count } else { "" }
         history_failed_count = if ($report.PSObject.Properties.Name -contains "history_failed_count") { $report.history_failed_count } else { "" }
+        task_processing_task_count = if ($report.PSObject.Properties.Name -contains "task_processing_task_count") { $report.task_processing_task_count } else { "" }
+        task_processing_selected_status = if ($report.PSObject.Properties.Name -contains "task_processing_selected_status") { $report.task_processing_selected_status } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }
