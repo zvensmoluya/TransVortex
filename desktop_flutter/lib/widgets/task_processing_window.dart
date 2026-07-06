@@ -109,6 +109,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _smokeResumeAttempted = false;
   bool _smokeResumeOk = false;
   String _smokeResumeStatus = '';
+  bool _smokeOutputDirectoryChecked = false;
+  bool _smokeOutputDirectoryWritable = false;
+  String _smokeOutputDirectoryPath = '';
+  String _smokeOutputDirectoryMessage = '';
 
   @override
   void initState() {
@@ -382,11 +386,14 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       await _runSmokeEditFlow(selected);
     } else if (_smokeScenario == 'resume') {
       await _runSmokeResumeFlow(selected);
+    } else {
+      await _runSmokeOutputDirectoryCheck(selected);
     }
   }
 
   Future<void> _runSmokeEditFlow(TaskSummary task) async {
     if (!task.isDone) return;
+    await _runSmokeOutputDirectoryCheck(task);
     final result = await _client.openTaskResult(task.taskId);
     _smokeResultSegmentCount = result.segments.length;
     _smokeResultIssueCount = result.issueCount;
@@ -446,6 +453,16 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _smokeResumeStatus = result.status;
   }
 
+  Future<void> _runSmokeOutputDirectoryCheck(TaskSummary task) async {
+    final dir = _outputDirectoryFor(task);
+    if (dir == null || dir.isEmpty) return;
+    _smokeOutputDirectoryChecked = true;
+    _smokeOutputDirectoryPath = dir;
+    final result = await _directoryProbe.checkWritable(dir);
+    _smokeOutputDirectoryWritable = result.ok;
+    _smokeOutputDirectoryMessage = result.message;
+  }
+
   Future<void> _writeSmokeReport({
     required List<TaskSummary> tasks,
     TaskSummary? selected,
@@ -475,6 +492,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_resume_attempted': _smokeResumeAttempted,
       'task_processing_resume_ok': _smokeResumeOk,
       'task_processing_resume_status': _smokeResumeStatus,
+      'task_processing_output_dir_checked': _smokeOutputDirectoryChecked,
+      'task_processing_output_dir_writable': _smokeOutputDirectoryWritable,
+      'task_processing_output_dir_path': _smokeOutputDirectoryPath,
+      'task_processing_output_dir_message': _smokeOutputDirectoryMessage,
       'error': error == null ? '' : '$error',
       'finished_at': DateTime.now().toUtc().toIso8601String(),
     };

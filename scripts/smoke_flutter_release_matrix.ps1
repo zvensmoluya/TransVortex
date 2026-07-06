@@ -156,6 +156,7 @@ foreach ($case in $cases) {
         task_processing_edit_saved = if ($report.PSObject.Properties.Name -contains "task_processing_edit_saved") { $report.task_processing_edit_saved } else { "" }
         task_processing_reexported = if ($report.PSObject.Properties.Name -contains "task_processing_reexported") { $report.task_processing_reexported } else { "" }
         task_processing_resume_ok = if ($report.PSObject.Properties.Name -contains "task_processing_resume_ok") { $report.task_processing_resume_ok } else { "" }
+        task_processing_output_dir_writable = if ($report.PSObject.Properties.Name -contains "task_processing_output_dir_writable") { $report.task_processing_output_dir_writable } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }

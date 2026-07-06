@@ -711,6 +711,9 @@ try {
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "resume" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
             throw "Release task processing smoke did not read and select the completed task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "resume" -and ($report.task_processing_output_dir_checked -ne $true -or $report.task_processing_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.task_processing_output_dir_path))) {
+            throw "Release task processing smoke did not verify the selected task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $false)) {
             throw "Release task processing edit smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
