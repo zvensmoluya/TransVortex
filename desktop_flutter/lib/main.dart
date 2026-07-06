@@ -43,7 +43,7 @@ Future<void> main(List<String> args) async {
   if (parsedArgs.type == AppWindowType.main) {
     await bridge.initializeMain();
   }
-  await configureCurrentWindow(parsedArgs.type);
+  await configureCurrentWindow(parsedArgs);
   await registerCurrentWindowControls();
 
   runApp(
@@ -1385,7 +1385,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _openToolWindow(AppWindowType type, {String? taskId}) async {
-    final args = AppWindowArgs(type: type, taskId: taskId);
+    final args = AppWindowArgs(
+      type: type,
+      taskId: taskId,
+      parentBounds: await _currentWindowBounds(),
+    );
     final windowKey = '${type.id}:${taskId?.trim() ?? ''}';
     final existing = _toolWindows[windowKey];
     if (existing != null) {
@@ -1405,6 +1409,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       // here races the child render path and can expose a blank native window.
     } on Object catch (exc) {
       _toast('打开${type.title}失败：$exc');
+    }
+  }
+
+  Future<Rect?> _currentWindowBounds() async {
+    try {
+      return await windowManager.getBounds();
+    } on Object {
+      return null;
     }
   }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
@@ -57,10 +58,11 @@ extension AppWindowTypeLabel on AppWindowType {
 
 @immutable
 class AppWindowArgs {
-  const AppWindowArgs({required this.type, this.taskId});
+  const AppWindowArgs({required this.type, this.taskId, this.parentBounds});
 
   final AppWindowType type;
   final String? taskId;
+  final Rect? parentBounds;
 
   String encode() {
     final normalizedTaskId = taskId?.trim();
@@ -68,6 +70,7 @@ class AppWindowArgs {
       'type': type.id,
       if (normalizedTaskId != null && normalizedTaskId.isNotEmpty)
         'task_id': normalizedTaskId,
+      if (parentBounds != null) 'parent_bounds': _rectToJson(parentBounds!),
     });
   }
 
@@ -91,6 +94,9 @@ class AppWindowArgs {
         return AppWindowArgs(
           type: AppWindowTypeLabel.fromId(decoded['type'] as String?),
           taskId: _optionalString(decoded['task_id'] ?? decoded['taskId']),
+          parentBounds: _rectFromJson(
+            decoded['parent_bounds'] ?? decoded['parentBounds'],
+          ),
         );
       }
     } catch (_) {
@@ -98,6 +104,32 @@ class AppWindowArgs {
     }
     return const AppWindowArgs(type: AppWindowType.main);
   }
+}
+
+Map<String, double> _rectToJson(Rect rect) => {
+  'x': rect.left,
+  'y': rect.top,
+  'width': rect.width,
+  'height': rect.height,
+};
+
+Rect? _rectFromJson(Object? value) {
+  if (value is! Map) return null;
+  final x = _numToDouble(value['x'] ?? value['left']);
+  final y = _numToDouble(value['y'] ?? value['top']);
+  final width = _numToDouble(value['width'] ?? value['w']);
+  final height = _numToDouble(value['height'] ?? value['h']);
+  if (x == null || y == null || width == null || height == null) {
+    return null;
+  }
+  if (width <= 0 || height <= 0) return null;
+  return Rect.fromLTWH(x, y, width, height);
+}
+
+double? _numToDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value.trim());
+  return null;
 }
 
 String? _optionalString(Object? value) {

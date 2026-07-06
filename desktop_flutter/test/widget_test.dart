@@ -10,6 +10,7 @@ import 'package:transvortex_desktop_flutter/model/main_window_controller.dart';
 import 'package:transvortex_desktop_flutter/model/startup_args.dart';
 import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
+import 'package:transvortex_desktop_flutter/services/current_window_controls.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
 import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
@@ -108,6 +109,15 @@ void main() {
     );
     expect(reviewArgs.type, AppWindowType.resultReview);
     expect(reviewArgs.taskId, 'tvx_review_123');
+    final positionedArgs = AppWindowArgs.parse(
+      '{"type":"translationSettings","parent_bounds":{"x":40,"y":60,"width":720,"height":520}}',
+    );
+    expect(positionedArgs.type, AppWindowType.translationSettings);
+    expect(positionedArgs.parentBounds, const Rect.fromLTWH(40, 60, 720, 520));
+    expect(
+      AppWindowArgs.parse(positionedArgs.encode()).parentBounds,
+      const Rect.fromLTWH(40, 60, 720, 520),
+    );
     expect(
       AppStartupArgs.parse(
         '{"type":"resultReview","taskId":"tvx_review_456","smoke":{"reportPath":"D:/tmp/review.json"}}',
@@ -132,6 +142,49 @@ void main() {
     ]);
     expect(detailStartup.window.type, AppWindowType.taskDetail);
     expect(detailStartup.window.taskId, 'tvx_detail_789');
+  });
+
+  test('window geometry follows native window roles', () {
+    final parent = const Rect.fromLTWH(100, 200, 720, 520);
+    final mainGeometry = windowGeometryFor(
+      const AppWindowArgs(type: AppWindowType.main),
+    );
+    expect(mainGeometry.role, WindowRole.main);
+    expect(mainGeometry.size, const Size(720, 520));
+    expect(mainGeometry.center, isTrue);
+    expect(mainGeometry.resizable, isFalse);
+    expect(mainGeometry.maximizable, isFalse);
+
+    final toolGeometry = windowGeometryFor(
+      AppWindowArgs(
+        type: AppWindowType.translationSettings,
+        parentBounds: parent,
+      ),
+    );
+    expect(toolGeometry.role, WindowRole.tool);
+    expect(toolGeometry.size, const Size(820, 600));
+    expect(toolGeometry.center, isFalse);
+    expect(toolGeometry.position, const Offset(172, 248));
+    expect(toolGeometry.alignment, isNull);
+    expect(toolGeometry.resizable, isTrue);
+    expect(toolGeometry.maximizable, isFalse);
+
+    final directToolGeometry = windowGeometryFor(
+      const AppWindowArgs(type: AppWindowType.asrSettings),
+    );
+    expect(directToolGeometry.center, isFalse);
+    expect(directToolGeometry.position, isNull);
+    expect(directToolGeometry.alignment, Alignment.topRight);
+
+    final workbenchGeometry = windowGeometryFor(
+      AppWindowArgs(type: AppWindowType.resultReview, parentBounds: parent),
+    );
+    expect(workbenchGeometry.role, WindowRole.workbench);
+    expect(workbenchGeometry.size, const Size(1040, 720));
+    expect(workbenchGeometry.center, isFalse);
+    expect(workbenchGeometry.position, const Offset(212, 256));
+    expect(workbenchGeometry.resizable, isTrue);
+    expect(workbenchGeometry.maximizable, isTrue);
   });
 
   testWidgets('app uses packaged CJK font family', (tester) async {

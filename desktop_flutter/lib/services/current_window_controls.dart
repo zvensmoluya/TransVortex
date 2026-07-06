@@ -1,33 +1,140 @@
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../model/window_state.dart';
 import '../theme/tokens.dart';
 
-Future<void> configureCurrentWindow(AppWindowType type) async {
+Future<void> configureCurrentWindow(AppWindowArgs args) async {
   await windowManager.ensureInitialized();
 
-  final size = switch (type) {
-    AppWindowType.main => const Size(720, 520),
-    AppWindowType.translationSettings => const Size(820, 600),
-    AppWindowType.asrSettings => const Size(760, 560),
-    AppWindowType.diagnostics => const Size(760, 560),
-    AppWindowType.resultReview => const Size(900, 640),
-    AppWindowType.taskHistory => const Size(820, 600),
-    AppWindowType.taskDetail => const Size(860, 620),
-  };
-
+  final geometry = windowGeometryFor(args);
   final options = WindowOptions(
-    size: size,
-    center: true,
+    size: geometry.size,
+    center: geometry.center,
+    minimumSize: geometry.minimumSize,
     backgroundColor: T.bg,
     titleBarStyle: TitleBarStyle.hidden,
     windowButtonVisibility: false,
   );
   await windowManager.waitUntilReadyToShow(options);
-  await windowManager.setResizable(false);
-  await windowManager.setMaximizable(false);
+  await windowManager.setResizable(geometry.resizable);
+  await windowManager.setMaximizable(geometry.maximizable);
+  if (geometry.position != null) {
+    await windowManager.setPosition(geometry.position!);
+  } else if (geometry.alignment != null) {
+    await windowManager.setAlignment(geometry.alignment!);
+  }
+}
+
+@visibleForTesting
+WindowGeometry windowGeometryFor(AppWindowArgs args) {
+  final type = args.type;
+  final role = _roleFor(type);
+  final size = _defaultSize(type);
+  final offset = args.parentBounds == null
+      ? null
+      : _positionFromParent(args.parentBounds!, type);
+  return switch (role) {
+    WindowRole.main => WindowGeometry(
+      role: role,
+      size: size,
+      center: true,
+      resizable: false,
+      maximizable: false,
+    ),
+    WindowRole.tool => WindowGeometry(
+      role: role,
+      size: size,
+      minimumSize: _minimumSize(type),
+      center: false,
+      position: offset,
+      alignment: offset == null ? Alignment.topRight : null,
+      resizable: true,
+      maximizable: false,
+    ),
+    WindowRole.workbench => WindowGeometry(
+      role: role,
+      size: size,
+      minimumSize: _minimumSize(type),
+      center: offset == null,
+      position: offset,
+      resizable: true,
+      maximizable: true,
+    ),
+  };
+}
+
+@visibleForTesting
+class WindowGeometry {
+  const WindowGeometry({
+    required this.role,
+    required this.size,
+    required this.center,
+    required this.resizable,
+    required this.maximizable,
+    this.minimumSize,
+    this.position,
+    this.alignment,
+  });
+
+  final WindowRole role;
+  final Size size;
+  final Size? minimumSize;
+  final bool center;
+  final Offset? position;
+  final Alignment? alignment;
+  final bool resizable;
+  final bool maximizable;
+}
+
+@visibleForTesting
+enum WindowRole { main, tool, workbench }
+
+WindowRole _roleFor(AppWindowType type) => switch (type) {
+  AppWindowType.main => WindowRole.main,
+  AppWindowType.resultReview => WindowRole.workbench,
+  AppWindowType.translationSettings ||
+  AppWindowType.asrSettings ||
+  AppWindowType.diagnostics ||
+  AppWindowType.taskHistory ||
+  AppWindowType.taskDetail => WindowRole.tool,
+};
+
+Size _defaultSize(AppWindowType type) => switch (type) {
+  AppWindowType.main => const Size(720, 520),
+  AppWindowType.translationSettings => const Size(820, 600),
+  AppWindowType.asrSettings => const Size(760, 560),
+  AppWindowType.diagnostics => const Size(780, 580),
+  AppWindowType.resultReview => const Size(1040, 720),
+  AppWindowType.taskHistory => const Size(840, 620),
+  AppWindowType.taskDetail => const Size(860, 620),
+};
+
+Size _minimumSize(AppWindowType type) => switch (type) {
+  AppWindowType.main => const Size(720, 520),
+  AppWindowType.translationSettings => const Size(760, 540),
+  AppWindowType.asrSettings => const Size(700, 500),
+  AppWindowType.diagnostics => const Size(720, 520),
+  AppWindowType.resultReview => const Size(900, 640),
+  AppWindowType.taskHistory => const Size(760, 540),
+  AppWindowType.taskDetail => const Size(780, 560),
+};
+
+Offset _positionFromParent(Rect parent, AppWindowType type) {
+  final step = switch (type) {
+    AppWindowType.translationSettings => 0,
+    AppWindowType.asrSettings => 1,
+    AppWindowType.diagnostics => 2,
+    AppWindowType.taskHistory => 3,
+    AppWindowType.taskDetail => 4,
+    AppWindowType.resultReview => 2,
+    AppWindowType.main => 0,
+  };
+  final dx = type == AppWindowType.resultReview ? 112.0 : 72.0 + step * 28.0;
+  final dy = type == AppWindowType.resultReview ? 56.0 : 48.0 + step * 24.0;
+  return Offset(parent.left + dx, parent.top + dy);
 }
 
 Future<void> registerCurrentWindowControls() async {

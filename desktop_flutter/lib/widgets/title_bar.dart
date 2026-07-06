@@ -12,11 +12,13 @@ class TitleBar extends StatelessWidget {
     this.title = 'TransVortex',
     required this.status,
     this.onMenu,
+    this.canMaximize = false,
   });
 
   final String title;
   final String status;
   final VoidCallback? onMenu;
+  final bool canMaximize;
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +61,8 @@ class TitleBar extends StatelessWidget {
           ),
           if (onMenu != null) _ChromeButton(glyph: _Glyph.menu, onTap: onMenu!),
           _ChromeButton(glyph: _Glyph.min, onTap: windowManager.minimize),
+          if (canMaximize)
+            _ChromeButton(glyph: _Glyph.max, onTap: _toggleMaximized),
           _ChromeButton(
             glyph: _Glyph.close,
             danger: true,
@@ -68,9 +72,17 @@ class TitleBar extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _toggleMaximized() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
 }
 
-enum _Glyph { menu, min, close }
+enum _Glyph { menu, min, max, close }
 
 class _ChromeButton extends StatefulWidget {
   const _ChromeButton({
@@ -141,6 +153,12 @@ class _GlyphPainter extends CustomPainter {
         break;
       case _Glyph.min:
         canvas.drawLine(Offset(0, s * 0.5), Offset(s, s * 0.5), p);
+        break;
+      case _Glyph.max:
+        canvas.drawRect(
+          Rect.fromLTWH(s * 0.16, s * 0.16, s * 0.68, s * 0.68),
+          p,
+        );
         break;
       case _Glyph.close:
         canvas.drawLine(Offset.zero, Offset(s, s), p);

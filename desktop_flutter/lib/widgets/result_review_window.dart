@@ -409,7 +409,7 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
         backgroundColor: T.bg,
         body: Column(
           children: [
-            TitleBar(title: '结果审看', status: _statusText),
+            TitleBar(title: '结果审看', status: _statusText, canMaximize: true),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
