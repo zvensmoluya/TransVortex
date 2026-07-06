@@ -10,6 +10,7 @@ import '../model/task_labels.dart';
 import '../model/window_state.dart';
 import '../services/app_service_client.dart';
 import '../services/current_window_controls.dart';
+import '../services/directory_probe.dart';
 import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
@@ -65,12 +66,14 @@ class TaskProcessingWindow extends StatefulWidget {
     required this.taskId,
     required this.bridge,
     this.pathOpener,
+    this.directoryProbe,
     this.smoke,
   });
 
   final String? taskId;
   final WindowStateBridge bridge;
   final PathOpener? pathOpener;
+  final DirectoryWriteProbe? directoryProbe;
   final AppSmokeArgs? smoke;
 
   @override
@@ -81,6 +84,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   late final AppServiceClient _client;
   late final AppServiceTransport _embeddedResultTransport;
   late final PathOpener _pathOpener;
+  late final DirectoryWriteProbe _directoryProbe;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'task-processing-smoke');
   LocalServiceController? _smokeService;
   List<TaskSummary> _tasks = const [];
@@ -91,6 +95,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingTasks = false;
   bool _loadingEvents = false;
   bool _resuming = false;
+  bool _checkingOutputDirectory = false;
   String? _editingTaskId;
   String _smokeScenario = 'browse';
   int _smokeResultSegmentCount = 0;
@@ -111,6 +116,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _client = AppServiceClient(_processingTransport());
     _embeddedResultTransport = _TaskProcessingClientTransport(_client);
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
+    _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
     _selectedTaskId = widget.taskId?.trim();
     _editingTaskId = widget.taskId?.trim();
     if (widget.smoke == null) {
@@ -310,6 +316,44 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     await _openDirectory(dir, successMessage: '已打开结果目录');
   }
 
+  Future<void> _checkOutputDirectory(TaskSummary task) async {
+    if (_checkingOutputDirectory) return;
+    final dir = _outputDirectoryFor(task);
+    if (dir == null || dir.isEmpty) {
+      setState(() {
+        _error = '这个任务还没有输出目录。';
+        _message = null;
+      });
+      return;
+    }
+    setState(() {
+      _checkingOutputDirectory = true;
+      _message = '正在检查结果目录…';
+      _error = null;
+    });
+    try {
+      final result = await _directoryProbe.checkWritable(dir);
+      if (!mounted) return;
+      setState(() {
+        if (result.ok) {
+          _message = '结果目录可写，可以重新导出。';
+          _error = null;
+        } else {
+          _message = null;
+          _error = '结果目录不可用：${result.message}';
+        }
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = null;
+        _error = '检查结果目录失败：$error';
+      });
+    } finally {
+      if (mounted) setState(() => _checkingOutputDirectory = false);
+    }
+  }
+
   Future<void> _openDirectory(
     String path, {
     required String successMessage,
@@ -495,6 +539,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   loadingTasks: _loadingTasks,
                   loadingEvents: _loadingEvents,
                   resuming: _resuming,
+                  checkingOutputDirectory: _checkingOutputDirectory,
                   onRefresh: _loadTasks,
                   onSelectTask: (task) => unawaited(_selectTask(task)),
                   onOpenResult: (task) => unawaited(_openResult(task)),
@@ -504,6 +549,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                       unawaited(_openTaskDirectory(task)),
                   onOpenOutputDirectory: (task) =>
                       unawaited(_openOutputDirectory(task)),
+                  onCheckOutputDirectory: (task) =>
+                      unawaited(_checkOutputDirectory(task)),
                 ),
               ),
             ),
@@ -516,6 +563,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String _statusText(TaskSummary? selected) {
     if (_loadingTasks) return '读取任务中';
     if (_resuming) return '继续任务中';
+    if (_checkingOutputDirectory) return '检查结果目录中';
     if (_error != null) return '任务处理暂不可用';
     if (selected == null) return '任务片列';
     return '${taskStatusLabel(selected.status)} · 任务片列';
@@ -535,6 +583,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.loadingTasks,
     required this.loadingEvents,
     required this.resuming,
+    required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onSelectTask,
     required this.onOpenResult,
@@ -542,6 +591,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onResume,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
+    required this.onCheckOutputDirectory,
   });
 
   final List<TaskSummary> tasks;
@@ -555,6 +605,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final bool loadingTasks;
   final bool loadingEvents;
   final bool resuming;
+  final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onSelectTask;
   final ValueChanged<TaskSummary> onOpenResult;
@@ -562,6 +613,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
+  final ValueChanged<TaskSummary> onCheckOutputDirectory;
 
   @override
   Widget build(BuildContext context) {
@@ -590,12 +642,14 @@ class _TaskProcessingBody extends StatelessWidget {
             loadingTasks: loadingTasks,
             loadingEvents: loadingEvents,
             resuming: resuming,
+            checkingOutputDirectory: checkingOutputDirectory,
             onRefresh: onRefresh,
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResume: onResume,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
+            onCheckOutputDirectory: onCheckOutputDirectory,
           ),
         ),
       ],
@@ -749,12 +803,14 @@ class _TaskPreview extends StatelessWidget {
     required this.loadingTasks,
     required this.loadingEvents,
     required this.resuming,
+    required this.checkingOutputDirectory,
     required this.onRefresh,
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
+    required this.onCheckOutputDirectory,
   });
 
   final TaskSummary? task;
@@ -767,12 +823,14 @@ class _TaskPreview extends StatelessWidget {
   final bool loadingTasks;
   final bool loadingEvents;
   final bool resuming;
+  final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
+  final ValueChanged<TaskSummary> onCheckOutputDirectory;
 
   @override
   Widget build(BuildContext context) {
@@ -862,6 +920,12 @@ class _TaskPreview extends StatelessWidget {
                   onTap: outputDir == null
                       ? null
                       : () => onOpenOutputDirectory(task),
+                ),
+                _TaskActionButton(
+                  label: checkingOutputDirectory ? '检查中' : '检查结果目录',
+                  onTap: outputDir == null || checkingOutputDirectory
+                      ? null
+                      : () => onCheckOutputDirectory(task),
                 ),
               ],
             ),

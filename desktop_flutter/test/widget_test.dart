@@ -11,6 +11,7 @@ import 'package:transvortex_desktop_flutter/model/startup_args.dart';
 import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 import 'package:transvortex_desktop_flutter/services/current_window_controls.dart';
+import 'package:transvortex_desktop_flutter/services/directory_probe.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
 import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
@@ -1712,6 +1713,9 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final pathOpener = _RecordingPathOpener();
+    final directoryProbe = _RecordingDirectoryProbe(
+      const DirectoryProbeResult(ok: true, message: '目录可写'),
+    );
     final calls = <String>[];
     final paramsByMethod = <String, Map<String, Object?>>{};
     final opened = <AppWindowArgs>[];
@@ -1823,6 +1827,7 @@ void main() {
         store: store,
         bridge: bridge,
         pathOpener: pathOpener,
+        directoryProbe: directoryProbe,
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
@@ -1845,6 +1850,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [r'D:\media']);
     expect(find.text('已打开结果目录'), findsOneWidget);
+
+    await tester.tap(find.text('检查结果目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(directoryProbe.checkedPaths, [r'D:\media']);
+    expect(find.text('结果目录可写，可以重新导出。'), findsOneWidget);
 
     await tester.tap(find.text('processing-failed.mp4'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -2147,5 +2157,18 @@ class _RecordingPathOpener extends PathOpener {
   @override
   Future<void> openDirectory(String path) async {
     openedDirectories.add(path);
+  }
+}
+
+class _RecordingDirectoryProbe extends DirectoryWriteProbe {
+  _RecordingDirectoryProbe(this.result);
+
+  final DirectoryProbeResult result;
+  final checkedPaths = <String>[];
+
+  @override
+  Future<DirectoryProbeResult> checkWritable(String path) async {
+    checkedPaths.add(path);
+    return result;
   }
 }

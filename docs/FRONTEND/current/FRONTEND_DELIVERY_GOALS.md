@@ -95,7 +95,7 @@
 
 完成标准：
 
-- 诊断入口当前已覆盖本地服务返回的 doctor 报告、翻译服务、语音识别、产物目录可写性检查、最小任务上下文摘要、真实 `tasks.list` 最近任务刷新和完成任务 `result.open` 结果摘要；常见配置问题可跳转对应设置窗，产物目录检查项可打开 doctor 报告里的目录路径，任务 / runtime / queue / interrupted / resume 类诊断和最近任务行可回到任务处理窗并定位任务；后续还要补按任务输出目录专项检查、完整运行队列和任务详情诊断。
+- 诊断入口当前已覆盖本地服务返回的 doctor 报告、翻译服务、语音识别、产物目录可写性检查、最小任务上下文摘要、真实 `tasks.list` 最近任务刷新和完成任务 `result.open` 结果摘要；常见配置问题可跳转对应设置窗，产物目录检查项可打开 doctor 报告里的目录路径，任务 / runtime / queue / interrupted / resume 类诊断和最近任务行可回到任务处理窗并定位任务；任务处理窗已提供用户触发的结果目录可写性检查；后续还要补诊断窗里的按任务输出目录专项报告、完整运行队列和任务详情诊断。
 - 系统通知使用真实桌面通知方案，不以网页 toast 或窗内轻提示替代；当前 Flutter 已接 Windows Toast 插件、前台抑制和点击聚焦回调，release smoke 已覆盖完成态状态转移经主窗口通知 observer 触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，`scripts\install_flutter_desktop_shortcut.ps1` 可创建并校验带同一 AUMID 的用户级开始菜单快捷方式，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认系统通知横幅出现；`scripts\package_flutter_release.ps1` 可生成包含该快捷方式辅助脚本和用户级安装脚本的 portable 包，并从包根验证 Local Service RPC、用户级安装快捷方式和可选窗口启动；后续必须补正式 MSIX / installer 分发路径下的通知中心行为。
 - 通知只用于完成、失败、需要用户处理等关键事件，不制造噪音。
 - 诊断结果能回到具体修复动作，而不是只展示检查列表。

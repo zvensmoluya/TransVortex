@@ -16,6 +16,7 @@ import 'model/task_labels.dart';
 import 'model/window_state.dart';
 import 'painters/source_object_painter.dart';
 import 'services/app_service_client.dart';
+import 'services/directory_probe.dart';
 import 'services/current_window_controls.dart';
 import 'services/local_service_controller.dart';
 import 'services/path_opener.dart';
@@ -87,6 +88,7 @@ class TransVortexApp extends StatelessWidget {
     this.localServiceController,
     this.taskNotificationService,
     this.pathOpener,
+    this.directoryProbe,
     this.smoke,
   });
 
@@ -97,6 +99,7 @@ class TransVortexApp extends StatelessWidget {
   final LocalServiceController? localServiceController;
   final TaskNotificationService? taskNotificationService;
   final PathOpener? pathOpener;
+  final DirectoryWriteProbe? directoryProbe;
   final AppSmokeArgs? smoke;
 
   @override
@@ -131,6 +134,7 @@ class TransVortexApp extends StatelessWidget {
           taskId: taskId,
           bridge: appBridge,
           pathOpener: pathOpener,
+          directoryProbe: directoryProbe,
           smoke: smoke,
         ),
         _ => SettingsWindow(
