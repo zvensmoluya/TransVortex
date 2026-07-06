@@ -38,8 +38,8 @@ class _SmokeResultTransport implements AppServiceTransport {
   Future<void> close() => service.shutdown();
 }
 
-class ResultReviewWindow extends StatefulWidget {
-  const ResultReviewWindow({
+class ResultReviewWorkspace extends StatefulWidget {
+  const ResultReviewWorkspace({
     super.key,
     required this.taskId,
     required this.store,
@@ -57,10 +57,10 @@ class ResultReviewWindow extends StatefulWidget {
   final AppServiceTransport? transportOverride;
 
   @override
-  State<ResultReviewWindow> createState() => _ResultReviewWindowState();
+  State<ResultReviewWorkspace> createState() => _ResultReviewWorkspaceState();
 }
 
-class _ResultReviewWindowState extends State<ResultReviewWindow> {
+class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   late final AppServiceClient _client;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'result-review-smoke');
   final Map<int, TextEditingController> _segmentControllers = {};
@@ -95,7 +95,7 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
   }
 
   @override
-  void didUpdateWidget(ResultReviewWindow oldWidget) {
+  void didUpdateWidget(ResultReviewWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
     if ((oldWidget.taskId ?? '').trim() == _taskId) return;
     for (final controller in _segmentControllers.values) {

@@ -16,7 +16,7 @@ import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
-import 'package:transvortex_desktop_flutter/widgets/result_review_window.dart';
+import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 
 void main() {
   test('window argument parser falls back to CLI args when window args empty', () {
@@ -1390,7 +1390,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('result review window renders real result workspace', (
+  testWidgets('result review workspace renders real result workspace', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 640));
@@ -1436,7 +1436,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ResultReviewWindow(
+        home: ResultReviewWorkspace(
           taskId: 'tvx_review_done_123456',
           store: store,
           bridge: bridge,
@@ -1478,7 +1478,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('result review window saves edits and reexports subtitles', (
+  testWidgets('result review workspace saves edits and reexports subtitles', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(900, 640));
@@ -1531,7 +1531,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ResultReviewWindow(
+        home: ResultReviewWorkspace(
           taskId: 'tvx_review_edit_123456',
           store: store,
           bridge: bridge,

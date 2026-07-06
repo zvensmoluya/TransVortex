@@ -15,7 +15,7 @@ import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
-import 'result_review_window.dart';
+import 'result_review_workspace.dart';
 import 'title_bar.dart';
 
 class _SmokeTaskProcessingTransport implements AppServiceTransport {
@@ -426,8 +426,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_result_issue_count': _smokeResultIssueCount,
       'task_processing_edit_saved': _smokeEditSaved,
       'task_processing_reexported': _smokeReexported,
-      'task_processing_reexport_output_contains_edit':
-          _smokeOutputContainsEdit,
+      'task_processing_reexport_output_contains_edit': _smokeOutputContainsEdit,
       'task_processing_edited_text': _smokeEditedText,
       'task_processing_reexport_format': _smokeReexportFormat,
       'task_processing_reexport_bilingual': _smokeReexportBilingual,
@@ -810,7 +809,7 @@ class _TaskPreview extends StatelessWidget {
           ),
           const SizedBox(height: T.s12),
           Expanded(
-            child: ResultReviewWindow(
+            child: ResultReviewWorkspace(
               taskId: task.taskId,
               store: store,
               bridge: bridge,
