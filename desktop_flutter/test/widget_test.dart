@@ -1599,6 +1599,9 @@ void main() {
     expect(find.text('2'), findsWidgets);
     expect(find.text('问题'), findsOneWidget);
     expect(find.text('1'), findsWidgets);
+    expect(find.text('导出复核'), findsOneWidget);
+    expect(find.text('将导出 SRT · 双语字幕'), findsOneWidget);
+    expect(find.text('已有输出 SRT review-source.zh-CN.srt'), findsOneWidget);
     expect(find.text('Good morning.'), findsOneWidget);
     expect(find.text('早上好。'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
@@ -1733,6 +1736,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.byType(Switch).first);
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('将导出 ASS · 单语字幕'), findsOneWidget);
 
     await tester.tap(find.text('重新导出'));
     await tester.pump(const Duration(milliseconds: 100));

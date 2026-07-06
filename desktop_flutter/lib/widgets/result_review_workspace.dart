@@ -589,6 +589,12 @@ class _ResultHeader extends StatelessWidget {
           onBilingualChanged: onBilingualChanged,
         ),
         const SizedBox(height: T.s8),
+        _ExportReview(
+          result: result,
+          selectedOutputFormat: selectedOutputFormat,
+          selectedBilingual: selectedBilingual,
+        ),
+        const SizedBox(height: T.s8),
         _FilterControls(
           selected: filter,
           searchController: searchController,
@@ -784,6 +790,70 @@ class _ExportControls extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _ExportReview extends StatelessWidget {
+  const _ExportReview({
+    required this.result,
+    required this.selectedOutputFormat,
+    required this.selectedBilingual,
+  });
+
+  final TaskResultWorkspace result;
+  final String selectedOutputFormat;
+  final bool selectedBilingual;
+
+  @override
+  Widget build(BuildContext context) {
+    final plannedFormats = _plannedExportFormats(selectedOutputFormat);
+    final plannedLabel = subtitleFormatListLabel(plannedFormats);
+    final outputEntries =
+        result.outputPaths.entries
+            .where((entry) => entry.value.trim().isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+    return Wrap(
+      spacing: T.s8,
+      runSpacing: T.s8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('导出复核', style: T.tCaption),
+        _SoftLabel(
+          label:
+              '将导出 ${plannedLabel.isEmpty ? '未知格式' : plannedLabel} · '
+              '${selectedBilingual ? '双语字幕' : '单语字幕'}',
+        ),
+        if (outputEntries.isEmpty)
+          const _SoftLabel(label: '已有输出 无记录')
+        else
+          for (final entry in outputEntries.take(3))
+            _OutputPathLabel(format: entry.key, path: entry.value),
+        if (outputEntries.length > 3)
+          _SoftLabel(label: '+${outputEntries.length - 3}'),
+      ],
+    );
+  }
+}
+
+class _OutputPathLabel extends StatelessWidget {
+  const _OutputPathLabel({required this.format, required this.path});
+
+  final String format;
+  final String path;
+
+  @override
+  Widget build(BuildContext context) {
+    final filename = _basename(path);
+    final label = [
+      '已有输出',
+      subtitleFormatLabel(format),
+      if (filename.isNotEmpty) compactMiddleLabel(filename, maxLength: 28),
+    ].join(' ');
+    return Tooltip(
+      message: fileTooltipLabel(path, fallbackName: filename),
+      child: _SoftLabel(label: label),
     );
   }
 }
@@ -1074,6 +1144,16 @@ String? _normalizeOutputFormat(String? value) {
     'srt' || 'ass' || 'both' || 'vtt' => normalized,
     'webvtt' => 'vtt',
     _ => null,
+  };
+}
+
+List<String> _plannedExportFormats(String value) {
+  return switch (_normalizeOutputFormat(value)) {
+    'srt' => const ['srt'],
+    'ass' => const ['ass'],
+    'vtt' => const ['vtt'],
+    'both' || null => const ['srt', 'ass'],
+    _ => const ['srt', 'ass'],
   };
 }
 
