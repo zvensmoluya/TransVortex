@@ -129,7 +129,6 @@ class TransVortexApp extends StatelessWidget {
         ),
         AppWindowType.taskProcessing => TaskProcessingWindow(
           taskId: taskId,
-          store: appStore,
           bridge: appBridge,
           pathOpener: pathOpener,
           smoke: smoke,

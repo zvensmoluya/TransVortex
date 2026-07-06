@@ -63,14 +63,12 @@ class TaskProcessingWindow extends StatefulWidget {
   const TaskProcessingWindow({
     super.key,
     required this.taskId,
-    required this.store,
     required this.bridge,
     this.pathOpener,
     this.smoke,
   });
 
   final String? taskId;
-  final WindowStateStore store;
   final WindowStateBridge bridge;
   final PathOpener? pathOpener;
   final AppSmokeArgs? smoke;
@@ -490,7 +488,6 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   editingTaskId: editingTaskId == selected?.taskId
                       ? editingTaskId
                       : null,
-                  store: widget.store,
                   bridge: widget.bridge,
                   resultTransportOverride: _embeddedResultTransport,
                   message: _message,
@@ -531,7 +528,6 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.selected,
     required this.events,
     required this.editingTaskId,
-    required this.store,
     required this.bridge,
     required this.resultTransportOverride,
     required this.message,
@@ -552,7 +548,6 @@ class _TaskProcessingBody extends StatelessWidget {
   final TaskSummary? selected;
   final List<Object?> events;
   final String? editingTaskId;
-  final WindowStateStore store;
   final WindowStateBridge bridge;
   final AppServiceTransport resultTransportOverride;
   final String? message;
@@ -588,7 +583,6 @@ class _TaskProcessingBody extends StatelessWidget {
             task: selected,
             events: events,
             editingTaskId: editingTaskId,
-            store: store,
             bridge: bridge,
             resultTransportOverride: resultTransportOverride,
             message: message,
@@ -748,7 +742,6 @@ class _TaskPreview extends StatelessWidget {
     required this.task,
     required this.events,
     required this.editingTaskId,
-    required this.store,
     required this.bridge,
     required this.resultTransportOverride,
     required this.message,
@@ -767,7 +760,6 @@ class _TaskPreview extends StatelessWidget {
   final TaskSummary? task;
   final List<Object?> events;
   final String? editingTaskId;
-  final WindowStateStore store;
   final WindowStateBridge bridge;
   final AppServiceTransport resultTransportOverride;
   final String? message;
@@ -811,9 +803,7 @@ class _TaskPreview extends StatelessWidget {
           Expanded(
             child: ResultReviewWorkspace(
               taskId: task.taskId,
-              store: store,
               bridge: bridge,
-              embedded: true,
               transportOverride: resultTransportOverride,
             ),
           ),

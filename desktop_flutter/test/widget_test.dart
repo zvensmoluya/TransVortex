@@ -1436,10 +1436,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ResultReviewWorkspace(
-          taskId: 'tvx_review_done_123456',
-          store: store,
-          bridge: bridge,
+        home: Scaffold(
+          body: ResultReviewWorkspace(
+            taskId: 'tvx_review_done_123456',
+            bridge: bridge,
+          ),
         ),
       ),
     );
@@ -1447,7 +1448,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(calls, contains('result.open'));
-    expect(find.text('结果审看'), findsOneWidget);
+    expect(find.text('结果审看'), findsNothing);
     expect(find.text('review-source.mp4'), findsOneWidget);
     expect(find.text('源语 英语 · 目标 简体中文'), findsOneWidget);
     expect(find.text('源语 en · 目标 zh-CN'), findsNothing);
@@ -1531,10 +1532,11 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ResultReviewWorkspace(
-          taskId: 'tvx_review_edit_123456',
-          store: store,
-          bridge: bridge,
+        home: Scaffold(
+          body: ResultReviewWorkspace(
+            taskId: 'tvx_review_edit_123456',
+            bridge: bridge,
+          ),
         ),
       ),
     );

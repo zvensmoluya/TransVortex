@@ -3,26 +3,20 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../model/task_labels.dart';
-import '../model/window_state.dart';
 import '../services/app_service_client.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
-import 'title_bar.dart';
 
 class ResultReviewWorkspace extends StatefulWidget {
   const ResultReviewWorkspace({
     super.key,
     required this.taskId,
-    required this.store,
     required this.bridge,
-    this.embedded = false,
     this.transportOverride,
   });
 
   final String? taskId;
-  final WindowStateStore store;
   final WindowStateBridge bridge;
-  final bool embedded;
   final AppServiceTransport? transportOverride;
 
   @override
@@ -288,32 +282,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.embedded) {
-      return _body();
-    }
-    return Scaffold(
-      backgroundColor: T.bg,
-      body: Column(
-        children: [
-          TitleBar(title: '结果审看', status: _statusText, canMaximize: true),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
-              child: _body(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String get _statusText {
-    final result = _result;
-    if (_loading) return '读取结果中';
-    if (_error != null) return '结果暂不可用';
-    if (result == null) return '读取完成任务的字幕片段';
-    final formats = subtitleFormatListLabel(result.outputPaths.keys);
-    return formats.isEmpty ? '只读结果' : '输出：$formats';
+    return _body();
   }
 
   Widget _body() {
