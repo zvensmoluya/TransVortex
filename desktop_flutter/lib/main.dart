@@ -29,6 +29,7 @@ import 'widgets/result_review_window.dart';
 import 'widgets/settings_window.dart';
 import 'widgets/task_detail_window.dart';
 import 'widgets/task_history_window.dart';
+import 'widgets/task_processing_window.dart';
 import 'widgets/title_bar.dart';
 
 Future<void> main(List<String> args) async {
@@ -127,6 +128,13 @@ class TransVortexApp extends StatelessWidget {
           bridge: appBridge,
           localServiceController: localServiceController,
           taskNotificationService: taskNotificationService,
+          smoke: smoke,
+        ),
+        AppWindowType.taskProcessing => TaskProcessingWindow(
+          taskId: taskId,
+          store: appStore,
+          bridge: appBridge,
+          pathOpener: pathOpener,
           smoke: smoke,
         ),
         AppWindowType.resultReview => ResultReviewWindow(
@@ -1132,7 +1140,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _openToolWindow(AppWindowType.asrSettings);
         break;
       case 'history':
-        _openToolWindow(AppWindowType.taskHistory);
+        _openToolWindow(AppWindowType.taskProcessing);
         break;
       case 'diagnostics':
         _openToolWindow(AppWindowType.diagnostics);
@@ -1377,7 +1385,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _toast('没有可审看的任务结果');
       return;
     }
-    await _openToolWindow(AppWindowType.resultReview, taskId: taskId);
+    await _openToolWindow(AppWindowType.taskProcessing, taskId: taskId);
   }
 
   Future<void> _openToolWindowFromArgs(AppWindowArgs args) {
@@ -1390,11 +1398,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       taskId: taskId,
       parentBounds: await _currentWindowBounds(),
     );
-    final windowKey = '${type.id}:${taskId?.trim() ?? ''}';
+    final windowKey = _toolWindowKey(type, taskId: taskId);
     final existing = _toolWindows[windowKey];
     if (existing != null) {
       try {
-        await existing.invokeMethod<void>('window_focus');
+        if (type == AppWindowType.taskProcessing) {
+          await existing.invokeMethod<void>('window_retarget', args.encode());
+        } else {
+          await existing.invokeMethod<void>('window_focus');
+        }
         return;
       } on Object {
         _toolWindows.remove(windowKey);
@@ -1410,6 +1422,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     } on Object catch (exc) {
       _toast('打开${type.title}失败：$exc');
     }
+  }
+
+  String _toolWindowKey(AppWindowType type, {String? taskId}) {
+    if (type == AppWindowType.taskProcessing) return type.id;
+    return '${type.id}:${taskId?.trim() ?? ''}';
   }
 
   Future<Rect?> _currentWindowBounds() async {

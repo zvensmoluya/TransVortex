@@ -132,6 +132,20 @@ void main() {
     expect(flaggedStartup.window.taskId, 'tvx_review_flagged');
     expect(
       AppStartupArgs.fromSources(null, [
+        '--tvx-window-type=taskProcessing',
+        '--tvx-task-id=tvx_processing_123',
+      ]).window.type,
+      AppWindowType.taskProcessing,
+    );
+    expect(
+      AppStartupArgs.fromSources(null, [
+        '--tvx-window-type=taskProcessing',
+        '--tvx-task-id=tvx_processing_123',
+      ]).window.taskId,
+      'tvx_processing_123',
+    );
+    expect(
+      AppStartupArgs.fromSources(null, [
         '--tvx-window-type=taskHistory',
       ]).window.type,
       AppWindowType.taskHistory,
@@ -185,6 +199,14 @@ void main() {
     expect(workbenchGeometry.position, const Offset(212, 256));
     expect(workbenchGeometry.resizable, isTrue);
     expect(workbenchGeometry.maximizable, isTrue);
+
+    final taskProcessingGeometry = windowGeometryFor(
+      AppWindowArgs(type: AppWindowType.taskProcessing, parentBounds: parent),
+    );
+    expect(taskProcessingGeometry.role, WindowRole.workbench);
+    expect(taskProcessingGeometry.size, const Size(1040, 720));
+    expect(taskProcessingGeometry.position, const Offset(212, 256));
+    expect(taskProcessingGeometry.maximizable, isTrue);
   });
 
   testWidgets('app uses packaged CJK font family', (tester) async {
@@ -1647,6 +1669,118 @@ void main() {
     expect(opened.last.type, AppWindowType.resultReview);
     expect(opened.last.taskId, 'tvx_history_done_123456');
     expect(find.textContaining('method_not_found'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('task processing window selects tasks and runs light actions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1040, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final pathOpener = _RecordingPathOpener();
+    final calls = <String>[];
+    final paramsByMethod = <String, Map<String, Object?>>{};
+    final opened = <AppWindowArgs>[];
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      paramsByMethod[method] = params;
+      if (method == 'tasks.list') {
+        return [
+          _task(
+            taskId: 'tvx_processing_done_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\processing-done.mp4',
+            taskDir: r'D:\artifacts\tvx_processing_done_123456',
+            outputPaths: {'srt': r'D:\media\processing-done.zh-CN.srt'},
+          ),
+          _task(
+            taskId: 'tvx_processing_failed_123456',
+            status: 'FAILED',
+            inputFile: r'D:\media\processing-failed.mp4',
+            taskDir: r'D:\artifacts\tvx_processing_failed_123456',
+            errorInfo: {'hint_zh': '可以继续任务。'},
+            runtime: {'can_resume': true},
+          ),
+        ];
+      }
+      if (method == 'tasks.events') {
+        final taskId = params['task_id'];
+        return {
+          'task_id': taskId,
+          'events': [
+            {
+              'type': 'stage',
+              'stage': 'EXPORT',
+              'message': taskId == 'tvx_processing_done_123456'
+                  ? 'done export'
+                  : 'failed export',
+              'created_at': '2026-07-06T10:00:00Z',
+            },
+          ],
+          'cursor': 0,
+          'next_cursor': 1,
+          'has_more': false,
+        };
+      }
+      if (method == 'runtime.submitResume') {
+        return {
+          'ok': true,
+          'task_id': 'tvx_processing_failed_123456',
+          'status': 'QUEUED',
+          'message': '任务已重新排队。',
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachToolWindowOpener((args) async {
+      opened.add(args);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.taskProcessing,
+        taskId: 'tvx_processing_done_123456',
+        store: store,
+        bridge: bridge,
+        pathOpener: pathOpener,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, contains('tasks.list'));
+    expect(calls, contains('tasks.events'));
+    expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('任务片列'), findsOneWidget);
+    expect(find.text('processing-done.mp4'), findsWidgets);
+    expect(find.text('processing-failed.mp4'), findsOneWidget);
+    expect(find.text('最近事件'), findsOneWidget);
+
+    await tester.tap(find.text('编辑字幕'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(opened.single.type, AppWindowType.resultReview);
+    expect(opened.single.taskId, 'tvx_processing_done_123456');
+
+    await tester.tap(find.text('processing-failed.mp4'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('继续任务'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(paramsByMethod['runtime.submitResume'], {
+      'request': {
+        'request_version': 1,
+        'task_id': 'tvx_processing_failed_123456',
+      },
+    });
+    await tester.tap(find.text('任务目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(pathOpener.openedDirectories, [
+      r'D:\artifacts\tvx_processing_failed_123456',
+    ]);
     expectNoFlutterException();
   });
 

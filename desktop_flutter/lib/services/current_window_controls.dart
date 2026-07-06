@@ -6,6 +6,14 @@ import 'package:window_manager/window_manager.dart';
 import '../model/window_state.dart';
 import '../theme/tokens.dart';
 
+Future<void> Function(AppWindowArgs args)? _retargetHandler;
+
+void registerCurrentWindowRetargetHandler(
+  Future<void> Function(AppWindowArgs args)? handler,
+) {
+  _retargetHandler = handler;
+}
+
 Future<void> configureCurrentWindow(AppWindowArgs args) async {
   await windowManager.ensureInitialized();
 
@@ -94,6 +102,7 @@ enum WindowRole { main, tool, workbench }
 
 WindowRole _roleFor(AppWindowType type) => switch (type) {
   AppWindowType.main => WindowRole.main,
+  AppWindowType.taskProcessing => WindowRole.workbench,
   AppWindowType.resultReview => WindowRole.workbench,
   AppWindowType.translationSettings ||
   AppWindowType.asrSettings ||
@@ -107,6 +116,7 @@ Size _defaultSize(AppWindowType type) => switch (type) {
   AppWindowType.translationSettings => const Size(820, 600),
   AppWindowType.asrSettings => const Size(760, 560),
   AppWindowType.diagnostics => const Size(780, 580),
+  AppWindowType.taskProcessing => const Size(1040, 720),
   AppWindowType.resultReview => const Size(1040, 720),
   AppWindowType.taskHistory => const Size(840, 620),
   AppWindowType.taskDetail => const Size(860, 620),
@@ -117,6 +127,7 @@ Size _minimumSize(AppWindowType type) => switch (type) {
   AppWindowType.translationSettings => const Size(760, 540),
   AppWindowType.asrSettings => const Size(700, 500),
   AppWindowType.diagnostics => const Size(720, 520),
+  AppWindowType.taskProcessing => const Size(900, 640),
   AppWindowType.resultReview => const Size(900, 640),
   AppWindowType.taskHistory => const Size(760, 540),
   AppWindowType.taskDetail => const Size(780, 560),
@@ -127,13 +138,17 @@ Offset _positionFromParent(Rect parent, AppWindowType type) {
     AppWindowType.translationSettings => 0,
     AppWindowType.asrSettings => 1,
     AppWindowType.diagnostics => 2,
+    AppWindowType.taskProcessing => 2,
     AppWindowType.taskHistory => 3,
     AppWindowType.taskDetail => 4,
     AppWindowType.resultReview => 2,
     AppWindowType.main => 0,
   };
-  final dx = type == AppWindowType.resultReview ? 112.0 : 72.0 + step * 28.0;
-  final dy = type == AppWindowType.resultReview ? 56.0 : 48.0 + step * 24.0;
+  final isWorkbench =
+      type == AppWindowType.taskProcessing ||
+      type == AppWindowType.resultReview;
+  final dx = isWorkbench ? 112.0 : 72.0 + step * 28.0;
+  final dy = isWorkbench ? 56.0 : 48.0 + step * 24.0;
   return Offset(parent.left + dx, parent.top + dy);
 }
 
@@ -143,6 +158,15 @@ Future<void> registerCurrentWindowControls() async {
     await current.setWindowMethodHandler((call) async {
       switch (call.method) {
         case 'window_focus':
+          await windowManager.show();
+          await windowManager.focus();
+          return null;
+        case 'window_retarget':
+          final retargetArgs = AppWindowArgs.parse('${call.arguments}');
+          final handler = _retargetHandler;
+          if (handler != null) {
+            await handler(retargetArgs);
+          }
           await windowManager.show();
           await windowManager.focus();
           return null;
