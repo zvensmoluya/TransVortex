@@ -52,7 +52,7 @@
 - 真实可见 release 窗口端到端人工验收；使用 `scripts\accept_flutter_release_manual.ps1` 记录逐步确认、窗口截图和 JSON 报告。
 - 其他目标用户环境里的真实外部翻译服务 / 语音识别复跑；本机已用 `smoke_external_services.ps1` 跑通真实 provider、样本翻译、媒体任务和 ASR 产物证据。
 - 正式 MSIX / installer 打包分发、托盘和分发路径下的通知中心行为；当前 portable 包脚本已能把 release bundle、Python 源码、提示词、示例 provider 配置、用户级安装脚本和快捷方式辅助脚本打在同一目录，并验证包内 Local Service RPC、用户级脚本安装与可选窗口启动，但它不内置 Python runtime / FFmpeg，也不是安装器；系统通知横幅已由人工确认出现，AppUserModelID 用户级开始菜单快捷方式已有脚本化建立 / 校验入口。
-- 跨任务批量筛查、完整结果编辑器、完整历史恢复矩阵和术语管理等后续窗口；最小结果审看编辑窗已经支持按全部 / 有问题 / 空译文筛查片段，并支持选择输出格式 / 单双语重新导出，最小任务历史窗和最小任务详情窗已经支持打开任务目录 / 结果目录，可恢复任务的继续动作也已经作为真实工具窗入口接入。
+- 跨任务批量筛查、完整结果编辑器、完整历史恢复矩阵和术语管理等后续窗口；任务处理窗已经作为任务历史 / 详情 / 结果编辑的新主入口接入，支持任务片列、选中任务预览、最近事件、完成任务内嵌编辑、任务目录 / 结果目录打开和可恢复任务继续动作；旧最小结果审看 / 任务历史 / 任务详情窗仍作为兼容 smoke / 回退覆盖保留。
 
 ### 先修护栏
 
@@ -151,7 +151,7 @@
 | 开始译制 | `runtime.submitRun` | 保存 `task_id`，开始轮询 |
 | 停止任务 | `runtime.cancel` | 刷新 runtime 和任务事件 |
 | 运行中刷新 | `runtime.snapshot` / `tasks.events` | 更新阶段文案、进度、失败信息 |
-| 审看结果 | `result.open` / `result.segments.save` / `result.reexport` | 打开最小结果审看窗，读取任务摘要、字幕片段、输出格式和问题提示；允许编辑并保存片段译文，再按用户选择的输出格式 / 单双语重新导出 |
+| 审看结果 | `result.open` / `result.segments.save` / `result.reexport` | 优先打开任务处理窗并定位任务，在右侧内嵌结果审看 / 编辑工作台读取任务摘要、字幕片段、输出格式和问题提示；允许编辑并保存片段译文，再按用户选择的输出格式 / 单双语重新导出；旧最小结果审看窗作为兼容 smoke / 回退覆盖保留 |
 | 打开字幕 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
 | 打开目录 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
 | 重新导出 | `result.reexport` | 刷新 result paths 和任务事件；默认沿用原输出目录，结果审看窗可选择 SRT / ASS / SRT+ASS / VTT 和单双语；若重新导出失败且指向输出目录不可写，失败修复件可让用户选择新目录，并把 `output_dir` 传给同一任务的 `result.reexport` |
@@ -264,9 +264,9 @@ MVP 美术执行采用文字契约 + 真实 Flutter 窗口验收：
 1. 持续守住真实副作用护栏。
 2. 以主窗口 controller / view model 为主状态来源。
 3. 对主窗口正式六态做真实窗口验收。
-4. 回归主窗口真实 `runtime.submitRun`、事件轮询、真实取消结果、继续任务和完成态结果动作；取消 / 继续任务当前已有 controller 防回归，结果文件缺失时会进入重新导出修复态并有 controller / widget 防回归，release exe 隔离 smoke 已覆盖启动 Local Service、读取配置摘要、通过主窗口 controller 正常提交 `video_asr_translate`、经临时本地 OpenAI-compatible 翻译服务翻译到真实 worker `DONE` 并校验 SRT / ASS 输出文本，随后执行 `result.open` 和 `result.reexport`，校验打开结果沿用原输出目录、reexport 事件并确认重新导出沿用原输出目录；最小结果审看窗可通过 `-WindowType resultReview` release smoke 单独拉起并读取真实 `result.open` 工作区，保存片段译文编辑，选择 ASS / 单语重新导出，确认导出字幕包含编辑文本，并校验所选导出参数传入 `result.reexport`；最小任务历史窗可通过 `-WindowType taskHistory` release smoke 单独拉起并读取真实 `tasks.list`，且 widget 已覆盖打开任务目录 / 结果目录；最小任务详情窗可通过 `-WindowType taskDetail` release smoke 单独拉起并读取真实 `tasks.events`，widget 已覆盖打开任务目录 / 结果目录，并从失败任务详情触发真实 `runtime.submitResume` 重新排队；带 `-ScreenshotPath` 时会由 release 进程导出 Flutter 渲染树截图并校验尺寸 / 非空像素 / Flutter overflow 警告条，Dart 到真实 Python Local Service 的 submit/cancel/events smoke 已通过，内嵌字幕 `video_asr` 已覆盖 Local Service pump → 真实 worker → `DONE` 输出，慢语音识别已覆盖真实 worker cancel → `CANCELLED`。
+4. 回归主窗口真实 `runtime.submitRun`、事件轮询、真实取消结果、继续任务和完成态结果动作；取消 / 继续任务当前已有 controller 防回归，结果文件缺失时会进入重新导出修复态并有 controller / widget 防回归，release exe 隔离 smoke 已覆盖启动 Local Service、读取配置摘要、通过主窗口 controller 正常提交 `video_asr_translate`、经临时本地 OpenAI-compatible 翻译服务翻译到真实 worker `DONE` 并校验 SRT / ASS 输出文本，随后执行 `result.open` 和 `result.reexport`，校验打开结果沿用原输出目录、reexport 事件并确认重新导出沿用原输出目录；任务处理窗可通过 `-WindowType taskProcessing` release smoke 单独拉起并读取 DONE 任务片、选中任务、导出渲染树截图；旧最小结果审看窗仍可通过 `-WindowType resultReview` release smoke 单独拉起并读取真实 `result.open` 工作区，保存片段译文编辑，选择 ASS / 单语重新导出，确认导出字幕包含编辑文本，并校验所选导出参数传入 `result.reexport`；旧最小任务历史窗可通过 `-WindowType taskHistory` release smoke 单独拉起并读取真实 `tasks.list`，且 widget 已覆盖打开任务目录 / 结果目录；旧最小任务详情窗可通过 `-WindowType taskDetail` release smoke 单独拉起并读取真实 `tasks.events`，widget 已覆盖打开任务目录 / 结果目录，并从失败任务详情触发真实 `runtime.submitResume` 重新排队；带 `-ScreenshotPath` 时会由 release 进程导出 Flutter 渲染树截图并校验尺寸 / 非空像素 / Flutter overflow 警告条，Dart 到真实 Python Local Service 的 submit/cancel/events smoke 已通过，内嵌字幕 `video_asr` 已覆盖 Local Service pump → 真实 worker → `DONE` 输出，慢语音识别已覆盖真实 worker cancel → `CANCELLED`。
    - `resultReview` release smoke 使用空译文片段触发后端 `result.open` 真实问题计数，覆盖结果审看问题提示和最小片段筛查的数据来源。
-   - `scripts\smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态和六个工具窗渲染截图固化为单命令，用于回归布局、Flutter overflow 和通知接线问题。
+   - `scripts\smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态和七个非主窗口 case（3 个工具窗 + 任务处理窗 + 3 个旧兼容窗）渲染截图固化为单命令，用于回归布局、Flutter overflow 和通知接线问题。
 5. 回归系统通知真实桌面路径；当前已接 Windows Toast 插件、完成 / 失败触发、前台抑制和点击聚焦回调，release smoke 已覆盖完成态状态转移经主窗口通知 observer 触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key，Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致，用户已人工确认真实横幅出现；portable 包脚本已验证包含通知 DLL、快捷方式辅助脚本、用户级安装脚本和 Python 源码布局的包内 Local Service RPC、用户级脚本安装与包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为。
 6. 持续覆盖翻译模型设置窗长模型名 / 无 key / 测试失败场景；当前已有 widget 防回归，release smoke 已覆盖 release 翻译设置窗读取临时翻译服务配置、Flutter 渲染树截图和 Flutter overflow 警告条检查。
 7. 持续覆盖语音识别设置窗三引擎 / 无依赖 / 云端缺 key 场景；当前已覆盖空保存方案、本机草稿回落，以及 release 语音识别设置窗读取临时语音识别配置、Flutter 渲染树截图和 Flutter overflow 警告条检查；诊断窗可从语音识别 / faster-whisper / FunASR 检查项跳转到语音识别设置。

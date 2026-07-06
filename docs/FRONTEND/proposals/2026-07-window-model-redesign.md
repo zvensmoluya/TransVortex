@@ -146,7 +146,7 @@
 
 ## 10. 迁移成本（如实标注）
 
-- 现在的 release smoke 是**按窗口类型逐个驱动**的（[`main.dart`](../../../desktop_flutter/lib/main.dart) 的 `_runStartupSmoke` 带 `window_type`；`smoke_flutter_release_matrix.ps1` 有 `-WindowType translationSettings/asrSettings/diagnostics/resultReview/taskHistory/taskDetail` 六个 case）。
+- 此前 release smoke 是**按窗口类型逐个驱动**的（[`main.dart`](../../../desktop_flutter/lib/main.dart) 的 `_runStartupSmoke` 带 `window_type`；`smoke_flutter_release_matrix.ps1` 原有 `-WindowType translationSettings/asrSettings/diagnostics/resultReview/taskHistory/taskDetail` 六个非主窗口 case）。当前已新增 `taskProcessing` case，但旧 `resultReview` / `taskHistory` / `taskDetail` case 还未完全收敛。
 - **任务历史 / 任务详情 / 结果审看三种旧窗合并成任务处理窗**、几何按角色重写后，这些 smoke 入口要**改写**：`taskHistory` / `taskDetail` / `resultReview` 三个 `-WindowType` case 收敛为任务处理窗的**任务片列浏览态（含失败 / 可继续任务 detail）+ 编辑态**两个核心 case，工作台改为可缩放。原 `taskDetail` smoke 覆盖的 `runtime.submitResume` 继续任务能力，要迁到任务片选中失败任务后的 detail / 轻动作里。**这是本次改动里最大的一块工作量，且属验证层不是 UI 层**，需在实施计划里单列。
 
 建议实施拆成四步，不要一次全吞：
@@ -155,6 +155,8 @@
 2. **再引入任务处理窗壳**：新增一个任务处理窗入口，先接 `tasks.list`、选中任务预览、完成任务编辑入口和失败任务继续动作；这一步允许旧 `taskHistory` / `taskDetail` / `resultReview` 入口短期并存，但菜单和完成态优先走新窗。
 3. **再把结果编辑器嵌入处理窗**：复用旧结果审看窗已验证的 `result.open` / `result.segments.save` / `result.reexport` 能力，但作为任务处理窗右侧工作台显示，不再从任务片列 spawn 新结果窗；旧 `resultReview` 窗口类型短期只作为 release smoke / 回退路径保留。
 4. **最后迁移并删除旧窗入口**：把 `resultReview`、`taskHistory`、`taskDetail` 的 release smoke 收敛到任务处理窗的浏览态 / 编辑态 / 可恢复失败态；确认 `runtime.submitResume`、`result.segments.save`、`result.reexport` 覆盖不掉线后，再移除旧窗口类型和旧 smoke case。
+
+**当前进度（2026-07-06）：** 第 1～3 步已落地；任务处理窗已按窗口类型单例打开，主窗完成态和菜单优先进入同一个任务处理窗，结果编辑器已内嵌到右侧工作台。release smoke 已新增 `taskProcessing` 浏览 / DONE 任务选中 case，并修复 Windows release 启动 raw window flag 时回退主窗的问题；旧 `resultReview` / `taskHistory` / `taskDetail` 仍作为兼容 smoke / 回退路径保留。第 4 步还未完成：仍需把编辑保存 / 重新导出 / 可恢复失败继续三类 smoke 完整迁到任务处理窗后，再删除旧窗口类型和旧 smoke case。
 
 ## 11. 留待决定（评审时定）
 
