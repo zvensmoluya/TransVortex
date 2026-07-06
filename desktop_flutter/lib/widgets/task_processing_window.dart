@@ -60,6 +60,8 @@ class _TaskProcessingClientTransport implements AppServiceTransport {
   Future<void> close() async {}
 }
 
+enum _TaskFilter { all, active, needsAction, done }
+
 class TaskProcessingWindow extends StatefulWidget {
   const TaskProcessingWindow({
     super.key,
@@ -90,6 +92,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   List<TaskSummary> _tasks = const [];
   TaskEventsPage? _eventsPage;
   String? _selectedTaskId;
+  _TaskFilter _taskFilter = _TaskFilter.all;
   String? _message;
   String? _error;
   bool _loadingTasks = false;
@@ -166,7 +169,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     try {
       final tasks = await _client.taskList();
       if (!mounted) return;
-      final selected = _selectedTask(tasks);
+      final selected = _selectedTask(_visibleTasksFor(tasks, _taskFilter));
       setState(() {
         _tasks = tasks;
         _selectedTaskId = selected?.taskId;
@@ -216,8 +219,25 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (taskId != null && taskId.isNotEmpty) {
       _selectedTaskId = taskId;
       _editingTaskId = taskId;
+      _taskFilter = _TaskFilter.all;
     }
     await _loadTasks();
+  }
+
+  List<TaskSummary> _visibleTasksFor(
+    List<TaskSummary> tasks,
+    _TaskFilter filter,
+  ) {
+    return tasks
+        .where((task) => _taskMatchesFilter(task, filter))
+        .toList(growable: false);
+  }
+
+  Map<_TaskFilter, int> _taskFilterCounts(List<TaskSummary> tasks) {
+    return {
+      for (final filter in _TaskFilter.values)
+        filter: tasks.where((task) => _taskMatchesFilter(task, filter)).length,
+    };
   }
 
   TaskSummary? _selectedTask(List<TaskSummary> tasks) {
@@ -229,6 +249,22 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       }
     }
     return tasks.first;
+  }
+
+  Future<void> _setTaskFilter(_TaskFilter filter) async {
+    if (_taskFilter == filter) return;
+    final visibleTasks = _visibleTasksFor(_tasks, filter);
+    final selected = _selectedTask(visibleTasks);
+    setState(() {
+      _taskFilter = filter;
+      _selectedTaskId = selected?.taskId;
+      _editingTaskId = null;
+      _message = null;
+      _error = null;
+    });
+    if (selected != null) {
+      await _loadEvents(selected.taskId);
+    }
   }
 
   Future<void> _selectTask(TaskSummary task) async {
@@ -578,7 +614,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   @override
   Widget build(BuildContext context) {
-    final selected = _selectedTask(_tasks);
+    final visibleTasks = _visibleTasksFor(_tasks, _taskFilter);
+    final selected = _selectedTask(visibleTasks);
     final events = _eventsPage?.taskId == selected?.taskId
         ? _eventsPage?.events ?? const <Object?>[]
         : const <Object?>[];
@@ -600,7 +637,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(T.s24, T.s16, T.s24, T.s24),
                 child: _TaskProcessingBody(
-                  tasks: _tasks,
+                  tasks: visibleTasks,
+                  totalTaskCount: _tasks.length,
+                  filter: _taskFilter,
+                  filterCounts: _taskFilterCounts(_tasks),
                   selected: selected,
                   events: events,
                   editingTaskId: editingTaskId == selected?.taskId
@@ -616,6 +656,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   cancellingTaskId: _cancellingTaskId,
                   checkingOutputDirectory: _checkingOutputDirectory,
                   onRefresh: _loadTasks,
+                  onFilterChanged: (filter) =>
+                      unawaited(_setTaskFilter(filter)),
                   onSelectTask: (task) => unawaited(_selectTask(task)),
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => setState(() => _editingTaskId = null),
@@ -649,6 +691,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 class _TaskProcessingBody extends StatelessWidget {
   const _TaskProcessingBody({
     required this.tasks,
+    required this.totalTaskCount,
+    required this.filter,
+    required this.filterCounts,
     required this.selected,
     required this.events,
     required this.editingTaskId,
@@ -662,6 +707,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
+    required this.onFilterChanged,
     required this.onSelectTask,
     required this.onOpenResult,
     required this.onCloseEditor,
@@ -673,6 +719,9 @@ class _TaskProcessingBody extends StatelessWidget {
   });
 
   final List<TaskSummary> tasks;
+  final int totalTaskCount;
+  final _TaskFilter filter;
+  final Map<_TaskFilter, int> filterCounts;
   final TaskSummary? selected;
   final List<Object?> events;
   final String? editingTaskId;
@@ -686,6 +735,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
+  final ValueChanged<_TaskFilter> onFilterChanged;
   final ValueChanged<TaskSummary> onSelectTask;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
@@ -703,9 +753,13 @@ class _TaskProcessingBody extends StatelessWidget {
           width: 292,
           child: _TaskStripList(
             tasks: tasks,
+            totalTaskCount: totalTaskCount,
+            filter: filter,
+            filterCounts: filterCounts,
             selectedTaskId: selected?.taskId,
             loading: loadingTasks,
             onRefresh: onRefresh,
+            onFilterChanged: onFilterChanged,
             onSelect: onSelectTask,
           ),
         ),
@@ -742,20 +796,33 @@ class _TaskProcessingBody extends StatelessWidget {
 class _TaskStripList extends StatelessWidget {
   const _TaskStripList({
     required this.tasks,
+    required this.totalTaskCount,
+    required this.filter,
+    required this.filterCounts,
     required this.selectedTaskId,
     required this.loading,
     required this.onRefresh,
+    required this.onFilterChanged,
     required this.onSelect,
   });
 
   final List<TaskSummary> tasks;
+  final int totalTaskCount;
+  final _TaskFilter filter;
+  final Map<_TaskFilter, int> filterCounts;
   final String? selectedTaskId;
   final bool loading;
   final VoidCallback onRefresh;
+  final ValueChanged<_TaskFilter> onFilterChanged;
   final ValueChanged<TaskSummary> onSelect;
 
   @override
   Widget build(BuildContext context) {
+    final summary = totalTaskCount == 0
+        ? '完成、失败和制作中的任务会出现在这里。'
+        : filter == _TaskFilter.all
+        ? '最近 $totalTaskCount 个任务'
+        : '显示 ${tasks.length} / $totalTaskCount 个任务';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -769,16 +836,28 @@ class _TaskStripList extends StatelessWidget {
           ],
         ),
         const SizedBox(height: T.s8),
-        Text(
-          tasks.isEmpty ? '完成、失败和制作中的任务会出现在这里。' : '最近 ${tasks.length} 个任务',
-          style: T.tCaption,
-        ),
+        Text(summary, style: T.tCaption),
+        if (totalTaskCount > 0) ...[
+          const SizedBox(height: T.s12),
+          _TaskFilterControls(
+            selected: filter,
+            counts: filterCounts,
+            onChanged: onFilterChanged,
+          ),
+        ],
         const SizedBox(height: T.s16),
         Expanded(
           child: loading && tasks.isEmpty
               ? const Center(child: Text('读取任务中…', style: T.tBody))
               : tasks.isEmpty
-              ? const Center(child: Text('还没有任务记录。', style: T.tBody))
+              ? Center(
+                  child: Text(
+                    totalTaskCount == 0
+                        ? '还没有任务记录。'
+                        : _taskFilterEmptyText(filter),
+                    style: T.tBody,
+                  ),
+                )
               : ListView.separated(
                   padding: EdgeInsets.zero,
                   itemCount: tasks.length,
@@ -794,6 +873,98 @@ class _TaskStripList extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+}
+
+class _TaskFilterControls extends StatelessWidget {
+  const _TaskFilterControls({
+    required this.selected,
+    required this.counts,
+    required this.onChanged,
+  });
+
+  final _TaskFilter selected;
+  final Map<_TaskFilter, int> counts;
+  final ValueChanged<_TaskFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: T.s8,
+      runSpacing: T.s8,
+      children: [
+        for (final filter in _TaskFilter.values)
+          _TaskFilterButton(
+            label: '${_taskFilterLabel(filter)} ${counts[filter] ?? 0}',
+            selected: selected == filter,
+            onTap: () => onChanged(filter),
+          ),
+      ],
+    );
+  }
+}
+
+class _TaskFilterButton extends StatefulWidget {
+  const _TaskFilterButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_TaskFilterButton> createState() => _TaskFilterButtonState();
+}
+
+class _TaskFilterButtonState extends State<_TaskFilterButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = widget.selected;
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 142,
+            constraints: const BoxConstraints(minHeight: 32),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 7),
+            decoration: BoxDecoration(
+              color: selected
+                  ? T.accentSoft
+                  : _hover
+                  ? T.surface
+                  : const Color(0x00000000),
+              borderRadius: BorderRadius.circular(T.rSm),
+              border: Border.all(
+                color: selected ? T.accentStrong : T.line,
+                width: 1.2,
+              ),
+            ),
+            child: Text(
+              widget.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: T.tCaption.copyWith(
+                color: selected ? T.accentStrong : T.ink,
+                fontWeight: selected ? T.wBold : T.wMedium,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1261,6 +1432,38 @@ Color _taskStatusColor(TaskSummary task) {
   if (task.isFailed) return T.danger;
   if (task.isActive) return T.sky;
   return T.muted;
+}
+
+bool _taskMatchesFilter(TaskSummary task, _TaskFilter filter) {
+  return switch (filter) {
+    _TaskFilter.all => true,
+    _TaskFilter.active =>
+      task.isActive || task.isRuntimeActive || task.canCancel,
+    _TaskFilter.needsAction =>
+      task.canResume ||
+          task.isFailed ||
+          task.isCancelled ||
+          task.isRuntimeStale,
+    _TaskFilter.done => task.isDone,
+  };
+}
+
+String _taskFilterLabel(_TaskFilter filter) {
+  return switch (filter) {
+    _TaskFilter.all => '全部',
+    _TaskFilter.active => '制作中',
+    _TaskFilter.needsAction => '待处理',
+    _TaskFilter.done => '已完成',
+  };
+}
+
+String _taskFilterEmptyText(_TaskFilter filter) {
+  return switch (filter) {
+    _TaskFilter.all => '还没有任务记录。',
+    _TaskFilter.active => '没有正在制作的任务。',
+    _TaskFilter.needsAction => '没有需要处理的失败或中断任务。',
+    _TaskFilter.done => '还没有完成的任务。',
+  };
 }
 
 String _taskSubtitle(TaskSummary task) {

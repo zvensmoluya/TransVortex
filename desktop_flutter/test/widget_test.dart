@@ -1890,9 +1890,25 @@ void main() {
     expect(directoryProbe.checkedPaths, [r'D:\media']);
     expect(find.text('结果目录可写，可以重新导出。'), findsOneWidget);
 
-    await tester.tap(find.text('processing-failed.mp4'));
+    expect(find.text('全部 3'), findsOneWidget);
+    expect(find.text('制作中 1'), findsOneWidget);
+    expect(find.text('待处理 1'), findsOneWidget);
+    expect(find.text('已完成 1'), findsOneWidget);
+
+    await tester.tap(find.text('制作中 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('显示 1 / 3 个任务'), findsOneWidget);
+    expect(find.text('processing-running.mp4'), findsWidgets);
+    expect(find.text('processing-done.mp4'), findsNothing);
+    expect(find.text('processing-failed.mp4'), findsNothing);
+
+    await tester.tap(find.text('待处理 1'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('processing-failed.mp4'), findsWidgets);
+    expect(find.text('processing-running.mp4'), findsNothing);
+
     await tester.tap(find.text('继续任务'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
@@ -1903,7 +1919,7 @@ void main() {
         'task_id': 'tvx_processing_failed_123456',
       },
     });
-    await tester.tap(find.text('processing-running.mp4'));
+    await tester.tap(find.text('制作中 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.text('取消任务'));
@@ -1916,7 +1932,7 @@ void main() {
     });
     expect(find.text('已请求取消任务。'), findsOneWidget);
 
-    await tester.tap(find.text('processing-failed.mp4'));
+    await tester.tap(find.text('待处理 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.text('任务目录'));
     await tester.pump(const Duration(milliseconds: 100));
