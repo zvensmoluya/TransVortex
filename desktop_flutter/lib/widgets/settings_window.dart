@@ -219,6 +219,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final selectedAsr = _selectedAsrProvider;
     final diagnosticReport = _diagnosticReport(snapshot);
     final diagnosticChecks = _diagnosticChecks(snapshot);
+    final diagnosticOutputDirectoryCheck =
+        widget.type == AppWindowType.diagnostics
+        ? await _diagnosticSmokeOutputDirectoryCheck(snapshot)
+        : const <String, Object?>{};
     final payload = <String, Object?>{
       'ok': error == null && snapshot != null,
       'status': error == null ? 'ready' : 'error',
@@ -248,6 +252,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
         snapshot,
         'interrupted',
       ).length,
+      ...diagnosticOutputDirectoryCheck,
       'error': error == null ? '' : '$error',
       'finished_at': DateTime.now().toUtc().toIso8601String(),
     };
@@ -1269,6 +1274,39 @@ class _SettingsWindowState extends State<SettingsWindow> {
         });
       }
     }
+  }
+
+  Future<Map<String, Object?>> _diagnosticSmokeOutputDirectoryCheck(
+    DesktopSnapshot? snapshot,
+  ) async {
+    final task = _diagnosticLatestTask(snapshot);
+    if (task == null) {
+      return const {
+        'diagnostic_output_dir_checked': false,
+        'diagnostic_output_dir_writable': false,
+        'diagnostic_output_dir_task_id': '',
+        'diagnostic_output_dir_path': '',
+        'diagnostic_output_dir_message': '没有任务记录',
+      };
+    }
+    final dir = _diagnosticOutputDirectoryFor(task);
+    if (dir == null || dir.isEmpty) {
+      return {
+        'diagnostic_output_dir_checked': false,
+        'diagnostic_output_dir_writable': false,
+        'diagnostic_output_dir_task_id': task.taskId,
+        'diagnostic_output_dir_path': '',
+        'diagnostic_output_dir_message': '没有结果目录记录',
+      };
+    }
+    final result = await _directoryProbe.checkWritable(dir);
+    return {
+      'diagnostic_output_dir_checked': true,
+      'diagnostic_output_dir_writable': result.ok,
+      'diagnostic_output_dir_task_id': task.taskId,
+      'diagnostic_output_dir_path': dir,
+      'diagnostic_output_dir_message': result.message,
+    };
   }
 
   Future<void> _openDiagnosticPath(_DiagnosticPathAction action) async {

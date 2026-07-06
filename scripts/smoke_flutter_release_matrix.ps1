@@ -151,6 +151,7 @@ foreach ($case in $cases) {
         selected_provider_model_count = if ($report.PSObject.Properties.Name -contains "selected_provider_model_count") { $report.selected_provider_model_count } else { "" }
         history_active_count = if ($report.PSObject.Properties.Name -contains "history_active_count") { $report.history_active_count } else { "" }
         history_failed_count = if ($report.PSObject.Properties.Name -contains "history_failed_count") { $report.history_failed_count } else { "" }
+        diagnostic_output_dir_writable = if ($report.PSObject.Properties.Name -contains "diagnostic_output_dir_writable") { $report.diagnostic_output_dir_writable } else { "" }
         task_processing_task_count = if ($report.PSObject.Properties.Name -contains "task_processing_task_count") { $report.task_processing_task_count } else { "" }
         task_processing_selected_status = if ($report.PSObject.Properties.Name -contains "task_processing_selected_status") { $report.task_processing_selected_status } else { "" }
         task_processing_edit_saved = if ($report.PSObject.Properties.Name -contains "task_processing_edit_saved") { $report.task_processing_edit_saved } else { "" }

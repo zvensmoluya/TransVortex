@@ -280,6 +280,10 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
     $taskOutputPaths = @{}
     if ($WindowType -eq "taskProcessing") {
         $taskOutputPaths = @{srt = (Join-Path $fixtureRoot "result-review.zh-CN.srt")}
+    } elseif ($WindowType -eq "diagnostics") {
+        $diagnosticOutputPath = Join-Path $fixtureRoot "diagnostics-context.zh-CN.srt"
+        [System.IO.File]::WriteAllText($diagnosticOutputPath, "1`n00:00:00,000 --> 00:00:01,000`n诊断 smoke 字幕`n", $utf8NoBom)
+        $taskOutputPaths = @{srt = $diagnosticOutputPath}
     }
     $contextStatus = if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume") { "FAILED" } else { "DONE" }
     $contextFixtureArgs = @{
@@ -707,6 +711,9 @@ try {
         }
         if ($WindowType -eq "diagnostics" -and ($report.diagnostic_task_count -lt 1)) {
             throw "Release diagnostics smoke did not read task context: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "diagnostics" -and ($report.diagnostic_output_dir_checked -ne $true -or $report.diagnostic_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.diagnostic_output_dir_path))) {
+            throw "Release diagnostics smoke did not verify the latest task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "resume" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
             throw "Release task processing smoke did not read and select the completed task: $($report | ConvertTo-Json -Compress -Depth 5)"
