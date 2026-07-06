@@ -81,6 +81,7 @@ void main() {
       '--tvx-smoke-use-controller=true',
       '--tvx-smoke-check-notifications=true',
       '--tvx-smoke-main-phase=blockedAsr',
+      '--tvx-smoke-task-processing-scenario=edit',
     ]);
     expect(flagStartup.window.type, AppWindowType.main);
     expect(flagStartup.smoke?.reportPath, 'D:/tmp/report.json');
@@ -97,6 +98,7 @@ void main() {
     expect(flagStartup.smoke?.useControllerSubmission, isTrue);
     expect(flagStartup.smoke?.checkNotifications, isTrue);
     expect(flagStartup.smoke?.mainPhase, SmokeMainPhase.blockedAsr);
+    expect(flagStartup.smoke?.taskProcessingScenario, 'edit');
 
     final emptyScreenshotStartup = AppStartupArgs.fromSources(null, [
       '--tvx-smoke-report=D:/tmp/report.json',
@@ -120,9 +122,15 @@ void main() {
     );
     expect(
       AppStartupArgs.parse(
-        '{"type":"resultReview","taskId":"tvx_review_456","smoke":{"reportPath":"D:/tmp/review.json"}}',
+        '{"type":"resultReview","taskId":"tvx_review_456","smoke":{"reportPath":"D:/tmp/review.json","taskProcessingScenario":"resume"}}',
       ).window.taskId,
       'tvx_review_456',
+    );
+    expect(
+      AppStartupArgs.parse(
+        '{"type":"resultReview","smoke":{"reportPath":"D:/tmp/review.json","task_processing_scenario":"resume"}}',
+      ).smoke?.taskProcessingScenario,
+      'resume',
     );
     final flaggedStartup = AppStartupArgs.fromSources(null, [
       '--tvx-window-type=resultReview',

@@ -428,7 +428,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           _smokeTaskSummary(
             status: 'RUNNING',
             progress: 0.46,
-            runtime: const {'progress': 0.46, 'message': '正在翻译第 12 / 38 段字幕'},
+            runtime: const {
+              'state': 'running',
+              'progress': 0.46,
+              'message': '正在翻译第 12 / 38 段字幕',
+            },
           ),
         );
         return;

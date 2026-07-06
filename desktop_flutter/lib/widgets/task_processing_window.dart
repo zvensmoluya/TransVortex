@@ -41,6 +41,24 @@ class _SmokeTaskProcessingTransport implements AppServiceTransport {
   Future<void> close() => service.shutdown();
 }
 
+class _TaskProcessingClientTransport implements AppServiceTransport {
+  const _TaskProcessingClientTransport(this.client);
+
+  final AppServiceClient client;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) {
+    return client.call(method, params, timeout);
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
 class TaskProcessingWindow extends StatefulWidget {
   const TaskProcessingWindow({
     super.key,
@@ -63,6 +81,7 @@ class TaskProcessingWindow extends StatefulWidget {
 
 class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   late final AppServiceClient _client;
+  late final AppServiceTransport _embeddedResultTransport;
   late final PathOpener _pathOpener;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'task-processing-smoke');
   LocalServiceController? _smokeService;
@@ -75,11 +94,24 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingEvents = false;
   bool _resuming = false;
   String? _editingTaskId;
+  String _smokeScenario = 'browse';
+  int _smokeResultSegmentCount = 0;
+  int _smokeResultIssueCount = 0;
+  bool _smokeEditSaved = false;
+  bool _smokeReexported = false;
+  bool _smokeOutputContainsEdit = false;
+  String _smokeEditedText = '';
+  String _smokeReexportFormat = '';
+  bool? _smokeReexportBilingual;
+  bool _smokeResumeAttempted = false;
+  bool _smokeResumeOk = false;
+  String _smokeResumeStatus = '';
 
   @override
   void initState() {
     super.initState();
     _client = AppServiceClient(_processingTransport());
+    _embeddedResultTransport = _TaskProcessingClientTransport(_client);
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
     _selectedTaskId = widget.taskId?.trim();
     _editingTaskId = widget.taskId?.trim();
@@ -130,10 +162,29 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
         _message = tasks.isEmpty ? '还没有任务记录。' : '已读取 ${tasks.length} 个任务。';
       });
       if (selected != null) {
-        unawaited(_loadEvents(selected.taskId));
+        if (widget.smoke != null) {
+          await _loadEvents(selected.taskId);
+        } else {
+          unawaited(_loadEvents(selected.taskId));
+        }
       }
       if (widget.smoke != null) {
-        await _writeSmokeReport(tasks: tasks, selected: selected);
+        var reportTasks = tasks;
+        var reportSelected = selected;
+        if (selected != null) {
+          await _runSmokeScenario(selected);
+          if (_smokeScenario == 'resume') {
+            reportTasks = await _client.taskList();
+            reportSelected = _selectedTask(reportTasks);
+            if (mounted) {
+              setState(() {
+                _tasks = reportTasks;
+                _selectedTaskId = reportSelected?.taskId;
+              });
+            }
+          }
+        }
+        await _writeSmokeReport(tasks: reportTasks, selected: reportSelected);
       }
     } on Object catch (error) {
       if (!mounted) return;
@@ -281,6 +332,78 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
   }
 
+  Future<void> _runSmokeScenario(TaskSummary selected) async {
+    _smokeScenario = _normalizedSmokeScenario(
+      widget.smoke?.taskProcessingScenario,
+    );
+    if (_smokeScenario == 'edit') {
+      await _runSmokeEditFlow(selected);
+    } else if (_smokeScenario == 'resume') {
+      await _runSmokeResumeFlow(selected);
+    }
+  }
+
+  Future<void> _runSmokeEditFlow(TaskSummary task) async {
+    if (!task.isDone) return;
+    final result = await _client.openTaskResult(task.taskId);
+    _smokeResultSegmentCount = result.segments.length;
+    _smokeResultIssueCount = result.issueCount;
+    if (result.segments.isEmpty) return;
+    final first = result.segments.first;
+    _smokeEditedText = '已校对的字幕译文';
+    final payload = result.segments
+        .map(
+          (segment) => <String, Object?>{
+            ...segment.raw,
+            'id': segment.id,
+            'start': segment.start,
+            'end': segment.end,
+            'text_src': segment.sourceText,
+            'text_tgt': segment.id == first.id
+                ? _smokeEditedText
+                : segment.targetText,
+          },
+        )
+        .toList();
+    final saved = await _client.resultSegmentsSave(task.taskId, payload);
+    _smokeEditSaved = saved.segments.any(
+      (segment) => segment.targetText == _smokeEditedText,
+    );
+    _smokeResultSegmentCount = saved.segments.length;
+    _smokeResultIssueCount = saved.issueCount;
+    _smokeReexportFormat = 'ass';
+    _smokeReexportBilingual = false;
+    final reexported = await _client.resultReexport(
+      task.taskId,
+      outputFormat: _smokeReexportFormat,
+      bilingual: _smokeReexportBilingual ?? false,
+    );
+    _smokeReexported = reexported.isNotEmpty;
+    final outputPaths = _stringMap(reexported['output_paths']);
+    final outputPath =
+        _stringValue(outputPaths['ass']) ??
+        _stringValue(outputPaths['srt']) ??
+        _stringValue(outputPaths['vtt']);
+    if (outputPath != null && outputPath.isNotEmpty) {
+      final output = File(outputPath);
+      if (await output.exists()) {
+        final text = await output.readAsString(encoding: utf8);
+        _smokeOutputContainsEdit = text.contains(_smokeEditedText);
+      }
+    }
+  }
+
+  Future<void> _runSmokeResumeFlow(TaskSummary task) async {
+    if (!task.canResume) return;
+    _smokeResumeAttempted = true;
+    final result = await _client.submitResume({
+      'request_version': 1,
+      'task_id': task.taskId,
+    });
+    _smokeResumeOk = result.taskId == task.taskId && result.status == 'QUEUED';
+    _smokeResumeStatus = result.status;
+  }
+
   Future<void> _writeSmokeReport({
     required List<TaskSummary> tasks,
     TaskSummary? selected,
@@ -295,9 +418,22 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'status': error == null ? 'ready' : 'error',
       'window_type': AppWindowType.taskProcessing.id,
       'title': AppWindowType.taskProcessing.title,
+      'task_processing_scenario': _smokeScenario,
       'task_processing_task_count': tasks.length,
       'task_processing_selected_task_id': selected?.taskId ?? '',
       'task_processing_selected_status': selected?.status ?? '',
+      'task_processing_result_segment_count': _smokeResultSegmentCount,
+      'task_processing_result_issue_count': _smokeResultIssueCount,
+      'task_processing_edit_saved': _smokeEditSaved,
+      'task_processing_reexported': _smokeReexported,
+      'task_processing_reexport_output_contains_edit':
+          _smokeOutputContainsEdit,
+      'task_processing_edited_text': _smokeEditedText,
+      'task_processing_reexport_format': _smokeReexportFormat,
+      'task_processing_reexport_bilingual': _smokeReexportBilingual,
+      'task_processing_resume_attempted': _smokeResumeAttempted,
+      'task_processing_resume_ok': _smokeResumeOk,
+      'task_processing_resume_status': _smokeResumeStatus,
       'error': error == null ? '' : '$error',
       'finished_at': DateTime.now().toUtc().toIso8601String(),
     };
@@ -357,6 +493,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                       : null,
                   store: widget.store,
                   bridge: widget.bridge,
+                  resultTransportOverride: _embeddedResultTransport,
                   message: _message,
                   error: _error,
                   loadingTasks: _loadingTasks,
@@ -397,6 +534,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.editingTaskId,
     required this.store,
     required this.bridge,
+    required this.resultTransportOverride,
     required this.message,
     required this.error,
     required this.loadingTasks,
@@ -417,6 +555,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final String? editingTaskId;
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final AppServiceTransport resultTransportOverride;
   final String? message;
   final String? error;
   final bool loadingTasks;
@@ -452,6 +591,7 @@ class _TaskProcessingBody extends StatelessWidget {
             editingTaskId: editingTaskId,
             store: store,
             bridge: bridge,
+            resultTransportOverride: resultTransportOverride,
             message: message,
             error: error,
             loadingTasks: loadingTasks,
@@ -611,6 +751,7 @@ class _TaskPreview extends StatelessWidget {
     required this.editingTaskId,
     required this.store,
     required this.bridge,
+    required this.resultTransportOverride,
     required this.message,
     required this.error,
     required this.loadingTasks,
@@ -629,6 +770,7 @@ class _TaskPreview extends StatelessWidget {
   final String? editingTaskId;
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final AppServiceTransport resultTransportOverride;
   final String? message;
   final String? error;
   final bool loadingTasks;
@@ -673,6 +815,7 @@ class _TaskPreview extends StatelessWidget {
               store: store,
               bridge: bridge,
               embedded: true,
+              transportOverride: resultTransportOverride,
             ),
           ),
         ],
@@ -1015,6 +1158,27 @@ String _dirname(String path) {
   final lastSlash = trimmed.lastIndexOf(RegExp(r'[\\/]'));
   if (lastSlash <= 0) return '';
   return trimmed.substring(0, lastSlash);
+}
+
+String _normalizedSmokeScenario(String? value) {
+  return switch ((value ?? '').trim().toLowerCase()) {
+    'edit' => 'edit',
+    'resume' => 'resume',
+    _ => 'browse',
+  };
+}
+
+Map<String, Object?> _stringMap(Object? value) {
+  if (value is Map) {
+    return value.map((key, item) => MapEntry('$key', item));
+  }
+  return const <String, Object?>{};
+}
+
+String? _stringValue(Object? value) {
+  if (value == null) return null;
+  final text = '$value'.trim();
+  return text.isEmpty ? null : text;
 }
 
 Map<String, Object?> _eventMap(Object? value) {

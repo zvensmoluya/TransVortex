@@ -42,6 +42,10 @@ class AppStartupArgs {
       '--tvx-smoke-check-notifications',
     );
     final mainPhaseArg = _optionValue(args, '--tvx-smoke-main-phase');
+    final taskProcessingScenarioArg = _optionValue(
+      args,
+      '--tvx-smoke-task-processing-scenario',
+    );
     final explicitWindowType =
         _optionValue(args, '--tvx-window-type') ??
         _optionValueFromRaw(rawWindowArgument, '--tvx-window-type');
@@ -84,6 +88,7 @@ class AppStartupArgs {
           useControllerSubmission: _boolOption(useControllerArg),
           checkNotifications: _boolOption(checkNotificationsArg),
           mainPhase: SmokeMainPhaseLabel.fromId(mainPhaseArg),
+          taskProcessingScenario: _optionalString(taskProcessingScenarioArg),
         ),
       );
     }
@@ -151,6 +156,7 @@ class AppSmokeArgs {
     this.useControllerSubmission = false,
     this.checkNotifications = false,
     this.mainPhase = SmokeMainPhase.normal,
+    this.taskProcessingScenario,
   });
 
   final String reportPath;
@@ -164,6 +170,7 @@ class AppSmokeArgs {
   final bool useControllerSubmission;
   final bool checkNotifications;
   final SmokeMainPhase mainPhase;
+  final String? taskProcessingScenario;
 
   static AppSmokeArgs? fromJson(Object? value) {
     final map = value is Map ? value : null;
@@ -185,6 +192,8 @@ class AppSmokeArgs {
     final checkNotifications =
         map?['checkNotifications'] ?? map?['check_notifications'];
     final mainPhase = map?['mainPhase'] ?? map?['main_phase'];
+    final taskProcessingScenario =
+        map?['taskProcessingScenario'] ?? map?['task_processing_scenario'];
     return AppSmokeArgs(
       reportPath: reportPath.trim(),
       serviceRoot: serviceRoot is String && serviceRoot.trim().isNotEmpty
@@ -219,6 +228,7 @@ class AppSmokeArgs {
       useControllerSubmission: useControllerSubmission == true,
       checkNotifications: checkNotifications == true,
       mainPhase: SmokeMainPhaseLabel.fromId(mainPhase as String?),
+      taskProcessingScenario: _optionalString(taskProcessingScenario),
     );
   }
 }

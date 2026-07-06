@@ -46,6 +46,7 @@ class ResultReviewWindow extends StatefulWidget {
     required this.bridge,
     this.smoke,
     this.embedded = false,
+    this.transportOverride,
   });
 
   final String? taskId;
@@ -53,6 +54,7 @@ class ResultReviewWindow extends StatefulWidget {
   final WindowStateBridge bridge;
   final AppSmokeArgs? smoke;
   final bool embedded;
+  final AppServiceTransport? transportOverride;
 
   @override
   State<ResultReviewWindow> createState() => _ResultReviewWindowState();
@@ -125,6 +127,8 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
   }
 
   AppServiceTransport _resultTransport() {
+    final override = widget.transportOverride;
+    if (override != null) return override;
     final smoke = widget.smoke;
     if (smoke == null) return WindowBridgeTransport(widget.bridge);
     final service = LocalServiceController(

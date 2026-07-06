@@ -48,6 +48,17 @@ foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "
         window_type = $windowType
         main_phase = "normal"
         translation_scenario = "normal"
+        task_processing_scenario = "browse"
+        check_notifications = $false
+    })
+}
+foreach ($scenario in @("edit", "resume")) {
+    $cases.Add([ordered]@{
+        name = "taskProcessing_$scenario"
+        window_type = "taskProcessing"
+        main_phase = "normal"
+        translation_scenario = "normal"
+        task_processing_scenario = $scenario
         check_notifications = $false
     })
 }
@@ -90,6 +101,9 @@ foreach ($case in $cases) {
     if ($case.translation_scenario -ne "normal") {
         $args += @("-TranslationScenario", $case.translation_scenario)
     }
+    if ($case.window_type -eq "taskProcessing" -and $case.task_processing_scenario -ne "browse") {
+        $args += @("-TaskProcessingScenario", $case.task_processing_scenario)
+    }
     if ($case.check_notifications -eq $true) {
         $args += "-CheckNotifications"
     }
@@ -130,6 +144,7 @@ foreach ($case in $cases) {
         window_type = $windowType
         main_phase = if ($report.PSObject.Properties.Name -contains "main_phase") { $report.main_phase } else { $case.main_phase }
         translation_scenario = $case.translation_scenario
+        task_processing_scenario = if ($report.PSObject.Properties.Name -contains "task_processing_scenario") { $report.task_processing_scenario } else { $case.task_processing_scenario }
         controller_state = if ($report.PSObject.Properties.Name -contains "controller_state") { $report.controller_state } else { "" }
         status = $report.status
         task_status = if ($report.PSObject.Properties.Name -contains "task_status") { $report.task_status } else { "" }
@@ -138,6 +153,9 @@ foreach ($case in $cases) {
         history_failed_count = if ($report.PSObject.Properties.Name -contains "history_failed_count") { $report.history_failed_count } else { "" }
         task_processing_task_count = if ($report.PSObject.Properties.Name -contains "task_processing_task_count") { $report.task_processing_task_count } else { "" }
         task_processing_selected_status = if ($report.PSObject.Properties.Name -contains "task_processing_selected_status") { $report.task_processing_selected_status } else { "" }
+        task_processing_edit_saved = if ($report.PSObject.Properties.Name -contains "task_processing_edit_saved") { $report.task_processing_edit_saved } else { "" }
+        task_processing_reexported = if ($report.PSObject.Properties.Name -contains "task_processing_reexported") { $report.task_processing_reexported } else { "" }
+        task_processing_resume_ok = if ($report.PSObject.Properties.Name -contains "task_processing_resume_ok") { $report.task_processing_resume_ok } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }
