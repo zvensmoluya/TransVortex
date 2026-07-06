@@ -52,7 +52,7 @@ foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "
         check_notifications = $false
     })
 }
-foreach ($scenario in @("edit", "resume", "cancel")) {
+foreach ($scenario in @("edit", "failure", "resume", "cancel")) {
     $cases.Add([ordered]@{
         name = "taskProcessing_$scenario"
         window_type = "taskProcessing"
