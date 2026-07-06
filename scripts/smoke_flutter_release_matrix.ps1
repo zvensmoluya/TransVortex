@@ -48,7 +48,7 @@ foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "
         window_type = $windowType
         main_phase = "normal"
         translation_scenario = "normal"
-        task_processing_scenario = "browse"
+        task_processing_scenario = if ($windowType -eq "taskProcessing") { "browse" } else { "" }
         check_notifications = $false
     })
 }
@@ -144,7 +144,7 @@ foreach ($case in $cases) {
         window_type = $windowType
         main_phase = if ($report.PSObject.Properties.Name -contains "main_phase") { $report.main_phase } else { $case.main_phase }
         translation_scenario = $case.translation_scenario
-        task_processing_scenario = if ($report.PSObject.Properties.Name -contains "task_processing_scenario") { $report.task_processing_scenario } else { $case.task_processing_scenario }
+        task_processing_scenario = if ($report.PSObject.Properties.Name -contains "task_processing_scenario") { $report.task_processing_scenario } elseif ($case.window_type -eq "taskProcessing") { $case.task_processing_scenario } else { "" }
         controller_state = if ($report.PSObject.Properties.Name -contains "controller_state") { $report.controller_state } else { "" }
         status = $report.status
         task_status = if ($report.PSObject.Properties.Name -contains "task_status") { $report.task_status } else { "" }
