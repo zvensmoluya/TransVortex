@@ -15,6 +15,7 @@ import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
+import 'result_review_window.dart';
 import 'title_bar.dart';
 
 class _SmokeTaskProcessingTransport implements AppServiceTransport {
@@ -73,6 +74,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingTasks = false;
   bool _loadingEvents = false;
   bool _resuming = false;
+  String? _editingTaskId;
 
   @override
   void initState() {
@@ -80,6 +82,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _client = AppServiceClient(_processingTransport());
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
     _selectedTaskId = widget.taskId?.trim();
+    _editingTaskId = widget.taskId?.trim();
     if (widget.smoke == null) {
       unawaited(widget.bridge.initializeChild());
     }
@@ -149,6 +152,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     final taskId = args.taskId?.trim();
     if (taskId != null && taskId.isNotEmpty) {
       _selectedTaskId = taskId;
+      _editingTaskId = taskId;
     }
     await _loadTasks();
   }
@@ -170,6 +174,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
     setState(() {
       _selectedTaskId = task.taskId;
+      _editingTaskId = null;
       _message = null;
       _error = null;
     });
@@ -198,23 +203,11 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   Future<void> _openResult(TaskSummary task) async {
     if (!task.isDone) return;
-    try {
-      await widget.bridge.openToolWindow(
-        AppWindowType.resultReview,
-        taskId: task.taskId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _message = '已打开结果编辑工作台。';
-        _error = null;
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = '打开结果失败：${_friendlyTaskProcessingError(error)}';
-        _message = null;
-      });
-    }
+    setState(() {
+      _editingTaskId = task.taskId;
+      _message = '正在处理字幕结果。';
+      _error = null;
+    });
   }
 
   Future<void> _resumeTask(TaskSummary task) async {
@@ -338,6 +331,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     final events = _eventsPage?.taskId == selected?.taskId
         ? _eventsPage?.events ?? const <Object?>[]
         : const <Object?>[];
+    final editingTaskId = selected?.isDone == true
+        ? _editingTaskId?.trim()
+        : null;
     return RepaintBoundary(
       key: _renderKey,
       child: Scaffold(
@@ -356,6 +352,11 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   tasks: _tasks,
                   selected: selected,
                   events: events,
+                  editingTaskId: editingTaskId == selected?.taskId
+                      ? editingTaskId
+                      : null,
+                  store: widget.store,
+                  bridge: widget.bridge,
                   message: _message,
                   error: _error,
                   loadingTasks: _loadingTasks,
@@ -364,6 +365,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onRefresh: _loadTasks,
                   onSelectTask: (task) => unawaited(_selectTask(task)),
                   onOpenResult: (task) => unawaited(_openResult(task)),
+                  onCloseEditor: () => setState(() => _editingTaskId = null),
                   onResume: (task) => unawaited(_resumeTask(task)),
                   onOpenTaskDirectory: (task) =>
                       unawaited(_openTaskDirectory(task)),
@@ -392,6 +394,9 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.tasks,
     required this.selected,
     required this.events,
+    required this.editingTaskId,
+    required this.store,
+    required this.bridge,
     required this.message,
     required this.error,
     required this.loadingTasks,
@@ -400,6 +405,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onRefresh,
     required this.onSelectTask,
     required this.onOpenResult,
+    required this.onCloseEditor,
     required this.onResume,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
@@ -408,6 +414,9 @@ class _TaskProcessingBody extends StatelessWidget {
   final List<TaskSummary> tasks;
   final TaskSummary? selected;
   final List<Object?> events;
+  final String? editingTaskId;
+  final WindowStateStore store;
+  final WindowStateBridge bridge;
   final String? message;
   final String? error;
   final bool loadingTasks;
@@ -416,6 +425,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onSelectTask;
   final ValueChanged<TaskSummary> onOpenResult;
+  final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
@@ -439,6 +449,9 @@ class _TaskProcessingBody extends StatelessWidget {
           child: _TaskPreview(
             task: selected,
             events: events,
+            editingTaskId: editingTaskId,
+            store: store,
+            bridge: bridge,
             message: message,
             error: error,
             loadingTasks: loadingTasks,
@@ -446,6 +459,7 @@ class _TaskProcessingBody extends StatelessWidget {
             resuming: resuming,
             onRefresh: onRefresh,
             onOpenResult: onOpenResult,
+            onCloseEditor: onCloseEditor,
             onResume: onResume,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
@@ -594,6 +608,9 @@ class _TaskPreview extends StatelessWidget {
   const _TaskPreview({
     required this.task,
     required this.events,
+    required this.editingTaskId,
+    required this.store,
+    required this.bridge,
     required this.message,
     required this.error,
     required this.loadingTasks,
@@ -601,6 +618,7 @@ class _TaskPreview extends StatelessWidget {
     required this.resuming,
     required this.onRefresh,
     required this.onOpenResult,
+    required this.onCloseEditor,
     required this.onResume,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
@@ -608,6 +626,9 @@ class _TaskPreview extends StatelessWidget {
 
   final TaskSummary? task;
   final List<Object?> events;
+  final String? editingTaskId;
+  final WindowStateStore store;
+  final WindowStateBridge bridge;
   final String? message;
   final String? error;
   final bool loadingTasks;
@@ -615,6 +636,7 @@ class _TaskPreview extends StatelessWidget {
   final bool resuming;
   final VoidCallback onRefresh;
   final ValueChanged<TaskSummary> onOpenResult;
+  final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
@@ -625,6 +647,35 @@ class _TaskPreview extends StatelessWidget {
     if (task == null) {
       return Center(
         child: Text(loadingTasks ? '读取任务中…' : '选择一个任务后查看处理动作。', style: T.tBody),
+      );
+    }
+    if (editingTaskId == task.taskId && task.isDone) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '字幕编辑',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tFilename,
+                ),
+              ),
+              _TaskActionButton(label: '返回概览', onTap: onCloseEditor),
+            ],
+          ),
+          const SizedBox(height: T.s12),
+          Expanded(
+            child: ResultReviewWindow(
+              taskId: task.taskId,
+              store: store,
+              bridge: bridge,
+              embedded: true,
+            ),
+          ),
+        ],
       );
     }
     final outputDir = _outputDirectoryFor(task);

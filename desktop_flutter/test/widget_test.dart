@@ -1683,6 +1683,7 @@ void main() {
     final calls = <String>[];
     final paramsByMethod = <String, Map<String, Object?>>{};
     final opened = <AppWindowArgs>[];
+    var targetText = '早上好。';
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       paramsByMethod[method] = params;
@@ -1732,6 +1733,51 @@ void main() {
           'message': '任务已重新排队。',
         };
       }
+      if (method == 'result.open') {
+        return {
+          'task': _task(
+            taskId: 'tvx_processing_done_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\processing-done.mp4',
+            outputPaths: {'srt': r'D:\media\processing-done.zh-CN.srt'},
+          ),
+          'segments': [
+            {
+              'id': 1,
+              'start': 0.4,
+              'end': 2.8,
+              'text_src': 'Good morning.',
+              'text_tgt': targetText,
+              'provider': 'RealProvider',
+              'model': 'real-model',
+            },
+          ],
+          'output_paths': {'srt': r'D:\media\processing-done.zh-CN.srt'},
+        };
+      }
+      if (method == 'result.segments.save') {
+        final segments = params['segments'] as List<Object?>;
+        final first = segments.first as Map<Object?, Object?>;
+        targetText = '${first['text_tgt']}';
+        return {
+          'task': _task(
+            taskId: 'tvx_processing_done_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\processing-done.mp4',
+            outputPaths: {'srt': r'D:\media\processing-done.zh-CN.srt'},
+          ),
+          'segments': [
+            {
+              'id': 1,
+              'start': 0.4,
+              'end': 2.8,
+              'text_src': 'Good morning.',
+              'text_tgt': targetText,
+            },
+          ],
+          'output_paths': {'srt': r'D:\media\processing-done.zh-CN.srt'},
+        };
+      }
       throw RpcRemoteException('method_not_found', method);
     });
     bridge.attachToolWindowOpener((args) async {
@@ -1756,12 +1802,10 @@ void main() {
     expect(find.text('任务片列'), findsOneWidget);
     expect(find.text('processing-done.mp4'), findsWidgets);
     expect(find.text('processing-failed.mp4'), findsOneWidget);
-    expect(find.text('最近事件'), findsOneWidget);
-
-    await tester.tap(find.text('编辑字幕'));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(opened.single.type, AppWindowType.resultReview);
-    expect(opened.single.taskId, 'tvx_processing_done_123456');
+    expect(find.text('字幕编辑'), findsOneWidget);
+    expect(find.text('导出格式'), findsOneWidget);
+    expect(calls, contains('result.open'));
+    expect(opened, isEmpty);
 
     await tester.tap(find.text('processing-failed.mp4'));
     await tester.pump(const Duration(milliseconds: 100));

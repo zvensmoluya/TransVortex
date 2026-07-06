@@ -45,12 +45,14 @@ class ResultReviewWindow extends StatefulWidget {
     required this.store,
     required this.bridge,
     this.smoke,
+    this.embedded = false,
   });
 
   final String? taskId;
   final WindowStateStore store;
   final WindowStateBridge bridge;
   final AppSmokeArgs? smoke;
+  final bool embedded;
 
   @override
   State<ResultReviewWindow> createState() => _ResultReviewWindowState();
@@ -87,6 +89,29 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
     if (widget.smoke == null) {
       unawaited(widget.bridge.initializeChild());
     }
+    unawaited(_loadResult());
+  }
+
+  @override
+  void didUpdateWidget(ResultReviewWindow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if ((oldWidget.taskId ?? '').trim() == _taskId) return;
+    for (final controller in _segmentControllers.values) {
+      controller.dispose();
+    }
+    _segmentControllers.clear();
+    setState(() {
+      _result = null;
+      _error = null;
+      _loading = false;
+      _saving = false;
+      _reexporting = false;
+      _dirty = false;
+      _notice = '';
+      _selectedOutputFormat = null;
+      _selectedBilingual = null;
+      _filter = _SegmentFilter.all;
+    });
     unawaited(_loadResult());
   }
 
@@ -403,6 +428,9 @@ class _ResultReviewWindowState extends State<ResultReviewWindow> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      return _body();
+    }
     return RepaintBoundary(
       key: _renderKey,
       child: Scaffold(
