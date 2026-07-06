@@ -1,42 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
 
-import '../model/startup_args.dart';
 import '../model/task_labels.dart';
 import '../model/window_state.dart';
 import '../services/app_service_client.dart';
-import '../services/local_service_controller.dart';
-import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
 import 'title_bar.dart';
-
-class _SmokeResultTransport implements AppServiceTransport {
-  _SmokeResultTransport(this.service);
-
-  final LocalServiceController service;
-
-  @override
-  Future<Object?> call(
-    String method, [
-    Map<String, Object?> params = const {},
-    Duration? timeout,
-  ]) async {
-    await service.start();
-    final client = service.client;
-    if (client == null) {
-      throw StateError('本地服务未连接，无法执行结果审看 smoke');
-    }
-    return client.call(method, params, timeout);
-  }
-
-  @override
-  Future<void> close() => service.shutdown();
-}
 
 class ResultReviewWorkspace extends StatefulWidget {
   const ResultReviewWorkspace({
@@ -44,7 +15,6 @@ class ResultReviewWorkspace extends StatefulWidget {
     required this.taskId,
     required this.store,
     required this.bridge,
-    this.smoke,
     this.embedded = false,
     this.transportOverride,
   });
@@ -52,7 +22,6 @@ class ResultReviewWorkspace extends StatefulWidget {
   final String? taskId;
   final WindowStateStore store;
   final WindowStateBridge bridge;
-  final AppSmokeArgs? smoke;
   final bool embedded;
   final AppServiceTransport? transportOverride;
 
@@ -62,9 +31,7 @@ class ResultReviewWorkspace extends StatefulWidget {
 
 class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   late final AppServiceClient _client;
-  final GlobalKey _renderKey = GlobalKey(debugLabel: 'result-review-smoke');
   final Map<int, TextEditingController> _segmentControllers = {};
-  LocalServiceController? _smokeService;
   TaskResultWorkspace? _result;
   String? _error;
   bool _loading = false;
@@ -75,12 +42,6 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   String? _selectedOutputFormat;
   bool? _selectedBilingual;
   _SegmentFilter _filter = _SegmentFilter.all;
-  bool _smokeEditSaved = false;
-  bool _smokeReexported = false;
-  bool _smokeOutputContainsEdit = false;
-  String _smokeEditedText = '';
-  String _smokeReexportFormat = '';
-  bool? _smokeReexportBilingual;
 
   String get _taskId => widget.taskId?.trim() ?? '';
 
@@ -88,9 +49,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void initState() {
     super.initState();
     _client = AppServiceClient(_resultTransport());
-    if (widget.smoke == null) {
-      unawaited(widget.bridge.initializeChild());
-    }
+    unawaited(widget.bridge.initializeChild());
     unawaited(_loadResult());
   }
 
@@ -122,26 +81,13 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     for (final controller in _segmentControllers.values) {
       controller.dispose();
     }
-    _smokeService?.dispose();
     super.dispose();
   }
 
   AppServiceTransport _resultTransport() {
     final override = widget.transportOverride;
     if (override != null) return override;
-    final smoke = widget.smoke;
-    if (smoke == null) return WindowBridgeTransport(widget.bridge);
-    final service = LocalServiceController(
-      supervisor: LocalServiceSupervisor(serviceRoot: _serviceRoot(smoke)),
-    );
-    _smokeService = service;
-    return _SmokeResultTransport(service);
-  }
-
-  Directory? _serviceRoot(AppSmokeArgs smoke) {
-    final root = smoke.serviceRoot;
-    if (root == null || root.isEmpty) return null;
-    return Directory(root);
+    return WindowBridgeTransport(widget.bridge);
   }
 
   Future<void> _loadResult() async {
@@ -169,19 +115,12 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _dirty = false;
         _notice = '';
       });
-      if (widget.smoke != null) {
-        await _runSmokeEditFlow();
-        await _writeSmokeReport(_result ?? result);
-      }
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
         _error = _friendlyResultError(error);
         _loading = false;
       });
-      if (widget.smoke != null) {
-        await _writeSmokeReport(null, error: error);
-      }
     }
   }
 
@@ -347,109 +286,23 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     });
   }
 
-  Future<void> _runSmokeEditFlow() async {
-    final result = _result;
-    if (result == null || result.segments.isEmpty) return;
-    final first = result.segments.first;
-    _smokeEditedText = '已校对的字幕译文';
-    _controllerFor(first).text = _smokeEditedText;
-    final saved = await _saveEdits();
-    _smokeEditSaved =
-        saved?.segments.any(
-          (segment) => segment.targetText == _smokeEditedText,
-        ) ??
-        false;
-    _selectedOutputFormat = 'ass';
-    _selectedBilingual = false;
-    _smokeReexportFormat = _exportFormatFor(saved ?? result);
-    _smokeReexportBilingual = _exportBilingualFor(saved ?? result);
-    final reexported = await _reexport();
-    _smokeReexported = reexported != null;
-    final outputPaths = _stringMap(reexported?['output_paths']);
-    final outputPath =
-        _stringValue(outputPaths['srt']) ??
-        _stringValue(outputPaths['ass']) ??
-        _stringValue(outputPaths['vtt']);
-    if (outputPath != null && outputPath.isNotEmpty) {
-      final output = File(outputPath);
-      if (await output.exists()) {
-        final text = await output.readAsString(encoding: utf8);
-        _smokeOutputContainsEdit = text.contains(_smokeEditedText);
-      }
-    }
-  }
-
-  Future<void> _writeSmokeReport(
-    TaskResultWorkspace? result, {
-    Object? error,
-  }) async {
-    final smoke = widget.smoke;
-    if (smoke == null) return;
-    final reportFile = File(smoke.reportPath);
-    await reportFile.parent.create(recursive: true);
-    final payload = <String, Object?>{
-      'ok': error == null && result != null,
-      'status': error == null ? 'ready' : 'error',
-      'window_type': 'resultReview',
-      'title': '结果审看',
-      'task_id': _taskId,
-      'result_segment_count': result?.segments.length ?? 0,
-      'result_issue_count': result?.issueCount ?? 0,
-      'result_output_formats': result?.outputPaths.keys.toList() ?? const [],
-      'result_edit_saved': _smokeEditSaved,
-      'result_reexported': _smokeReexported,
-      'result_reexport_output_contains_edit': _smokeOutputContainsEdit,
-      'result_edited_text': _smokeEditedText,
-      'result_reexport_format': _smokeReexportFormat,
-      'result_reexport_bilingual': _smokeReexportBilingual,
-      'result_reexport_notice': _notice,
-      'error': error == null ? '' : '$error',
-      'finished_at': DateTime.now().toUtc().toIso8601String(),
-    };
-    payload.addAll(
-      await captureSmokeRender(
-        boundaryKey: _renderKey,
-        path: smoke.screenshotPath,
-      ),
-    );
-    if (smoke.screenshotPath != null) {
-      payload['ok'] =
-          payload['ok'] == true && payload['render_capture_ok'] == true;
-    }
-    await reportFile.writeAsString(jsonEncode(payload), encoding: utf8);
-    final hold = smoke.postReportVisibleDuration;
-    if (hold > Duration.zero) {
-      await Future<void>.delayed(hold);
-    }
-    if (!mounted) return;
-    try {
-      await _smokeService?.shutdown();
-      await windowManager.close();
-    } on Object {
-      exit(0);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (widget.embedded) {
       return _body();
     }
-    return RepaintBoundary(
-      key: _renderKey,
-      child: Scaffold(
-        backgroundColor: T.bg,
-        body: Column(
-          children: [
-            TitleBar(title: '结果审看', status: _statusText, canMaximize: true),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
-                child: _body(),
-              ),
+    return Scaffold(
+      backgroundColor: T.bg,
+      body: Column(
+        children: [
+          TitleBar(title: '结果审看', status: _statusText, canMaximize: true),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
+              child: _body(),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1131,13 +984,6 @@ String _friendlyResultError(Object error) {
 String _basename(String path) {
   if (path.trim().isEmpty) return '';
   return path.split(RegExp(r'[\\/]')).last;
-}
-
-Map<String, Object?> _stringMap(Object? value) {
-  if (value is Map) {
-    return value.map((key, item) => MapEntry('$key', item));
-  }
-  return const <String, Object?>{};
 }
 
 String _shortTaskId(String taskId) {
