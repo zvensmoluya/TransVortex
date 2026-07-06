@@ -151,7 +151,7 @@
 | 开始译制 | `runtime.submitRun` | 保存 `task_id`，开始轮询 |
 | 停止任务 | `runtime.cancel` | 刷新 runtime 和任务事件 |
 | 运行中刷新 | `runtime.snapshot` / `tasks.events` | 更新阶段文案、进度、失败信息 |
-| 审看结果 | `result.open` / `result.segments.save` / `result.reexport` | 优先打开任务处理窗并定位任务，在右侧内嵌结果审看 / 编辑工作台读取任务摘要、字幕片段、输出格式和问题提示；允许按全部 / 有问题 / 空译文筛查片段，并按源文 / 译文 / 问题提示搜索片段；允许放弃未保存修改、编辑并保存片段译文；重新导出前显示将导出的格式 / 单双语和已有输出记录，再按用户选择调用真实重新导出；旧 `resultReview` 启动 ID 兼容进入任务处理窗 |
+| 审看结果 | `result.open` / `result.segments.save` / `result.reexport` | 优先打开任务处理窗并定位任务，在右侧内嵌结果审看 / 编辑工作台读取任务摘要、字幕片段、输出格式和问题提示；允许按全部 / 有问题 / 空译文 / 已修改筛查片段，并按源文 / 译文 / 问题提示搜索片段；允许放弃未保存修改、编辑并保存片段译文；重新导出前显示将导出的格式 / 单双语和已有输出记录，再按用户选择调用真实重新导出；旧 `resultReview` 启动 ID 兼容进入任务处理窗 |
 | 打开字幕 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
 | 打开目录 | `result.open` | 读取 result paths，确认文件仍存在后交给系统打开；缺失则进入重新导出修复态 |
 | 重新导出 | `result.reexport` | 刷新 result paths 和任务事件；默认沿用原输出目录，任务处理窗右侧的结果审看 / 编辑工作台可选择 SRT / ASS / SRT+ASS / VTT 和单双语；若重新导出失败且指向输出目录不可写，失败修复件可让用户选择新目录，并把 `output_dir` 传给同一任务的 `result.reexport` |

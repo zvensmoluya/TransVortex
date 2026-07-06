@@ -1633,6 +1633,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Good morning.'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
+
+    await tester.tap(find.text('已修改'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('没有已修改片段。'), findsOneWidget);
+
+    await tester.tap(find.text('全部'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.enterText(
+      find.widgetWithText(TextField, '输入译文').last,
+      '欢迎回来。',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('已修改'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Good morning.'), findsNothing);
+    expect(find.text('Welcome back.'), findsOneWidget);
+    expect(find.text('欢迎回来。'), findsOneWidget);
     expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });

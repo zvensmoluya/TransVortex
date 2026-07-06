@@ -355,7 +355,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   }
 }
 
-enum _SegmentFilter { all, issues, emptyTarget }
+enum _SegmentFilter { all, issues, emptyTarget, modified }
 
 class _ResultReviewBody extends StatelessWidget {
   const _ResultReviewBody({
@@ -892,6 +892,7 @@ class _FilterControls extends StatelessWidget {
               value: _SegmentFilter.emptyTarget,
               label: Text('空译文'),
             ),
+            ButtonSegment(value: _SegmentFilter.modified, label: Text('已修改')),
           ],
           onSelectionChanged: enabled
               ? (selection) {
@@ -1167,6 +1168,8 @@ bool _matchesFilter(
     _SegmentFilter.issues =>
       segment.issues.isNotEmpty || segment.qualityIssues.isNotEmpty,
     _SegmentFilter.emptyTarget => controllerFor(segment).text.trim().isEmpty,
+    _SegmentFilter.modified =>
+      controllerFor(segment).text != segment.targetText,
   };
 }
 
@@ -1202,5 +1205,6 @@ String _emptyFilterText(_SegmentFilter filter, String searchQuery) {
     _SegmentFilter.all => '结果里没有字幕片段。',
     _SegmentFilter.issues => '没有带问题提示的片段。',
     _SegmentFilter.emptyTarget => '没有空译文片段。',
+    _SegmentFilter.modified => '没有已修改片段。',
   };
 }
