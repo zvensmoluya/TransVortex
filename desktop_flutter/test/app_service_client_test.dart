@@ -858,7 +858,7 @@ routing:
       'updated_at': '2026-07-01T00:01:00Z',
       'output_paths': {'srt': r'D:\out.srt'},
       'error_info': {'hint_zh': 'Provider 配置不可用。'},
-      'runtime': {'can_resume': true},
+      'runtime': {'can_resume': true, 'state': 'stale'},
       'checkpoint_status': 'TRANSLATE',
       'progress_detail': {
         'translate_done_count': 2,
@@ -869,9 +869,52 @@ routing:
     expect(task.taskId, 'tvx_1');
     expect(task.isFailed, isTrue);
     expect(task.canResume, isTrue);
+    expect(task.runtimeState, 'stale');
+    expect(task.isRuntimeActive, isFalse);
+    expect(task.isRuntimeStale, isTrue);
     expect(task.latestProgress, 0.5);
     expect(task.displayStatus, 'TRANSLATE');
     expect(task.outputPaths['srt'], r'D:\out.srt');
+  });
+
+  test('DesktopSnapshot restores only runtime-active or terminal tasks', () {
+    final staleThenQueued = DesktopSnapshot.fromJson({
+      'tasks': [
+        {
+          'task_id': 'tvx_stale',
+          'status': 'TRANSLATE',
+          'runtime': {'state': 'stale'},
+        },
+        {
+          'task_id': 'tvx_queued',
+          'status': 'QUEUED',
+          'runtime': {'state': 'queued'},
+        },
+      ],
+    });
+    final runningThenDone = DesktopSnapshot.fromJson({
+      'tasks': [
+        {
+          'task_id': 'tvx_running',
+          'status': 'TRANSLATE',
+          'runtime': {'state': 'running'},
+        },
+        {'task_id': 'tvx_done', 'status': 'DONE'},
+      ],
+    });
+    final terminalOnly = DesktopSnapshot.fromJson({
+      'tasks': [
+        {
+          'task_id': 'tvx_interrupted',
+          'status': 'INTERRUPTED',
+          'runtime': {'state': 'interrupted'},
+        },
+      ],
+    });
+
+    expect(staleThenQueued.latestActiveTask, isNull);
+    expect(runningThenDone.latestActiveTask?.taskId, 'tvx_running');
+    expect(terminalOnly.latestActiveTask?.taskId, 'tvx_interrupted');
   });
 
   test('task labels localize runtime lifecycle stages', () {

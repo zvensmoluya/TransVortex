@@ -51,6 +51,7 @@ void main() {
                   r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04.mp4',
               progress: 0.42,
               checkpointStatus: 'TRANSLATE',
+              runtime: {'state': 'running'},
             ),
           ],
         ),
@@ -65,6 +66,46 @@ void main() {
     expect(controller.view.source?.name, contains('style3-preview-part04'));
     expect(controller.view.progress, 0.42);
   });
+
+  test(
+    'controller does not restore stale or queued history as running',
+    () async {
+      final staleController = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                status: 'TRANSLATE',
+                inputFile: r'D:\stale.mp4',
+                runtime: {'state': 'stale'},
+              ),
+            ],
+          ),
+        ),
+      );
+      final queuedController = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                status: 'QUEUED',
+                inputFile: r'D:\queued.mp4',
+                runtime: {'state': 'queued'},
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await staleController.startService();
+      await queuedController.startService();
+
+      expect(staleController.view.state, MainState.empty);
+      expect(staleController.view.taskId, isNull);
+      expect(queuedController.view.state, MainState.empty);
+      expect(queuedController.view.taskId, isNull);
+    },
+  );
 
   test('controller opens and reexports completed task results', () async {
     final pathOpener = _RecordingPathOpener();
@@ -467,7 +508,12 @@ void main() {
     final handle = _FakeHandle(
       _desktopSnapshot(
         tasks: [
-          _task(status: 'RUNNING', inputFile: r'D:\movie.mp4', progress: 0.2),
+          _task(
+            status: 'RUNNING',
+            inputFile: r'D:\movie.mp4',
+            progress: 0.2,
+            runtime: {'state': 'running'},
+          ),
         ],
       ),
     );

@@ -587,7 +587,11 @@ class MainWindowController extends ChangeNotifier {
     if (task.sourceLang.isNotEmpty) _sourceLang = task.sourceLang;
     if (task.targetLang.isNotEmpty) _targetLang = task.targetLang;
     _bilingual = task.bilingual;
-    _running = !task.isTerminal;
+    final pendingCurrentTask =
+        !task.isTerminal &&
+        task.status == 'QUEUED' &&
+        (_running || _submitting);
+    _running = !task.isTerminal && (task.isRuntimeActive || pendingCurrentTask);
     _canceling = task.status == 'CANCEL_REQUESTED';
     _completed = task.isDone;
     _progress = task.isDone ? 1 : (task.latestProgress ?? _progress);
@@ -596,7 +600,7 @@ class MainWindowController extends ChangeNotifier {
     _failure = task.isFailed || task.isCancelled
         ? _failureFromTask(task)
         : null;
-    if (task.isTerminal) {
+    if (task.isTerminal || !_running) {
       _taskPoll?.cancel();
       _taskPoll = null;
     } else {

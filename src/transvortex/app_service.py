@@ -29,11 +29,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
-    pump = LocalServicePump(root_dir=root, providers_file=providers_file)
+    pump = LocalServicePump(root_dir=root, providers_file=providers_file, explicit_queue_only=True)
     service = DesktopApi(
         root_dir=root,
         providers_file=providers_file,
         pump_status=pump.status,
+        task_ready_callback=pump.allow_task,
         shutdown_callback=pump.stop,
     )
     if not args.no_pump:
@@ -66,15 +67,19 @@ class LocalServicePump:
         interval_seconds: float = PUMP_INTERVAL_SECONDS,
         cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
         worker_launcher: Any | None = None,
+        explicit_queue_only: bool = False,
     ) -> None:
         self.root_dir = root_dir
         self.providers_file = providers_file
         self.interval_seconds = interval_seconds
         self.cancel_grace_seconds = cancel_grace_seconds
         self.worker_launcher = worker_launcher
+        self.explicit_queue_only = explicit_queue_only
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._allowed_task_ids: set[str] = set()
         self._started_at = ""
         self._last_tick_at = ""
         self._last_error = ""
@@ -89,22 +94,33 @@ class LocalServicePump:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
 
     def join(self, timeout: float | None = None) -> None:
         thread = self._thread
         if thread is not None:
             thread.join(timeout=timeout)
 
+    def allow_task(self, task_id: str) -> None:
+        normalized = task_id.strip()
+        if not normalized:
+            return
+        with self._lock:
+            self._allowed_task_ids.add(normalized)
+        self._wake.set()
+
     def status(self) -> dict[str, Any]:
         thread = self._thread
         with self._lock:
             return {
                 "enabled": True,
+                "explicit_queue_only": self.explicit_queue_only,
                 "running": bool(thread and thread.is_alive() and not self._stop.is_set()),
                 "started_at": self._started_at,
                 "last_tick_at": self._last_tick_at,
                 "last_error": self._last_error,
                 "launch_count": self._launch_count,
+                "allowed_task_count": len(self._allowed_task_ids),
             }
 
     def tick(self) -> None:
@@ -112,11 +128,17 @@ class LocalServicePump:
         runtime = TaskRuntime(config.pipeline.artifacts_dir)
         runtime.reconcile()
         runtime.force_cancel_expired(grace_seconds=self.cancel_grace_seconds)
-        acquired = runtime.acquire_next(root_dir=self.root_dir, providers_file=self.providers_file, reconcile=False)
+        acquired = runtime.acquire_next(
+            root_dir=self.root_dir,
+            providers_file=self.providers_file,
+            reconcile=False,
+            allowed_task_ids=self._allowed_task_ids_snapshot(),
+        )
         if not acquired.get("acquired"):
             return
         launch = acquired.get("launch") if isinstance(acquired.get("launch"), dict) else {}
         task_id = str(launch.get("task_id") or "")
+        self._discard_allowed_task(task_id)
         try:
             worker_args = list(launch.get("args") or ["_worker", "--task-id", task_id])
             if self.providers_file is not None:
@@ -146,6 +168,7 @@ class LocalServicePump:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            self._wake.clear()
             try:
                 self.tick()
                 with self._lock:
@@ -156,7 +179,21 @@ class LocalServicePump:
                 with self._lock:
                     self._last_tick_at = _now_for_status()
                     self._last_error = "pump_tick_failed"
-            self._stop.wait(self.interval_seconds)
+            if self._stop.is_set():
+                break
+            self._wake.wait(self.interval_seconds)
+
+    def _allowed_task_ids_snapshot(self) -> set[str] | None:
+        if not self.explicit_queue_only:
+            return None
+        with self._lock:
+            return set(self._allowed_task_ids)
+
+    def _discard_allowed_task(self, task_id: str) -> None:
+        if not task_id:
+            return
+        with self._lock:
+            self._allowed_task_ids.discard(task_id)
 
 
 def _default_worker_launcher() -> Any:

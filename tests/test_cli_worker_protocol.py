@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -11,6 +12,7 @@ from transvortex.cli import main
 from transvortex.app.desktop_requests import run_request_from_flags, run_request_from_payload
 from transvortex.protocol.errors import PipelineTaskError, error_info
 from transvortex.app.models import TaskRecord
+from transvortex.artifacts.runtime import TaskRuntime
 from transvortex.artifacts.task_store import TaskStore
 from transvortex.utils import write_json
 
@@ -46,6 +48,7 @@ def test_status_events_and_cancel_cli_json(tmp_path: Path, monkeypatch, capsys) 
         updated_at="2026-02-13T00:00:00+00:00",
     )
     store.save_task(task)
+    TaskRuntime(tmp_path / "artifacts").register_worker(task_id="t1", pid=os.getpid(), owner="test")
     store.append_event("t1", "stage", stage="ASR", message="working", progress=0.25)
 
     monkeypatch.setattr(
@@ -62,8 +65,8 @@ def test_status_events_and_cancel_cli_json(tmp_path: Path, monkeypatch, capsys) 
         ["transvortex", "--root", str(tmp_path), "events", "--task-id", "t1"],
     )
     main()
-    first_event = json.loads(capsys.readouterr().out.splitlines()[0])
-    assert first_event["type"] == "stage"
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(event["type"] == "stage" for event in events)
 
     monkeypatch.setattr(
         "sys.argv",

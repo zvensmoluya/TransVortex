@@ -84,6 +84,22 @@ def test_runtime_acquire_next_is_fifo_and_single_active(tmp_path: Path) -> None:
     assert runtime.snapshot()["queued"] == ["task2"]
 
 
+def test_runtime_acquire_next_respects_allowed_task_ids(tmp_path: Path) -> None:
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    store = runtime.store
+    store.save_task(_task("task1", "QUEUED"))
+    store.save_task(_task("task2", "QUEUED"))
+    runtime.save_runtime_request("task1", "run", {"request_version": 1, "input": "a.mp4", "source_lang": "en", "target_lang": "zh-CN"})
+    runtime.save_runtime_request("task2", "run", {"request_version": 1, "input": "b.mp4", "source_lang": "en", "target_lang": "zh-CN"})
+
+    skipped = runtime.acquire_next(root_dir=tmp_path, allowed_task_ids=set())
+    acquired = runtime.acquire_next(root_dir=tmp_path, allowed_task_ids={"task2"})
+
+    assert skipped == {"acquired": False, "reason": "no_queued_task"}
+    assert acquired["acquired"] is True
+    assert acquired["launch"]["task_id"] == "task2"
+
+
 def test_runtime_acquire_next_reconciles_by_default(tmp_path: Path, monkeypatch) -> None:
     runtime = TaskRuntime(tmp_path / "artifacts")
     calls = []
@@ -123,6 +139,19 @@ def test_runtime_reconcile_marks_missing_worker_interrupted(tmp_path: Path) -> N
     assert "task1" in payload["interrupted"]
     assert runtime.store.load_task("task1").status == "INTERRUPTED"
     assert runtime.store.read_events("task1")[-1]["type"] == "interrupted"
+
+
+def test_runtime_reconcile_marks_running_task_without_worker_interrupted(tmp_path: Path) -> None:
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    runtime.store.save_task(_task("task1", "TRANSLATE"))
+
+    payload = runtime.reconcile()
+
+    assert "task1" in payload["stale"]
+    assert runtime.store.load_task("task1").status == "INTERRUPTED"
+    event = runtime.store.read_events("task1")[-1]
+    assert event["type"] == "interrupted"
+    assert event["details"]["reason"] == "no_active_worker"
 
 
 def test_runtime_load_worker_request_supports_resume(tmp_path: Path) -> None:

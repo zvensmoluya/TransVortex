@@ -433,6 +433,52 @@ def test_local_service_pump_launches_queued_worker(tmp_path: Path) -> None:
     assert events[-1]["type"] == "worker_launch_requested"
 
 
+def test_local_service_pump_explicit_queue_only_waits_for_allowed_task(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    launched = []
+    service = DesktopApi(root_dir=tmp_path)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+    task_id = submitted["result"]["task_id"]
+
+    def fake_launcher(**kwargs):
+        launched.append(kwargs)
+        return {"pid": 12345, "stdout_log": "stdout.log", "stderr_log": "stderr.log"}
+
+    pump = LocalServicePump(root_dir=tmp_path, worker_launcher=fake_launcher, explicit_queue_only=True)
+    pump.tick()
+    pump.allow_task(task_id)
+    pump.tick()
+
+    assert len(launched) == 1
+    assert launched[0]["worker_args"] == ["_worker", "--task-id", task_id]
+
+
+def test_app_service_submit_notifies_pump_allow_callback(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    allowed: list[str] = []
+    service = DesktopApi(root_dir=tmp_path, task_ready_callback=allowed.append)
+    request = {
+        "request_version": 1,
+        "input": str(tmp_path / "demo.mp4"),
+        "source_lang": "en",
+        "target_lang": "zh-CN",
+        "provider": "p1",
+        "model": "m1",
+    }
+
+    submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
+
+    assert allowed == [submitted["result"]["task_id"]]
+
+
 def test_local_service_pump_does_not_reconcile_twice(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     calls = []

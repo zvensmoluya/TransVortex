@@ -73,11 +73,13 @@ class DesktopApi:
         root_dir: Path,
         providers_file: Path | None = None,
         pump_status: Callable[[], dict[str, Any]] | None = None,
+        task_ready_callback: Callable[[str], None] | None = None,
         shutdown_callback: Callable[[], None] | None = None,
     ) -> None:
         self.root_dir = root_dir
         self.providers_file = providers_file
         self._pump_status = pump_status
+        self._task_ready_callback = task_ready_callback
         self._shutdown_callback = shutdown_callback
         self.shutdown_requested = False
 
@@ -214,11 +216,15 @@ class DesktopApi:
 
     def runtime_submit_run(self, params: dict[str, Any]) -> dict[str, Any]:
         request = run_request_from_payload(_request_param(params))
-        return self._runtime().submit_run(root_dir=self.root_dir, request=request, providers_file=self.providers_file)
+        payload = self._runtime().submit_run(root_dir=self.root_dir, request=request, providers_file=self.providers_file)
+        self._notify_task_ready(str(payload.get("task_id") or ""))
+        return payload
 
     def runtime_submit_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         request = resume_request_from_payload(_request_param(params))
-        return self._runtime().submit_resume(root_dir=self.root_dir, request=request, providers_file=self.providers_file)
+        payload = self._runtime().submit_resume(root_dir=self.root_dir, request=request, providers_file=self.providers_file)
+        self._notify_task_ready(str(payload.get("task_id") or ""))
+        return payload
 
     def runtime_acquire_next(self, _params: dict[str, Any]) -> dict[str, Any]:
         return self._runtime().acquire_next(root_dir=self.root_dir, providers_file=self.providers_file)
@@ -357,6 +363,11 @@ class DesktopApi:
     def _runtime(self) -> TaskRuntime:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return TaskRuntime(config.pipeline.artifacts_dir)
+
+    def _notify_task_ready(self, task_id: str) -> None:
+        if self._task_ready_callback is None or not task_id:
+            return
+        self._task_ready_callback(task_id)
 
 
 def config_payload(

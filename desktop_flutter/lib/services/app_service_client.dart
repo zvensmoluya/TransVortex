@@ -691,9 +691,12 @@ class DesktopSnapshot {
 
   TaskSummary? get latestActiveTask {
     for (final task in tasks) {
-      if (!task.isTerminal) return task;
+      if (task.isRuntimeActive) return task;
     }
-    return tasks.isEmpty ? null : tasks.first;
+    for (final task in tasks) {
+      if (task.isTerminal) return task;
+    }
+    return null;
   }
 
   String? get translationProvider {
@@ -1130,6 +1133,11 @@ class TaskSummary {
   bool get isDone => status == 'DONE';
   bool get isFailed => status == 'FAILED';
   bool get isCancelled => status == 'CANCELLED' || status == 'INTERRUPTED';
+  String get runtimeState =>
+      (_stringValue(runtime['state']) ?? '').trim().toLowerCase();
+  bool get isRuntimeActive =>
+      runtimeState == 'running' || runtimeState == 'claimed';
+  bool get isRuntimeStale => runtimeState == 'stale';
   bool get isActive =>
       status == 'INIT' ||
       status == 'QUEUED' ||

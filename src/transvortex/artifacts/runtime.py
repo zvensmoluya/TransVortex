@@ -115,6 +115,7 @@ class TaskRuntime:
         root_dir: Path,
         providers_file: Path | None = None,
         reconcile: bool = True,
+        allowed_task_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         with self.lock():
             if reconcile:
@@ -124,6 +125,8 @@ class TaskRuntime:
                 return {"acquired": False, "reason": "active_worker", "active": active}
             for task in self._tasks_created_asc():
                 if task.status != "QUEUED":
+                    continue
+                if allowed_task_ids is not None and task.task_id not in allowed_task_ids:
                     continue
                 request_payload = self._read_runtime_request(task.task_id)
                 if not request_payload:
@@ -262,13 +265,15 @@ class TaskRuntime:
             stale: list[str] = []
             for task in self._tasks_updated_desc():
                 if task.status in RUNNING_STATUSES and task.status != "QUEUED":
+                    if self._active_payload() and self._active_payload().get("task_id") == task.task_id:
+                        continue
                     worker = self._read_worker(task.task_id)
                     if not worker:
+                        self._mark_interrupted(task, reason="no_active_worker")
+                        stale.append(task.task_id)
                         continue
                     pid = _int_or_none((worker or {}).get("pid"))
                     if pid and is_pid_alive(pid):
-                        continue
-                    if self._active_payload() and self._active_payload().get("task_id") == task.task_id:
                         continue
                     self._mark_interrupted(task, reason="no_active_worker")
                     stale.append(task.task_id)

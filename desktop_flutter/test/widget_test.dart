@@ -233,6 +233,7 @@ void main() {
                 inputFile:
                     r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-ridiculously-long-tail.mp4',
                 progress: 0.42,
+                runtime: {'state': 'running'},
               ),
             ],
           ),
@@ -322,6 +323,7 @@ void main() {
             taskId: 'tvx_widget_task',
             status: 'RUNNING',
             inputFile: r'D:\movie.mp4',
+            runtime: {'state': 'running'},
           ),
         ],
       ).raw,
@@ -384,6 +386,7 @@ void main() {
             taskId: 'tvx_widget_task',
             status: 'RUNNING',
             inputFile: r'D:\movie.mp4',
+            runtime: {'state': 'running'},
           ),
         ],
       ).raw,
@@ -1159,6 +1162,7 @@ void main() {
               taskId: 'tvx_diag_context_active_123456',
               status: 'RUNNING',
               inputFile: r'D:\media\active.mp4',
+              runtime: {'state': 'running'},
             ),
             _task(
               taskId: 'tvx_diag_context_done_654321',
@@ -1230,6 +1234,7 @@ void main() {
             taskId: 'tvx_recent_running_abcdef',
             status: 'RUNNING',
             inputFile: r'D:\media\running.mp4',
+            runtime: {'state': 'running'},
           ),
         ];
       }
@@ -1512,6 +1517,7 @@ void main() {
             taskId: 'tvx_history_running_123456',
             status: 'RUNNING',
             inputFile: r'D:\media\history-running.mp4',
+            runtime: {'state': 'running'},
           ),
           _task(
             taskId: 'tvx_history_init_123456',
