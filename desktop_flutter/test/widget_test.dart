@@ -1804,6 +1804,9 @@ void main() {
             inputFile: r'D:\media\processing-done.mp4',
             taskDir: r'D:\artifacts\tvx_processing_done_123456',
             outputPaths: {'srt': r'D:\media\processing-done.zh-CN.srt'},
+            runtime: {'state': 'terminal'},
+            createdAt: '2026-07-06T08:00:00',
+            updatedAt: '2026-07-06T09:30:00',
           ),
           _task(
             taskId: 'tvx_processing_failed_123456',
@@ -1812,6 +1815,8 @@ void main() {
             taskDir: r'D:\artifacts\tvx_processing_failed_123456',
             errorInfo: {'hint_zh': '可以继续任务。'},
             runtime: {'can_resume': true},
+            createdAt: '2026-07-05T08:00:00',
+            updatedAt: '2026-07-05T08:30:00',
           ),
           _task(
             taskId: 'tvx_processing_running_123456',
@@ -1819,6 +1824,8 @@ void main() {
             inputFile: r'D:\media\processing-running.mp4',
             taskDir: r'D:\artifacts\tvx_processing_running_123456',
             runtime: {'can_cancel': true, 'state': 'running'},
+            createdAt: '2026-07-06T10:00:00',
+            updatedAt: '2026-07-06T10:05:00',
           ),
         ];
       }
@@ -1941,6 +1948,10 @@ void main() {
 
     await tester.tap(find.text('返回概览'));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('创建 2026-07-06 08:00:00'), findsOneWidget);
+    expect(find.text('更新 2026-07-06 09:30:00'), findsOneWidget);
+    expect(find.text('运行记录 已结束'), findsOneWidget);
+    expect(find.text('操作 可编辑结果'), findsOneWidget);
     expect(find.text('阶段'), findsOneWidget);
     expect(find.text('加载更多事件'), findsOneWidget);
     await tester.tap(find.text('加载更多事件'));
@@ -2000,6 +2011,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('processing-failed.mp4'), findsWidgets);
     expect(find.text('processing-running.mp4'), findsNothing);
+    expect(find.text('操作 可继续任务'), findsOneWidget);
 
     await tester.tap(find.text('继续任务'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -2014,6 +2026,8 @@ void main() {
     await tester.tap(find.text('制作中 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('运行记录 运行中'), findsOneWidget);
+    expect(find.text('操作 可取消任务'), findsOneWidget);
     await tester.tap(find.text('取消任务'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
@@ -2172,6 +2186,8 @@ Map<String, Object?> _task({
   String? taskDir,
   double? progress,
   String? checkpointStatus,
+  String? createdAt,
+  String? updatedAt,
   Map<String, String> outputPaths = const {},
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
@@ -2186,6 +2202,8 @@ Map<String, Object?> _task({
     'bilingual': true,
     'progress': ?progress,
     'checkpoint_status': ?checkpointStatus,
+    'created_at': ?createdAt,
+    'updated_at': ?updatedAt,
     if (outputPaths.isNotEmpty) 'output_paths': outputPaths,
     if (errorInfo.isNotEmpty) 'error_info': errorInfo,
     if (runtime.isNotEmpty) 'runtime': runtime,

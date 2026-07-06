@@ -1424,6 +1424,10 @@ class _TaskSummaryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outputs = subtitleFormatListLabel(task.outputPaths.keys);
+    final createdAt = taskTimestampLabel(task.createdAt);
+    final updatedAt = taskTimestampLabel(task.updatedAt);
+    final runtimeState = _runtimeStateLabel(task.runtimeState);
+    final actionability = _taskActionabilityLabel(task);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(T.s16),
@@ -1441,6 +1445,19 @@ class _TaskSummaryPanel extends StatelessWidget {
           _InfoPill(label: '目标', value: languageLabel(task.targetLang)),
           _InfoPill(label: '字幕', value: task.bilingual ? '双语' : '单语'),
           if (outputs.isNotEmpty) _InfoPill(label: '输出', value: outputs),
+          if (createdAt.isNotEmpty) _InfoPill(label: '创建', value: createdAt),
+          if (updatedAt.isNotEmpty) _InfoPill(label: '更新', value: updatedAt),
+          if (runtimeState.isNotEmpty)
+            _InfoPill(
+              label: '运行记录',
+              value: runtimeState,
+              danger: task.isRuntimeStale,
+            ),
+          _InfoPill(
+            label: '操作',
+            value: actionability,
+            danger: _taskActionabilityDanger(task),
+          ),
           _InfoPill(label: '编号', value: shortTaskIdLabel(task.taskId)),
           if ((task.error ?? '').isNotEmpty)
             _InfoPill(
@@ -1654,6 +1671,8 @@ bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
     taskStatusLabel(task.status),
     task.displayStatus,
     taskStatusLabel(task.displayStatus),
+    _runtimeStateLabel(task.runtimeState),
+    _taskActionabilityLabel(task),
     task.sourceLang,
     task.targetLang,
     languageLabel(task.sourceLang),
@@ -1673,6 +1692,34 @@ bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
     task.updatedAt,
   ].join('\n').toLowerCase();
   return terms.every((term) => searchText.contains(term));
+}
+
+String _runtimeStateLabel(String state) {
+  return switch (state.trim().toLowerCase()) {
+    '' => '',
+    'running' => '运行中',
+    'claimed' => '正在处理',
+    'queued' => '排队中',
+    'stale' => '记录过期',
+    'interrupted' => '已中断',
+    'terminal' => '已结束',
+    'idle' => '空闲',
+    _ => state.trim(),
+  };
+}
+
+String _taskActionabilityLabel(TaskSummary task) {
+  if (task.canResume) return '可继续任务';
+  if (task.canCancel) return '可取消任务';
+  if (task.isDone) return '可编辑结果';
+  if (task.isFailed || task.isRuntimeStale) return '无可用恢复动作';
+  if (task.isCancelled) return '已结束';
+  if (task.isActive || task.isRuntimeActive) return '等待处理';
+  return '只读查看';
+}
+
+bool _taskActionabilityDanger(TaskSummary task) {
+  return (task.isFailed || task.isRuntimeStale) && !task.canResume;
 }
 
 String _taskFilterLabel(_TaskFilter filter) {
