@@ -10,6 +10,7 @@ import '../model/task_labels.dart';
 import '../model/window_state.dart';
 import '../services/app_service_client.dart';
 import '../services/local_service_controller.dart';
+import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
@@ -47,12 +48,14 @@ class SettingsWindow extends StatefulWidget {
     required this.type,
     required this.store,
     required this.bridge,
+    this.pathOpener,
     this.smoke,
   });
 
   final AppWindowType type;
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final PathOpener? pathOpener;
   final AppSmokeArgs? smoke;
 
   @override
@@ -68,6 +71,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
   late final AppServiceClient _client;
+  late final PathOpener _pathOpener;
 
   DesktopSnapshot? _snapshot;
   List<TaskSummary>? _diagnosticTasks;
@@ -95,6 +99,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   void initState() {
     super.initState();
     _client = AppServiceClient(_settingsTransport());
+    _pathOpener = widget.pathOpener ?? SystemPathOpener();
     if (widget.smoke == null) {
       widget.bridge.initializeChild();
     }
@@ -591,6 +596,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
                       : _openDiagnosticResult,
                   onOpenTask: _openDiagnosticTask,
                   onOpenTool: _openDiagnosticTool,
+                  onOpenPath: _openDiagnosticPath,
                 ),
               ),
             ],
@@ -1213,10 +1219,39 @@ class _SettingsWindowState extends State<SettingsWindow> {
       taskId: task.taskId,
     );
   }
+
+  Future<void> _openDiagnosticPath(_DiagnosticPathAction action) async {
+    try {
+      await _pathOpener.openDirectory(action.path);
+      if (!mounted) return;
+      setState(() {
+        _message = action.successMessage;
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = null;
+        _error = '打开目录失败：${_friendlySettingsError(error)}';
+      });
+    }
+  }
 }
 
 typedef _DiagnosticToolOpener =
     void Function(AppWindowType type, {String? taskId});
+
+class _DiagnosticPathAction {
+  const _DiagnosticPathAction({
+    required this.label,
+    required this.path,
+    required this.successMessage,
+  });
+
+  final String label;
+  final String path;
+  final String successMessage;
+}
 
 int _diagnosticCount(List<Map<String, Object?>> checks, String status) {
   return checks
@@ -1283,7 +1318,11 @@ String _diagnosticCodeLabel(String code) {
     return lower.contains('missing') ? '翻译配置缺失' : '翻译配置可用';
   }
   if (lower.contains('artifacts')) {
-    return lower.contains('missing') ? '产物目录不可用' : '产物目录可用';
+    return lower.contains('missing') ||
+            lower.contains('not_writable') ||
+            lower.contains('unwritable')
+        ? '产物目录不可用'
+        : '产物目录可用';
   }
   if (lower.contains('asr_provider')) {
     return lower.contains('missing') ? '识别配置缺失' : '识别配置可用';
@@ -1368,6 +1407,47 @@ AppWindowType? _diagnosticRepairTarget(Map<String, Object?> check) {
       haystack.contains('中断') ||
       haystack.contains('继续')) {
     return AppWindowType.taskProcessing;
+  }
+  return null;
+}
+
+_DiagnosticPathAction? _diagnosticPathAction(
+  Map<String, Object?> check,
+  Map<String, Object?> report,
+) {
+  final details = _stringMap(check['details']);
+  final haystack = [
+    _diagnosticName(check),
+    _stringValue(check['code']) ?? '',
+    _diagnosticMessage(check),
+    _diagnosticHint(check),
+  ].join(' ').toLowerCase();
+  if (haystack.contains('artifacts') || haystack.contains('产物目录')) {
+    final path =
+        _stringValue(details['path']) ?? _stringValue(report['artifacts_dir']);
+    if (path != null && path.isNotEmpty) {
+      return _DiagnosticPathAction(
+        label: '打开产物目录',
+        path: path,
+        successMessage: '已打开产物目录',
+      );
+    }
+  }
+  if (haystack.contains('output_dir') ||
+      haystack.contains('output directory') ||
+      haystack.contains('output_not_writable') ||
+      haystack.contains('输出目录')) {
+    final path =
+        _stringValue(details['output_dir']) ??
+        _stringValue(details['outputDir']) ??
+        _stringValue(details['path']);
+    if (path != null && path.isNotEmpty) {
+      return _DiagnosticPathAction(
+        label: '打开输出目录',
+        path: path,
+        successMessage: '已打开输出目录',
+      );
+    }
   }
   return null;
 }
@@ -1851,6 +1931,7 @@ class _DiagnosticDetails extends StatelessWidget {
     required this.onOpenResult,
     required this.onOpenTask,
     required this.onOpenTool,
+    required this.onOpenPath,
   });
 
   final DesktopSnapshot? snapshot;
@@ -1865,6 +1946,7 @@ class _DiagnosticDetails extends StatelessWidget {
   final ValueChanged<TaskSummary>? onOpenResult;
   final ValueChanged<TaskSummary>? onOpenTask;
   final _DiagnosticToolOpener onOpenTool;
+  final ValueChanged<_DiagnosticPathAction> onOpenPath;
 
   @override
   Widget build(BuildContext context) {
@@ -1873,6 +1955,9 @@ class _DiagnosticDetails extends StatelessWidget {
     final artifactsDir = _stringValue(report['artifacts_dir']) ?? '未加载';
     final check = highlighted;
     final repairTarget = check == null ? null : _diagnosticRepairTarget(check);
+    final pathAction = check == null
+        ? null
+        : _diagnosticPathAction(check, report);
     return _ToolPanel(
       footer: [
         if (repairTarget != null)
@@ -1884,6 +1969,11 @@ class _DiagnosticDetails extends StatelessWidget {
                   ? _diagnosticRepairTaskId(check!, snapshot)
                   : null,
             ),
+          ),
+        if (pathAction != null)
+          _ActionButton(
+            label: pathAction.label,
+            onTap: () => onOpenPath(pathAction),
           ),
         _ActionButton(
           label: onRefresh == null ? '刷新中' : '刷新诊断',

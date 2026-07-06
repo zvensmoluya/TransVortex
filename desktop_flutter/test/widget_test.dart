@@ -1256,6 +1256,68 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('diagnostics window opens artifact directory checks', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final pathOpener = _RecordingPathOpener();
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          environment: {
+            'status': 'FAIL',
+            'root_dir': r'D:\thevox\TransVortex',
+            'providers_file': r'D:\thevox\TransVortex\providers.yaml',
+            'artifacts_dir': r'E:\blocked-artifacts',
+            'checks': [
+              {
+                'name': 'python',
+                'status': 'PASS',
+                'code': 'python_found',
+                'message': 'Python is available',
+                'hint_zh': 'Python 已可用。',
+              },
+              {
+                'name': 'artifacts',
+                'status': 'FAIL',
+                'code': 'artifacts_not_writable',
+                'message': 'artifacts directory is not writable',
+                'hint_zh': 'artifacts 目录不可写。请检查路径和权限。',
+                'details': {'path': r'E:\blocked-artifacts'},
+              },
+            ],
+          },
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.diagnostics,
+        store: store,
+        bridge: bridge,
+        pathOpener: pathOpener,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('产物目录 · 失败'), findsOneWidget);
+    expect(find.text('产物目录不可用'), findsOneWidget);
+    expect(find.text('打开产物目录'), findsOneWidget);
+
+    await tester.tap(find.text('打开产物目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(pathOpener.openedDirectories, [r'E:\blocked-artifacts']);
+    expect(find.text('已打开产物目录'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets('diagnostics window shows task context from snapshot', (
     tester,
   ) async {
