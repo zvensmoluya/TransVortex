@@ -1263,10 +1263,23 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
+    final openedTools = <AppWindowArgs>[];
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
-          environment: _doctorEnvironment(status: 'PASS'),
+          environment: _doctorEnvironment(
+            status: 'PASS',
+            extraChecks: [
+              {
+                'name': 'runtime_queue',
+                'status': 'WARN',
+                'code': 'runtime_interrupted_tasks',
+                'message': 'Interrupted tasks need user review.',
+                'hint_zh': '有中断任务需要查看和处理。',
+                'details': {'task_id': 'tvx_diag_context_active_123456'},
+              },
+            ],
+          ),
           runtime: {
             'active': {'task_id': 'tvx_diag_context_active_123456'},
             'queued': ['tvx_waiting_1'],
@@ -1288,6 +1301,9 @@ void main() {
         ).raw;
       }
       throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachToolWindowOpener((args) async {
+      openedTools.add(args);
     });
 
     await tester.pumpWidget(
@@ -1315,6 +1331,12 @@ void main() {
     expect(find.text('最新任务'), findsOneWidget);
     expect(find.textContaining('tvx_diag'), findsNothing);
     expect(find.textContaining('RUNNING'), findsNothing);
+    expect(find.text('查看任务处理'), findsOneWidget);
+    await tester.tap(find.text('查看任务处理'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(openedTools.single.type, AppWindowType.taskProcessing);
+    expect(openedTools.single.taskId, 'tvx_diag_context_active_123456');
+    expect(find.textContaining('已打开任务处理'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1325,6 +1347,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
+    final openedTools = <AppWindowArgs>[];
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -1383,6 +1406,9 @@ void main() {
       }
       throw RpcRemoteException('method_not_found', method);
     });
+    bridge.attachToolWindowOpener((args) async {
+      openedTools.add(args);
+    });
 
     await tester.pumpWidget(
       TransVortexApp(
@@ -1410,6 +1436,11 @@ void main() {
     expect(find.text('未完成'), findsOneWidget);
     expect(find.textContaining('tvx_recent'), findsNothing);
     expect(find.textContaining('DONE'), findsNothing);
+    await tester.tap(find.text('任务处理').first);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(openedTools.single.type, AppWindowType.taskProcessing);
+    expect(openedTools.single.taskId, 'tvx_recent_done_abcdef');
+    expect(find.textContaining('已打开任务处理'), findsOneWidget);
     await tester.tap(find.text('结果摘要').first);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpAndSettle();
@@ -1870,7 +1901,10 @@ DesktopSnapshot _desktopSnapshot({
   });
 }
 
-Map<String, Object?> _doctorEnvironment({String status = 'FAIL'}) {
+Map<String, Object?> _doctorEnvironment({
+  String status = 'FAIL',
+  List<Map<String, Object?>> extraChecks = const [],
+}) {
   return {
     'status': status,
     'root_dir': r'D:\thevox\TransVortex',
@@ -1897,6 +1931,7 @@ Map<String, Object?> _doctorEnvironment({String status = 'FAIL'}) {
             : '本地 ASR 需要 faster-whisper。请执行 python -m pip install -e .[asr]。',
         'details': {'provider': 'local', 'kind': 'local_inprocess'},
       },
+      ...extraChecks,
     ],
   };
 }

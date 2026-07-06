@@ -589,6 +589,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
                   onOpenResult: _loadingDiagnosticResult
                       ? null
                       : _openDiagnosticResult,
+                  onOpenTask: _openDiagnosticTask,
                   onOpenTool: _openDiagnosticTool,
                 ),
               ),
@@ -1144,9 +1145,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
     });
   }
 
-  Future<void> _openDiagnosticTool(AppWindowType type) async {
+  Future<void> _openDiagnosticTool(AppWindowType type, {String? taskId}) async {
     try {
-      await widget.bridge.openToolWindow(type);
+      await widget.bridge.openToolWindow(type, taskId: taskId);
       if (!mounted) return;
       setState(() {
         _message = '已打开${type.title}';
@@ -1205,7 +1206,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (mounted) setState(() => _loadingDiagnosticResult = false);
     }
   }
+
+  Future<void> _openDiagnosticTask(TaskSummary task) {
+    return _openDiagnosticTool(
+      AppWindowType.taskProcessing,
+      taskId: task.taskId,
+    );
+  }
 }
+
+typedef _DiagnosticToolOpener =
+    void Function(AppWindowType type, {String? taskId});
 
 int _diagnosticCount(List<Map<String, Object?>> checks, String status) {
   return checks
@@ -1346,7 +1357,35 @@ AppWindowType? _diagnosticRepairTarget(Map<String, Object?> check) {
       haystack.contains('api_key')) {
     return AppWindowType.translationSettings;
   }
+  if (haystack.contains('runtime') ||
+      haystack.contains('task') ||
+      haystack.contains('queue') ||
+      haystack.contains('queued') ||
+      haystack.contains('interrupted') ||
+      haystack.contains('resume') ||
+      haystack.contains('任务') ||
+      haystack.contains('队列') ||
+      haystack.contains('中断') ||
+      haystack.contains('继续')) {
+    return AppWindowType.taskProcessing;
+  }
   return null;
+}
+
+String? _diagnosticRepairTaskId(
+  Map<String, Object?> check,
+  DesktopSnapshot? snapshot,
+) {
+  final details = _stringMap(check['details']);
+  final direct =
+      _stringValue(details['task_id']) ??
+      _stringValue(details['taskId']) ??
+      _stringValue(check['task_id']) ??
+      _stringValue(check['taskId']);
+  if (direct != null && direct.isNotEmpty) return direct;
+  final active = _diagnosticActiveTaskRawId(snapshot);
+  if (active != null && active.isNotEmpty) return active;
+  return _diagnosticLatestTask(snapshot)?.taskId;
 }
 
 String _diagnosticRepairLabel(AppWindowType type) {
@@ -1810,6 +1849,7 @@ class _DiagnosticDetails extends StatelessWidget {
     required this.onRefresh,
     required this.onRefreshTasks,
     required this.onOpenResult,
+    required this.onOpenTask,
     required this.onOpenTool,
   });
 
@@ -1823,7 +1863,8 @@ class _DiagnosticDetails extends StatelessWidget {
   final VoidCallback? onRefresh;
   final VoidCallback? onRefreshTasks;
   final ValueChanged<TaskSummary>? onOpenResult;
-  final ValueChanged<AppWindowType> onOpenTool;
+  final ValueChanged<TaskSummary>? onOpenTask;
+  final _DiagnosticToolOpener onOpenTool;
 
   @override
   Widget build(BuildContext context) {
@@ -1837,7 +1878,12 @@ class _DiagnosticDetails extends StatelessWidget {
         if (repairTarget != null)
           _ActionButton(
             label: _diagnosticRepairLabel(repairTarget),
-            onTap: () => onOpenTool(repairTarget),
+            onTap: () => onOpenTool(
+              repairTarget,
+              taskId: repairTarget == AppWindowType.taskProcessing
+                  ? _diagnosticRepairTaskId(check!, snapshot)
+                  : null,
+            ),
           ),
         _ActionButton(
           label: onRefresh == null ? '刷新中' : '刷新诊断',
@@ -1893,6 +1939,7 @@ class _DiagnosticDetails extends StatelessWidget {
           result: result,
           onRefreshTasks: onRefreshTasks,
           onOpenResult: onOpenResult,
+          onOpenTask: onOpenTask,
         ),
       ],
     );
@@ -1955,6 +2002,7 @@ class _DiagnosticRecentTasks extends StatelessWidget {
     required this.result,
     required this.onRefreshTasks,
     required this.onOpenResult,
+    required this.onOpenTask,
   });
 
   final DesktopSnapshot? snapshot;
@@ -1963,6 +2011,7 @@ class _DiagnosticRecentTasks extends StatelessWidget {
   final TaskResultWorkspace? result;
   final VoidCallback? onRefreshTasks;
   final ValueChanged<TaskSummary>? onOpenResult;
+  final ValueChanged<TaskSummary>? onOpenTask;
 
   @override
   Widget build(BuildContext context) {
@@ -1996,6 +2045,7 @@ class _DiagnosticRecentTasks extends StatelessWidget {
               _DiagnosticTaskRow(
                 task: task,
                 selected: task.taskId == selectedTaskId,
+                onOpenTask: onOpenTask == null ? null : () => onOpenTask!(task),
                 onOpenResult: task.isDone && onOpenResult != null
                     ? () => onOpenResult!(task)
                     : null,
@@ -2016,11 +2066,13 @@ class _DiagnosticTaskRow extends StatelessWidget {
   const _DiagnosticTaskRow({
     required this.task,
     required this.selected,
+    required this.onOpenTask,
     required this.onOpenResult,
   });
 
   final TaskSummary task;
   final bool selected;
+  final VoidCallback? onOpenTask;
   final VoidCallback? onOpenResult;
 
   @override
@@ -2057,6 +2109,8 @@ class _DiagnosticTaskRow extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(width: T.s8),
+          _MiniTextButton(label: '任务处理', onTap: onOpenTask),
           const SizedBox(width: T.s8),
           _MiniTextButton(label: canOpen ? '结果摘要' : '未完成', onTap: onOpenResult),
         ],
