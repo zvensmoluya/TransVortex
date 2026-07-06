@@ -9,6 +9,7 @@ import '../model/startup_args.dart';
 import '../model/task_labels.dart';
 import '../model/window_state.dart';
 import '../services/app_service_client.dart';
+import '../services/directory_probe.dart';
 import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
@@ -49,6 +50,7 @@ class SettingsWindow extends StatefulWidget {
     required this.store,
     required this.bridge,
     this.pathOpener,
+    this.directoryProbe,
     this.smoke,
   });
 
@@ -56,6 +58,7 @@ class SettingsWindow extends StatefulWidget {
   final WindowStateStore store;
   final WindowStateBridge bridge;
   final PathOpener? pathOpener;
+  final DirectoryWriteProbe? directoryProbe;
   final AppSmokeArgs? smoke;
 
   @override
@@ -72,10 +75,14 @@ class _SettingsWindowState extends State<SettingsWindow> {
   LocalServiceController? _smokeService;
   late final AppServiceClient _client;
   late final PathOpener _pathOpener;
+  late final DirectoryWriteProbe _directoryProbe;
 
   DesktopSnapshot? _snapshot;
   List<TaskSummary>? _diagnosticTasks;
   TaskResultWorkspace? _diagnosticResult;
+  final Map<String, DirectoryProbeResult> _diagnosticOutputDirectoryResults =
+      {};
+  final Set<String> _checkingDiagnosticOutputDirectoryTaskIds = {};
   String? _selectedDiagnosticTaskId;
   String? _selectedProvider;
   String? _selectedModel;
@@ -100,6 +107,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     super.initState();
     _client = AppServiceClient(_settingsTransport());
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
+    _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
     if (widget.smoke == null) {
       widget.bridge.initializeChild();
     }
@@ -584,6 +592,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
                   tasks: _diagnosticTasks,
                   selectedTaskId: _selectedDiagnosticTaskId,
                   result: _diagnosticResult,
+                  outputDirectoryResults: _diagnosticOutputDirectoryResults,
+                  checkingOutputDirectoryTaskIds:
+                      _checkingDiagnosticOutputDirectoryTaskIds,
                   report: report,
                   checks: checks,
                   highlighted: selected,
@@ -595,6 +606,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
                       ? null
                       : _openDiagnosticResult,
                   onOpenTask: _openDiagnosticTask,
+                  onCheckOutputDirectory: _checkDiagnosticOutputDirectory,
                   onOpenTool: _openDiagnosticTool,
                   onOpenPath: _openDiagnosticPath,
                 ),
@@ -1179,6 +1191,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (!mounted) return;
       setState(() {
         _diagnosticTasks = tasks;
+        final ids = tasks.map((task) => task.taskId).toSet();
+        _diagnosticOutputDirectoryResults.removeWhere(
+          (taskId, _) => !ids.contains(taskId),
+        );
         _message = '已读取 ${tasks.length} 个最近任务。';
       });
     } on Object catch (error) {
@@ -1218,6 +1234,41 @@ class _SettingsWindowState extends State<SettingsWindow> {
       AppWindowType.taskProcessing,
       taskId: task.taskId,
     );
+  }
+
+  Future<void> _checkDiagnosticOutputDirectory(TaskSummary task) async {
+    final dir = _diagnosticOutputDirectoryFor(task);
+    if (dir == null || dir.isEmpty) {
+      setState(() {
+        _selectedDiagnosticTaskId = task.taskId;
+        _message = null;
+        _error = '这个任务没有结果目录记录。';
+      });
+      return;
+    }
+    setState(() {
+      _selectedDiagnosticTaskId = task.taskId;
+      _checkingDiagnosticOutputDirectoryTaskIds.add(task.taskId);
+      _message = null;
+      _error = null;
+    });
+    try {
+      final result = await _directoryProbe.checkWritable(dir);
+      if (!mounted) return;
+      setState(() {
+        _diagnosticOutputDirectoryResults[task.taskId] = result;
+        _message = result.ok ? '结果目录可写：$dir' : '结果目录不可写：${result.message}';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _checkingDiagnosticOutputDirectoryTaskIds.remove(task.taskId);
+        });
+      }
+    }
   }
 
   Future<void> _openDiagnosticPath(_DiagnosticPathAction action) async {
@@ -1609,6 +1660,26 @@ String _diagnosticTaskSummaryLabel(TaskSummary task) {
   return '${_diagnosticTaskLabel(task)} · ${taskStatusLabel(task.status)}';
 }
 
+String? _diagnosticOutputDirectoryFor(TaskSummary task) {
+  final outputPath = _diagnosticPrimaryOutputPath(task);
+  if (outputPath == null || outputPath.isEmpty) return null;
+  return File(outputPath).parent.path;
+}
+
+String? _diagnosticPrimaryOutputPath(TaskSummary task) {
+  final direct = task.outputPath?.trim();
+  if (direct != null && direct.isNotEmpty) return direct;
+  for (final key in const ['srt', 'ass', 'vtt']) {
+    final value = task.outputPaths[key]?.trim();
+    if (value != null && value.isNotEmpty) return value;
+  }
+  for (final value in task.outputPaths.values) {
+    final trimmed = value.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+  }
+  return null;
+}
+
 String _shortTaskId(String taskId) {
   return shortTaskIdLabel(taskId);
 }
@@ -1923,6 +1994,8 @@ class _DiagnosticDetails extends StatelessWidget {
     required this.tasks,
     required this.selectedTaskId,
     required this.result,
+    required this.outputDirectoryResults,
+    required this.checkingOutputDirectoryTaskIds,
     required this.report,
     required this.checks,
     required this.highlighted,
@@ -1930,6 +2003,7 @@ class _DiagnosticDetails extends StatelessWidget {
     required this.onRefreshTasks,
     required this.onOpenResult,
     required this.onOpenTask,
+    required this.onCheckOutputDirectory,
     required this.onOpenTool,
     required this.onOpenPath,
   });
@@ -1938,6 +2012,8 @@ class _DiagnosticDetails extends StatelessWidget {
   final List<TaskSummary>? tasks;
   final String? selectedTaskId;
   final TaskResultWorkspace? result;
+  final Map<String, DirectoryProbeResult> outputDirectoryResults;
+  final Set<String> checkingOutputDirectoryTaskIds;
   final Map<String, Object?> report;
   final List<Map<String, Object?>> checks;
   final Map<String, Object?>? highlighted;
@@ -1945,6 +2021,7 @@ class _DiagnosticDetails extends StatelessWidget {
   final VoidCallback? onRefreshTasks;
   final ValueChanged<TaskSummary>? onOpenResult;
   final ValueChanged<TaskSummary>? onOpenTask;
+  final ValueChanged<TaskSummary>? onCheckOutputDirectory;
   final _DiagnosticToolOpener onOpenTool;
   final ValueChanged<_DiagnosticPathAction> onOpenPath;
 
@@ -2027,9 +2104,12 @@ class _DiagnosticDetails extends StatelessWidget {
           tasks: tasks,
           selectedTaskId: selectedTaskId,
           result: result,
+          outputDirectoryResults: outputDirectoryResults,
+          checkingOutputDirectoryTaskIds: checkingOutputDirectoryTaskIds,
           onRefreshTasks: onRefreshTasks,
           onOpenResult: onOpenResult,
           onOpenTask: onOpenTask,
+          onCheckOutputDirectory: onCheckOutputDirectory,
         ),
       ],
     );
@@ -2090,18 +2170,24 @@ class _DiagnosticRecentTasks extends StatelessWidget {
     required this.tasks,
     required this.selectedTaskId,
     required this.result,
+    required this.outputDirectoryResults,
+    required this.checkingOutputDirectoryTaskIds,
     required this.onRefreshTasks,
     required this.onOpenResult,
     required this.onOpenTask,
+    required this.onCheckOutputDirectory,
   });
 
   final DesktopSnapshot? snapshot;
   final List<TaskSummary>? tasks;
   final String? selectedTaskId;
   final TaskResultWorkspace? result;
+  final Map<String, DirectoryProbeResult> outputDirectoryResults;
+  final Set<String> checkingOutputDirectoryTaskIds;
   final VoidCallback? onRefreshTasks;
   final ValueChanged<TaskSummary>? onOpenResult;
   final ValueChanged<TaskSummary>? onOpenTask;
+  final ValueChanged<TaskSummary>? onCheckOutputDirectory;
 
   @override
   Widget build(BuildContext context) {
@@ -2135,10 +2221,18 @@ class _DiagnosticRecentTasks extends StatelessWidget {
               _DiagnosticTaskRow(
                 task: task,
                 selected: task.taskId == selectedTaskId,
+                outputDirectoryResult: outputDirectoryResults[task.taskId],
+                checkingOutputDirectory: checkingOutputDirectoryTaskIds
+                    .contains(task.taskId),
                 onOpenTask: onOpenTask == null ? null : () => onOpenTask!(task),
                 onOpenResult: task.isDone && onOpenResult != null
                     ? () => onOpenResult!(task)
                     : null,
+                onCheckOutputDirectory:
+                    _diagnosticOutputDirectoryFor(task) == null ||
+                        onCheckOutputDirectory == null
+                    ? null
+                    : () => onCheckOutputDirectory!(task),
               ),
               const SizedBox(height: T.s8),
             ],
@@ -2156,18 +2250,29 @@ class _DiagnosticTaskRow extends StatelessWidget {
   const _DiagnosticTaskRow({
     required this.task,
     required this.selected,
+    required this.outputDirectoryResult,
+    required this.checkingOutputDirectory,
     required this.onOpenTask,
     required this.onOpenResult,
+    required this.onCheckOutputDirectory,
   });
 
   final TaskSummary task;
   final bool selected;
+  final DirectoryProbeResult? outputDirectoryResult;
+  final bool checkingOutputDirectory;
   final VoidCallback? onOpenTask;
   final VoidCallback? onOpenResult;
+  final VoidCallback? onCheckOutputDirectory;
 
   @override
   Widget build(BuildContext context) {
     final canOpen = onOpenResult != null;
+    final outputCheckLabel = checkingOutputDirectory
+        ? '检查中'
+        : onCheckOutputDirectory == null
+        ? '无目录'
+        : '检查目录';
     return Container(
       decoration: BoxDecoration(
         border: const Border(bottom: BorderSide(color: T.line)),
@@ -2196,6 +2301,19 @@ class _DiagnosticTaskRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: T.tCaption,
                 ),
+                if (outputDirectoryResult != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    outputDirectoryResult!.ok
+                        ? '结果目录：可写'
+                        : '结果目录：${outputDirectoryResult!.message}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: T.tCaption.copyWith(
+                      color: outputDirectoryResult!.ok ? T.ok : T.danger,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -2203,6 +2321,11 @@ class _DiagnosticTaskRow extends StatelessWidget {
           _MiniTextButton(label: '任务处理', onTap: onOpenTask),
           const SizedBox(width: T.s8),
           _MiniTextButton(label: canOpen ? '结果摘要' : '未完成', onTap: onOpenResult),
+          const SizedBox(width: T.s8),
+          _MiniTextButton(
+            label: outputCheckLabel,
+            onTap: checkingOutputDirectory ? null : onCheckOutputDirectory,
+          ),
         ],
       ),
     );

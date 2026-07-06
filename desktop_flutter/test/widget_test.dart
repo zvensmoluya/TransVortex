@@ -1411,6 +1411,9 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final openedTools = <AppWindowArgs>[];
+    final directoryProbe = _RecordingDirectoryProbe(
+      const DirectoryProbeResult(ok: false, message: '目录不可写：denied'),
+    );
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -1430,6 +1433,7 @@ void main() {
             taskId: 'tvx_recent_done_abcdef',
             status: 'DONE',
             inputFile: r'D:\media\recent.mp4',
+            outputPaths: {'srt': r'D:\media\recent.zh-CN.srt'},
           ),
           _task(
             taskId: 'tvx_recent_running_abcdef',
@@ -1478,6 +1482,7 @@ void main() {
         windowType: AppWindowType.diagnostics,
         store: store,
         bridge: bridge,
+        directoryProbe: directoryProbe,
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
@@ -1499,6 +1504,11 @@ void main() {
     expect(find.text('未完成'), findsOneWidget);
     expect(find.textContaining('tvx_recent'), findsNothing);
     expect(find.textContaining('DONE'), findsNothing);
+    await tester.tap(find.text('检查目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(directoryProbe.checkedPaths, [r'D:\media']);
+    expect(find.text('结果目录：目录不可写：denied'), findsOneWidget);
+    expect(find.textContaining('结果目录不可写'), findsOneWidget);
     await tester.tap(find.text('任务处理').first);
     await tester.pump(const Duration(milliseconds: 100));
     expect(openedTools.single.type, AppWindowType.taskProcessing);
