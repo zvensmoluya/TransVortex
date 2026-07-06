@@ -1396,14 +1396,25 @@ void main() {
     expect(find.text('1 个等待'), findsOneWidget);
     expect(find.text('中断任务'), findsOneWidget);
     expect(find.text('1 个'), findsOneWidget);
+    expect(find.text('等待任务'), findsOneWidget);
+    expect(find.text('任务 tvx_waiting_1'), findsOneWidget);
+    expect(find.text('中断线索'), findsOneWidget);
+    expect(find.text('任务 tvx_inte…pted_1'), findsOneWidget);
     expect(find.text('最新任务'), findsOneWidget);
-    expect(find.textContaining('tvx_diag'), findsNothing);
+    expect(find.textContaining('tvx_diag_context_active_123456'), findsNothing);
     expect(find.textContaining('RUNNING'), findsNothing);
+
+    await tester.tap(find.text('任务 tvx_waiting_1'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(openedTools.single.type, AppWindowType.taskProcessing);
+    expect(openedTools.single.taskId, 'tvx_waiting_1');
+
     expect(find.text('查看任务处理'), findsOneWidget);
     await tester.tap(find.text('查看任务处理'));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(openedTools.single.type, AppWindowType.taskProcessing);
-    expect(openedTools.single.taskId, 'tvx_diag_context_active_123456');
+    expect(openedTools.length, 2);
+    expect(openedTools.last.type, AppWindowType.taskProcessing);
+    expect(openedTools.last.taskId, 'tvx_diag_context_active_123456');
     expect(find.textContaining('已打开任务处理'), findsOneWidget);
     expectNoFlutterException();
   });

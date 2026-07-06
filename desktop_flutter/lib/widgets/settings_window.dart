@@ -611,6 +611,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
                       ? null
                       : _openDiagnosticResult,
                   onOpenTask: _openDiagnosticTask,
+                  onOpenTaskId: _openDiagnosticTaskId,
                   onCheckOutputDirectory: _checkDiagnosticOutputDirectory,
                   onOpenTool: _openDiagnosticTool,
                   onOpenPath: _openDiagnosticPath,
@@ -1241,6 +1242,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
     );
   }
 
+  Future<void> _openDiagnosticTaskId(String taskId) {
+    return _openDiagnosticTool(AppWindowType.taskProcessing, taskId: taskId);
+  }
+
   Future<void> _checkDiagnosticOutputDirectory(TaskSummary task) async {
     final dir = _diagnosticOutputDirectoryFor(task);
     if (dir == null || dir.isEmpty) {
@@ -1589,6 +1594,8 @@ String _diagnosticDetailLabel(String key) {
     'protocol' => '协议',
     'model' => '模型',
     'base_url' => '服务地址',
+    'task_id' => '任务',
+    'taskId' => '任务',
     _ => key,
   };
 }
@@ -1600,6 +1607,8 @@ String _diagnosticDetailValue(String key, Object? value) {
     'provider' => _serviceValueLabel(lower, fallback: text),
     'kind' => _serviceKindLabel(lower, fallback: text),
     'protocol' => _serviceProtocolLabel(lower, fallback: text),
+    'task_id' => _shortTaskId(text),
+    'taskId' => _shortTaskId(text),
     _ => _localizeDiagnosticText(text),
   };
 }
@@ -1687,6 +1696,24 @@ TaskSummary? _diagnosticLatestTask(DesktopSnapshot? snapshot) {
   final tasks = snapshot?.tasks ?? const <TaskSummary>[];
   if (tasks.isEmpty) return null;
   return _diagnosticActiveTask(snapshot) ?? tasks.first;
+}
+
+TaskSummary? _diagnosticTaskById(DesktopSnapshot? snapshot, String taskId) {
+  final target = taskId.trim();
+  if (target.isEmpty) return null;
+  for (final task in snapshot?.tasks ?? const <TaskSummary>[]) {
+    if (task.taskId == target) return task;
+  }
+  return null;
+}
+
+String _diagnosticRuntimeTaskLinkLabel(
+  DesktopSnapshot? snapshot,
+  String taskId,
+) {
+  final task = _diagnosticTaskById(snapshot, taskId);
+  if (task != null) return _diagnosticTaskSummaryLabel(task);
+  return '任务 ${_shortTaskId(taskId)}';
 }
 
 String _diagnosticTaskLabel(TaskSummary task) {
@@ -2041,6 +2068,7 @@ class _DiagnosticDetails extends StatelessWidget {
     required this.onRefreshTasks,
     required this.onOpenResult,
     required this.onOpenTask,
+    required this.onOpenTaskId,
     required this.onCheckOutputDirectory,
     required this.onOpenTool,
     required this.onOpenPath,
@@ -2059,6 +2087,7 @@ class _DiagnosticDetails extends StatelessWidget {
   final VoidCallback? onRefreshTasks;
   final ValueChanged<TaskSummary>? onOpenResult;
   final ValueChanged<TaskSummary>? onOpenTask;
+  final ValueChanged<String>? onOpenTaskId;
   final ValueChanged<TaskSummary>? onCheckOutputDirectory;
   final _DiagnosticToolOpener onOpenTool;
   final ValueChanged<_DiagnosticPathAction> onOpenPath;
@@ -2135,7 +2164,7 @@ class _DiagnosticDetails extends StatelessWidget {
           ],
         ],
         const SizedBox(height: T.s24),
-        _DiagnosticTaskContext(snapshot: snapshot),
+        _DiagnosticTaskContext(snapshot: snapshot, onOpenTaskId: onOpenTaskId),
         const SizedBox(height: T.s16),
         _DiagnosticRecentTasks(
           snapshot: snapshot,
@@ -2155,9 +2184,13 @@ class _DiagnosticDetails extends StatelessWidget {
 }
 
 class _DiagnosticTaskContext extends StatelessWidget {
-  const _DiagnosticTaskContext({required this.snapshot});
+  const _DiagnosticTaskContext({
+    required this.snapshot,
+    required this.onOpenTaskId,
+  });
 
   final DesktopSnapshot? snapshot;
+  final ValueChanged<String>? onOpenTaskId;
 
   @override
   Widget build(BuildContext context) {
@@ -2192,11 +2225,115 @@ class _DiagnosticTaskContext extends StatelessWidget {
           _ReadonlyRow(label: '任务数', value: '$taskCount'),
           const SizedBox(height: T.s8),
           _ReadonlyRow(label: '队列', value: '${queued.length} 个等待'),
+          if (queued.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            _DiagnosticRuntimeTaskLinks(
+              label: '等待任务',
+              snapshot: snapshot,
+              taskIds: queued,
+              onOpenTaskId: onOpenTaskId,
+            ),
+          ],
           const SizedBox(height: T.s8),
           _ReadonlyRow(label: '中断任务', value: '${interrupted.length} 个'),
+          if (interrupted.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            _DiagnosticRuntimeTaskLinks(
+              label: '中断线索',
+              snapshot: snapshot,
+              taskIds: interrupted,
+              onOpenTaskId: onOpenTaskId,
+            ),
+          ],
           const SizedBox(height: T.s8),
           _ReadonlyRow(label: '最新任务', value: latestLabel),
         ],
+      ),
+    );
+  }
+}
+
+class _DiagnosticRuntimeTaskLinks extends StatelessWidget {
+  const _DiagnosticRuntimeTaskLinks({
+    required this.label,
+    required this.snapshot,
+    required this.taskIds,
+    required this.onOpenTaskId,
+  });
+
+  final String label;
+  final DesktopSnapshot? snapshot;
+  final List<String> taskIds;
+  final ValueChanged<String>? onOpenTaskId;
+
+  @override
+  Widget build(BuildContext context) {
+    final uniqueTaskIds = <String>{
+      for (final taskId in taskIds)
+        if (taskId.trim().isNotEmpty) taskId.trim(),
+    }.toList(growable: false);
+    final visibleTaskIds = uniqueTaskIds.take(3).toList(growable: false);
+    if (uniqueTaskIds.isEmpty) return const SizedBox.shrink();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 96, child: Text(label, style: T.tCaption)),
+        Expanded(
+          child: Wrap(
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              for (final taskId in visibleTaskIds)
+                _DiagnosticRuntimeTaskLink(
+                  label: _diagnosticRuntimeTaskLinkLabel(snapshot, taskId),
+                  onTap: onOpenTaskId == null
+                      ? null
+                      : () => onOpenTaskId!(taskId),
+                ),
+              if (uniqueTaskIds.length > visibleTaskIds.length)
+                Text(
+                  '另有 ${uniqueTaskIds.length - visibleTaskIds.length} 个',
+                  style: T.tCaption,
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DiagnosticRuntimeTaskLink extends StatelessWidget {
+  const _DiagnosticRuntimeTaskLink({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 220),
+          padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 5),
+          decoration: BoxDecoration(
+            color: enabled ? T.accentSoft : T.surface,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: enabled ? T.accent : T.line),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: T.tCaption.copyWith(
+              color: enabled ? T.accentStrong : T.muted,
+              fontWeight: enabled ? T.wBold : T.wMedium,
+            ),
+          ),
+        ),
       ),
     );
   }

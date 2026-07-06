@@ -118,12 +118,12 @@
 - 读取 `desktop.snapshot.environment`。
 - 展示总体 PASS / WARN / FAIL。
 - 展示检查项、中文建议、错误码和关键路径。
-- 从 `desktop.snapshot` 显示活动任务、任务数、队列和中断任务的只读摘要。
+- 从 `desktop.snapshot` 显示活动任务、任务数、队列和中断任务的只读摘要；队列 / 中断任务只显示短线索，并可定位到任务处理窗。
 - 从真实 `tasks.list` 刷新最近任务。
 - 对完成任务用 `result.open` 读取片段数、问题数和输出格式摘要。
 - 提供真实刷新。
 
-不得在修复动作未接线前放假按钮；当前只允许跳转到已真实接线的翻译模型设置 / 语音识别设置、打开 doctor 报告里的产物目录路径、在诊断窗最近任务行和任务处理窗里对单个任务结果目录做用户触发的可写性检查，或对 `can_resume` 任务调用真实 `runtime.submitResume`。完整诊断修复台、运行队列操作、完整历史恢复矩阵、完整结果编辑器和任务详情诊断延后。
+不得在修复动作未接线前放假按钮；当前只允许跳转到已真实接线的翻译模型设置 / 语音识别设置、打开 doctor 报告里的产物目录路径、从诊断窗的队列 / 中断任务线索或最近任务行定位任务处理窗、在诊断窗最近任务行和任务处理窗里对单个任务结果目录做用户触发的可写性检查，或对 `can_resume` 任务调用真实 `runtime.submitResume`。完整诊断修复台、运行队列操作、完整历史恢复矩阵、完整结果编辑器和任务详情诊断延后。
 
 ---
 
@@ -270,5 +270,5 @@ MVP 美术执行采用文字契约 + 真实 Flutter 窗口验收：
 5. 回归系统通知真实桌面路径；当前已接 Windows Toast 插件、完成 / 失败触发、前台抑制和点击聚焦回调，release smoke 已覆盖完成态状态转移经主窗口通知 observer 触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key，Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致，用户已人工确认真实横幅出现；portable 包脚本已验证包含通知 DLL、快捷方式辅助脚本、用户级安装脚本和 Python 源码布局的包内 Local Service RPC、用户级脚本安装与包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为。
 6. 持续覆盖翻译模型设置窗长模型名 / 无 key / 测试失败场景；当前已有 widget 防回归，release smoke 已覆盖 release 翻译设置窗读取临时翻译服务配置、Flutter 渲染树截图和 Flutter overflow 警告条检查。
 7. 持续覆盖语音识别设置窗三引擎 / 无依赖 / 云端缺 key 场景；当前已覆盖空保存方案、本机草稿回落，以及 release 语音识别设置窗读取临时语音识别配置、Flutter 渲染树截图和 Flutter overflow 警告条检查；诊断窗可从语音识别 / faster-whisper / FunASR 检查项跳转到语音识别设置。
-8. 持续覆盖诊断工具窗读取 doctor 报告；当前 release smoke 已覆盖 `-WindowType diagnostics`、最近任务结果目录可写性、Flutter 渲染树截图和 Flutter overflow 警告条检查，常见翻译 / 语音识别检查项已有设置窗跳转入口，widget 已覆盖任务上下文摘要、真实 `tasks.list` 最近任务刷新、完成任务 `result.open` 结果摘要和最近任务结果目录检查；完整自动修复台、运行队列操作、任务详情诊断后续补。
+8. 持续覆盖诊断工具窗读取 doctor 报告；当前 release smoke 已覆盖 `-WindowType diagnostics`、最近任务结果目录可写性、Flutter 渲染树截图和 Flutter overflow 警告条检查，常见翻译 / 语音识别检查项已有设置窗跳转入口，widget 已覆盖任务上下文摘要、队列 / 中断任务线索定位到任务处理窗、真实 `tasks.list` 最近任务刷新、完成任务 `result.open` 结果摘要和最近任务结果目录检查；完整自动修复台、运行队列操作、任务详情诊断后续补。
 9. 再进入完整历史恢复矩阵、术语管理、跨任务批量筛查、完整结果编辑器和高级导出复核等后续窗口。
