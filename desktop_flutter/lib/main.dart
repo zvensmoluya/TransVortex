@@ -55,9 +55,7 @@ Future<void> main(List<String> args) async {
       smoke: startupArgs.smoke,
     ),
   );
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    unawaited(showConfiguredWindow());
-  });
+  unawaited(_showConfiguredWindowAfterFirstRaster());
 }
 
 Future<WindowController?> _currentWindowController() async {
@@ -66,6 +64,19 @@ Future<WindowController?> _currentWindowController() async {
   } on Object {
     return null;
   }
+}
+
+Future<void> _showConfiguredWindowAfterFirstRaster() async {
+  try {
+    await WidgetsBinding.instance.waitUntilFirstFrameRasterized.timeout(
+      const Duration(seconds: 10),
+    );
+  } on TimeoutException {
+    // Do not leave a window hidden forever if a host cannot report rasterization.
+  } on Object {
+    // Unsupported test hosts still need the normal best-effort show path below.
+  }
+  await showConfiguredWindow();
 }
 
 class TransVortexApp extends StatelessWidget {
@@ -1390,7 +1401,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         WindowConfiguration(hiddenAtLaunch: true, arguments: args.encode()),
       );
       _toolWindows[windowKey] = controller;
-      await controller.show();
+      // Child windows reveal themselves after their first Flutter frame. Showing
+      // here races the child render path and can expose a blank native window.
     } on Object catch (exc) {
       _toast('打开${type.title}失败：$exc');
     }

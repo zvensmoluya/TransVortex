@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../model/window_state.dart';
+import '../theme/tokens.dart';
 
 Future<void> configureCurrentWindow(AppWindowType type) async {
   await windowManager.ensureInitialized();
@@ -20,6 +21,7 @@ Future<void> configureCurrentWindow(AppWindowType type) async {
   final options = WindowOptions(
     size: size,
     center: true,
+    backgroundColor: T.bg,
     titleBarStyle: TitleBarStyle.hidden,
     windowButtonVisibility: false,
   );
