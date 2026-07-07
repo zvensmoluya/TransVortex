@@ -142,6 +142,7 @@ MainWindowViewModel _view(
             actionLabel: '重试',
             target: MainRecoveryTarget.retry,
           ),
+    homeTaskReminder: null,
     submitting: false,
   );
 }

@@ -40,18 +40,49 @@ void main() {
     },
   );
 
-  test('controller restores latest task from desktop snapshot', () async {
+  test(
+    'controller keeps launch empty and exposes resumable task reminder',
+    () async {
+      final controller = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                taskId: 'tvx_resumable_history',
+                status: 'FAILED',
+                inputFile: r'D:\media\history-failed.mp4',
+                errorInfo: const {'hint_zh': '可以继续上次任务。'},
+                runtime: const {'can_resume': true},
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await controller.startService();
+
+      expect(controller.view.state, MainState.empty);
+      expect(controller.view.taskId, isNull);
+      expect(controller.view.source, isNull);
+      expect(controller.view.homeTaskReminder?.taskId, 'tvx_resumable_history');
+      expect(
+        controller.view.homeTaskReminder?.sourceName,
+        'history-failed.mp4',
+      );
+      expect(controller.view.homeTaskReminder?.reason, '可以继续上次任务。');
+    },
+  );
+
+  test('controller dismisses home task reminder for this session', () async {
     final controller = MainWindowController(
       service: _readyController(
         snapshot: _desktopSnapshot(
           tasks: [
             _task(
-              status: 'RUNNING',
-              inputFile:
-                  r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04.mp4',
-              progress: 0.42,
-              checkpointStatus: 'TRANSLATE',
-              runtime: {'state': 'running'},
+              taskId: 'tvx_resumable_history',
+              status: 'INTERRUPTED',
+              inputFile: r'D:\media\history-interrupted.mp4',
+              runtime: const {'can_resume': true},
             ),
           ],
         ),
@@ -59,17 +90,64 @@ void main() {
     );
 
     await controller.startService();
+    expect(controller.view.homeTaskReminder?.taskId, 'tvx_resumable_history');
 
-    expect(controller.view.state, MainState.running);
-    expect(controller.view.runningText, contains('翻译字幕'));
-    expect(controller.view.runningText, isNot(contains('TRANSLATE')));
-    expect(controller.view.source?.name, contains('style3-preview-part04'));
-    expect(controller.view.progress, 0.42);
+    controller.dismissHomeTaskReminder('tvx_resumable_history');
+
+    expect(controller.view.state, MainState.empty);
+    expect(controller.view.homeTaskReminder, isNull);
   });
 
   test(
-    'controller does not restore stale or queued history as running',
+    'controller dismisses all current home reminders for this session',
     () async {
+      final controller = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                taskId: 'tvx_resumable_first',
+                status: 'FAILED',
+                inputFile: r'D:\media\first.mp4',
+                runtime: const {'can_resume': true},
+              ),
+              _task(
+                taskId: 'tvx_resumable_second',
+                status: 'INTERRUPTED',
+                inputFile: r'D:\media\second.mp4',
+                runtime: const {'can_resume': true},
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await controller.startService();
+      expect(controller.view.homeTaskReminder?.resumableCount, 2);
+
+      controller.dismissHomeTaskReminder('tvx_resumable_first');
+
+      expect(controller.view.state, MainState.empty);
+      expect(controller.view.homeTaskReminder, isNull);
+    },
+  );
+
+  test(
+    'controller does not restore running, stale, queued, or done history',
+    () async {
+      final runningController = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                status: 'RUNNING',
+                inputFile: r'D:\running.mp4',
+                runtime: {'state': 'running'},
+              ),
+            ],
+          ),
+        ),
+      );
       final staleController = MainWindowController(
         service: _readyController(
           snapshot: _desktopSnapshot(
@@ -96,14 +174,29 @@ void main() {
           ),
         ),
       );
+      final doneController = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [_task(status: 'DONE', inputFile: r'D:\done.mp4')],
+          ),
+        ),
+      );
 
+      await runningController.startService();
       await staleController.startService();
       await queuedController.startService();
+      await doneController.startService();
 
+      expect(runningController.view.state, MainState.empty);
+      expect(runningController.view.taskId, isNull);
+      expect(runningController.view.homeTaskReminder, isNull);
       expect(staleController.view.state, MainState.empty);
       expect(staleController.view.taskId, isNull);
       expect(queuedController.view.state, MainState.empty);
       expect(queuedController.view.taskId, isNull);
+      expect(doneController.view.state, MainState.empty);
+      expect(doneController.view.taskId, isNull);
+      expect(doneController.view.homeTaskReminder, isNull);
     },
   );
 
@@ -134,6 +227,15 @@ void main() {
     );
 
     await controller.startService();
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'DONE',
+          inputFile: '${temp.path}${Platform.pathSeparator}movie.mp4',
+          outputPaths: {'ass': ass.path, 'srt': srt.path},
+        ),
+      ),
+    );
     expect(controller.view.state, MainState.completed);
 
     await controller.openResultFile();
@@ -179,6 +281,15 @@ void main() {
       );
 
       await controller.startService();
+      controller.applySmokeTask(
+        TaskSummary.fromJson(
+          _task(
+            status: 'DONE',
+            inputFile: '${temp.path}${Platform.pathSeparator}movie.mp4',
+            outputPaths: {'srt': missing.path},
+          ),
+        ),
+      );
       expect(controller.view.state, MainState.completed);
 
       await expectLater(controller.openResultFile(), throwsStateError);
@@ -227,6 +338,15 @@ void main() {
       );
 
       await controller.startService();
+      controller.applySmokeTask(
+        TaskSummary.fromJson(
+          _task(
+            status: 'DONE',
+            inputFile: '${temp.path}${Platform.pathSeparator}movie.mp4',
+            outputPaths: {'srt': srt.path},
+          ),
+        ),
+      );
       await expectLater(
         controller.reexportResult(),
         throwsA(isA<RpcRemoteException>()),
@@ -276,6 +396,15 @@ void main() {
       );
 
       await controller.startService();
+      controller.applySmokeTask(
+        TaskSummary.fromJson(
+          _task(
+            status: 'FAILED',
+            inputFile: '${temp.path}${Platform.pathSeparator}movie.mp4',
+            errorInfo: {'code': 'output_not_writable', 'hint_zh': '输出目录不可写。'},
+          ),
+        ),
+      );
       expect(controller.view.state, MainState.failed);
 
       await controller.reexportResultToDirectory(outDir);
@@ -522,6 +651,16 @@ void main() {
     );
 
     await controller.startService();
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'RUNNING',
+          inputFile: r'D:\movie.mp4',
+          progress: 0.2,
+          runtime: {'state': 'running'},
+        ),
+      ),
+    );
     await controller.cancelRun();
 
     expect(handle.transport.calls, contains('runtime.cancel'));
@@ -532,7 +671,7 @@ void main() {
   });
 
   test(
-    'controller resumes resumable task through runtime.submitResume',
+    'controller resumes home task reminder through runtime.submitResume',
     () async {
       final handle = _FakeHandle(
         _desktopSnapshot(
@@ -551,10 +690,11 @@ void main() {
 
       await controller.startService();
 
-      expect(controller.view.state, MainState.failed);
-      expect(controller.view.failure?.target, MainRecoveryTarget.resume);
+      expect(controller.view.state, MainState.empty);
+      expect(controller.view.taskId, isNull);
+      expect(controller.view.homeTaskReminder?.taskId, 'tvx_controller_FAILED');
 
-      await controller.resumeRun();
+      await controller.resumeHomeTaskReminder();
 
       expect(handle.transport.calls, contains('runtime.submitResume'));
       final request =
@@ -573,7 +713,7 @@ void main() {
   );
 
   test(
-    'controller disables only memory generation through resume payload',
+    'controller disables only memory generation through home reminder resume payload',
     () async {
       final handle = _FakeHandle(
         _desktopSnapshot(
@@ -593,7 +733,7 @@ void main() {
       await controller.startService();
       controller.setTermsEnabled(false);
 
-      await controller.resumeRun();
+      await controller.resumeHomeTaskReminder();
 
       final request =
           handle.transport.lastParams['runtime.submitResume']!['request']

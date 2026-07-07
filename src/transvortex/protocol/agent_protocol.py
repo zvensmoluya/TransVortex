@@ -76,6 +76,7 @@ def agent_info_payload() -> dict:
             "PRECHECK",
             "INGEST",
             "ASR",
+            "MEMORY",
             "SEGMENT",
             "TRANSLATE",
             "ALIGN",

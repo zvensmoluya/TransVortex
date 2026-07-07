@@ -4,6 +4,7 @@ __pycache__/
 src/*.egg-info/
 /artifacts/
 .venv/
+.transvortex-desktop/
 providers.local.yaml
 .env
 .agentonlyenv

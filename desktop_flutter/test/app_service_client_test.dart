@@ -565,6 +565,91 @@ routing:
   });
 
   test(
+    'LocalServiceSupervisor uses an isolated desktop runtime root',
+    () async {
+      final repoRoot = await Directory.systemTemp.createTemp(
+        'transvortex_repo_root_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+      await Directory(
+        '${repoRoot.path}${Platform.pathSeparator}src'
+        '${Platform.pathSeparator}transvortex',
+      ).create(recursive: true);
+      File(
+        '${repoRoot.path}${Platform.pathSeparator}src'
+        '${Platform.pathSeparator}transvortex'
+        '${Platform.pathSeparator}app_service.py',
+      ).writeAsStringSync('# marker\n', encoding: utf8);
+      File(
+        '${repoRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsStringSync(
+        'artifacts_dir: artifacts\nsource_mode: asr\n',
+        encoding: utf8,
+      );
+      File(
+        '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsStringSync('providers: []\n', encoding: utf8);
+      await Directory(
+        '${repoRoot.path}${Platform.pathSeparator}artifacts',
+      ).create(recursive: true);
+
+      String? executable;
+      List<String>? arguments;
+      String? capturedWorkingDirectory;
+      Map<String, String>? capturedEnvironment;
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: repoRoot,
+        pythonExecutable: 'python-test',
+        processStarter:
+            (
+              String startedExecutable,
+              List<String> startedArguments, {
+              String? workingDirectory,
+              Map<String, String>? environment,
+            }) async {
+              executable = startedExecutable;
+              arguments = List<String>.from(startedArguments);
+              capturedWorkingDirectory = workingDirectory;
+              capturedEnvironment = environment;
+              return _FakeProcess();
+            },
+      );
+
+      await supervisor.start();
+
+      final runtimeRoot = Directory(
+        '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
+      );
+      final runtimeArtifacts = Directory(
+        '${runtimeRoot.path}${Platform.pathSeparator}artifacts',
+      );
+      expect(executable, 'python-test');
+      expect(arguments, [
+        '-m',
+        'transvortex.app_service',
+        '--root',
+        runtimeRoot.path,
+      ]);
+      expect(capturedWorkingDirectory, repoRoot.path);
+      expect(capturedEnvironment?['PYTHONIOENCODING'], 'utf-8');
+      expect(runtimeRoot.existsSync(), isTrue);
+      expect(
+        File(
+          '${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml',
+        ).readAsStringSync(encoding: utf8),
+        'artifacts_dir: artifacts\nsource_mode: asr\n',
+      );
+      expect(
+        File(
+          '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+        ).readAsStringSync(encoding: utf8),
+        'providers: []\n',
+      );
+      expect(runtimeArtifacts.existsSync(), isFalse);
+    },
+  );
+
+  test(
     'LocalServiceSupervisor runs a real embedded-subtitle worker to DONE',
     () async {
       final serviceRoot = await Directory.systemTemp.createTemp(
@@ -859,6 +944,7 @@ routing:
       'output_paths': {'srt': r'D:\out.srt'},
       'error_info': {'hint_zh': 'Provider 配置不可用。'},
       'runtime': {'can_resume': true, 'state': 'stale'},
+      'input_type': 'video_asr_translate',
       'checkpoint_status': 'TRANSLATE',
       'progress_detail': {
         'translate_done_count': 2,
@@ -868,6 +954,8 @@ routing:
 
     expect(task.taskId, 'tvx_1');
     expect(task.isFailed, isTrue);
+    expect(task.inputType, 'video_asr_translate');
+    expect(task.displayName, 'input.mp4');
     expect(task.canResume, isTrue);
     expect(task.runtimeState, 'stale');
     expect(task.isRuntimeActive, isFalse);
@@ -875,6 +963,18 @@ routing:
     expect(task.latestProgress, 0.5);
     expect(task.displayStatus, 'TRANSLATE');
     expect(task.outputPaths['srt'], r'D:\out.srt');
+  });
+
+  test('TaskSummary does not infer task type from legacy file extension', () {
+    final task = TaskSummary.fromJson({
+      'task_id': 'tvx_jsonl',
+      'status': 'FAILED',
+      'input_file': r'D:\artifacts\segments.jsonl',
+      'runtime': {'can_resume': true},
+    });
+
+    expect(task.inputType, isEmpty);
+    expect(task.displayName, 'segments.jsonl');
   });
 
   test('DesktopSnapshot restores only runtime-active or terminal tasks', () {
@@ -921,6 +1021,7 @@ routing:
     expect(taskStatusLabel('INIT'), '等待中');
     expect(taskStatusLabel('PRECHECK'), '检查环境');
     expect(taskStatusLabel('ASR'), '识别语音');
+    expect(taskStatusLabel('MEMORY'), '准备术语');
     expect(taskStatusLabel('TRANSLATE'), '翻译字幕');
     expect(taskStatusLabel('EXPORT'), '写出字幕');
     expect(taskStageLabel('checkpoint: translate'), '翻译字幕');
@@ -936,9 +1037,14 @@ routing:
       'task_id': 'tvx_asr',
       'status': 'ASR',
     });
+    final memoryTask = TaskSummary.fromJson({
+      'task_id': 'tvx_memory',
+      'status': 'MEMORY',
+    });
 
     expect(initTask.isActive, isTrue);
     expect(asrTask.isActive, isTrue);
+    expect(memoryTask.isActive, isTrue);
   });
 
   test(
@@ -1313,6 +1419,33 @@ Future<void> _deleteDirectoryWithRetries(Directory directory) async {
   }
   if (lastError != null) {
     Error.throwWithStackTrace(lastError, lastStackTrace ?? StackTrace.current);
+  }
+}
+
+class _FakeProcess implements Process {
+  final _exit = Completer<int>();
+
+  @override
+  Future<int> get exitCode => _exit.future;
+
+  @override
+  int get pid => 12345;
+
+  @override
+  IOSink get stdin => _FakeSink();
+
+  @override
+  Stream<List<int>> get stderr => const Stream<List<int>>.empty();
+
+  @override
+  Stream<List<int>> get stdout => const Stream<List<int>>.empty();
+
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    if (!_exit.isCompleted) {
+      _exit.complete(0);
+    }
+    return true;
   }
 }
 

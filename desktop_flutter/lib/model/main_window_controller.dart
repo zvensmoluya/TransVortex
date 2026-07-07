@@ -51,6 +51,21 @@ class MainFailureView {
 }
 
 @immutable
+class HomeTaskReminder {
+  const HomeTaskReminder({
+    required this.taskId,
+    required this.sourceName,
+    required this.reason,
+    required this.resumableCount,
+  });
+
+  final String taskId;
+  final String sourceName;
+  final String reason;
+  final int resumableCount;
+}
+
+@immutable
 class TaskOption {
   const TaskOption({
     required this.label,
@@ -87,6 +102,7 @@ class MainWindowViewModel {
     required this.outputPaths,
     required this.outputDirectory,
     required this.failure,
+    required this.homeTaskReminder,
     required this.submitting,
   });
 
@@ -109,6 +125,7 @@ class MainWindowViewModel {
   final Map<String, String> outputPaths;
   final String? outputDirectory;
   final MainFailureView? failure;
+  final HomeTaskReminder? homeTaskReminder;
   final bool submitting;
 
   bool get hasSource => source != null;
@@ -147,6 +164,7 @@ class MainWindowController extends ChangeNotifier {
   List<Map<String, Object?>> _recentEvents = const [];
   TaskOption? _selectedTranslation;
   TaskOption? _selectedAsr;
+  final Set<String> _dismissedHomeTaskReminderIds = <String>{};
 
   late MainWindowViewModel _view;
 
@@ -384,6 +402,45 @@ class MainWindowController extends ChangeNotifier {
 
   Future<void> retryRun() => submitRun();
 
+  Future<void> resumeHomeTaskReminder() async {
+    final task = _homeTaskReminderTask(service.snapshot.desktopSnapshot);
+    if (task == null) {
+      await refreshSnapshot();
+      final refreshed = _homeTaskReminderTask(service.snapshot.desktopSnapshot);
+      if (refreshed == null) {
+        throw StateError('没有可继续的历史任务');
+      }
+      return _resumeReminderTask(refreshed);
+    }
+    return _resumeReminderTask(task);
+  }
+
+  Future<void> _resumeReminderTask(TaskSummary task) async {
+    if (!task.canResume) {
+      _dismissedHomeTaskReminderIds.add(task.taskId);
+      await refreshSnapshot();
+      _publish();
+      throw StateError('这个任务现在不能继续了');
+    }
+    _applyTask(task);
+    _publish();
+    await resumeRun();
+  }
+
+  void dismissHomeTaskReminder(String taskId) {
+    final normalized = taskId.trim();
+    if (normalized.isEmpty) return;
+    final tasks = _homeTaskReminderTasks(service.snapshot.desktopSnapshot);
+    if (tasks.isEmpty) {
+      _dismissedHomeTaskReminderIds.add(normalized);
+    } else {
+      _dismissedHomeTaskReminderIds.addAll(
+        tasks.map((task) => task.taskId).where((id) => id.trim().isNotEmpty),
+      );
+    }
+    _publish();
+  }
+
   Future<void> resetForNext() async {
     removeSource();
   }
@@ -570,8 +627,7 @@ class MainWindowController extends ChangeNotifier {
       final selectedTask = snapshot.taskById(taskId);
       if (selectedTask != null) return selectedTask;
     }
-    if (_source != null || _submitting) return null;
-    return snapshot.latestActiveTask;
+    return null;
   }
 
   void _applyTask(TaskSummary task) {
@@ -581,9 +637,9 @@ class MainWindowController extends ChangeNotifier {
       _recentEvents = const [];
     }
     _source ??= MainSourceDraft(
-      name: _basename(task.inputFile),
+      name: task.displayName,
       path: task.inputFile,
-      kind: _kindOf(task.inputFile),
+      kind: _kindOf(task.displayName),
     );
     if (task.sourceLang.isNotEmpty) _sourceLang = task.sourceLang;
     if (task.targetLang.isNotEmpty) _targetLang = task.targetLang;
@@ -648,8 +704,51 @@ class MainWindowController extends ChangeNotifier {
       outputPaths: _outputPaths,
       outputDirectory: _outputDirectory,
       failure: _failure,
+      homeTaskReminder: state == MainState.empty
+          ? _homeTaskReminder(snapshot)
+          : null,
       submitting: _submitting,
     );
+  }
+
+  HomeTaskReminder? _homeTaskReminder(DesktopSnapshot? snapshot) {
+    final task = _homeTaskReminderTask(snapshot);
+    if (task == null) return null;
+    final resumableCount = _homeTaskReminderTasks(snapshot).length;
+    return HomeTaskReminder(
+      taskId: task.taskId,
+      sourceName: task.displayName,
+      reason: _homeTaskReminderReason(task),
+      resumableCount: resumableCount,
+    );
+  }
+
+  TaskSummary? _homeTaskReminderTask(DesktopSnapshot? snapshot) {
+    final tasks = _homeTaskReminderTasks(snapshot);
+    return tasks.isEmpty ? null : tasks.first;
+  }
+
+  List<TaskSummary> _homeTaskReminderTasks(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return const [];
+    return snapshot.tasks
+        .where((task) {
+          if (!task.canResume) return false;
+          if (_dismissedHomeTaskReminderIds.contains(task.taskId)) {
+            return false;
+          }
+          return task.taskId.isNotEmpty;
+        })
+        .toList(growable: false);
+  }
+
+  String _homeTaskReminderReason(TaskSummary task) {
+    final hint = '${task.errorInfo['hint_zh'] ?? ''}'.trim();
+    if (hint.isNotEmpty) return hint;
+    final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
+    if (message.isNotEmpty) return message;
+    if (task.status == 'INTERRUPTED') return '上次任务中断，可以继续。';
+    if (task.status == 'CANCELLED') return '上次任务已取消，可以继续。';
+    return '上次任务未完成，可以继续。';
   }
 
   MainState _deriveState(
@@ -1011,6 +1110,9 @@ class MainWindowController extends ChangeNotifier {
         normalized.contains('whisper') ||
         normalized.contains('transcrib')) {
       return '正在识别语音';
+    }
+    if (normalized.contains('memory') || normalized.contains('术语')) {
+      return '正在准备术语';
     }
     if (normalized.contains('translat')) return '正在翻译字幕';
     if (normalized.contains('subtitle') || normalized.contains('render')) {

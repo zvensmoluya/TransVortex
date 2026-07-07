@@ -40,7 +40,7 @@ from .credentials import (
     resolve_provider_credential,
     write_auth_credential,
 )
-from .desktop_requests import resume_request_from_payload, run_request_from_payload
+from .desktop_requests import normalize_input_type, resume_request_from_payload, run_request_from_payload
 from .doctor import doctor_report
 
 
@@ -576,9 +576,23 @@ def auth_list_payload() -> dict[str, Any]:
 def task_payload(task: Any, artifacts_dir: Path | None = None) -> dict[str, Any]:
     store = TaskStore(artifacts_dir) if artifacts_dir is not None else None
     payload = task_status_json(task, store=store)
+    payload["input_type"] = _task_input_type(task)
     if artifacts_dir is not None:
         payload["task_dir"] = str(artifacts_dir / task.task_id)
     return payload
+
+
+def _task_input_type(task: Any) -> str:
+    settings = _task_settings(task)
+    raw = str(settings.get("input_type") or "").strip()
+    if raw:
+        return normalize_input_type(raw)
+    return ""
+
+
+def _task_settings(task: Any) -> dict[str, Any]:
+    settings = getattr(task, "settings", {})
+    return settings if isinstance(settings, dict) else {}
 
 
 def _catalog_task_payloads(artifacts_dir: Path) -> list[dict[str, Any]]:

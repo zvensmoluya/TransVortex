@@ -57,7 +57,9 @@ def test_runtime_submit_run_queues_task_and_saves_request(tmp_path: Path) -> Non
     assert payload["ok"] is True
     assert payload["status"] == "QUEUED"
     task_id = payload["task_id"]
-    assert runtime.store.load_task(task_id).status == "QUEUED"
+    task = runtime.store.load_task(task_id)
+    assert task.status == "QUEUED"
+    assert task.settings["input_type"] == "video_asr_translate"
     saved = runtime.load_worker_request(task_id)
     assert saved is not None
     command, saved_request = saved
@@ -152,6 +154,16 @@ def test_runtime_reconcile_marks_running_task_without_worker_interrupted(tmp_pat
     event = runtime.store.read_events("task1")[-1]
     assert event["type"] == "interrupted"
     assert event["details"]["reason"] == "no_active_worker"
+
+
+def test_runtime_treats_memory_stage_as_running(tmp_path: Path) -> None:
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    runtime.store.save_task(_task("task1", "MEMORY"))
+
+    payload = runtime.reconcile()
+
+    assert "task1" in payload["stale"]
+    assert runtime.store.load_task("task1").status == "INTERRUPTED"
 
 
 def test_runtime_load_worker_request_supports_resume(tmp_path: Path) -> None:

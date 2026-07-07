@@ -34,6 +34,7 @@ RUNNING_STATUSES = {
     "PRECHECK",
     "INGEST",
     "ASR",
+    "MEMORY",
     "SEGMENT",
     "TRANSLATE",
     "ALIGN",

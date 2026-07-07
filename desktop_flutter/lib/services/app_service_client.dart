@@ -255,7 +255,7 @@ class LocalServiceSupervisor {
     if (root == null) {
       throw LocalServiceLaunchException('找不到本地服务所需的仓库根目录');
     }
-    final runtimeRoot = serviceRoot ?? root;
+    final runtimeRoot = serviceRoot ?? await _prepareDesktopRuntimeRoot(root);
     final process = await _processStarter(
       pythonExecutable,
       ['-m', 'transvortex.app_service', '--root', runtimeRoot.path],
@@ -278,6 +278,45 @@ class LocalServiceSupervisor {
       transport: transport,
       client: AppServiceClient(transport),
     );
+  }
+
+  static Future<Directory> _prepareDesktopRuntimeRoot(
+    Directory repoRoot,
+  ) async {
+    final runtimeRoot = Directory(
+      '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
+    );
+    if (!runtimeRoot.existsSync()) {
+      await runtimeRoot.create(recursive: true);
+    }
+    await _copyConfigIfMissing(
+      source: File('${repoRoot.path}${Platform.pathSeparator}pipeline.yaml'),
+      target: File('${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml'),
+      fallback: 'artifacts_dir: artifacts\n',
+    );
+    await _copyConfigIfMissing(
+      source: File('${repoRoot.path}${Platform.pathSeparator}providers.yaml'),
+      target: File(
+        '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+      ),
+    );
+    return runtimeRoot;
+  }
+
+  static Future<void> _copyConfigIfMissing({
+    required File source,
+    required File target,
+    String fallback = '',
+  }) async {
+    if (target.existsSync()) return;
+    await target.parent.create(recursive: true);
+    if (source.existsSync()) {
+      await source.copy(target.path);
+      return;
+    }
+    if (fallback.isNotEmpty) {
+      await target.writeAsString(fallback);
+    }
   }
 
   static Directory? findRepoRoot() {
@@ -1037,6 +1076,7 @@ class TaskSummary {
     required this.taskId,
     required this.status,
     required this.inputFile,
+    required this.inputType,
     required this.sourceLang,
     required this.targetLang,
     required this.bilingual,
@@ -1055,6 +1095,7 @@ class TaskSummary {
   final String taskId;
   final String status;
   final String inputFile;
+  final String inputType;
   final String sourceLang;
   final String targetLang;
   final bool bilingual;
@@ -1075,6 +1116,7 @@ class TaskSummary {
         taskId: value,
         status: 'unknown',
         inputFile: '',
+        inputType: '',
         sourceLang: '',
         targetLang: '',
         bilingual: false,
@@ -1091,13 +1133,19 @@ class TaskSummary {
       );
     }
     final map = _stringMap(value);
+    final settings = _stringMap(map['settings']);
+    final inputFile =
+        _stringValue(map['input_file']) ?? _stringValue(map['inputFile']) ?? '';
+    final inputType = _normalizeInputType(
+      _stringValue(map['input_type']) ??
+          _stringValue(map['inputType']) ??
+          _stringValue(settings['input_type']),
+    );
     return TaskSummary(
       taskId: _stringValue(map['task_id']) ?? _stringValue(map['taskId']) ?? '',
       status: _stringValue(map['status']) ?? 'unknown',
-      inputFile:
-          _stringValue(map['input_file']) ??
-          _stringValue(map['inputFile']) ??
-          '',
+      inputFile: inputFile,
+      inputType: inputType,
       sourceLang:
           _stringValue(map['source_lang']) ??
           _stringValue(map['sourceLang']) ??
@@ -1125,10 +1173,12 @@ class TaskSummary {
       error: _stringValue(map['error']),
       errorInfo: _stringMap(map['error_info']),
       runtime: _stringMap(map['runtime']),
-      settings: _stringMap(map['settings']),
+      settings: settings,
       raw: map,
     );
   }
+
+  String get displayName => _pathBasename(inputFile);
 
   bool get isDone => status == 'DONE';
   bool get isFailed => status == 'FAILED';
@@ -1144,6 +1194,7 @@ class TaskSummary {
       status == 'PRECHECK' ||
       status == 'INGEST' ||
       status == 'ASR' ||
+      status == 'MEMORY' ||
       status == 'SEGMENT' ||
       status == 'TRANSLATE' ||
       status == 'ALIGN' ||
@@ -1341,6 +1392,23 @@ num? _numValue(Object? value) {
   if (value is num) return value;
   if (value is String) return num.tryParse(value);
   return null;
+}
+
+String _normalizeInputType(String? value) {
+  final raw = (value ?? '').trim();
+  if (raw == 'srt' || raw == 'srt_translate') return 'srt_translate';
+  if (raw == 'segments' || raw == 'segments_translate') {
+    return 'segments_translate';
+  }
+  if (raw == 'video_asr' || raw == 'video_asr_translate') return raw;
+  return '';
+}
+
+String _pathBasename(String path) {
+  if (path.trim().isEmpty) return '';
+  final normalized = path.replaceAll('\\', '/');
+  final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
+  return parts.isEmpty ? path : parts.last;
 }
 
 String _formatTimestamp(double seconds) {

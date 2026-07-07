@@ -732,7 +732,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   @override
   Widget build(BuildContext context) {
     final searchQuery = _taskSearchController.text;
-    final visibleTasks = _visibleTasksFor(_tasks, _taskFilter, searchQuery);
+    final listTasks = _tasks;
+    final visibleTasks = _visibleTasksFor(listTasks, _taskFilter, searchQuery);
     final selected = _selectedTask(visibleTasks);
     final selectedEventsPage = _eventsPage?.taskId == selected?.taskId
         ? _eventsPage
@@ -757,9 +758,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                 padding: const EdgeInsets.fromLTRB(T.s24, T.s16, T.s24, T.s24),
                 child: _TaskProcessingBody(
                   tasks: visibleTasks,
-                  totalTaskCount: _tasks.length,
+                  totalTaskCount: listTasks.length,
                   filter: _taskFilter,
-                  filterCounts: _taskFilterCounts(_tasks, searchQuery),
+                  filterCounts: _taskFilterCounts(listTasks, searchQuery),
                   searchController: _taskSearchController,
                   selected: selected,
                   events: events,
@@ -973,6 +974,7 @@ class _TaskStripList extends StatelessWidget {
   Widget build(BuildContext context) {
     final searchQuery = searchController.text.trim();
     final hasSearch = searchQuery.isNotEmpty;
+    final hasListControls = totalTaskCount > 0;
     final summary = totalTaskCount == 0
         ? '完成、失败和制作中的任务会出现在这里。'
         : filter == _TaskFilter.all && !hasSearch
@@ -992,19 +994,22 @@ class _TaskStripList extends StatelessWidget {
         ),
         const SizedBox(height: T.s8),
         Text(summary, style: T.tCaption),
-        if (totalTaskCount > 0) ...[
+        if (hasListControls) ...[
           const SizedBox(height: T.s12),
-          _TaskFilterControls(
-            selected: filter,
-            counts: filterCounts,
-            onChanged: onFilterChanged,
-          ),
-          const SizedBox(height: T.s12),
-          _TaskSearchField(
-            controller: searchController,
-            enabled: !loading,
-            onClear: onClearSearch,
-          ),
+          if (totalTaskCount > 0)
+            _TaskFilterControls(
+              selected: filter,
+              counts: filterCounts,
+              onChanged: onFilterChanged,
+            ),
+          if (totalTaskCount > 0) ...[
+            const SizedBox(height: T.s12),
+            _TaskSearchField(
+              controller: searchController,
+              enabled: !loading,
+              onClear: onClearSearch,
+            ),
+          ],
         ],
         const SizedBox(height: T.s16),
         Expanded(
@@ -1257,7 +1262,7 @@ class _TaskStripTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _taskStatusColor(task);
-    final name = _basename(task.inputFile);
+    final name = task.displayName;
     final outputs = subtitleFormatListLabel(task.outputPaths.keys);
     final subtitle = [
       taskStatusLabel(task.status),
@@ -1883,6 +1888,8 @@ bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
     languageLabel(task.sourceLang),
     languageLabel(task.targetLang),
     task.inputFile,
+    task.displayName,
+    task.inputType,
     _basename(task.inputFile),
     task.taskDir,
     ?task.outputPath,

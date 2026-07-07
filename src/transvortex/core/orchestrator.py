@@ -766,6 +766,7 @@ def _stage_progress(stage: str) -> float:
         "PRECHECK": 0.02,
         "INGEST": 0.08,
         "ASR": 0.25,
+        "MEMORY": 0.54,
         "SEGMENT": 0.55,
         "TRANSLATE": 0.65,
         "ALIGN": 0.85,

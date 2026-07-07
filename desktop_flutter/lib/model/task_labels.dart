@@ -6,6 +6,7 @@ String taskStatusLabel(String status, {String fallback = ''}) {
     'PRECHECK' => '检查环境',
     'INGEST' => '读取片源',
     'ASR' => '识别语音',
+    'MEMORY' => '准备术语',
     'SEGMENT' => '整理片段',
     'TRANSLATE' => '翻译字幕',
     'ALIGN' => '对齐字幕',
@@ -51,6 +52,7 @@ String taskStageLabel(String stage) {
       lower.contains('transcrib')) {
     return '识别语音';
   }
+  if (lower.contains('memory') || lower.contains('术语')) return '准备术语';
   if (lower.contains('translat')) return '翻译字幕';
   if (lower.contains('subtitle') || lower.contains('render')) return '整理字幕';
   if (lower.contains('export') || lower.contains('write')) return '写出字幕';
@@ -78,6 +80,9 @@ String taskEventMessageLabel({
       normalized.contains('whisper') ||
       normalized.contains('transcrib')) {
     return '正在识别语音';
+  }
+  if (normalized.contains('memory') || normalized.contains('术语')) {
+    return '正在准备术语';
   }
   if (normalized.contains('translat')) return '正在翻译字幕';
   if (normalized.contains('subtitle') || normalized.contains('render')) {

@@ -133,6 +133,7 @@ def test_desktop_tasks_list_uses_rebuildable_catalog_shape(tmp_path: Path) -> No
     assert response["result"][0]["task_id"] == "task1"
     assert response["result"][0]["status"] == "DONE"
     assert response["result"][0]["task_dir"].endswith("task1")
+    assert response["result"][0]["input_type"] == ""
 
 
 def test_runtime_submit_cancel_and_reconcile_update_catalog(tmp_path: Path) -> None:

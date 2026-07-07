@@ -788,6 +788,7 @@ def test_agent_info_json_is_static_and_secret_free(tmp_path: Path, monkeypatch, 
     assert payload["commands"]["memory bootstrap"]["supports_dry_run"] is True
     assert payload["commands"]["memory export-preset"]["supports_dry_run"] is True
     assert "QUEUED" in payload["statuses"]
+    assert "MEMORY" in payload["statuses"]
     assert "INTERRUPTED" in payload["statuses"]
     assert "source/segments.raw.jsonl" in payload["artifact_contract"]
     assert "source/segments.normalized.jsonl" in payload["artifact_contract"]

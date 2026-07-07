@@ -7,7 +7,8 @@ import sys
 import time
 from pathlib import Path
 
-from transvortex.app.desktop_api import DesktopApi
+from transvortex.app.desktop_api import DesktopApi, task_payload
+from transvortex.app.models import TaskRecord
 from transvortex.app_service import LocalServicePump, handle_line, serve
 from transvortex.artifacts.runtime import TaskRuntime
 from transvortex.cli import main as cli_main
@@ -33,6 +34,27 @@ routing:
 
 def _request(method: str, params: dict | None = None, request_id: int = 1) -> str:
     return json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}})
+
+
+def _task_record(
+    *,
+    input_file: str,
+    input_type: str | None = None,
+) -> TaskRecord:
+    settings = {}
+    if input_type is not None:
+        settings["input_type"] = input_type
+    return TaskRecord(
+        task_id="task1",
+        input_file=input_file,
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        status="FAILED",
+        created_at="2026-02-13T00:00:00+00:00",
+        updated_at="2026-02-13T00:00:01+00:00",
+        settings=settings,
+    )
 
 
 def test_app_service_ping_and_unknown_method(tmp_path: Path) -> None:
@@ -67,6 +89,21 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert shutdown["result"] == {"ok": True, "shutdown": "requested"}
     assert service.shutdown_requested is True
     assert stopped == [True]
+
+
+def test_task_payload_exposes_explicit_input_type_without_display_classification() -> None:
+    explicit = task_payload(
+        _task_record(
+            input_file=r"D:\artifacts\segments.jsonl",
+            input_type="segments_translate",
+        )
+    )
+    legacy_jsonl = task_payload(_task_record(input_file=r"D:\artifacts\legacy.jsonl"))
+
+    assert explicit["input_type"] == "segments_translate"
+    assert "desktop_view" not in explicit
+    assert "origin" not in explicit
+    assert legacy_jsonl["input_type"] == ""
 
 
 def test_app_service_serve_tolerates_utf8_bom_on_first_line(tmp_path: Path, monkeypatch) -> None:
