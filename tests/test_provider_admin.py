@@ -79,7 +79,7 @@ def test_provider_templates_include_core_compat_modes() -> None:
     assert "custom_json" not in protocol_ids
     assert {"openai_chat", "openai_responses", "vertex_native", "vertex_express"}.issubset(protocol_ids)
     preset_ids = {row["id"] for row in provider_presets_payload()}
-    assert {"openai_official", "google_ai_studio", "google_vertex_gemini"}.issubset(preset_ids)
+    assert {"openai_official", "deepseek", "google_ai_studio", "google_vertex_gemini"}.issubset(preset_ids)
     assert custom_adapter_template_payload()["id"] == "custom_json"
     templates_by_id = {row["id"]: row for row in provider_templates_payload()}
     assert templates_by_id["openai_responses"]["capabilities"]["max_output_tokens"] == 65536
@@ -92,6 +92,10 @@ def test_provider_templates_include_core_compat_modes() -> None:
     assert "gemini-3.1-pro-preview" in templates_by_id["vertex_express"]["models"]
     assert "gemini-2.0-flash-001" not in templates_by_id["vertex_express"]["models"]
     presets_by_id = {row["id"]: row for row in provider_presets_payload()}
+    assert presets_by_id["openai_official"]["label"] == "OpenAI"
+    assert presets_by_id["deepseek"]["base_url"] == "https://api.deepseek.com"
+    assert presets_by_id["deepseek"]["env_key"] == "DEEPSEEK_API_KEY"
+    assert presets_by_id["deepseek"]["compat_mode"] == "openai_chat"
     assert presets_by_id["google_vertex_gemini"]["compat_mode"] == "vertex_express"
 
 

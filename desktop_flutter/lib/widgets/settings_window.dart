@@ -117,6 +117,7 @@ class SettingsWindow extends StatefulWidget {
 
 class _SettingsWindowState extends State<SettingsWindow> {
   final _baseUrl = TextEditingController();
+  final _providerName = TextEditingController();
   final _model = TextEditingController();
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
@@ -137,6 +138,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String? _selectedDiagnosticTaskId;
   String? _selectedProvider;
   String? _selectedModel;
+  String? _selectedProviderTemplate;
+  bool _creatingProvider = false;
   final Map<String, List<String>> _fetchedProviderModels = {};
   String _selectedAsrProvider = 'faster_whisper_large_v3';
   String? _selectedDiagnosticCheck;
@@ -150,6 +153,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _savingAsr = false;
   bool _loadingDiagnosticTasks = false;
   bool _loadingDiagnosticResult = false;
+  bool _updatingProviderName = false;
 
   bool get _isTranslation => widget.type == AppWindowType.translationSettings;
   bool get _isAsr => widget.type == AppWindowType.asrSettings;
@@ -157,6 +161,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   @override
   void initState() {
     super.initState();
+    _providerName.addListener(_onProviderNameChanged);
     _client = AppServiceClient(_settingsTransport());
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
     _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
@@ -171,11 +176,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _smokeService?.dispose();
     _ownedFallbackService?.dispose();
     _baseUrl.dispose();
+    _providerName.removeListener(_onProviderNameChanged);
+    _providerName.dispose();
     _model.dispose();
     _key.dispose();
     _endpoint.dispose();
     _device.dispose();
     super.dispose();
+  }
+
+  void _onProviderNameChanged() {
+    if (mounted && _creatingProvider && !_updatingProviderName) setState(() {});
   }
 
   AppServiceTransport _settingsTransport() {
@@ -220,7 +231,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           _diagnosticResult = null;
           _selectedDiagnosticTaskId = null;
         }
-        if (_isTranslation) {
+        if (_isTranslation && !_creatingProvider) {
           final routedProvider = snapshot.translationProvider;
           final routedProviderExists =
               routedProvider != null &&
@@ -250,6 +261,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
                     ? snapshot.translationModel
                     : (visibleModels.isNotEmpty ? visibleModels.first : null));
           _loadProviderDraftFields();
+        } else if (_isTranslation) {
+          _selectedProviderTemplate ??= _defaultProviderTemplate(snapshot)?.id;
         } else if (_isAsr) {
           _selectedAsrProvider = _asrSelectionIdForProvider(
             snapshot,
@@ -432,7 +445,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
                   providers: providers,
                   selected: selected,
                   defaultProvider: snapshot?.translationProvider,
+                  creating: _creatingProvider,
                   onPick: _pickProvider,
+                  onCreate: _startCreateProvider,
                 ),
               ),
               const SizedBox(width: T.s32),
@@ -445,11 +460,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Widget _translationDetails() {
-    final provider = _selectedProvider == null || _snapshot == null
-        ? const ProviderOption(name: '', models: [])
-        : _providerByName(_snapshot!, _selectedProvider);
+    final provider = _activeTranslationProvider();
     final visibleModels = _visibleModels(provider);
     final model = _translationModelSelection(provider);
+    final template = _selectedProviderTemplateOption();
+    final isBlank = provider.name.isEmpty && !_creatingProvider;
+    final modelHelp = _modelListHelp(provider);
     return _ToolPanel(
       footer: [
         _ActionButton(
@@ -461,7 +477,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           onTap: _testingProvider ? null : _testProvider,
         ),
         _ActionButton(
-          label: _savingProvider ? '保存中' : '保存供应商',
+          label: _savingProvider ? '保存中' : '保存连接',
           onTap: _savingProvider ? null : _saveProvider,
         ),
         _ActionButton(
@@ -474,10 +490,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
           onTap: _loading ? null : _loadConfig,
         ),
       ],
-      footnote: '供应商配置保存服务地址、协议和模型清单；密钥只写入用户级凭据。',
+      footnote: '连接保存协议、服务地址和模型清单；密钥只写入用户级凭据。',
       children: [
         Text(
-          provider.name.isEmpty ? '选择一个模型供应商' : provider.name,
+          _creatingProvider
+              ? '添加模型连接'
+              : (provider.name.isEmpty ? '选择一个连接或添加连接' : provider.name),
           style: T.tSection,
         ),
         const SizedBox(height: T.s12),
@@ -487,24 +505,60 @@ class _SettingsWindowState extends State<SettingsWindow> {
           children: [
             _MetaPill(label: '默认', value: _translationRouteLabel(_snapshot)),
             _MetaPill(label: '配置组', value: _routingProfileLabel(_snapshot)),
-            _MetaPill(label: '凭据', value: _credentialStatusLabel(provider)),
-            _MetaPill(label: '编辑', value: _providersFileLabel(_snapshot)),
+            _MetaPill(
+              label: '类型',
+              value: _creatingProvider
+                  ? (template == null
+                        ? '待选择'
+                        : _providerTemplateLabel(template))
+                  : _providerProtocolLabel(provider),
+            ),
+            _MetaPill(
+              label: '凭据',
+              value: _creatingProvider
+                  ? '待保存'
+                  : _credentialStatusLabel(provider),
+            ),
           ],
         ),
         const SizedBox(height: T.s16),
+        if (_creatingProvider) ...[
+          _SettingsSection(
+            title: '常用厂商',
+            children: [
+              _TemplatePicker(
+                templates: _providerPresetTemplates(),
+                selected: _selectedProviderTemplate,
+                onPick: _pickProviderTemplate,
+              ),
+            ],
+          ),
+          _SettingsSection(
+            title: '通用协议',
+            children: [
+              _TemplatePicker(
+                templates: _protocolProviderTemplates(),
+                selected: _selectedProviderTemplate,
+                onPick: _pickProviderTemplate,
+              ),
+            ],
+          ),
+        ],
         _SettingsSection(
-          title: '连接信息',
+          title: '连接',
           children: [
-            _ReadonlyRow(
-              label: '协议适配',
-              value: _providerProtocolLabel(provider),
-            ),
+            if (_creatingProvider)
+              _Input(label: '连接名称', controller: _providerName)
+            else
+              _ReadonlyRow(label: '连接名称', value: provider.name),
+            const SizedBox(height: T.s12),
+            _ReadonlyRow(label: '协议', value: _providerProtocolLabel(provider)),
             const SizedBox(height: T.s12),
             _Input(label: '服务地址 (Base URL)', controller: _baseUrl),
           ],
         ),
         _SettingsSection(
-          title: '可用模型',
+          title: '模型',
           children: [
             Wrap(
               spacing: T.s8,
@@ -527,31 +581,33 @@ class _SettingsWindowState extends State<SettingsWindow> {
                 ),
               ],
             ),
-            const SizedBox(height: T.s12),
-            Text(
-              _modelListHelp(provider),
-              style: T.tCaption,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            if (modelHelp != null) ...[
+              const SizedBox(height: T.s12),
+              Text(
+                modelHelp,
+                style: T.tCaption,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ],
         ),
         _SettingsSection(
           title: '凭据',
           children: [
-            _ReadonlyRow(label: '状态', value: _credentialStatusLabel(provider)),
+            _ReadonlyRow(
+              label: '状态',
+              value: _creatingProvider
+                  ? '待保存'
+                  : _credentialStatusLabel(provider),
+            ),
             const SizedBox(height: T.s8),
             _ReadonlyRow(
               label: '凭据 ID',
-              value: provider.credentialId.isEmpty
-                  ? provider.name
-                  : provider.credentialId,
+              value: _providerCredentialId(provider),
             ),
             const SizedBox(height: T.s8),
-            _ReadonlyRow(
-              label: '环境变量',
-              value: provider.envKey.isEmpty ? '未配置' : provider.envKey,
-            ),
+            _ReadonlyRow(label: '环境变量', value: _providerEnvKey(provider)),
             const SizedBox(height: T.s12),
             _Input(
               label: 'API key（留空则沿用已保存凭据）',
@@ -560,6 +616,21 @@ class _SettingsWindowState extends State<SettingsWindow> {
             ),
           ],
         ),
+        if (!isBlank)
+          _SettingsSection(
+            title: '高级',
+            children: [
+              _ReadonlyRow(
+                label: '配置来源',
+                value: _providersFileLabel(_snapshot),
+              ),
+              const SizedBox(height: T.s8),
+              _ReadonlyRow(
+                label: '模型列表',
+                value: _modelListEndpointLabel(provider),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -738,7 +809,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   void _pickProvider(String providerName) {
     setState(() {
+      _creatingProvider = false;
       _selectedProvider = providerName;
+      _setProviderNameText(providerName);
       final provider = _snapshot == null
           ? const ProviderOption(name: '', models: [])
           : _providerByName(_snapshot!, providerName);
@@ -750,11 +823,56 @@ class _SettingsWindowState extends State<SettingsWindow> {
     });
   }
 
+  void _startCreateProvider() {
+    final template = _defaultProviderTemplate(_snapshot);
+    setState(() {
+      _creatingProvider = true;
+      _selectedProvider = null;
+      _selectedProviderTemplate = template?.id;
+      _loadProviderTemplateDraftFields(template);
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _pickProviderTemplate(ProviderTemplateOption template) {
+    setState(() {
+      _selectedProviderTemplate = template.id;
+      _loadProviderTemplateDraftFields(template);
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _loadProviderTemplateDraftFields(ProviderTemplateOption? template) {
+    if (template == null) {
+      _setProviderNameText('');
+      _baseUrl.clear();
+      _model.clear();
+      _selectedModel = null;
+      _key.clear();
+      return;
+    }
+    _setProviderNameText(_uniqueProviderName(_providerNameSeed(template)));
+    _baseUrl.text = template.baseUrl;
+    final models = _normalizedModels(template.models);
+    _selectedModel = models.isEmpty ? null : models.first;
+    _model.clear();
+    _key.clear();
+  }
+
+  void _setProviderNameText(String value) {
+    _updatingProviderName = true;
+    _providerName.text = value;
+    _updatingProviderName = false;
+  }
+
   void _loadProviderDraftFields() {
     final snapshot = _snapshot;
     final provider = snapshot == null
         ? const ProviderOption(name: '', models: [])
         : _providerByName(snapshot, _selectedProvider);
+    _setProviderNameText(provider.name);
     final model =
         _selectedProvider != null &&
             _selectedProvider == snapshot?.translationProvider
@@ -770,6 +888,109 @@ class _SettingsWindowState extends State<SettingsWindow> {
       _model.text = selectedModel;
     }
     _key.clear();
+  }
+
+  ProviderOption _activeTranslationProvider() {
+    if (!_creatingProvider) {
+      return _selectedProvider == null || _snapshot == null
+          ? const ProviderOption(name: '', models: [])
+          : _providerByName(_snapshot!, _selectedProvider);
+    }
+    final template = _selectedProviderTemplateOption();
+    if (template == null) return const ProviderOption(name: '', models: []);
+    final name = _providerName.text.trim();
+    return ProviderOption(
+      name: name,
+      models: _normalizedModels(template.models),
+      baseUrl: template.baseUrl,
+      envKey: template.envKey,
+      apiType: template.apiType,
+      compatMode: template.compatMode,
+      credentialId: template.credentialId,
+      credentialSource: 'missing',
+      raw: template.raw,
+    );
+  }
+
+  ProviderTemplateOption? _selectedProviderTemplateOption() {
+    final snapshot = _snapshot;
+    if (snapshot == null) return null;
+    return _providerTemplateById(snapshot, _selectedProviderTemplate) ??
+        _defaultProviderTemplate(snapshot);
+  }
+
+  ProviderTemplateOption? _providerTemplateById(
+    DesktopSnapshot snapshot,
+    String? id,
+  ) {
+    if (id == null || id.isEmpty) return null;
+    for (final template in [
+      ...snapshot.providerPresets,
+      ...snapshot.protocolTemplates,
+      if (snapshot.customAdapterTemplate != null)
+        snapshot.customAdapterTemplate!,
+    ]) {
+      if (template.id == id) return template;
+    }
+    return null;
+  }
+
+  ProviderTemplateOption? _defaultProviderTemplate(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    for (final template in snapshot.providerPresets) {
+      if (template.id == 'deepseek') return template;
+    }
+    if (snapshot.providerPresets.isNotEmpty) {
+      return snapshot.providerPresets.first;
+    }
+    if (snapshot.protocolTemplates.isNotEmpty) {
+      return snapshot.protocolTemplates.first;
+    }
+    return snapshot.customAdapterTemplate;
+  }
+
+  List<ProviderTemplateOption> _providerPresetTemplates() {
+    return _snapshot?.providerPresets ?? const <ProviderTemplateOption>[];
+  }
+
+  List<ProviderTemplateOption> _protocolProviderTemplates() {
+    final snapshot = _snapshot;
+    if (snapshot == null) return const <ProviderTemplateOption>[];
+    return [
+      ...snapshot.protocolTemplates,
+      if (snapshot.customAdapterTemplate != null)
+        snapshot.customAdapterTemplate!,
+    ];
+  }
+
+  String _providerNameSeed(ProviderTemplateOption template) {
+    return switch (template.id) {
+      'openai_official' => 'openai',
+      'anthropic_official' => 'anthropic',
+      'google_ai_studio' => 'google_ai_studio',
+      'google_vertex_gemini' => 'google_vertex_gemini',
+      'google_vertex_openai' => 'google_vertex_openai',
+      _ => template.id,
+    };
+  }
+
+  String _uniqueProviderName(String seed) {
+    final normalized = _providerNameSlug(seed);
+    final providers = _snapshot?.providers ?? const <ProviderOption>[];
+    final used = providers.map((provider) => provider.name).toSet();
+    if (!used.contains(normalized)) return normalized;
+    for (var index = 2; index < 100; index += 1) {
+      final candidate = '${normalized}_$index';
+      if (!used.contains(candidate)) return candidate;
+    }
+    return '${normalized}_${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  String _providerNameSlug(String value) {
+    final lower = value.trim().toLowerCase();
+    final slug = lower.replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    final trimmed = slug.replaceAll(RegExp(r'^_+|_+$'), '');
+    return trimmed.isEmpty ? 'custom_provider' : trimmed;
   }
 
   String _translationDefaultText(DesktopSnapshot? snapshot) {
@@ -788,13 +1009,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _saveProvider() async {
-    final provider = _selectedProvider;
-    final providerOption = _snapshot == null || provider == null
-        ? const ProviderOption(name: '', models: [])
-        : _providerByName(_snapshot!, provider);
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
     final model = _translationModelSelection(providerOption);
-    if (provider == null || provider.isEmpty) {
-      setState(() => _error = '需要先选择翻译服务');
+    if (provider.isEmpty) {
+      setState(() => _error = '连接名称不能为空');
       return;
     }
     if (model.isEmpty) {
@@ -815,6 +1034,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
         apiKey: _keyTextOrNull(),
         expectedVersion: _snapshot?.providersFileVersion,
       );
+      _creatingProvider = false;
+      _selectedProvider = provider;
       _selectedModel = model;
       await _loadConfig();
       if (!mounted) return;
@@ -822,7 +1043,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
         _selectedModel = model;
         _fetchedProviderModels.remove(provider);
         if (_visibleModels(providerOption).contains(model)) _model.clear();
-        _message = '供应商已保存；默认翻译没有自动切换。';
+        _message = '连接已保存；默认翻译没有自动切换。';
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -833,13 +1054,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _saveTranslationDefault() async {
-    final provider = _selectedProvider;
-    final providerOption = _snapshot == null || provider == null
-        ? const ProviderOption(name: '', models: [])
-        : _providerByName(_snapshot!, provider);
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
     final model = _translationModelSelection(providerOption);
-    if (provider == null || provider.isEmpty || model.isEmpty) {
-      setState(() => _error = '需要先选择翻译服务和模型');
+    if (provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先填写连接名称和模型');
       return;
     }
     setState(() {
@@ -863,6 +1082,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
         savedProviderBeforeRouting = true;
       }
       await _saveRouting(provider, model, expectedVersion: expectedVersion);
+      _creatingProvider = false;
+      _selectedProvider = provider;
       await _loadConfig();
       if (!mounted) return;
       setState(() {
@@ -898,9 +1119,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _fetchModels() async {
-    final provider = _selectedProvider;
-    if (provider == null || provider.isEmpty) {
-      setState(() => _error = '需要先选择翻译服务');
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
+    if (provider.isEmpty) {
+      setState(() => _error = '需要先填写连接名称');
       return;
     }
     setState(() {
@@ -937,13 +1159,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _testProvider() async {
-    final provider = _selectedProvider;
-    final providerOption = _snapshot == null || provider == null
-        ? const ProviderOption(name: '', models: [])
-        : _providerByName(_snapshot!, provider);
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
     final model = _translationModelSelection(providerOption);
-    if (provider == null || provider.isEmpty || model.isEmpty) {
-      setState(() => _error = '需要先选择翻译服务和模型');
+    if (provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先填写连接名称和模型');
       return;
     }
     setState(() {
@@ -989,12 +1209,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
     required String providerName,
     List<String>? models,
   }) {
-    final provider = _snapshot == null
-        ? const ProviderOption(name: '', models: [])
-        : _providerByName(_snapshot!, providerName);
+    final provider = _creatingProvider
+        ? _activeTranslationProvider()
+        : (_snapshot == null
+              ? const ProviderOption(name: '', models: [])
+              : _providerByName(_snapshot!, providerName));
+    final name = _translationProviderName(provider);
     return {
       ...provider.raw,
-      'name': providerName,
+      'name': name,
       'base_url': _baseUrl.text.trim().isNotEmpty
           ? _baseUrl.text.trim()
           : provider.baseUrl,
@@ -1010,10 +1233,48 @@ class _SettingsWindowState extends State<SettingsWindow> {
       'api_type': provider.apiType.isNotEmpty
           ? provider.apiType
           : 'openai-compatible',
+      'env_key': _providerEnvKey(provider),
       'credential_id': provider.credentialId.isNotEmpty
           ? provider.credentialId
-          : providerName,
+          : name,
     };
+  }
+
+  String _translationProviderName(ProviderOption provider) {
+    if (_creatingProvider) return _providerName.text.trim();
+    return provider.name.trim();
+  }
+
+  String _providerCredentialId(ProviderOption provider) {
+    if (provider.credentialId.isNotEmpty) return provider.credentialId;
+    final name = _translationProviderName(provider);
+    return name.isEmpty ? '待填写' : name;
+  }
+
+  String _providerEnvKey(ProviderOption provider) {
+    if (provider.envKey.isNotEmpty) return provider.envKey;
+    final name = _translationProviderName(provider);
+    if (name.isEmpty) return '待填写';
+    return _defaultProviderEnvKey(name);
+  }
+
+  String _defaultProviderEnvKey(String name) {
+    final slug = name
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return 'TVX_PROVIDER_${slug.isEmpty ? 'CUSTOM' : slug}_API_KEY';
+  }
+
+  String _modelListEndpointLabel(ProviderOption provider) {
+    final modelList = _stringMap(provider.raw['model_list']);
+    final path =
+        _stringValue(modelList['path_template']) ??
+        _stringValue(modelList['pathTemplate']);
+    if (path == null || path.isEmpty) return '手动填写';
+    final method = _stringValue(modelList['method']) ?? 'GET';
+    return '$method $path';
   }
 
   String _translationModelSelection(ProviderOption provider) {
@@ -1057,20 +1318,21 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   bool _providerModelsNeedSave(ProviderOption provider, String model) {
+    if (_creatingProvider) return true;
     final saved = provider.models.toSet();
     if (model.trim().isNotEmpty && !saved.contains(model.trim())) return true;
     final fetched = _fetchedProviderModels[provider.name] ?? const <String>[];
     return fetched.any((item) => !saved.contains(item));
   }
 
-  String _modelListHelp(ProviderOption provider) {
-    if (provider.name.isEmpty) return '选择供应商后可以查看或手动填写模型。';
+  String? _modelListHelp(ProviderOption provider) {
+    if (provider.name.isEmpty) return '选择连接后可以查看或手动填写模型。';
     final fetched = _fetchedProviderModels[provider.name] ?? const <String>[];
     if (fetched.isNotEmpty) {
-      return '拉取结果还未保存；点击“保存供应商”后会写入模型清单。';
+      return '拉取结果还未保存；点击“保存连接”后会写入模型清单。';
     }
-    if (provider.models.isEmpty) return '这个供应商还没有保存模型，可以手动填写模型名。';
-    return '模型清单来自当前供应商配置；拉取后可先预览，再保存进供应商配置。';
+    if (provider.models.isEmpty) return '这个连接还没有保存模型，可以手动填写模型名。';
+    return null;
   }
 
   void _pickAsrProvider(String providerName) {
@@ -1849,6 +2111,23 @@ String _providerProtocolLabel(ProviderOption provider) {
   };
 }
 
+String _providerTemplateLabel(ProviderTemplateOption template) {
+  final label = template.label.trim();
+  if (label.isNotEmpty) return label;
+  return template.id;
+}
+
+String _providerTemplateProtocolLabel(ProviderTemplateOption template) {
+  return _providerProtocolLabel(
+    ProviderOption(
+      name: template.id,
+      models: template.models,
+      apiType: template.apiType,
+      compatMode: template.compatMode,
+    ),
+  );
+}
+
 String _credentialSourceLabel(String source) {
   return switch (source.trim().toLowerCase()) {
     'auth_json' => '用户级凭据',
@@ -1863,7 +2142,7 @@ String _credentialSourceLabel(String source) {
 }
 
 String _credentialStatusLabel(ProviderOption provider) {
-  if (provider.name.isEmpty) return '未选择供应商';
+  if (provider.name.isEmpty) return '未选择连接';
   final source = _credentialSourceLabel(provider.credentialSource);
   return provider.hasKey ? '已配置 · $source' : '缺密钥 · $source';
 }
@@ -2146,23 +2425,29 @@ class _ProviderList extends StatelessWidget {
     required this.providers,
     required this.selected,
     required this.defaultProvider,
+    required this.creating,
     required this.onPick,
+    required this.onCreate,
   });
 
   final List<ProviderOption> providers;
   final String? selected;
   final String? defaultProvider;
+  final bool creating;
   final ValueChanged<String> onPick;
+  final VoidCallback onCreate;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('模型供应商', style: T.tSection),
+        const Text('已配置连接', style: T.tSection),
+        const SizedBox(height: T.s12),
+        _ActionButton(label: '添加连接', strong: creating, onTap: onCreate),
         const SizedBox(height: T.s12),
         if (providers.isEmpty)
-          const Text('还没有模型供应商', style: T.tCaption)
+          const Text('还没有连接', style: T.tCaption)
         else
           Expanded(
             child: ListView(
@@ -2184,6 +2469,108 @@ class _ProviderList extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _TemplatePicker extends StatelessWidget {
+  const _TemplatePicker({
+    required this.templates,
+    required this.selected,
+    required this.onPick,
+  });
+
+  final List<ProviderTemplateOption> templates;
+  final String? selected;
+  final ValueChanged<ProviderTemplateOption> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    if (templates.isEmpty) {
+      return const Text('没有可用模板', style: T.tCaption);
+    }
+    return Wrap(
+      spacing: T.s8,
+      runSpacing: T.s8,
+      children: [
+        for (final template in templates)
+          _TemplateChoice(
+            label: _providerTemplateLabel(template),
+            detail: _providerTemplateProtocolLabel(template),
+            selected: template.id == selected,
+            onTap: () => onPick(template),
+          ),
+      ],
+    );
+  }
+}
+
+class _TemplateChoice extends StatefulWidget {
+  const _TemplateChoice({
+    required this.label,
+    required this.detail,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String detail;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_TemplateChoice> createState() => _TemplateChoiceState();
+}
+
+class _TemplateChoiceState extends State<_TemplateChoice> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 176,
+          height: 62,
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
+          decoration: BoxDecoration(
+            color: widget.selected || _hover ? T.accentSoft : T.surface,
+            borderRadius: BorderRadius.circular(T.rMd),
+            border: Border.all(
+              color: widget.selected ? T.accent : T.line,
+              width: 1.2,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                widget.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: T.tBody.copyWith(
+                  fontWeight: widget.selected ? T.wBold : T.wMedium,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                widget.detail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: T.tCaption,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -719,6 +719,27 @@ class DesktopSnapshot {
         .toList();
   }
 
+  List<ProviderTemplateOption> get providerPresets {
+    return _objectList(config['provider_presets'])
+        .map(ProviderTemplateOption.fromJson)
+        .where((template) => template.id.isNotEmpty)
+        .toList();
+  }
+
+  List<ProviderTemplateOption> get protocolTemplates {
+    return _objectList(config['protocol_templates'])
+        .map(ProviderTemplateOption.fromJson)
+        .where((template) => template.id.isNotEmpty)
+        .toList();
+  }
+
+  ProviderTemplateOption? get customAdapterTemplate {
+    final template = ProviderTemplateOption.fromJson(
+      config['custom_adapter_template'],
+    );
+    return template.id.isEmpty ? null : template;
+  }
+
   List<AsrProviderOption> get asrProviders {
     final source = _stringMap(config['asr_providers']);
     return source.entries
@@ -851,6 +872,60 @@ class ConfigReadiness {
       translationLabel: translationLabel,
       asrConfigured: selectedAsr['has_key'] == true,
       asrLabel: asrLabel,
+    );
+  }
+}
+
+class ProviderTemplateOption {
+  const ProviderTemplateOption({
+    required this.id,
+    required this.label,
+    this.baseUrl = '',
+    this.envKey = '',
+    this.apiType = '',
+    this.compatMode = '',
+    this.credentialId = '',
+    this.protocolTemplateId = '',
+    this.models = const <String>[],
+    this.raw = const <String, Object?>{},
+  });
+
+  final String id;
+  final String label;
+  final String baseUrl;
+  final String envKey;
+  final String apiType;
+  final String compatMode;
+  final String credentialId;
+  final String protocolTemplateId;
+  final List<String> models;
+  final Map<String, Object?> raw;
+
+  factory ProviderTemplateOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    final id = _stringValue(map['id']) ?? '';
+    return ProviderTemplateOption(
+      id: id,
+      label: _stringValue(map['label']) ?? id,
+      baseUrl:
+          _stringValue(map['base_url']) ?? _stringValue(map['baseUrl']) ?? '',
+      envKey: _stringValue(map['env_key']) ?? _stringValue(map['envKey']) ?? '',
+      apiType:
+          _stringValue(map['api_type']) ?? _stringValue(map['apiType']) ?? '',
+      compatMode:
+          _stringValue(map['compat_mode']) ??
+          _stringValue(map['compatMode']) ??
+          '',
+      credentialId:
+          _stringValue(map['credential_id']) ??
+          _stringValue(map['credentialId']) ??
+          '',
+      protocolTemplateId:
+          _stringValue(map['protocol_template_id']) ??
+          _stringValue(map['protocolTemplateId']) ??
+          '',
+      models: _stringList(map['models']),
+      raw: map,
     );
   }
 }

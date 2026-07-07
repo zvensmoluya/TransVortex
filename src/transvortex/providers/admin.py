@@ -323,29 +323,63 @@ PROTOCOL_TEMPLATE_IDS = [
 
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "openai_official": {
-        "label": "OpenAI official",
-        "protocol_template_id": "openai_responses",
         **PROVIDER_TEMPLATES["openai_responses"],
+        "label": "OpenAI",
+        "protocol_template_id": "openai_responses",
+        "env_key": "OPENAI_API_KEY",
+        "credential_id": "openai",
     },
     "anthropic_official": {
-        "label": "Anthropic official",
-        "protocol_template_id": "anthropic_messages",
         **PROVIDER_TEMPLATES["anthropic_messages"],
+        "label": "Anthropic",
+        "protocol_template_id": "anthropic_messages",
+        "env_key": "ANTHROPIC_API_KEY",
+        "credential_id": "anthropic",
+    },
+    "deepseek": {
+        **PROVIDER_TEMPLATES["openai_chat"],
+        "label": "DeepSeek",
+        "protocol_template_id": "openai_chat",
+        "base_url": "https://api.deepseek.com",
+        "env_key": "DEEPSEEK_API_KEY",
+        "credential_id": "deepseek",
+        "models": ["deepseek-v4-pro"],
+        "request_mapping": {
+            "style": "openai_chat",
+            "body_overrides": {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        },
+        "capabilities": {
+            **PROVIDER_TEMPLATES["openai_chat"]["capabilities"],
+            "supports_temperature": False,
+            "supports_json_mode": True,
+            "max_context_tokens": 1000000,
+            "max_output_tokens": 384000,
+            "recommended_output_tokens": 32768,
+        },
     },
     "google_ai_studio": {
+        **PROVIDER_TEMPLATES["gemini_ai_studio_native"],
         "label": "Google AI Studio",
         "protocol_template_id": "gemini_generate_content",
-        **PROVIDER_TEMPLATES["gemini_ai_studio_native"],
+        "env_key": "GEMINI_API_KEY",
+        "credential_id": "google_ai_studio",
     },
     "google_vertex_gemini": {
-        "label": "Google Vertex AI Gemini (Express)",
-        "protocol_template_id": "vertex_express",
         **PROVIDER_TEMPLATES["vertex_express"],
+        "label": "Google Vertex AI Gemini",
+        "protocol_template_id": "vertex_express",
+        "env_key": "VERTEX_API_KEY",
+        "credential_id": "google_vertex_gemini",
     },
     "google_vertex_openai": {
-        "label": "Google Vertex AI OpenAI-compatible",
-        "protocol_template_id": "vertex_openai_compatible",
         **PROVIDER_TEMPLATES["vertex_openai_compatible"],
+        "label": "Google Vertex OpenAI-compatible",
+        "protocol_template_id": "vertex_openai_compatible",
+        "env_key": "VERTEX_API_KEY",
+        "credential_id": "google_vertex_openai",
     },
 }
 

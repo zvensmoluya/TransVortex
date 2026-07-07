@@ -1025,7 +1025,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('翻译模型设置'), findsOneWidget);
-    expect(find.text('模型供应商'), findsOneWidget);
+    expect(find.text('已配置连接'), findsOneWidget);
     expect(find.text('服务地址 (Base URL)'), findsOneWidget);
     expect(find.textContaining('中文备注'), findsNothing);
     expect(find.textContaining('spike'), findsNothing);
@@ -1092,15 +1092,15 @@ void main() {
 
     expect(find.text('RealProvider'), findsWidgets);
     expect(find.text('real-model'), findsWidgets);
-    expect(find.text('连接信息'), findsOneWidget);
-    expect(find.text('可用模型'), findsOneWidget);
+    expect(find.text('连接'), findsOneWidget);
+    expect(find.text('模型'), findsOneWidget);
     expect(find.widgetWithText(TextField, '自定义模型名'), findsOneWidget);
     final fields = tester.widgetList<TextField>(find.byType(TextField));
     expect(
       fields.map((field) => field.controller?.text),
       isNot(contains('real-model')),
     );
-    expect(find.textContaining('供应商配置保存服务地址'), findsOneWidget);
+    expect(find.textContaining('连接保存协议'), findsOneWidget);
     expect(find.text('OpenAI Chat 兼容'), findsWidgets);
     expect(find.textContaining('用户级凭据'), findsWidgets);
     expect(find.text('openai-compatible'), findsNothing);
@@ -1134,8 +1134,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('还没选默认模型'), findsOneWidget);
-    expect(find.text('还没有模型供应商'), findsOneWidget);
-    expect(find.text('选择一个模型供应商'), findsOneWidget);
+    expect(find.text('还没有连接'), findsOneWidget);
+    expect(find.text('选择一个连接或添加连接'), findsOneWidget);
     expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });
@@ -1166,7 +1166,7 @@ void main() {
 
     expect(find.text('gemini-3.5-flash'), findsWidgets);
     expect(find.text('设为翻译默认'), findsOneWidget);
-    expect(find.textContaining('供应商配置保存服务地址'), findsOneWidget);
+    expect(find.textContaining('连接保存协议'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1248,7 +1248,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('保存供应商'));
+    await tester.tap(find.text('保存连接'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1256,9 +1256,66 @@ void main() {
     expect(calls, isNot(contains('provider.routing.save')));
     expect(savedProviderDraft?['models'], contains('real-model'));
     expect(savedRouting, isNull);
-    expect(find.textContaining('供应商已保存'), findsOneWidget);
+    expect(find.textContaining('连接已保存'), findsOneWidget);
     expectNoFlutterException();
   });
+
+  testWidgets(
+    'translation settings creates a connection from provider preset',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(820, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      Map<String, Object?>? savedProviderDraft;
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+        if (method == 'provider.save') {
+          savedProviderDraft = Map<String, Object?>.from(
+            params['provider_draft'] as Map,
+          );
+          return {'ok': true};
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.translationSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.text('添加连接'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('常用厂商'), findsOneWidget);
+      expect(find.text('通用协议'), findsOneWidget);
+      expect(find.text('DeepSeek'), findsOneWidget);
+
+      await tester.tap(find.text('保存连接'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(savedProviderDraft?['name'], 'deepseek');
+      expect(savedProviderDraft?['base_url'], 'https://api.deepseek.com');
+      expect(savedProviderDraft?['env_key'], 'DEEPSEEK_API_KEY');
+      expect(savedProviderDraft?['credential_id'], 'deepseek');
+      expect(savedProviderDraft?['compat_mode'], 'openai_chat');
+      expect(savedProviderDraft?['api_type'], 'openai-compatible');
+      expect(savedProviderDraft?['models'], contains('deepseek-v4-pro'));
+      expect(
+        (savedProviderDraft?['endpoint'] as Map?)?['path_template'],
+        '/chat/completions',
+      );
+      expect(find.textContaining('连接已保存'), findsOneWidget);
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets(
     'translation settings default saves unsaved fetched models first',
@@ -2457,6 +2514,112 @@ DesktopSnapshot _desktopSnapshot({
       'pipeline': {'asr_provider': 'local'},
       'pipeline_file_version': {'mtime_ns': 1, 'size': 2},
       'providers_file_version': {'mtime_ns': 3, 'size': 4},
+      'provider_presets': [
+        {
+          'id': 'deepseek',
+          'label': 'DeepSeek',
+          'api_type': 'openai-compatible',
+          'compat_mode': 'openai_chat',
+          'base_url': 'https://api.deepseek.com',
+          'env_key': 'DEEPSEEK_API_KEY',
+          'credential_id': 'deepseek',
+          'models': ['deepseek-v4-pro'],
+          'auth': {
+            'type': 'bearer',
+            'header_name': 'Authorization',
+            'prefix': 'Bearer ',
+          },
+          'endpoint': {'path_template': '/chat/completions', 'method': 'POST'},
+          'request_mapping': {'style': 'openai_chat'},
+          'response_mapping': {
+            'text_paths': ['choices[0].message.content'],
+          },
+          'model_list': {
+            'path_template': '/models',
+            'method': 'GET',
+            'response_paths': ['data[].id'],
+          },
+        },
+        {
+          'id': 'openai_official',
+          'label': 'OpenAI',
+          'api_type': 'openai-compatible',
+          'compat_mode': 'openai_responses',
+          'base_url': 'https://api.openai.com/v1',
+          'env_key': 'OPENAI_API_KEY',
+          'credential_id': 'openai',
+          'models': ['gpt-5.5'],
+          'endpoint': {'path_template': '/responses', 'method': 'POST'},
+          'request_mapping': {'style': 'openai_responses'},
+          'response_mapping': {
+            'text_paths': ['output_text'],
+          },
+          'model_list': {
+            'path_template': '/models',
+            'method': 'GET',
+            'response_paths': ['data[].id'],
+          },
+        },
+      ],
+      'protocol_templates': [
+        {
+          'id': 'openai_chat',
+          'label': 'OpenAI-compatible Chat',
+          'api_type': 'openai-compatible',
+          'compat_mode': 'openai_chat',
+          'base_url': 'https://api.openai.com/v1',
+          'models': ['custom-model'],
+          'endpoint': {'path_template': '/chat/completions', 'method': 'POST'},
+          'request_mapping': {'style': 'openai_chat'},
+          'response_mapping': {
+            'text_paths': ['choices[0].message.content'],
+          },
+          'model_list': {
+            'path_template': '/models',
+            'method': 'GET',
+            'response_paths': ['data[].id'],
+          },
+        },
+        {
+          'id': 'anthropic_messages',
+          'label': 'Anthropic Messages',
+          'api_type': 'anthropic',
+          'compat_mode': 'anthropic_messages',
+          'base_url': 'https://api.anthropic.com/v1',
+          'models': ['claude-sonnet'],
+          'endpoint': {'path_template': '/messages', 'method': 'POST'},
+          'request_mapping': {'style': 'anthropic_messages'},
+          'response_mapping': {
+            'text_paths': ['content[].text'],
+          },
+          'model_list': {
+            'path_template': '/models',
+            'method': 'GET',
+            'response_paths': ['data[].id'],
+          },
+        },
+      ],
+      'custom_adapter_template': {
+        'id': 'custom_json',
+        'label': 'Custom JSON',
+        'api_type': 'custom',
+        'compat_mode': 'custom_json',
+        'base_url': 'https://example.com',
+        'models': ['custom-model'],
+        'endpoint': {'path_template': '/', 'method': 'POST'},
+        'request_mapping': {
+          'style': 'custom_json',
+          'body_template': {'model': '{{model}}', 'prompt': '{{prompt}}'},
+        },
+        'response_mapping': {
+          'text_paths': ['text'],
+        },
+        'model_list': {
+          'path_template': '',
+          'method': 'GET',
+          'response_paths': [],
+        },
+      },
       'providers': withProviders
           ? [
               {
