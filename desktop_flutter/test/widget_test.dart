@@ -1382,10 +1382,15 @@ void main() {
         savedProviderDraft?['models'],
         containsAll(['model-a', 'model-b']),
       );
-      expect(savedRouting?['primary'], {
+      final profiles = savedRouting?['profiles'] as List?;
+      final defaultProfile = profiles?.cast<Map>().firstWhere(
+        (item) => item['id'] == 'default',
+      );
+      expect(defaultProfile?['primary'], {
         'provider': 'RealProvider',
         'model': 'model-a',
       });
+      expect(savedRouting?['active_profile'], 'default');
       expect(savedRouting?['expected_version'], {'mtime_ns': 5, 'size': 6});
       expect(find.textContaining('默认翻译已切换'), findsOneWidget);
       expectNoFlutterException();
@@ -1433,7 +1438,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('配置组'), findsWidgets);
-    expect(find.text('配置 1'), findsOneWidget);
+    expect(find.text('配置 1'), findsWidgets);
     expect(find.text('配置 2'), findsOneWidget);
 
     await tester.tap(find.text('配置 2'));
@@ -1445,6 +1450,154 @@ void main() {
     expect(savedRouting?['expected_version'], {'mtime_ns': 3, 'size': 4});
     expect(savedRouting?['profiles'], isA<List>());
     expect(find.textContaining('已切换配置组：配置 2'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings renames routing profile', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': 'route_1',
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.enterText(find.byType(TextField).first, '正式翻译');
+    await tester.tap(find.text('重命名配置组'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    final renamed = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect(renamed?['name'], '正式翻译');
+    expect(savedRouting?['active_profile'], 'route_1');
+    expect(find.textContaining('配置组已重命名：正式翻译'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings saves current route as a new profile', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': params['active_profile'],
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('另存为新组'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    final created = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_3',
+    );
+    expect(savedRouting?['active_profile'], 'route_3');
+    expect(savedRouting?['next_profile_seq'], 4);
+    expect(created?['name'], '配置 3');
+    expect(created?['primary'], {
+      'provider': 'RealProvider',
+      'model': 'real-model',
+    });
+    expect(find.textContaining('已新建配置组：配置 3'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings deletes active routing profile', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': params['active_profile'],
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('删除当前组'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    expect(savedRouting?['active_profile'], 'route_2');
+    expect(profiles?.cast<Map>().map((item) => item['id']), ['route_2']);
+    expect(find.textContaining('已删除配置组：配置 1'), findsOneWidget);
     expectNoFlutterException();
   });
 

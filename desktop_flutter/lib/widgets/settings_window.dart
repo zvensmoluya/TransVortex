@@ -118,6 +118,7 @@ class SettingsWindow extends StatefulWidget {
 class _SettingsWindowState extends State<SettingsWindow> {
   final _baseUrl = TextEditingController();
   final _providerName = TextEditingController();
+  final _routingProfileName = TextEditingController();
   final _model = TextEditingController();
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
@@ -178,6 +179,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _baseUrl.dispose();
     _providerName.removeListener(_onProviderNameChanged);
     _providerName.dispose();
+    _routingProfileName.dispose();
     _model.dispose();
     _key.dispose();
     _endpoint.dispose();
@@ -261,6 +263,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
                     ? snapshot.translationModel
                     : (visibleModels.isNotEmpty ? visibleModels.first : null));
           _loadProviderDraftFields();
+          _loadRoutingProfileDraftFields(snapshot);
         } else if (_isTranslation) {
           _selectedProviderTemplate ??= _defaultProviderTemplate(snapshot)?.id;
         } else if (_isAsr) {
@@ -467,7 +470,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final isBlank = provider.name.isEmpty && !_creatingProvider;
     final modelHelp = _modelListHelp(provider);
     final routingProfiles = _snapshot?.routingProfiles ?? const [];
-    final activeProfile = _snapshot?.activeRoutingProfile ?? 'default';
+    final activeProfile = _activeRoutingProfile(_snapshot);
+    final activeProfileId =
+        activeProfile?.id ?? _snapshot?.activeRoutingProfile ?? 'default';
     return _ToolPanel(
       footer: [
         _ActionButton(
@@ -535,9 +540,32 @@ class _SettingsWindowState extends State<SettingsWindow> {
                   for (final profile in routingProfiles)
                     _ChoicePill(
                       label: profile.displayName,
-                      selected: profile.id == activeProfile,
+                      selected: profile.id == activeProfileId,
                       onTap: () => _switchRoutingProfile(profile),
                     ),
+                ],
+              ),
+              const SizedBox(height: T.s12),
+              _Input(label: '配置组名称', controller: _routingProfileName),
+              const SizedBox(height: T.s12),
+              Wrap(
+                spacing: T.s12,
+                runSpacing: T.s8,
+                children: [
+                  _ActionButton(
+                    label: '重命名配置组',
+                    onTap: _savingDefault ? null : _renameRoutingProfile,
+                  ),
+                  _ActionButton(
+                    label: '另存为新组',
+                    onTap: _savingDefault ? null : _createRoutingProfile,
+                  ),
+                  _ActionButton(
+                    label: '删除当前组',
+                    onTap: _savingDefault || routingProfiles.length <= 1
+                        ? null
+                        : _deleteRoutingProfile,
+                  ),
                 ],
               ),
             ],
@@ -649,6 +677,20 @@ class _SettingsWindowState extends State<SettingsWindow> {
                 label: '模型列表',
                 value: _modelListEndpointLabel(provider),
               ),
+              if (!_creatingProvider &&
+                  routingProfiles.length <= 1 &&
+                  routingProfiles.isNotEmpty) ...[
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '配置组',
+                  value: routingProfiles.first.displayName,
+                ),
+                const SizedBox(height: T.s12),
+                _ActionButton(
+                  label: '另存为新组',
+                  onTap: _savingDefault ? null : _createRoutingProfile,
+                ),
+              ],
             ],
           ),
       ],
@@ -910,6 +952,91 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _key.clear();
   }
 
+  void _loadRoutingProfileDraftFields(DesktopSnapshot snapshot) {
+    final profile = _activeRoutingProfile(snapshot);
+    _routingProfileName.text = profile?.displayName ?? 'Default';
+  }
+
+  RoutingProfileOption? _activeRoutingProfile(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    final activeId = snapshot.activeRoutingProfile;
+    for (final profile in snapshot.routingProfiles) {
+      if (profile.id == activeId) return profile;
+    }
+    return snapshot.routingProfiles.isEmpty
+        ? null
+        : snapshot.routingProfiles.first;
+  }
+
+  Map<String, Object?> _routingProfilePayload(
+    RoutingProfileOption profile, {
+    String? name,
+    String? provider,
+    String? model,
+    List<Object?>? fallback,
+  }) {
+    return {
+      ...profile.raw,
+      'id': profile.id,
+      'name': name ?? profile.displayName,
+      'primary': {
+        'provider': provider ?? profile.provider,
+        'model': model ?? profile.model,
+      },
+      'fallback': fallback ?? profile.fallback,
+    };
+  }
+
+  List<Map<String, Object?>> _routingProfilePayloads(
+    DesktopSnapshot snapshot, {
+    String? updatingProfileId,
+    String? name,
+    String? provider,
+    String? model,
+    List<Object?>? fallback,
+  }) {
+    return [
+      for (final profile in snapshot.routingProfiles)
+        profile.id == updatingProfileId
+            ? _routingProfilePayload(
+                profile,
+                name: name,
+                provider: provider,
+                model: model,
+                fallback: fallback,
+              )
+            : _routingProfilePayload(profile),
+    ];
+  }
+
+  String _uniqueRoutingProfileName(DesktopSnapshot snapshot, String seed) {
+    final used = snapshot.routingProfiles
+        .map((profile) => profile.displayName.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final base = seed.trim().isEmpty ? '配置' : seed.trim();
+    if (!used.contains(base)) return base;
+    for (var index = 2; index < 100; index += 1) {
+      final candidate = '$base $index';
+      if (!used.contains(candidate)) return candidate;
+    }
+    return '$base ${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  String _nextRoutingProfileId(DesktopSnapshot snapshot) {
+    final seq = snapshot.routingProfileNextSeq <= 0
+        ? snapshot.routingProfiles.length + 1
+        : snapshot.routingProfileNextSeq;
+    final used = snapshot.routingProfiles.map((profile) => profile.id).toSet();
+    var candidate = 'route_$seq';
+    var next = seq + 1;
+    while (used.contains(candidate)) {
+      candidate = 'route_$next';
+      next += 1;
+    }
+    return candidate;
+  }
+
   ProviderOption _activeTranslationProvider() {
     if (!_creatingProvider) {
       return _selectedProvider == null || _snapshot == null
@@ -1126,12 +1253,27 @@ class _SettingsWindowState extends State<SettingsWindow> {
     Map<String, Object?>? expectedVersion,
   }) async {
     final snapshot = _snapshot ?? await _client.desktopSnapshot();
-    await _client.saveTranslationRouting(
-      provider: provider,
-      model: model,
-      fallback: snapshot.translationFallback,
-      expectedVersion: expectedVersion ?? snapshot.providersFileVersion,
-    );
+    final activeProfile = _activeRoutingProfile(snapshot);
+    if (activeProfile == null) {
+      await _client.saveTranslationRouting(
+        provider: provider,
+        model: model,
+        fallback: snapshot.translationFallback,
+        expectedVersion: expectedVersion ?? snapshot.providersFileVersion,
+      );
+    } else {
+      await _client.saveTranslationRoutingProfiles(
+        profiles: _routingProfilePayloads(
+          snapshot,
+          updatingProfileId: activeProfile.id,
+          provider: provider,
+          model: model,
+        ),
+        activeProfile: activeProfile.id,
+        nextProfileSeq: snapshot.routingProfileNextSeq,
+        expectedVersion: expectedVersion ?? snapshot.providersFileVersion,
+      );
+    }
     await widget.bridge.setTranslationDefault(
       '$provider · $model',
       configured: true,
@@ -1168,6 +1310,138 @@ class _SettingsWindowState extends State<SettingsWindow> {
         _selectedModel = profile.model.isEmpty ? _selectedModel : profile.model;
         _message = '已切换配置组：${profile.displayName}。';
       });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _renameRoutingProfile() async {
+    final snapshot = _snapshot;
+    final profile = _activeRoutingProfile(snapshot);
+    if (snapshot == null || profile == null) return;
+    final name = _routingProfileName.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = '配置组名称不能为空');
+      return;
+    }
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.saveTranslationRoutingProfiles(
+        profiles: _routingProfilePayloads(
+          snapshot,
+          updatingProfileId: profile.id,
+          name: name,
+        ),
+        activeProfile: profile.id,
+        nextProfileSeq: snapshot.routingProfileNextSeq,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() => _message = '配置组已重命名：$name。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _createRoutingProfile() async {
+    final snapshot = _snapshot;
+    if (snapshot == null) return;
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
+    final model = _translationModelSelection(providerOption);
+    if (provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先选择连接和模型');
+      return;
+    }
+    final current = _activeRoutingProfile(snapshot);
+    final newId = _nextRoutingProfileId(snapshot);
+    final desiredName = _routingProfileName.text.trim();
+    final defaultName = '配置 ${snapshot.routingProfileNextSeq}';
+    final name = _uniqueRoutingProfileName(
+      snapshot,
+      desiredName.isEmpty || desiredName == current?.displayName
+          ? defaultName
+          : desiredName,
+    );
+    final fallback = current?.fallback ?? snapshot.translationFallback;
+    final profiles = [
+      for (final item in snapshot.routingProfiles) _routingProfilePayload(item),
+      {
+        'id': newId,
+        'name': name,
+        'primary': {'provider': provider, 'model': model},
+        'fallback': fallback,
+      },
+    ];
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.saveTranslationRoutingProfiles(
+        profiles: profiles,
+        activeProfile: newId,
+        nextProfileSeq: snapshot.routingProfileNextSeq + 1,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      await widget.bridge.setTranslationDefault(
+        '$provider · $model',
+        configured: true,
+      );
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() => _message = '已新建配置组：$name。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _deleteRoutingProfile() async {
+    final snapshot = _snapshot;
+    final profile = _activeRoutingProfile(snapshot);
+    if (snapshot == null || profile == null) return;
+    if (snapshot.routingProfiles.length <= 1) {
+      setState(() => _error = '至少保留一个配置组');
+      return;
+    }
+    final kept = snapshot.routingProfiles
+        .where((item) => item.id != profile.id)
+        .toList();
+    final nextActive = kept.first;
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.saveTranslationRoutingProfiles(
+        profiles: [for (final item in kept) _routingProfilePayload(item)],
+        activeProfile: nextActive.id,
+        nextProfileSeq: snapshot.routingProfileNextSeq,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      await widget.bridge.setTranslationDefault(
+        nextActive.routeLabel,
+        configured: nextActive.provider.isNotEmpty,
+      );
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() => _message = '已删除配置组：${profile.displayName}。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -2214,10 +2488,20 @@ String _translationRouteLabel(DesktopSnapshot? snapshot) {
 }
 
 String _routingProfileLabel(DesktopSnapshot? snapshot) {
-  final routing = _stringMap(snapshot?.config['routing']);
-  final active = _stringValue(routing['active_profile']);
-  final fallbackCount = _objectList(routing['fallback']).length;
-  final profile = active == null || active.isEmpty ? 'default' : active;
+  if (snapshot == null) return 'Default · 无备用';
+  final activeId = snapshot.activeRoutingProfile;
+  final profiles = snapshot.routingProfiles;
+  RoutingProfileOption? activeProfile;
+  for (final item in profiles) {
+    if (item.id == activeId) {
+      activeProfile = item;
+      break;
+    }
+  }
+  activeProfile ??= profiles.isEmpty ? null : profiles.first;
+  final profile = activeProfile?.displayName ?? 'Default';
+  final fallbackCount =
+      activeProfile?.fallback.length ?? snapshot.translationFallback.length;
   return fallbackCount == 0
       ? '$profile · 无备用'
       : '$profile · $fallbackCount 个备用';
