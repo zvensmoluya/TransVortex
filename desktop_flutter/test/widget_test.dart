@@ -1601,6 +1601,111 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('translation settings adds selected model as fallback', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 980));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': params['active_profile'],
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('backup-model'));
+    await tester.pump();
+    await tester.tap(find.text('加入备用'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    final active = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect(active?['primary'], {
+      'provider': 'RealProvider',
+      'model': 'real-model',
+    });
+    expect(active?['fallback'], [
+      {'provider': 'RealProvider', 'model': 'backup-model'},
+    ]);
+    expect(savedRouting?['active_profile'], 'route_1');
+    expect(find.textContaining('已加入备用模型'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings removes fallback model', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(820, 980));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+          withRoutingFallback: true,
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': params['active_profile'],
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byTooltip('移除备用模型'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    final active = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect(active?['fallback'], isEmpty);
+    expect(savedRouting?['active_profile'], 'route_1');
+    expect(find.textContaining('已移除备用模型'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets('translation settings window localizes provider test failures', (
     tester,
   ) async {
@@ -2699,6 +2804,7 @@ DesktopSnapshot _desktopSnapshot({
   bool withAsrProviders = true,
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
+  bool withRoutingFallback = false,
   List<Map<String, Object?>> tasks = const [],
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
@@ -2723,7 +2829,11 @@ DesktopSnapshot _desktopSnapshot({
             'id': 'route_1',
             'name': '配置 1',
             'primary': {'provider': 'RealProvider', 'model': 'real-model'},
-            'fallback': const [],
+            'fallback': withRoutingFallback
+                ? [
+                    {'provider': 'RealProvider', 'model': 'backup-model'},
+                  ]
+                : const [],
           },
           {
             'id': 'route_2',

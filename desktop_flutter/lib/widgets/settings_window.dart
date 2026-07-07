@@ -473,6 +473,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final activeProfile = _activeRoutingProfile(_snapshot);
     final activeProfileId =
         activeProfile?.id ?? _snapshot?.activeRoutingProfile ?? 'default';
+    final fallbackRoutes = _fallbackRouteRows(activeProfile);
     return _ToolPanel(
       footer: [
         _ActionButton(
@@ -640,6 +641,41 @@ class _SettingsWindowState extends State<SettingsWindow> {
             ],
           ],
         ),
+        if (!_creatingProvider && activeProfile != null)
+          _SettingsSection(
+            title: '备用模型',
+            children: [
+              if (fallbackRoutes.isEmpty)
+                Text('暂未设置备用模型', style: T.tCaption)
+              else
+                for (var index = 0; index < fallbackRoutes.length; index += 1)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == fallbackRoutes.length - 1 ? 0 : T.s8,
+                    ),
+                    child: _FallbackRouteRow(
+                      provider: '${fallbackRoutes[index]['provider'] ?? ''}',
+                      model: '${fallbackRoutes[index]['model'] ?? ''}',
+                      canMoveUp: index > 0,
+                      canMoveDown: index < fallbackRoutes.length - 1,
+                      onMoveUp: _savingDefault
+                          ? null
+                          : () => _moveFallbackRoute(index, -1),
+                      onMoveDown: _savingDefault
+                          ? null
+                          : () => _moveFallbackRoute(index, 1),
+                      onRemove: _savingDefault
+                          ? null
+                          : () => _removeFallbackRoute(index),
+                    ),
+                  ),
+              const SizedBox(height: T.s12),
+              _ActionButton(
+                label: '加入备用',
+                onTap: _savingDefault ? null : _addFallbackRoute,
+              ),
+            ],
+          ),
         _SettingsSection(
           title: '凭据',
           children: [
@@ -1007,6 +1043,27 @@ class _SettingsWindowState extends State<SettingsWindow> {
               )
             : _routingProfilePayload(profile),
     ];
+  }
+
+  List<Map<String, Object?>> _fallbackRouteRows(RoutingProfileOption? profile) {
+    if (profile == null) return const <Map<String, Object?>>[];
+    return [for (final item in profile.fallback) ?_routePayloadFromRaw(item)];
+  }
+
+  Map<String, Object?>? _routePayloadFromRaw(Object? raw) {
+    final route = _stringMap(raw);
+    final provider = _stringValue(route['provider'])?.trim() ?? '';
+    final model = _stringValue(route['model'])?.trim() ?? '';
+    if (provider.isEmpty || model.isEmpty) return null;
+    return {'provider': provider, 'model': model};
+  }
+
+  Map<String, Object?> _routePayload(String provider, String model) {
+    return {'provider': provider, 'model': model};
+  }
+
+  bool _sameRoute(Map<String, Object?> route, String provider, String model) {
+    return route['provider'] == provider && route['model'] == model;
   }
 
   String _uniqueRoutingProfileName(DesktopSnapshot snapshot, String seed) {
@@ -1442,6 +1499,147 @@ class _SettingsWindowState extends State<SettingsWindow> {
       await _loadConfig();
       if (!mounted) return;
       setState(() => _message = '已删除配置组：${profile.displayName}。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _saveFallbackRoutes(
+    List<Map<String, Object?>> fallback, {
+    Map<String, Object?>? expectedVersion,
+  }) async {
+    final snapshot = _snapshot;
+    final profile = _activeRoutingProfile(snapshot);
+    if (snapshot == null || profile == null) return;
+    await _client.saveTranslationRoutingProfiles(
+      profiles: _routingProfilePayloads(
+        snapshot,
+        updatingProfileId: profile.id,
+        fallback: fallback,
+      ),
+      activeProfile: profile.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      expectedVersion: expectedVersion ?? snapshot.providersFileVersion,
+    );
+    await widget.bridge.setTranslationDefault(
+      profile.routeLabel,
+      configured: profile.provider.isNotEmpty,
+    );
+  }
+
+  Future<void> _addFallbackRoute() async {
+    if (_creatingProvider) {
+      setState(() => _error = '需要先保存连接，再加入备用模型');
+      return;
+    }
+    final snapshot = _snapshot;
+    final profile = _activeRoutingProfile(snapshot);
+    if (snapshot == null || profile == null) return;
+    final providerOption = _activeTranslationProvider();
+    final provider = _translationProviderName(providerOption);
+    final model = _translationModelSelection(providerOption);
+    if (provider.isEmpty || model.isEmpty) {
+      setState(() => _error = '需要先选择连接和模型');
+      return;
+    }
+    if (provider == profile.provider && model == profile.model) {
+      setState(() => _error = '当前模型已经是主模型');
+      return;
+    }
+    final fallback = _fallbackRouteRows(profile);
+    if (fallback.any((route) => _sameRoute(route, provider, model))) {
+      setState(() => _error = '这个备用模型已经在列表中');
+      return;
+    }
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      Map<String, Object?>? expectedVersion;
+      var savedProviderBeforeRouting = false;
+      if (_providerModelsNeedSave(providerOption, model)) {
+        final saveResult = await _client.providerSave(
+          providerDraft: _translationDraft(
+            providerName: provider,
+            models: _mergedModelsForProvider(providerOption, model),
+          ),
+          apiKey: _keyTextOrNull(),
+          expectedVersion: snapshot.providersFileVersion,
+        );
+        expectedVersion = _stringMap(saveResult['providers_file_version']);
+        savedProviderBeforeRouting = true;
+      }
+      await _saveFallbackRoutes([
+        ...fallback,
+        _routePayload(provider, model),
+      ], expectedVersion: expectedVersion);
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() {
+        if (savedProviderBeforeRouting) _fetchedProviderModels.remove(provider);
+        _message = '已加入备用模型：$provider · $model。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _removeFallbackRoute(int index) async {
+    final profile = _activeRoutingProfile(_snapshot);
+    final fallback = _fallbackRouteRows(profile);
+    if (index < 0 || index >= fallback.length) return;
+    final removed = fallback[index];
+    fallback.removeAt(index);
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _saveFallbackRoutes(fallback);
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() {
+        _message = '已移除备用模型：${removed['provider']} · ${removed['model']}。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
+  }
+
+  Future<void> _moveFallbackRoute(int index, int direction) async {
+    final profile = _activeRoutingProfile(_snapshot);
+    final fallback = _fallbackRouteRows(profile);
+    final target = index + direction;
+    if (index < 0 ||
+        index >= fallback.length ||
+        target < 0 ||
+        target >= fallback.length) {
+      return;
+    }
+    final item = fallback.removeAt(index);
+    fallback.insert(target, item);
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _saveFallbackRoutes(fallback);
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() => _message = '备用模型顺序已更新。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -3746,6 +3944,132 @@ class _ToolPanel extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
       ],
+    );
+  }
+}
+
+class _FallbackRouteRow extends StatelessWidget {
+  const _FallbackRouteRow({
+    required this.provider,
+    required this.model,
+    required this.canMoveUp,
+    required this.canMoveDown,
+    required this.onMoveUp,
+    required this.onMoveDown,
+    required this.onRemove,
+  });
+
+  final String provider;
+  final String model;
+  final bool canMoveUp;
+  final bool canMoveDown;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 42),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: RichText(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(
+                style: T.tCaption.copyWith(
+                  color: T.ink,
+                  fontFamily: T.fontFamily,
+                ),
+                children: [
+                  TextSpan(
+                    text: provider,
+                    style: const TextStyle(fontWeight: T.wBold),
+                  ),
+                  const TextSpan(
+                    text: ' · ',
+                    style: TextStyle(color: T.muted),
+                  ),
+                  TextSpan(text: model),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: T.s8),
+          _IconToolButton(
+            icon: Icons.arrow_upward_rounded,
+            tooltip: '上移备用模型',
+            onTap: canMoveUp ? onMoveUp : null,
+          ),
+          _IconToolButton(
+            icon: Icons.arrow_downward_rounded,
+            tooltip: '下移备用模型',
+            onTap: canMoveDown ? onMoveDown : null,
+          ),
+          _IconToolButton(
+            icon: Icons.close_rounded,
+            tooltip: '移除备用模型',
+            onTap: onRemove,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IconToolButton extends StatefulWidget {
+  const _IconToolButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  State<_IconToolButton> createState() => _IconToolButtonState();
+}
+
+class _IconToolButtonState extends State<_IconToolButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final color = enabled ? T.accentStrong : T.muted;
+    return Tooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: _hover && enabled ? T.accentSoft : T.surface,
+              borderRadius: BorderRadius.circular(T.rSm),
+              border: Border.all(
+                color: _hover && enabled ? T.accent : T.line,
+                width: 1,
+              ),
+            ),
+            child: Icon(widget.icon, size: 16, color: color),
+          ),
+        ),
+      ),
     );
   }
 }
