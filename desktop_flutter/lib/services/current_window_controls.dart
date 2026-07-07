@@ -38,6 +38,10 @@ Future<void> configureCurrentWindow(AppWindowArgs args) async {
     windowButtonVisibility: false,
   );
   await windowManager.waitUntilReadyToShow(options);
+  if (geometry.role == WindowRole.main) {
+    await windowManager.setAsFrameless();
+    await windowManager.setHasShadow(false);
+  }
   await windowManager.setResizable(geometry.resizable);
   await windowManager.setMaximizable(geometry.maximizable);
   if (geometry.position != null) {

@@ -65,22 +65,13 @@ class _PrimaryActionState extends State<PrimaryAction> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 130),
           curve: Curves.easeOut,
-          height: 46,
-          constraints: const BoxConstraints(minWidth: 180),
-          padding: const EdgeInsets.symmetric(horizontal: T.s32),
+          height: 44,
+          constraints: const BoxConstraints(minWidth: 168, maxWidth: 320),
+          padding: const EdgeInsets.symmetric(horizontal: T.s24),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(T.rMd),
             border: Border.all(color: border, width: 1.6),
-            boxShadow: filled && !disabled
-                ? [
-                    BoxShadow(
-                      color: T.accent.withValues(alpha: 0.30),
-                      blurRadius: _hover ? 16 : 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ]
-                : null,
           ),
           alignment: Alignment.center,
           child: Text(widget.label, style: T.tCta.copyWith(color: fg)),

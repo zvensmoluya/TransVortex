@@ -17,6 +17,7 @@ import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
+import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 
 void main() {
@@ -263,6 +264,7 @@ void main() {
 
     final theme = Theme.of(tester.element(find.text('TransVortex')));
     expect(theme.textTheme.bodyMedium?.fontFamily, T.fontFamily);
+    expect(T.displayFontFamily, 'TransVortexDisplay');
     expect(T.tFilename.fontFamily, T.fontFamily);
     expect(T.tCta.fontFamily, T.fontFamily);
     expect(T.tBrand.fontFamily, T.fontFamily);
@@ -278,9 +280,16 @@ void main() {
     // 呼吸动画在 repeat，不能 pumpAndSettle；推进一帧即可。
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('放入片源'), findsOneWidget);
-    expect(find.text('选择片源'), findsOneWidget);
-    expect(find.textContaining('SRT 字幕'), findsOneWidget);
+    expect(find.text('把视频或字幕放进来吧'), findsOneWidget);
+    expect(find.text('浏览文件'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('main-empty-pick-target')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('也可以点击选择'), findsNothing);
+    expect(find.textContaining('支持视频'), findsNothing);
+    expect(find.textContaining('翻译'), findsOneWidget);
+    expect(find.textContaining('DeepSeek'), findsNothing);
     expect(find.text('TransVortex'), findsOneWidget);
     expect(find.textContaining('调试态'), findsNothing);
     expectNoFlutterException();
@@ -317,35 +326,35 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('选择片源'));
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('picked-video.mp4'), findsOneWidget);
-    expect(find.textContaining('生成术语建议'), findsOneWidget);
-    final allowTerms = find.textContaining('允许');
-    expect(allowTerms, findsOneWidget);
+    expect(find.textContaining('也会'), findsOneWidget);
+    final termsToggle = find.text('整理术语记忆');
+    expect(termsToggle, findsOneWidget);
     final enabledTooltips = tester
-        .widgetList<Tooltip>(find.byType(Tooltip))
+        .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(enabledTooltips, contains('本次允许系统自动积累术语建议；人工术语表和预设术语表留在后续术语窗口。'));
+    expect(enabledTooltips, contains('制作时自动整理术语记忆。不会改动人工术语表。'));
 
-    await tester.tap(allowTerms);
+    await tester.tap(termsToggle);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('关闭'), findsOneWidget);
+    expect(find.text('不整理术语记忆'), findsOneWidget);
     final disabledTooltips = tester
-        .widgetList<Tooltip>(find.byType(Tooltip))
+        .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(disabledTooltips, contains('本次不自动积累术语建议；不会关闭已有人工术语表或预设术语表。'));
+    expect(disabledTooltips, contains('本次不生成新的术语记忆。已有术语表不受影响。'));
     expect(find.text('开始译制'), findsOneWidget);
     expectNoFlutterException();
   });
 
-  testWidgets('main screen applies readonly service snapshot readiness', (
+  testWidgets('main screen keeps readonly service status out of chrome', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -353,8 +362,10 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('服务已连接'), findsOneWidget);
-    expect(find.textContaining('等待片源'), findsOneWidget);
+    expect(find.text('TransVortex'), findsOneWidget);
+    expect(find.textContaining('服务已连接'), findsNothing);
+    expect(find.textContaining('等待片源'), findsNothing);
+    expect(find.text('把视频或字幕放进来吧'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -363,28 +374,53 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(720, 520));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    installFilePickerMock(
+      tester,
+      name:
+          'video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-ridiculously-long-tail.mp4',
+      path:
+          r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-ridiculously-long-tail.mp4',
+    );
+    final transport = _FakeTransport({
+      'service.info': {
+        'service': 'transvortex.app_service',
+        'protocol_version': 1,
+        'app_version': 'test',
+        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+      },
+      'service.health': {
+        'service': 'transvortex.app_service',
+        'status': 'healthy',
+        'runtime': {'active': null},
+        'pump': {'enabled': true},
+      },
+      'desktop.snapshot': _desktopSnapshot().raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_widget_running',
+        'status': 'QUEUED',
+      },
+      'tasks.events': {
+        'task_id': 'tvx_widget_running',
+        'events': [
+          {'stage': 'translate', 'progress': 0.42},
+        ],
+        'cursor': 0,
+        'next_cursor': 1,
+        'has_more': false,
+      },
+    });
 
     await tester.pumpWidget(
       TransVortexApp(
-        localServiceController: _readyController(
-          snapshot: _desktopSnapshot(
-            tasks: [
-              _task(
-                status: 'RUNNING',
-                inputFile:
-                    r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-ridiculously-long-tail.mp4',
-                progress: 0.42,
-                runtime: {'state': 'running'},
-              ),
-            ],
-          ),
-        ),
+        localServiceController: _controllerForTransport(transport),
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    await pickSourceAndStart(tester);
 
-    expect(find.textContaining('制作中'), findsWidgets);
+    expect(find.textContaining('正在翻译字幕'), findsOneWidget);
     expect(find.textContaining('ridiculously-long-tail'), findsOneWidget);
     expect(find.text('停止任务'), findsOneWidget);
     expect(find.textContaining('Task created'), findsNothing);
@@ -398,34 +434,63 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     const longPath =
         r'D:\AICenter\neko\video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-very-long-tail.mp4';
+    installFilePickerMock(
+      tester,
+      name:
+          'video_2026-05-21_21-07-52.zh-CN.style3-preview-part04-with-a-very-long-tail.mp4',
+      path: longPath,
+    );
+    final transport = _FakeTransport(
+      {
+        'service.info': {
+          'service': 'transvortex.app_service',
+          'protocol_version': 1,
+          'app_version': 'test',
+          'capabilities': ['desktop_snapshot', 'runtime_pump'],
+        },
+        'service.health': {
+          'service': 'transvortex.app_service',
+          'status': 'healthy',
+          'runtime': {'active': null},
+          'pump': {'enabled': true},
+        },
+        'desktop.snapshot': _desktopSnapshot().raw,
+      },
+      failures: {
+        'runtime.submitRun': [
+          RpcRemoteException(
+            'routing_provider_missing',
+            'provider not found',
+            details: const {
+              'error_info': {
+                'code': 'routing_provider_missing',
+                'hint_zh':
+                    '翻译服务还没配置好，请打开翻译模型设置检查 provider、模型、base_url 和凭据；这是一段特意很长的恢复提示，用来防止失败态再次溢出。',
+              },
+            },
+          ),
+        ],
+      },
+    );
 
     await tester.pumpWidget(
       TransVortexApp(
-        localServiceController: _readyController(
-          snapshot: _desktopSnapshot(
-            tasks: [
-              _task(
-                status: 'FAILED',
-                inputFile: longPath,
-                errorInfo: {
-                  'code': 'routing_provider_missing',
-                  'hint_zh':
-                      '翻译服务还没配置好，请打开翻译模型设置检查 provider、模型、base_url 和凭据；这是一段特意很长的恢复提示，用来防止失败态再次溢出。',
-                },
-              ),
-            ],
-          ),
-        ),
+        localServiceController: _controllerForTransport(transport),
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('开始译制'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('制作失败'), findsWidgets);
     expect(find.textContaining('翻译服务还没配置好'), findsOneWidget);
+    expect(find.textContaining('制作失败'), findsNothing);
     expect(find.text('继续任务'), findsNothing);
     final tooltipMessages = tester
-        .widgetList<Tooltip>(find.byType(Tooltip))
+        .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
@@ -444,6 +509,7 @@ void main() {
   testWidgets('main screen notifies when a running task completes', (
     tester,
   ) async {
+    installFilePickerMock(tester);
     final notifications = _RecordingTaskNotificationService();
     final transport = _FakeTransport({
       'service.info': {
@@ -458,16 +524,12 @@ void main() {
         'runtime': {'active': null},
         'pump': {'enabled': true},
       },
-      'desktop.snapshot': _desktopSnapshot(
-        tasks: [
-          _task(
-            taskId: 'tvx_widget_task',
-            status: 'RUNNING',
-            inputFile: r'D:\movie.mp4',
-            runtime: {'state': 'running'},
-          ),
-        ],
-      ).raw,
+      'desktop.snapshot': _desktopSnapshot().raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_widget_task',
+        'status': 'QUEUED',
+      },
       'tasks.events': {
         'task_id': 'tvx_widget_task',
         'events': [],
@@ -486,6 +548,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    await pickSourceAndStart(tester);
 
     transport.results['desktop.snapshot'] = _desktopSnapshot(
       tasks: [
@@ -507,6 +570,7 @@ void main() {
   });
 
   testWidgets('main screen notifies when a running task fails', (tester) async {
+    installFilePickerMock(tester);
     final notifications = _RecordingTaskNotificationService();
     final transport = _FakeTransport({
       'service.info': {
@@ -521,16 +585,12 @@ void main() {
         'runtime': {'active': null},
         'pump': {'enabled': true},
       },
-      'desktop.snapshot': _desktopSnapshot(
-        tasks: [
-          _task(
-            taskId: 'tvx_widget_task',
-            status: 'RUNNING',
-            inputFile: r'D:\movie.mp4',
-            runtime: {'state': 'running'},
-          ),
-        ],
-      ).raw,
+      'desktop.snapshot': _desktopSnapshot().raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_widget_task',
+        'status': 'QUEUED',
+      },
       'tasks.events': {
         'task_id': 'tvx_widget_task',
         'events': [],
@@ -549,6 +609,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
+    await pickSourceAndStart(tester);
 
     transport.results['desktop.snapshot'] = _desktopSnapshot(
       tasks: [
@@ -585,52 +646,70 @@ void main() {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       pickerChannel,
       (call) async {
+        if (call.method == 'any') {
+          return [
+            {'name': 'movie.mp4', 'path': r'D:\movie.mp4', 'size': 1234},
+          ];
+        }
         expect(call.method, 'dir');
         return r'E:\subtitle-output';
       },
     );
-    final transport = _FakeTransport({
-      'service.info': {
-        'service': 'transvortex.app_service',
-        'protocol_version': 1,
-        'app_version': 'test',
-        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+    final transport = _FakeTransport(
+      {
+        'service.info': {
+          'service': 'transvortex.app_service',
+          'protocol_version': 1,
+          'app_version': 'test',
+          'capabilities': ['desktop_snapshot', 'runtime_pump'],
+        },
+        'service.health': {
+          'service': 'transvortex.app_service',
+          'status': 'healthy',
+          'runtime': {'active': null},
+          'pump': {'enabled': true},
+        },
+        'desktop.snapshot': _desktopSnapshot().raw,
+        'runtime.submitRun': {
+          'ok': true,
+          'task_id': 'tvx_retry',
+          'status': 'QUEUED',
+        },
+        'tasks.events': {
+          'task_id': 'tvx_retry',
+          'events': [],
+          'cursor': 0,
+          'next_cursor': 0,
+          'has_more': false,
+        },
       },
-      'service.health': {
-        'service': 'transvortex.app_service',
-        'status': 'healthy',
-        'runtime': {'active': null},
-        'pump': {'enabled': true},
-      },
-      'desktop.snapshot': _desktopSnapshot(
-        tasks: [
-          _task(
-            taskId: 'tvx_output_failed',
-            status: 'FAILED',
-            inputFile: r'D:\movie.mp4',
-            errorInfo: {'code': 'output_not_writable', 'hint_zh': '输出目录不可写。'},
+      failures: {
+        'runtime.submitRun': [
+          RpcRemoteException(
+            'output_not_writable',
+            'output path is not writable',
+            details: const {
+              'error_info': {
+                'code': 'output_not_writable',
+                'hint_zh': '输出目录不可写。',
+              },
+            },
           ),
         ],
-      ).raw,
-      'runtime.submitRun': {
-        'ok': true,
-        'task_id': 'tvx_retry',
-        'status': 'QUEUED',
       },
-      'tasks.events': {
-        'task_id': 'tvx_retry',
-        'events': [],
-        'cursor': 0,
-        'next_cursor': 0,
-        'has_more': false,
-      },
-    });
+    );
 
     await tester.pumpWidget(
       TransVortexApp(
         localServiceController: _controllerForTransport(transport),
       ),
     );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('开始译制'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -645,7 +724,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('main failed recovery resumes resumable tasks', (tester) async {
+  testWidgets('main home reminder resumes resumable tasks', (tester) async {
     final transport = _FakeTransport({
       'service.info': {
         'service': 'transvortex.app_service',
@@ -691,8 +770,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('继续任务'), findsOneWidget);
-    await tester.tap(find.text('继续任务'));
+    expect(find.textContaining('有 1 个未完成制作'), findsOneWidget);
+    expect(find.textContaining('movie.mp4'), findsOneWidget);
+    expect(find.textContaining('制作失败'), findsNothing);
+    await tester.tap(find.text('继续'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -707,9 +788,44 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main home reminder can be dismissed without blocking new work', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                taskId: 'tvx_dismissible_failed',
+                status: 'INTERRUPTED',
+                inputFile: r'D:\movie.mp4',
+                runtime: {'can_resume': true},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('有 1 个未完成制作'), findsOneWidget);
+    await tester.tap(find.text('稍后'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('有 1 个未完成制作'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('main-empty-pick-target')),
+      findsOneWidget,
+    );
+    expectNoFlutterException();
+  });
+
   testWidgets('main failed recovery re-exports missing results', (
     tester,
   ) async {
+    installFilePickerMock(tester);
     final transport = _FakeTransport({
       'service.info': {
         'service': 'transvortex.app_service',
@@ -723,19 +839,12 @@ void main() {
         'runtime': {'active': null},
         'pump': {'enabled': true},
       },
-      'desktop.snapshot': _desktopSnapshot(
-        tasks: [
-          _task(
-            taskId: 'tvx_result_missing',
-            status: 'FAILED',
-            inputFile: r'D:\movie.mp4',
-            errorInfo: {
-              'code': 'result_missing',
-              'hint_zh': '结果文件不在原位置了，可以重新导出字幕。',
-            },
-          ),
-        ],
-      ).raw,
+      'desktop.snapshot': _desktopSnapshot().raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_result_missing',
+        'status': 'QUEUED',
+      },
       'result.reexport': {
         'ok': true,
         'output_paths': {'srt': r'D:\movie.srt'},
@@ -749,12 +858,26 @@ void main() {
       },
     });
 
-    await tester.pumpWidget(
-      TransVortexApp(
-        localServiceController: _controllerForTransport(transport),
-      ),
-    );
+    final controller = _controllerForTransport(transport);
+
+    await tester.pumpWidget(TransVortexApp(localServiceController: controller));
     await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await pickSourceAndStart(tester);
+    transport.results['desktop.snapshot'] = _desktopSnapshot(
+      tasks: [
+        _task(
+          taskId: 'tvx_result_missing',
+          status: 'FAILED',
+          inputFile: r'D:\movie.mp4',
+          errorInfo: {
+            'code': 'result_missing',
+            'hint_zh': '结果文件不在原位置了，可以重新导出字幕。',
+          },
+        ),
+      ],
+    ).raw;
+    await controller.refresh();
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('重新导出'), findsOneWidget);
@@ -786,6 +909,11 @@ void main() {
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         pickerChannel,
         (call) async {
+          if (call.method == 'any') {
+            return [
+              {'name': 'movie.mp4', 'path': r'D:\movie.mp4', 'size': 1234},
+            ];
+          }
           expect(call.method, 'dir');
           return r'E:\fixed-output';
         },
@@ -824,7 +952,12 @@ void main() {
             'runtime': {'active': null},
             'pump': {'enabled': true},
           },
-          'desktop.snapshot': initialSnapshot,
+          'desktop.snapshot': _desktopSnapshot().raw,
+          'runtime.submitRun': {
+            'ok': true,
+            'task_id': 'tvx_reexport_output_failed',
+            'status': 'QUEUED',
+          },
           'result.reexport': {
             'ok': true,
             'output_paths': {'srt': r'E:\fixed-output\movie.zh-CN.srt'},
@@ -851,24 +984,23 @@ void main() {
             ),
           ],
         },
-        sequences: {
-          'desktop.snapshot': [initialSnapshot, recoveredSnapshot],
-        },
       );
+      final controller = _controllerForTransport(transport);
 
       await tester.pumpWidget(
-        TransVortexApp(
-          localServiceController: _controllerForTransport(transport),
-        ),
+        TransVortexApp(localServiceController: controller),
       );
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
+      transport.results['desktop.snapshot'] = initialSnapshot;
+      await pickSourceAndStart(tester);
 
       expect(find.text('重新导出'), findsOneWidget);
       await tester.tap(find.text('重新导出'));
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('选择输出目录'), findsOneWidget);
 
+      transport.results['desktop.snapshot'] = recoveredSnapshot;
       await tester.tap(find.text('选择输出目录'));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
@@ -879,7 +1011,6 @@ void main() {
         'output_dir': r'E:\fixed-output',
         'bilingual': true,
       });
-      expect(transport.calls, isNot(contains('runtime.submitRun')));
       expect(find.textContaining('已重新导出字幕'), findsOneWidget);
       expectNoFlutterException();
     },
@@ -1977,6 +2108,7 @@ void main() {
     expect(find.text('processing-done.mp4'), findsWidgets);
     expect(find.text('processing-failed.mp4'), findsOneWidget);
     expect(find.text('processing-running.mp4'), findsOneWidget);
+    expect(find.text('全部 3'), findsOneWidget);
     expect(find.text('字幕编辑'), findsOneWidget);
     expect(find.text('导出格式'), findsOneWidget);
     expect(calls, contains('result.open'));
@@ -2110,6 +2242,41 @@ void main() {
 void expectNoFlutterException() {
   final exception = TestWidgetsFlutterBinding.instance.takeException();
   expect(exception, isNull);
+}
+
+void installFilePickerMock(
+  WidgetTester tester, {
+  String name = 'movie.mp4',
+  String path = r'D:\movie.mp4',
+}) {
+  FilePickerIO.registerWith();
+  const pickerChannel = MethodChannel(
+    'miguelruivo.flutter.plugins.filepicker',
+    JSONMethodCodec(),
+  );
+  addTearDown(() {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pickerChannel,
+      null,
+    );
+  });
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    pickerChannel,
+    (call) async {
+      expect(call.method, 'any');
+      return [
+        {'name': name, 'path': path, 'size': 1234},
+      ];
+    },
+  );
+}
+
+Future<void> pickSourceAndStart(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.tap(find.text('开始译制'));
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.pump(const Duration(milliseconds: 100));
 }
 
 LocalServiceController _readyController({DesktopSnapshot? snapshot}) {
@@ -2248,11 +2415,13 @@ Map<String, Object?> _task({
   Map<String, String> outputPaths = const {},
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
+  String? inputType,
 }) {
   return {
     'task_id': taskId ?? 'tvx_widget_$status',
     'status': status,
     'input_file': inputFile,
+    'input_type': ?inputType,
     'task_dir': ?taskDir,
     'source_lang': 'en',
     'target_lang': 'zh-CN',

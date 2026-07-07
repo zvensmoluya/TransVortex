@@ -31,6 +31,7 @@ class T {
 
   // —— 字重：只用三档真实字重（§10.1）——
   static const fontFamily = 'TransVortexNotoSansSC';
+  static const displayFontFamily = 'TransVortexDisplay';
   static const wRegular = FontWeight.w400;
   static const wMedium = FontWeight.w500;
   static const wBold = FontWeight.w700;

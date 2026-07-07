@@ -26,6 +26,7 @@ import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
 import 'widgets/job_line.dart';
 import 'widgets/primary_action.dart';
+import 'widgets/designed_tooltip.dart';
 import 'widgets/settings_window.dart';
 import 'widgets/task_processing_window.dart';
 import 'widgets/title_bar.dart';
@@ -117,6 +118,21 @@ class TransVortexApp extends StatelessWidget {
         useMaterial3: true,
         fontFamily: T.fontFamily,
         scaffoldBackgroundColor: T.bg,
+        tooltipTheme: TooltipThemeData(
+          decoration: BoxDecoration(
+            color: T.surface,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: T.line, width: 1),
+          ),
+          textStyle: T.tCaption.copyWith(color: T.ink, height: 1.25),
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
+          margin: const EdgeInsets.all(T.s12),
+          waitDuration: const Duration(milliseconds: 450),
+          showDuration: const Duration(seconds: 3),
+        ),
         colorScheme: ColorScheme.fromSeed(
           seedColor: T.accent,
           brightness: Brightness.light,
@@ -178,6 +194,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late final TaskNotificationObserver _notificationObserver;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'main-smoke-render');
   final Map<String, WindowController> _toolWindows = {};
+  bool _dropTargetHover = false;
+  bool _dropTargetDown = false;
 
   late final AnimationController _breathe = AnimationController(
     vsync: this,
@@ -816,9 +834,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           child: Scaffold(
             body: DropTarget(
               onDragEntered: (_) => _drag.forward(),
-              onDragExited: (_) => _drag.reverse(),
+              onDragExited: (_) {
+                _drag.reverse();
+                if (_dropTargetHover) {
+                  setState(() => _dropTargetHover = false);
+                }
+              },
               onDragDone: (detail) {
                 _drag.reverse();
+                if (_dropTargetHover || _dropTargetDown) {
+                  setState(() {
+                    _dropTargetHover = false;
+                    _dropTargetDown = false;
+                  });
+                }
                 final file = detail.files.isNotEmpty
                     ? detail.files.first
                     : null;
@@ -828,13 +857,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 }
               },
               child: Container(
-                color: T.bg,
+                decoration: BoxDecoration(
+                  color: T.bg,
+                  border: Border.all(color: T.line, width: 1),
+                ),
                 child: Column(
                   children: [
-                    TitleBar(
-                      status: view.statusLine,
-                      onMenu: () => unawaited(_showChromeMenu()),
-                    ),
+                    TitleBar(onMenu: () => unawaited(_showChromeMenu())),
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(
@@ -862,7 +891,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         Expanded(
           child: Align(alignment: Alignment.center, child: _subject(view)),
         ),
-        if (view.hasSource) ...[
+        if (view.hasSource || view.state == MainState.empty) ...[
           JobLine(
             view: view,
             onPickTranslation: _pickTranslation,
@@ -876,7 +905,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(height: T.s16),
         ],
-        if (view.state != MainState.failed) ...[
+        if (view.state != MainState.failed &&
+            view.state != MainState.empty) ...[
           PrimaryAction(
             key: ValueKey(
               'main-cta-${view.state.name}-${_ctaVariant(view.state).name}',
@@ -886,7 +916,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             onTap: () => _onCta(view),
           ),
           const SizedBox(height: T.s4),
-        ] else
+        ] else if (view.state == MainState.failed)
           const SizedBox(height: 50),
       ],
     );
@@ -929,6 +959,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                             progress: view.progress,
                             breathe: _breathe.value,
                             dragOver: _drag.value,
+                            pickHover: _dropTargetHover,
+                            pickDown: _dropTargetDown,
                           ),
                         ),
                       ],
@@ -938,9 +970,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(height: T.s8),
-            if (view.state == MainState.empty)
-              _emptyPrompt()
-            else
+            if (view.state == MainState.empty) ...[
+              _emptyPrompt(),
+              if (view.homeTaskReminder != null) ...[
+                const SizedBox(height: T.s12),
+                _PendingTaskSlip(
+                  reminder: view.homeTaskReminder!,
+                  onResume: _resumeHomeTaskReminder,
+                  onOpen: () => _openToolWindow(
+                    AppWindowType.taskProcessing,
+                    taskId: view.homeTaskReminder!.taskId,
+                  ),
+                  onDismiss: () => _controller.dismissHomeTaskReminder(
+                    view.homeTaskReminder!.taskId,
+                  ),
+                ),
+              ],
+            ] else
               ConstrainedBox(
                 constraints: BoxConstraints(maxHeight: captionHeight!),
                 child: _subjectCaption(view),
@@ -951,29 +997,34 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           behavior: view.state == MainState.empty
               ? HitTestBehavior.translucent
               : HitTestBehavior.deferToChild,
-          onTap: view.state == MainState.empty ? _pickFile : null,
           onSecondaryTapDown: view.source == null
               ? null
               : (details) => _showSourceContextMenu(details.globalPosition),
-          child: content,
+          child: view.state == MainState.empty
+              ? _DropPickTarget(
+                  onTap: () => unawaited(_pickFile()),
+                  onHoverChanged: (hover) =>
+                      setState(() => _dropTargetHover = hover),
+                  onDownChanged: (down) =>
+                      setState(() => _dropTargetDown = down),
+                  child: content,
+                )
+              : content,
         );
       },
     );
   }
 
   Widget _emptyPrompt() {
-    return const Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('放入片源', style: T.tFilename),
-        SizedBox(height: T.s4),
-        Text(
-          '拖进来，或点击选择 · 视频 / 音频 / SRT 字幕',
-          style: T.tCaption,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
+    return AnimatedBuilder(
+      animation: _drag,
+      builder: (context, _) {
+        final active = _drag.value > 0.35;
+        return _HeroPrompt(
+          text: active ? '松手就收下啦' : '把视频或字幕放进来吧',
+          active: active,
+        );
+      },
     );
   }
 
@@ -1033,7 +1084,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (source == null) return const SizedBox.shrink();
     return Column(
       children: [
-        Tooltip(
+        DesignedTooltip(
           message: fileTooltipLabel(source.path, fallbackName: source.name),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 390),
@@ -1056,7 +1107,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   String _ctaLabel(MainWindowViewModel view) {
     return switch (view.state) {
-      MainState.empty => '选择片源',
+      MainState.empty => '浏览文件',
       MainState.ready => view.submitting ? '提交中…' : '开始译制',
       MainState.blocked => !view.translationConfigured ? '去配置翻译' : '去配置识别',
       MainState.running => view.canceling ? '取消中…' : '停止任务',
@@ -1104,6 +1155,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final res = await FilePicker.platform.pickFiles();
     final file = res?.files.singleOrNull;
     final path = file?.path;
+    if (mounted && (_dropTargetHover || _dropTargetDown)) {
+      setState(() {
+        _dropTargetHover = false;
+        _dropTargetDown = false;
+      });
+    }
     if (path != null) _controller.pickSource(path, name: file?.name);
   }
 
@@ -1305,6 +1362,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
   }
 
+  Future<void> _resumeHomeTaskReminder() async {
+    try {
+      await _controller.resumeHomeTaskReminder();
+    } on Object catch (error) {
+      _toast('$error');
+    }
+  }
+
   Future<void> _pickOutputDirectoryAndRetry() async {
     try {
       final selected = await FilePicker.platform.getDirectoryPath(
@@ -1460,6 +1525,437 @@ class _TypeTag extends StatelessWidget {
         style: T.tCaption.copyWith(
           color: T.accentStrong,
           fontWeight: T.wMedium,
+        ),
+      ),
+    );
+  }
+}
+
+class _DropPickTarget extends StatefulWidget {
+  const _DropPickTarget({
+    required this.child,
+    required this.onTap,
+    required this.onHoverChanged,
+    required this.onDownChanged,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final ValueChanged<bool> onHoverChanged;
+  final ValueChanged<bool> onDownChanged;
+
+  @override
+  State<_DropPickTarget> createState() => _DropPickTargetState();
+}
+
+class _DropPickTargetState extends State<_DropPickTarget> {
+  bool _hover = false;
+  bool _down = false;
+
+  void _setHover(bool value) {
+    if (_hover == value) return;
+    _hover = value;
+    widget.onHoverChanged(value);
+  }
+
+  void _setDown(bool value) {
+    if (_down == value) return;
+    _down = value;
+    widget.onDownChanged(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => _setHover(true),
+      onExit: (_) {
+        _setHover(false);
+        _setDown(false);
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => _setDown(true),
+        onTapUp: (_) => _setDown(false),
+        onTapCancel: () => _setDown(false),
+        onTap: widget.onTap,
+        child: Semantics(
+          key: const ValueKey('main-empty-pick-target'),
+          button: true,
+          label: '浏览文件',
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroPrompt extends StatelessWidget {
+  const _HeroPrompt({required this.text, required this.active});
+
+  final String text;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 140),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeOutCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.08),
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        ),
+      ),
+      child: SizedBox(
+        key: ValueKey(text),
+        width: 316,
+        height: 46,
+        child: CustomPaint(
+          painter: _HeroPromptPainter(active: active),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: T.displayFontFamily,
+                  fontSize: 24,
+                  fontWeight: T.wMedium,
+                  height: 1.0,
+                  letterSpacing: 0,
+                ).copyWith(color: active ? T.accentStrong : T.ink),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroPromptPainter extends CustomPainter {
+  const _HeroPromptPainter({required this.active});
+
+  final bool active;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final centerY = size.height * 0.58;
+    final fillPath = Path()
+      ..moveTo(22, 10)
+      ..quadraticBezierTo(size.width * 0.38, 5.5, size.width - 34, 9)
+      ..lineTo(size.width - 20, centerY + 9)
+      ..quadraticBezierTo(size.width * 0.52, centerY + 15, 26, centerY + 10)
+      ..close();
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..color = active
+            ? T.accentSoft.withValues(alpha: 0.46)
+            : T.surface.withValues(alpha: 0.56),
+    );
+
+    final underline = Paint()
+      ..color = active
+          ? T.accent.withValues(alpha: 0.76)
+          : T.accent.withValues(alpha: 0.34)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = active ? 2.0 : 1.4
+      ..strokeCap = StrokeCap.round;
+
+    final underlineY = size.height - 7;
+    final segments = active
+        ? <(double, double)>[(73, 219)]
+        : <(double, double)>[(78, 102), (112, 139), (150, 178), (188, 214)];
+    for (final segment in segments) {
+      canvas.drawLine(
+        Offset(segment.$1, underlineY),
+        Offset(segment.$2, underlineY),
+        underline,
+      );
+    }
+
+    final dotPaint = Paint()
+      ..color = active
+          ? T.sky.withValues(alpha: 0.8)
+          : T.sky.withValues(alpha: 0.46)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(const Offset(48, 15), active ? 2.2 : 1.7, dotPaint);
+    canvas.drawCircle(
+      Offset(size.width - 51, 14),
+      active ? 2.0 : 1.5,
+      dotPaint,
+    );
+
+    final spark = Paint()
+      ..color = T.accent.withValues(alpha: active ? 0.78 : 0.38)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(const Offset(36, 25), const Offset(42, 25), spark);
+    canvas.drawLine(const Offset(39, 22), const Offset(39, 28), spark);
+    canvas.drawLine(
+      Offset(size.width - 36, 25),
+      Offset(size.width - 30, 25),
+      spark,
+    );
+    canvas.drawLine(
+      Offset(size.width - 33, 22),
+      Offset(size.width - 33, 28),
+      spark,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _HeroPromptPainter oldDelegate) =>
+      oldDelegate.active != active;
+}
+
+class _PendingTaskSlip extends StatelessWidget {
+  const _PendingTaskSlip({
+    required this.reminder,
+    required this.onResume,
+    required this.onOpen,
+    required this.onDismiss,
+  });
+
+  final HomeTaskReminder reminder;
+  final VoidCallback onResume;
+  final VoidCallback onOpen;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasMany = reminder.resumableCount > 1;
+    final title = hasMany
+        ? '有 ${reminder.resumableCount} 个未完成制作'
+        : '有 1 个未完成制作';
+    final source = reminder.sourceName.trim();
+    final sourceLabel = source.isEmpty
+        ? '上次制作还没完成'
+        : hasMany
+        ? '最近：$source'
+        : source;
+    return SizedBox(
+      width: 430,
+      height: 78,
+      child: CustomPaint(
+        painter: _PendingTaskSlipPainter(),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(T.s24, T.s12, T.s16, T.s8),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 58,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '待续',
+                      style: T.tSection.copyWith(color: T.accentStrong),
+                    ),
+                    const SizedBox(height: 2),
+                    Text('制作', style: T.tCaption.copyWith(fontSize: 11)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tBody.copyWith(fontWeight: T.wMedium),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      sourceLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              _SlipAction(
+                label: hasMany ? '继续最近' : '继续',
+                onTap: onResume,
+                primary: true,
+              ),
+              const SizedBox(width: T.s8),
+              _SlipAction(label: hasMany ? '查看全部' : '查看', onTap: onOpen),
+              const SizedBox(width: T.s4),
+              _SlipAction(label: '稍后', onTap: onDismiss),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PendingTaskSlipPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paper = Path()
+      ..moveTo(13, 9)
+      ..lineTo(size.width - 34, 5)
+      ..lineTo(size.width - 12, 22)
+      ..lineTo(size.width - 15, size.height - 12)
+      ..lineTo(24, size.height - 6)
+      ..lineTo(8, size.height - 22)
+      ..close();
+    canvas.drawPath(
+      paper,
+      Paint()
+        ..color = T.surface
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawPath(
+      paper,
+      Paint()
+        ..color = T.line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    final fold = Path()
+      ..moveTo(size.width - 34, 5)
+      ..lineTo(size.width - 12, 22)
+      ..lineTo(size.width - 35, 24)
+      ..close();
+    canvas.drawPath(
+      fold,
+      Paint()
+        ..color = T.accentSoft.withValues(alpha: 0.65)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawPath(
+      fold,
+      Paint()
+        ..color = T.line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+
+    final tape = Path()
+      ..moveTo(42, 0)
+      ..lineTo(122, 0)
+      ..lineTo(116, 14)
+      ..lineTo(36, 14)
+      ..close();
+    canvas.drawPath(
+      tape,
+      Paint()
+        ..color = T.sky.withValues(alpha: 0.18)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawPath(
+      tape,
+      Paint()
+        ..color = T.sky.withValues(alpha: 0.30)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+
+    final divider = Paint()
+      ..color = T.line
+      ..strokeWidth = 1;
+    canvas.drawLine(
+      const Offset(92, 17),
+      Offset(92, size.height - 17),
+      divider,
+    );
+
+    final holePaint = Paint()
+      ..color = T.bg
+      ..style = PaintingStyle.fill;
+    final holeStroke = Paint()
+      ..color = T.inkLine.withValues(alpha: 0.62)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1;
+    for (final y in [25.0, 39.0, 53.0]) {
+      final rect = Rect.fromCenter(center: Offset(22, y), width: 7, height: 8);
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(2));
+      canvas
+        ..drawRRect(rrect, holePaint)
+        ..drawRRect(rrect, holeStroke);
+    }
+
+    canvas.drawCircle(
+      const Offset(390, 56),
+      2.4,
+      Paint()
+        ..color = T.warn.withValues(alpha: 0.75)
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PendingTaskSlipPainter oldDelegate) => false;
+}
+
+class _SlipAction extends StatefulWidget {
+  const _SlipAction({
+    required this.label,
+    required this.onTap,
+    this.primary = false,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final bool primary;
+
+  @override
+  State<_SlipAction> createState() => _SlipActionState();
+}
+
+class _SlipActionState extends State<_SlipAction> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = widget.primary ? const Color(0xFFFFFFFF) : T.accentStrong;
+    final bg = widget.primary
+        ? (_hover ? T.accentStrong : T.accent)
+        : (_hover ? T.accentSoft : const Color(0x00000000));
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          height: 30,
+          padding: const EdgeInsets.symmetric(horizontal: T.s8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: T.accent, width: 1),
+          ),
+          child: Text(
+            widget.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: T.tCaption.copyWith(color: fg, fontWeight: T.wMedium),
+          ),
         ),
       ),
     );

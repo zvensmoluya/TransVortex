@@ -3,14 +3,14 @@ import 'package:window_manager/window_manager.dart';
 
 import '../theme/tokens.dart';
 
-/// 自绘标题栏（design spec §4.1）：左=品牌点 + 标题 + 一行轻状态字；
+/// 自绘标题栏（design spec §4.1）：左=低调窗口身份；
 /// 右=窗控簇 `≡ — ✕`，行为像原生（拖拽区、最小化 / 关闭）。
 /// `≡` 是准备配置的门（单个 app 菜单），不是一排具名入口。
 class TitleBar extends StatelessWidget {
   const TitleBar({
     super.key,
     this.title = 'TransVortex',
-    required this.status,
+    this.status = '',
     this.onMenu,
     this.canMaximize = false,
   });
@@ -22,6 +22,7 @@ class TitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final statusText = status.trim();
     return SizedBox(
       height: 44,
       child: Row(
@@ -33,27 +34,25 @@ class TitleBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: T.s16),
                 child: Row(
                   children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: const BoxDecoration(
-                        color: T.accent,
-                        shape: BoxShape.circle,
+                    Text(
+                      title,
+                      style: T.tSection.copyWith(
+                        color: T.ink.withValues(alpha: 0.86),
                       ),
                     ),
-                    const SizedBox(width: T.s8),
-                    Text(title, style: T.tBrand),
-                    const SizedBox(width: T.s12),
-                    Container(width: 1, height: 14, color: T.line),
-                    const SizedBox(width: T.s12),
-                    Flexible(
-                      child: Text(
-                        status,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: T.tCaption,
+                    if (statusText.isNotEmpty) ...[
+                      const SizedBox(width: T.s12),
+                      Container(width: 1, height: 14, color: T.line),
+                      const SizedBox(width: T.s12),
+                      Flexible(
+                        child: Text(
+                          statusText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: T.tCaption,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

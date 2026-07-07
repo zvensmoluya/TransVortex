@@ -17,12 +17,16 @@ class SourceObjectPainter extends CustomPainter {
     required this.progress,
     required this.breathe,
     required this.dragOver,
+    required this.pickHover,
+    required this.pickDown,
   });
 
   final MainState state;
   final double progress; // 0..1 真实进度
   final double breathe; // 0..1 连续呼吸相位
   final double dragOver; // 0..1 拖入强反馈
+  final bool pickHover; // 空态点击投递区的 hover 反馈
+  final bool pickDown; // 空态点击投递区的按下反馈
 
   static const _strokeBase = 3.0;
 
@@ -41,7 +45,9 @@ class SourceObjectPainter extends CustomPainter {
     final h = w * 0.62;
     final body = Rect.fromCenter(center: center, width: w, height: h);
 
-    _drawShadow(canvas, body);
+    if (state != MainState.empty) {
+      _drawShadow(canvas, body);
+    }
     if (dragOver > 0.01) _drawDropHalo(canvas, body);
 
     switch (state) {
@@ -140,9 +146,18 @@ class SourceObjectPainter extends CustomPainter {
 
   // —— 空态：投递口开着 ——
   void _drawOpenSlot(Canvas canvas, Rect body) {
+    final interaction = math.max(dragOver, pickHover ? 1.0 : 0.0);
     final rrect = RRect.fromRectAndRadius(body, const Radius.circular(16));
-    canvas.drawRRect(rrect, _fill(T.surface));
-    canvas.drawRRect(rrect, _ink);
+    canvas.drawRRect(
+      rrect,
+      _fill(pickDown ? T.accentSoft.withValues(alpha: 0.42) : T.surface),
+    );
+    canvas.drawRRect(
+      rrect,
+      _ink
+        ..color = Color.lerp(T.inkLine, T.accent, interaction * 0.32)!
+        ..strokeWidth = _strokeBase + 0.4 * interaction,
+    );
     _sprockets(canvas, body);
 
     // 掀开的盖子（梯形，浮在投递口上方）。
@@ -153,12 +168,22 @@ class SourceObjectPainter extends CustomPainter {
       ..lineTo(body.right - 30, body.top - flapH)
       ..lineTo(body.left + 30, body.top - flapH)
       ..close();
-    canvas.drawPath(flap, _fill(T.accentSoft));
-    canvas.drawPath(flap, _ink);
+    canvas.drawPath(
+      flap,
+      _fill(
+        Color.lerp(T.accentSoft, const Color(0xFFFFD8E5), interaction * 0.45)!,
+      ),
+    );
+    canvas.drawPath(
+      flap,
+      _ink
+        ..color = Color.lerp(T.inkLine, T.accent, interaction * 0.25)!
+        ..strokeWidth = _strokeBase,
+    );
 
     // 投递口内的下行提示箭头。
     final cx = body.center.dx;
-    final ay = body.center.dy;
+    final ay = body.center.dy - 6 + (pickDown ? 2 : 0);
     final arrow = Path()
       ..moveTo(cx, ay - 18)
       ..lineTo(cx, ay + 14)
@@ -169,8 +194,38 @@ class SourceObjectPainter extends CustomPainter {
       arrow,
       _ink
         ..color = T.accent
-        ..strokeWidth = 3.2,
+        ..strokeWidth = 3.2 + 0.6 * interaction,
     );
+
+    _drawLandingMark(canvas, body, interaction);
+  }
+
+  void _drawLandingMark(Canvas canvas, Rect body, double interaction) {
+    final y = body.bottom - body.height * 0.20 + (pickDown ? 1.5 : 0);
+    final left = body.center.dx - body.width * 0.20;
+    final right = body.center.dx + body.width * 0.20;
+    final paint = Paint()
+      ..color = T.accent.withValues(alpha: 0.34 + 0.36 * interaction)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6 + 0.7 * interaction
+      ..strokeCap = StrokeCap.round;
+
+    if (interaction > 0.08) {
+      canvas.drawLine(Offset(left, y), Offset(right, y), paint);
+      canvas.drawLine(
+        Offset(body.center.dx - 8, y + 6),
+        Offset(body.center.dx + 8, y + 6),
+        paint..strokeWidth = 1.1 + 0.4 * interaction,
+      );
+      return;
+    }
+
+    var x = left;
+    while (x < right) {
+      final segmentRight = math.min(x + 8, right);
+      canvas.drawLine(Offset(x, y), Offset(segmentRight, y), paint);
+      x += 14;
+    }
   }
 
   // —— 已放入 / 受阻 / 运行 / 完成 的封套主体 ——
@@ -322,5 +377,7 @@ class SourceObjectPainter extends CustomPainter {
       old.state != state ||
       old.progress != progress ||
       old.breathe != breathe ||
-      old.dragOver != dragOver;
+      old.dragOver != dragOver ||
+      old.pickHover != pickHover ||
+      old.pickDown != pickDown;
 }
