@@ -1894,10 +1894,28 @@ String _providersFileLabel(DesktopSnapshot? snapshot) {
   final markerIndex = normalized.indexOf(marker);
   if (markerIndex >= 0) {
     final tail = normalized.substring(markerIndex + 1).replaceAll('/', '\\');
-    return tail;
+    return '${_providersFileKindLabel(tail)} · $tail';
   }
   final parts = normalized.split('/');
-  return parts.isEmpty ? raw : parts.last;
+  final fileName = parts.isEmpty ? raw : parts.last;
+  return '${_providersFileKindLabel(fileName)} · $fileName';
+}
+
+String _providersFileKindLabel(String path) {
+  final normalized = path.replaceAll('\\', '/').toLowerCase();
+  if (normalized.endsWith('/providers.local.yaml') ||
+      normalized == 'providers.local.yaml') {
+    return '本机配置';
+  }
+  if (normalized.endsWith('/providers.example.yaml') ||
+      normalized == 'providers.example.yaml') {
+    return '示例配置';
+  }
+  if (normalized.endsWith('/providers.yaml') ||
+      normalized == 'providers.yaml') {
+    return normalized.contains('/.transvortex-desktop/') ? '默认副本' : '默认配置';
+  }
+  return '配置文件';
 }
 
 String? _diagnosticActiveTaskId(DesktopSnapshot? snapshot) {

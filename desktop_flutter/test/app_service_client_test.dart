@@ -650,6 +650,115 @@ routing:
   );
 
   test(
+    'LocalServiceSupervisor refreshes desktop provider defaults from repo',
+    () async {
+      final repoRoot = await Directory.systemTemp.createTemp(
+        'transvortex_repo_root_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+      File(
+        '${repoRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsStringSync('artifacts_dir: repo-artifacts\n', encoding: utf8);
+      File(
+        '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsStringSync('providers: [fresh]\n', encoding: utf8);
+
+      final runtimeRoot = Directory(
+        '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
+      );
+      await runtimeRoot.create(recursive: true);
+      File(
+        '${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsStringSync('artifacts_dir: runtime-artifacts\n', encoding: utf8);
+      File(
+        '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsStringSync('providers: [stale]\n', encoding: utf8);
+
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: repoRoot,
+        pythonExecutable: 'python-test',
+        processStarter:
+            (
+              String startedExecutable,
+              List<String> startedArguments, {
+              String? workingDirectory,
+              Map<String, String>? environment,
+            }) async {
+              return _FakeProcess();
+            },
+      );
+
+      await supervisor.start();
+
+      expect(
+        File(
+          '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+        ).readAsStringSync(encoding: utf8),
+        'providers: [fresh]\n',
+      );
+      expect(
+        File(
+          '${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml',
+        ).readAsStringSync(encoding: utf8),
+        'artifacts_dir: runtime-artifacts\n',
+      );
+    },
+  );
+
+  test('LocalServiceSupervisor preserves local provider overrides', () async {
+    final repoRoot = await Directory.systemTemp.createTemp(
+      'transvortex_repo_root_',
+    );
+    addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+    File(
+      '${repoRoot.path}${Platform.pathSeparator}pipeline.yaml',
+    ).writeAsStringSync('artifacts_dir: repo-artifacts\n', encoding: utf8);
+    File(
+      '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
+    ).writeAsStringSync('providers: [fresh]\n', encoding: utf8);
+
+    final runtimeRoot = Directory(
+      '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
+    );
+    await runtimeRoot.create(recursive: true);
+    File(
+      '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+    ).writeAsStringSync('providers: [stale]\n', encoding: utf8);
+    File(
+      '${runtimeRoot.path}${Platform.pathSeparator}providers.local.yaml',
+    ).writeAsStringSync('providers: [local]\n', encoding: utf8);
+
+    final supervisor = LocalServiceSupervisor(
+      repoRoot: repoRoot,
+      pythonExecutable: 'python-test',
+      processStarter:
+          (
+            String startedExecutable,
+            List<String> startedArguments, {
+            String? workingDirectory,
+            Map<String, String>? environment,
+          }) async {
+            return _FakeProcess();
+          },
+    );
+
+    await supervisor.start();
+
+    expect(
+      File(
+        '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).readAsStringSync(encoding: utf8),
+      'providers: [stale]\n',
+    );
+    expect(
+      File(
+        '${runtimeRoot.path}${Platform.pathSeparator}providers.local.yaml',
+      ).readAsStringSync(encoding: utf8),
+      'providers: [local]\n',
+    );
+  });
+
+  test(
     'LocalServiceSupervisor runs a real embedded-subtitle worker to DONE',
     () async {
       final serviceRoot = await Directory.systemTemp.createTemp(

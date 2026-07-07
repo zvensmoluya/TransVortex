@@ -294,10 +294,13 @@ class LocalServiceSupervisor {
       target: File('${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml'),
       fallback: 'artifacts_dir: artifacts\n',
     );
-    await _copyConfigIfMissing(
+    await _syncDesktopDefaultConfig(
       source: File('${repoRoot.path}${Platform.pathSeparator}providers.yaml'),
       target: File(
         '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
+      ),
+      localOverride: File(
+        '${runtimeRoot.path}${Platform.pathSeparator}providers.local.yaml',
       ),
     );
     return runtimeRoot;
@@ -315,6 +318,23 @@ class LocalServiceSupervisor {
       return;
     }
     if (fallback.isNotEmpty) {
+      await target.writeAsString(fallback);
+    }
+  }
+
+  static Future<void> _syncDesktopDefaultConfig({
+    required File source,
+    required File target,
+    required File localOverride,
+    String fallback = '',
+  }) async {
+    if (localOverride.existsSync()) return;
+    await target.parent.create(recursive: true);
+    if (source.existsSync()) {
+      await source.copy(target.path);
+      return;
+    }
+    if (!target.existsSync() && fallback.isNotEmpty) {
       await target.writeAsString(fallback);
     }
   }
