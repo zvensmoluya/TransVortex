@@ -544,6 +544,20 @@ class AppServiceClient {
     return call('provider.routing.save', params).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> saveTranslationRoutingProfiles({
+    required List<Object?> profiles,
+    required String activeProfile,
+    int? nextProfileSeq,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('provider.routing.save', {
+      'profiles': profiles,
+      'active_profile': activeProfile,
+      'next_profile_seq': ?nextProfileSeq,
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
+  }
+
   Future<Map<String, Object?>> asrProviderSave({
     required Map<String, Object?> providerDraft,
     String? apiKey,
@@ -791,6 +805,50 @@ class DesktopSnapshot {
     return _stringValue(primary['model']);
   }
 
+  String get activeRoutingProfile {
+    final routing = _stringMap(config['routing']);
+    final active =
+        _stringValue(config['active_routing_profile']) ??
+        _stringValue(routing['active_profile']);
+    if (active != null && active.isNotEmpty) return active;
+    final profiles = routingProfiles;
+    return profiles.isEmpty ? 'default' : profiles.first.id;
+  }
+
+  int get routingProfileNextSeq {
+    return _intValue(config['routing_profile_next_seq']) ?? 1;
+  }
+
+  List<RoutingProfileOption> get routingProfiles {
+    final rows = _objectList(config['routing_profiles'])
+        .map(RoutingProfileOption.fromJson)
+        .where((profile) => profile.id.isNotEmpty)
+        .toList();
+    if (rows.isNotEmpty) return rows;
+    final routing = _stringMap(config['routing']);
+    final primary = _stringMap(routing['primary']);
+    final provider = _stringValue(primary['provider']) ?? '';
+    final model = _stringValue(primary['model']) ?? '';
+    if (provider.isEmpty && model.isEmpty) {
+      return const <RoutingProfileOption>[];
+    }
+    return [
+      RoutingProfileOption(
+        id: 'default',
+        name: 'Default',
+        provider: provider,
+        model: model,
+        fallback: _objectList(routing['fallback']),
+        raw: {
+          'id': 'default',
+          'name': 'Default',
+          'primary': {'provider': provider, 'model': model},
+          'fallback': _objectList(routing['fallback']),
+        },
+      ),
+    ];
+  }
+
   List<Object?> get translationFallback {
     final routing = _stringMap(config['routing']);
     return _objectList(routing['fallback']);
@@ -873,6 +931,46 @@ class ConfigReadiness {
       asrConfigured: selectedAsr['has_key'] == true,
       asrLabel: asrLabel,
     );
+  }
+}
+
+class RoutingProfileOption {
+  const RoutingProfileOption({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.model,
+    this.fallback = const <Object?>[],
+    this.raw = const <String, Object?>{},
+  });
+
+  final String id;
+  final String name;
+  final String provider;
+  final String model;
+  final List<Object?> fallback;
+  final Map<String, Object?> raw;
+
+  factory RoutingProfileOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    final primary = _stringMap(map['primary']);
+    final id = _stringValue(map['id']) ?? '';
+    return RoutingProfileOption(
+      id: id,
+      name: _stringValue(map['name']) ?? id,
+      provider: _stringValue(primary['provider']) ?? '',
+      model: _stringValue(primary['model']) ?? '',
+      fallback: _objectList(map['fallback']),
+      raw: map,
+    );
+  }
+
+  String get displayName => name.trim().isEmpty ? id : name;
+
+  String get routeLabel {
+    if (provider.isEmpty && model.isEmpty) return '未配置默认模型';
+    if (model.isEmpty) return provider;
+    return '$provider · $model';
   }
 }
 

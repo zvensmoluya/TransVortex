@@ -1392,6 +1392,62 @@ void main() {
     },
   );
 
+  testWidgets('translation settings switches routing profiles', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var activeProfile = 'route_1';
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: activeProfile,
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        activeProfile = '${params['active_profile']}';
+        return {
+          'active_routing_profile': activeProfile,
+          'routing_profiles': params['profiles'],
+          'routing': {
+            'active_profile': activeProfile,
+            'primary': {'provider': 'RealProvider', 'model': 'backup-model'},
+          },
+          'providers_file_version': {'mtime_ns': 5, 'size': 6},
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('配置组'), findsWidgets);
+    expect(find.text('配置 1'), findsOneWidget);
+    expect(find.text('配置 2'), findsOneWidget);
+
+    await tester.tap(find.text('配置 2'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(savedRouting?['active_profile'], 'route_2');
+    expect(savedRouting?['next_profile_seq'], 3);
+    expect(savedRouting?['expected_version'], {'mtime_ns': 3, 'size': 4});
+    expect(savedRouting?['profiles'], isA<List>());
+    expect(find.textContaining('已切换配置组：配置 2'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets('translation settings window localizes provider test failures', (
     tester,
   ) async {
@@ -2488,6 +2544,8 @@ DesktopSnapshot _desktopSnapshot({
   bool localModelSizeOnly = false,
   bool withProviders = true,
   bool withAsrProviders = true,
+  bool multiRoutingProfiles = false,
+  String activeRoutingProfile = '',
   List<Map<String, Object?>> tasks = const [],
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
@@ -2502,15 +2560,54 @@ DesktopSnapshot _desktopSnapshot({
           'gemini-2.5-flash-lite',
           'gemini-2.0-flash-lite-preview-02-05',
         ]
-      : ['real-model'];
+      : ['real-model', if (multiRoutingProfiles) 'backup-model'];
+  final activeRouteId = activeRoutingProfile.isNotEmpty
+      ? activeRoutingProfile
+      : (multiRoutingProfiles ? 'route_1' : 'default');
+  final routingProfiles = multiRoutingProfiles
+      ? [
+          {
+            'id': 'route_1',
+            'name': '配置 1',
+            'primary': {'provider': 'RealProvider', 'model': 'real-model'},
+            'fallback': const [],
+          },
+          {
+            'id': 'route_2',
+            'name': '配置 2',
+            'primary': {'provider': 'RealProvider', 'model': 'backup-model'},
+            'fallback': const [],
+          },
+        ]
+      : [
+          {
+            'id': 'default',
+            'name': 'Default',
+            'primary': {'provider': 'RealProvider', 'model': models.first},
+            'fallback': [
+              {'provider': 'RealProvider', 'model': 'real-model'},
+            ],
+          },
+        ];
+  final activeProfile = routingProfiles.firstWhere(
+    (profile) => profile['id'] == activeRouteId,
+    orElse: () => routingProfiles.first,
+  );
+  final activePrimary = Map<String, Object?>.from(
+    activeProfile['primary'] as Map,
+  );
   return DesktopSnapshot.fromJson({
     'config': {
       'routing': {
-        'primary': {'provider': 'RealProvider', 'model': models.first},
+        'active_profile': activeProfile['id'],
+        'primary': activePrimary,
         'fallback': [
           {'provider': 'RealProvider', 'model': 'real-model'},
         ],
       },
+      'active_routing_profile': activeProfile['id'],
+      'routing_profiles': routingProfiles,
+      'routing_profile_next_seq': multiRoutingProfiles ? 3 : 1,
       'pipeline': {'asr_provider': 'local'},
       'pipeline_file_version': {'mtime_ns': 1, 'size': 2},
       'providers_file_version': {'mtime_ns': 3, 'size': 4},

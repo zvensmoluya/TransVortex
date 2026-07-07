@@ -466,6 +466,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final template = _selectedProviderTemplateOption();
     final isBlank = provider.name.isEmpty && !_creatingProvider;
     final modelHelp = _modelListHelp(provider);
+    final routingProfiles = _snapshot?.routingProfiles ?? const [];
+    final activeProfile = _snapshot?.activeRoutingProfile ?? 'default';
     return _ToolPanel(
       footer: [
         _ActionButton(
@@ -522,6 +524,24 @@ class _SettingsWindowState extends State<SettingsWindow> {
           ],
         ),
         const SizedBox(height: T.s16),
+        if (!_creatingProvider && routingProfiles.length > 1)
+          _SettingsSection(
+            title: '配置组',
+            children: [
+              Wrap(
+                spacing: T.s8,
+                runSpacing: T.s8,
+                children: [
+                  for (final profile in routingProfiles)
+                    _ChoicePill(
+                      label: profile.displayName,
+                      selected: profile.id == activeProfile,
+                      onTap: () => _switchRoutingProfile(profile),
+                    ),
+                ],
+              ),
+            ],
+          ),
         if (_creatingProvider) ...[
           _SettingsSection(
             title: '常用厂商',
@@ -1116,6 +1136,44 @@ class _SettingsWindowState extends State<SettingsWindow> {
       '$provider · $model',
       configured: true,
     );
+  }
+
+  Future<void> _switchRoutingProfile(RoutingProfileOption profile) async {
+    final snapshot = _snapshot;
+    if (snapshot == null || profile.id == snapshot.activeRoutingProfile) {
+      return;
+    }
+    setState(() {
+      _savingDefault = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.saveTranslationRoutingProfiles(
+        profiles: [for (final item in snapshot.routingProfiles) item.raw],
+        activeProfile: profile.id,
+        nextProfileSeq: snapshot.routingProfileNextSeq,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      await widget.bridge.setTranslationDefault(
+        profile.routeLabel,
+        configured: profile.provider.isNotEmpty,
+      );
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() {
+        _selectedProvider = profile.provider.isEmpty
+            ? _selectedProvider
+            : profile.provider;
+        _selectedModel = profile.model.isEmpty ? _selectedModel : profile.model;
+        _message = '已切换配置组：${profile.displayName}。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingDefault = false);
+    }
   }
 
   Future<void> _fetchModels() async {

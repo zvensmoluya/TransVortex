@@ -1002,6 +1002,19 @@ routing:
       ],
       expectedVersion: {'mtime_ns': 1, 'size': 2},
     );
+    await client.saveTranslationRoutingProfiles(
+      profiles: [
+        {
+          'id': 'route_1',
+          'name': '配置 1',
+          'primary': {'provider': 'p1', 'model': 'model-a'},
+          'fallback': [],
+        },
+      ],
+      activeProfile: 'route_1',
+      nextProfileSeq: 2,
+      expectedVersion: {'mtime_ns': 5, 'size': 6},
+    );
     await client.asrProviderSave(
       providerDraft: {
         'name': 'openai_whisper',
@@ -1016,6 +1029,7 @@ routing:
       'provider.models',
       'provider.test',
       'provider.routing.save',
+      'provider.routing.save',
       'asr.provider.save',
     ]);
     expect(transport.calls.first.params['api_key'], 'secret');
@@ -1029,6 +1043,12 @@ routing:
     expect(transport.calls[3].params['expected_version'], {
       'mtime_ns': 1,
       'size': 2,
+    });
+    expect(transport.calls[4].params['active_profile'], 'route_1');
+    expect(transport.calls[4].params['next_profile_seq'], 2);
+    expect(transport.calls[4].params['expected_version'], {
+      'mtime_ns': 5,
+      'size': 6,
     });
     expect(
       transport.calls.last.params['provider_draft'],
