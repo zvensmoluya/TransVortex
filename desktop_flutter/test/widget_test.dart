@@ -1032,35 +1032,41 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('settings window hides raw window channel errors', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(820, 600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    bridge.attachServiceCaller((method, params) async {
-      throw PlatformException(
-        code: 'service_unavailable',
-        message: 'Local Service caller is not attached',
+  testWidgets(
+    'settings window falls back to local service when bridge is absent',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(820, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      final localService = _readyController();
+      addTearDown(localService.dispose);
+      bridge.attachServiceCaller((method, params) async {
+        throw PlatformException(
+          code: 'service_unavailable',
+          message: 'Local Service caller is not attached',
+        );
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.translationSettings,
+          store: store,
+          bridge: bridge,
+          localServiceController: localService,
+        ),
       );
-    });
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.translationSettings,
-        store: store,
-        bridge: bridge,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.textContaining('需要从主窗口打开设置'), findsOneWidget);
-    expect(find.textContaining('CHANNEL_UNREGISTERED'), findsNothing);
-    expect(find.textContaining('WindowChannelException'), findsNothing);
-    expectNoFlutterException();
-  });
+      expect(find.text('RealProvider'), findsWidgets);
+      expect(find.text('real-model'), findsWidgets);
+      expect(find.textContaining('需要从主窗口打开设置'), findsNothing);
+      expect(find.textContaining('CHANNEL_UNREGISTERED'), findsNothing);
+      expect(find.textContaining('WindowChannelException'), findsNothing);
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets('translation settings window reads providers through bridge', (
     tester,

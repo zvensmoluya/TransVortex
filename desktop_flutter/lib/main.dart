@@ -157,6 +157,7 @@ class TransVortexApp extends StatelessWidget {
           type: windowType,
           store: appStore,
           bridge: appBridge,
+          localServiceController: localServiceController,
           pathOpener: pathOpener,
           directoryProbe: directoryProbe,
           smoke: smoke,

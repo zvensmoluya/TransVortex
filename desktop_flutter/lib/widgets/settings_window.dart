@@ -43,12 +43,61 @@ class _SmokeSettingsTransport implements AppServiceTransport {
   Future<void> close() => service.shutdown();
 }
 
+class _BridgeOrLocalSettingsTransport implements AppServiceTransport {
+  _BridgeOrLocalSettingsTransport({
+    required WindowStateBridge bridge,
+    required this.service,
+  }) : _bridge = WindowBridgeTransport(bridge);
+
+  final WindowBridgeTransport _bridge;
+  final LocalServiceController service;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    try {
+      return await _bridge.call(method, params, timeout);
+    } on Object catch (error) {
+      if (!_shouldUseLocalService(error)) rethrow;
+    }
+    await service.start();
+    final client = service.client;
+    if (client == null) {
+      throw PlatformException(
+        code: 'service_unavailable',
+        message: '本地服务暂时不可用，请稍后重试。',
+      );
+    }
+    return client.call(method, params, timeout);
+  }
+
+  @override
+  Future<void> close() async {}
+
+  bool _shouldUseLocalService(Object error) {
+    if (error is PlatformException) {
+      final message = error.message ?? '';
+      return error.code == 'service_unavailable' ||
+          message.contains('Local Service caller') ||
+          '$error'.contains('CHANNEL_UNREGISTERED') ||
+          '$error'.contains('WindowChannelException');
+    }
+    final text = '$error';
+    return text.contains('CHANNEL_UNREGISTERED') ||
+        text.contains('WindowChannelException');
+  }
+}
+
 class SettingsWindow extends StatefulWidget {
   const SettingsWindow({
     super.key,
     required this.type,
     required this.store,
     required this.bridge,
+    this.localServiceController,
     this.pathOpener,
     this.directoryProbe,
     this.smoke,
@@ -57,6 +106,7 @@ class SettingsWindow extends StatefulWidget {
   final AppWindowType type;
   final WindowStateStore store;
   final WindowStateBridge bridge;
+  final LocalServiceController? localServiceController;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
   final AppSmokeArgs? smoke;
@@ -73,6 +123,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   final _device = TextEditingController(text: 'auto');
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
+  LocalServiceController? _ownedFallbackService;
   late final AppServiceClient _client;
   late final PathOpener _pathOpener;
   late final DirectoryWriteProbe _directoryProbe;
@@ -118,6 +169,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   @override
   void dispose() {
     _smokeService?.dispose();
+    _ownedFallbackService?.dispose();
     _baseUrl.dispose();
     _model.dispose();
     _key.dispose();
@@ -128,7 +180,16 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   AppServiceTransport _settingsTransport() {
     final smoke = widget.smoke;
-    if (smoke == null) return WindowBridgeTransport(widget.bridge);
+    if (smoke == null) {
+      final service = widget.localServiceController ?? LocalServiceController();
+      if (widget.localServiceController == null) {
+        _ownedFallbackService = service;
+      }
+      return _BridgeOrLocalSettingsTransport(
+        bridge: widget.bridge,
+        service: service,
+      );
+    }
     final service = LocalServiceController(
       supervisor: LocalServiceSupervisor(serviceRoot: _serviceRoot(smoke)),
     );
@@ -3297,9 +3358,12 @@ String? _stringValue(Object? value) {
 String _friendlySettingsError(Object error) {
   if (error is PlatformException) {
     final rawMessage = error.message ?? '';
-    if (error.code == 'service_unavailable' ||
-        rawMessage.contains('Local Service caller')) {
-      return '需要从主窗口打开设置，才能连接本地服务。';
+    if (rawMessage.contains('Local Service caller')) {
+      return '本地服务未连接，请稍后刷新。';
+    }
+    if (error.code == 'service_unavailable') {
+      final message = rawMessage.trim();
+      return message.isEmpty ? '本地服务暂时不可用，请稍后重试。' : message;
     }
     final message = rawMessage.trim();
     if (message.isNotEmpty) return message;
@@ -3319,7 +3383,7 @@ String _friendlySettingsError(Object error) {
   final text = '$error';
   if (text.contains('CHANNEL_UNREGISTERED') ||
       text.contains('WindowChannelException')) {
-    return '需要从主窗口打开设置，才能连接本地服务。';
+    return '本地服务未连接，请稍后刷新。';
   }
   return text;
 }
