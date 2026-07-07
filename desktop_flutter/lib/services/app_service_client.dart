@@ -841,6 +841,7 @@ class ProviderOption {
     required this.models,
     this.hasKey = false,
     this.baseUrl = '',
+    this.envKey = '',
     this.apiType = '',
     this.compatMode = '',
     this.credentialId = '',
@@ -852,6 +853,7 @@ class ProviderOption {
   final List<String> models;
   final bool hasKey;
   final String baseUrl;
+  final String envKey;
   final String apiType;
   final String compatMode;
   final String credentialId;
@@ -866,6 +868,7 @@ class ProviderOption {
       hasKey: map['has_key'] == true || map['hasKey'] == true,
       baseUrl:
           _stringValue(map['base_url']) ?? _stringValue(map['baseUrl']) ?? '',
+      envKey: _stringValue(map['env_key']) ?? _stringValue(map['envKey']) ?? '',
       apiType:
           _stringValue(map['api_type']) ?? _stringValue(map['apiType']) ?? '',
       compatMode:
