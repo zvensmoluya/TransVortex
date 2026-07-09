@@ -300,6 +300,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     if (formats.contains('srt')) return 'srt';
     if (formats.contains('ass')) return 'ass';
     if (formats.contains('vtt')) return 'vtt';
+    if (formats.contains('lrc')) return 'lrc';
     return 'both';
   }
 
@@ -792,6 +793,7 @@ class _ExportControls extends StatelessWidget {
                 ButtonSegment(value: 'ass', label: Text('ASS')),
                 ButtonSegment(value: 'both', label: Text('SRT+ASS')),
                 ButtonSegment(value: 'vtt', label: Text('VTT')),
+                ButtonSegment(value: 'lrc', label: Text('LRC')),
               ],
               onSelectionChanged: enabled
                   ? (selection) {
@@ -1243,7 +1245,7 @@ String? _stringValue(Object? value) {
 String? _normalizeOutputFormat(String? value) {
   final normalized = value?.trim().toLowerCase();
   return switch (normalized) {
-    'srt' || 'ass' || 'both' || 'vtt' => normalized,
+    'srt' || 'ass' || 'both' || 'vtt' || 'lrc' => normalized,
     'webvtt' => 'vtt',
     _ => null,
   };
@@ -1254,6 +1256,7 @@ List<String> _plannedExportFormats(String value) {
     'srt' => const ['srt'],
     'ass' => const ['ass'],
     'vtt' => const ['vtt'],
+    'lrc' => const ['lrc'],
     'both' || null => const ['srt', 'ass'],
     _ => const ['srt', 'ass'],
   };

@@ -624,7 +624,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     final outputPath =
         _stringValue(outputPaths['ass']) ??
         _stringValue(outputPaths['srt']) ??
-        _stringValue(outputPaths['vtt']);
+        _stringValue(outputPaths['vtt']) ??
+        _stringValue(outputPaths['lrc']);
     if (outputPath != null && outputPath.isNotEmpty) {
       final output = File(outputPath);
       if (await output.exists()) {
@@ -2160,7 +2161,7 @@ String? _outputDirectoryFor(TaskSummary task) {
 String? _primaryOutputPath(TaskSummary task) {
   final direct = task.outputPath?.trim();
   if (direct != null && direct.isNotEmpty) return direct;
-  for (final key in const ['srt', 'ass', 'vtt']) {
+  for (final key in const ['srt', 'ass', 'vtt', 'lrc']) {
     final value = task.outputPaths[key]?.trim();
     if (value != null && value.isNotEmpty) return value;
   }

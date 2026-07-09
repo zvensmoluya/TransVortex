@@ -469,6 +469,19 @@ void main() {
     expect(payload['target_lang'], 'en');
   });
 
+  test('controller sends LRC output format in run payload', () async {
+    final controller = MainWindowController(service: _readyController());
+    await controller.startService();
+    controller.pickSource(r'D:\song.mp3');
+    controller.setFormats(const ['LRC']);
+
+    final payload = controller.buildRunRequest();
+    final overrides = payload['overrides'] as Map<String, Object?>;
+
+    expect(controller.view.formats, ['LRC']);
+    expect(overrides['output_format'], 'lrc');
+  });
+
   test('controller exposes routing profiles as model-first choices', () async {
     final controller = MainWindowController(
       service: _readyController(

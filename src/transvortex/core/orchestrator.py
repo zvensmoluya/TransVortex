@@ -14,7 +14,7 @@ from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
 from ..app.credentials import resolve_credential
-from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
+from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from .media import (
     extract_audio_for_asr,
     extract_subtitle_stream,
@@ -1656,7 +1656,7 @@ def _normalize_output_format(value: str) -> str:
     normalized = str(value or "srt").strip().lower()
     if normalized == "webvtt":
         normalized = "vtt"
-    return normalized if normalized in {"srt", "ass", "vtt", "both"} else "srt"
+    return normalized if normalized in {"srt", "ass", "vtt", "lrc", "both"} else "srt"
 
 
 def _output_paths_for_task(
@@ -1676,6 +1676,8 @@ def _output_paths_for_task(
             return output_format, {"ass": output_file.with_suffix(".ass")}
         if output_format == "vtt":
             return output_format, {"vtt": output_file.with_suffix(".vtt")}
+        if output_format == "lrc":
+            return output_format, {"lrc": output_file.with_suffix(".lrc")}
         return output_format, {"srt": base.with_suffix(".srt"), "ass": base.with_suffix(".ass")}
     base = output_dir / f"{stem}.{task.target_lang}"
     if output_format == "srt":
@@ -1684,6 +1686,8 @@ def _output_paths_for_task(
         return output_format, {"ass": base.parent / f"{base.name}.ass"}
     if output_format == "vtt":
         return output_format, {"vtt": base.parent / f"{base.name}.vtt"}
+    if output_format == "lrc":
+        return output_format, {"lrc": base.parent / f"{base.name}.lrc"}
     return output_format, {"srt": base.parent / f"{base.name}.srt", "ass": base.parent / f"{base.name}.ass"}
 
 
@@ -2456,8 +2460,17 @@ def _execute_task(
                 task.bilingual,
                 style=config.pipeline.subtitle_ass_style,
             )
+        if "lrc" in output_paths:
+            export_lrc(
+                final_segments,
+                output_paths["lrc"],
+                task.bilingual,
+                style=config.pipeline.subtitle_ass_style,
+            )
         delivery_reports: dict[str, dict] = {}
         for fmt in output_paths:
+            if fmt == "lrc":
+                continue
             delivery_reports[fmt] = subtitle_delivery_report(
                 final_segments,
                 output_format=fmt,
@@ -2491,7 +2504,7 @@ def _execute_task(
                         details={"issue_counts": summary.get("issue_counts", {})},
                     )
         output_paths_payload = {key: str(path) for key, path in output_paths.items()}
-        primary_output = output_paths.get("srt") or output_paths.get("ass") or output_paths.get("vtt")
+        primary_output = output_paths.get("srt") or output_paths.get("ass") or output_paths.get("vtt") or output_paths.get("lrc")
         checkpoint["status"] = "DONE"
         checkpoint.pop("error", None)
         store.save_checkpoint(task_id, checkpoint)

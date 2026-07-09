@@ -147,6 +147,11 @@ World
     plain_body = Path(reexported_plain["output_paths"]["srt"]).read_text(encoding="utf-8")
     assert "Hello" not in plain_body
     assert reexported_plain["bilingual"] is False
+    reexported_lrc = reexport_task(root_dir=root, task_id=task_id, output_format="lrc", bilingual=False)
+    assert reexported_lrc["output_paths"]["lrc"] == str(external_base.with_suffix(".lrc"))
+    lrc_body = Path(reexported_lrc["output_paths"]["lrc"]).read_text(encoding="utf-8")
+    assert "[00:01.00]改过的译文" in lrc_body
+    assert "Hello" not in lrc_body
     recovery_dir = root / "fixed-output"
     store.update_task_status(
         task_id,
@@ -168,6 +173,54 @@ World
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)
+
+
+def test_srt_translate_can_export_lrc_on_first_run(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    srt_file = root / "song.srt"
+    srt_file.write_text(
+        """
+1
+00:00:01,000 --> 00:00:02,000
+Hello
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    def fake_translate_all_chunks(config, chunks, source_lang: str, target_lang: str, already_done=None):
+        return [
+            {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "你好"} for seg_id in chunk.segment_ids],
+                "errors": [],
+            }
+            for chunk in chunks
+        ]
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=srt_file,
+        source_lang="en",
+        target_lang="zh-CN",
+        bilingual=False,
+        input_type="srt_translate",
+        cli_overrides={"output_format": "lrc"},
+    )
+
+    task = TaskStore(root / "artifacts").load_task(task_id)
+    assert task.status == "DONE"
+    assert task.settings["output_format"] == "lrc"
+    assert set(task.output_paths) == {"lrc"}
+    assert task.output_path == task.output_paths["lrc"]
+    assert Path(task.output_paths["lrc"]).read_text(encoding="utf-8") == "[00:01.00]你好\n"
 
 
 def test_srt_translate_reflow_artifacts_and_result_summary(tmp_path: Path, monkeypatch) -> None:

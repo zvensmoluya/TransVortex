@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.config import load_app_config
-from ..formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
+from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..app.models import Segment
 from ..utils import read_json, read_jsonl, to_plain, write_json
 from .task_store import TaskStore
@@ -258,7 +258,7 @@ def _primary_output_base(task: Any, paths: dict[str, Path], output_dir: str | No
     if output_dir and output_dir.strip():
         stem = Path(task.input_file).stem
         return Path(output_dir).expanduser().resolve() / f"{stem}.{task.target_lang}"
-    for fmt in ("srt", "ass", "vtt"):
+    for fmt in ("srt", "ass", "vtt", "lrc"):
         value = task.output_paths.get(fmt) if isinstance(task.output_paths, dict) else None
         if isinstance(value, str) and value.strip():
             return Path(value).with_suffix("")
@@ -296,7 +296,7 @@ def reexport_task(
     segments = [_segment_from_payload(row) for row in read_json(final_file)]
     normalized = str(output_format or task.settings.get("output_format") or config.pipeline.output_format or "srt").lower()
     normalized = "vtt" if normalized == "webvtt" else normalized
-    normalized = normalized if normalized in {"srt", "ass", "vtt", "both"} else "srt"
+    normalized = normalized if normalized in {"srt", "ass", "vtt", "lrc", "both"} else "srt"
     effective_bilingual = _optional_bool(bilingual, task.bilingual)
     base = _primary_output_base(task, paths, output_dir=output_dir)
     base.parent.mkdir(parents=True, exist_ok=True)
@@ -310,6 +310,9 @@ def reexport_task(
     if normalized == "vtt":
         output_paths["vtt"] = base.parent / f"{base.name}.vtt"
         export_vtt(segments, output_paths["vtt"], effective_bilingual)
+    if normalized == "lrc":
+        output_paths["lrc"] = base.parent / f"{base.name}.lrc"
+        export_lrc(segments, output_paths["lrc"], effective_bilingual, style=config.pipeline.subtitle_ass_style)
     delivery_reports = {
         fmt: subtitle_delivery_report(
             segments,
@@ -318,11 +321,12 @@ def reexport_task(
             style=config.pipeline.subtitle_ass_style,
         )
         for fmt in output_paths
+        if fmt != "lrc"
     }
     if delivery_reports:
         write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
     output_payload = {key: str(path) for key, path in output_paths.items()}
-    primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt")
+    primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt") or output_payload.get("lrc")
     store.update_task_status(task_id, "DONE", output_path=primary, output_paths=output_payload)
     task = store.load_task(task_id)
     task.settings["edited"] = bool(task.settings.get("edited", False))

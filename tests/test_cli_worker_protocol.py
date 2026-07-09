@@ -1376,6 +1376,29 @@ def test_asr_translate_and_export_cli_commands(tmp_path: Path, monkeypatch, caps
     assert (tmp_path / "web.vtt").exists()
     assert vtt_payload["delivery"]["vtt"]["renderer"] == "web_html5"
 
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "export",
+            "--segments",
+            str(final_file),
+            "--format",
+            "lrc",
+            "--output",
+            str(tmp_path / "lyrics"),
+            "--json",
+        ],
+    )
+    main()
+    lrc_payload = json.loads(capsys.readouterr().out)
+    assert lrc_payload["output_format"] == "lrc"
+    assert set(lrc_payload["output_paths"]) == {"lrc"}
+    assert (tmp_path / "lyrics.lrc").exists()
+    assert lrc_payload["delivery"] == {}
+
 
 def test_auth_cli_json_does_not_print_secret(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))

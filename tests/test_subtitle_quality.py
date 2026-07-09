@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from transvortex.formats.exporter import export_ass, export_srt, export_vtt, subtitle_delivery_report
+from transvortex.formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from transvortex.app.models import AssStyleConfig, Segment
 from transvortex.formats.presentation import build_render_plan, resolve_ass_style
 from transvortex.core.subtitle_quality import (
@@ -398,3 +398,26 @@ def test_export_vtt_writes_webvtt_without_bom_and_escapes_html(tmp_path: Path) -
     assert "00:00:00.000 --> 00:00:01.200" in body
     assert "Hello &lt;world&gt;" in body
     assert "你好 &amp; 再见" in body
+
+
+def test_export_lrc_writes_lyrics_timestamps_and_single_line_text(tmp_path: Path) -> None:
+    out_file = tmp_path / "out.lrc"
+    export_lrc(
+        [
+            Segment(
+                id=1,
+                start=62.346,
+                end=64.0,
+                text_src="Hello\nworld",
+                text_tgt="你好\n世界",
+            ),
+            Segment(id=2, start=65.0, end=66.0, text_src="Only source", text_tgt=""),
+        ],
+        out_file,
+        bilingual=True,
+    )
+
+    body = out_file.read_text(encoding="utf-8")
+    assert not out_file.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert "[01:02.35]你好 世界 / Hello world" in body
+    assert "[01:05.00]Only source" in body

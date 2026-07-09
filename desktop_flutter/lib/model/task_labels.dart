@@ -154,6 +154,7 @@ String subtitleFormatLabel(String format) {
     'srt' => 'SRT',
     'ass' => 'ASS',
     'vtt' => 'VTT',
+    'lrc' => 'LRC',
     'both' => 'SRT+ASS',
     _ => raw.isEmpty ? '未知' : raw.toUpperCase(),
   };

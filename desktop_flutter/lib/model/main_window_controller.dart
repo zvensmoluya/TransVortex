@@ -219,7 +219,7 @@ class MainWindowController extends ChangeNotifier {
     final unsupported =
         kind == SourceKind.subtitle &&
             !displayName.toLowerCase().endsWith('.srt')
-        ? '字幕输入暂时只支持 SRT；ASS / VTT 目前只能作为输出格式。'
+        ? '字幕输入暂时只支持 SRT；ASS / VTT / LRC 目前只能作为输出格式。'
         : null;
     _source = MainSourceDraft(
       name: displayName,
@@ -1240,7 +1240,7 @@ class MainWindowController extends ChangeNotifier {
     const video = {'mp4', 'mkv', 'mov', 'avi', 'webm', 'flv'};
     const audio = {'mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg'};
     if (audio.contains(ext)) return SourceKind.audio;
-    if (ext == 'srt' || ext == 'ass' || ext == 'vtt') {
+    if (ext == 'srt' || ext == 'ass' || ext == 'vtt' || ext == 'lrc') {
       return SourceKind.subtitle;
     }
     if (video.contains(ext)) return SourceKind.video;
@@ -1259,11 +1259,12 @@ class MainWindowController extends ChangeNotifier {
     if (selected.contains('srt') && selected.contains('ass')) return 'both';
     if (selected.contains('ass')) return 'ass';
     if (selected.contains('vtt')) return 'vtt';
+    if (selected.contains('lrc')) return 'lrc';
     return 'srt';
   }
 
   static String? primaryOutputPath(Map<String, String> outputs) {
-    for (final key in const ['srt', 'ass', 'vtt']) {
+    for (final key in const ['srt', 'ass', 'vtt', 'lrc']) {
       final value = outputs[key]?.trim();
       if (value != null && value.isNotEmpty) return value;
     }

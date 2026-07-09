@@ -1402,6 +1402,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         ['SRT'],
         ['ASS'],
         ['VTT'],
+        ['LRC'],
         ['SRT', 'ASS'],
       ],
       emptyLabel: '',

@@ -1446,7 +1446,7 @@ String? _diagnosticOutputDirectoryFor(TaskSummary task) {
 String? _diagnosticPrimaryOutputPath(TaskSummary task) {
   final direct = task.outputPath?.trim();
   if (direct != null && direct.isNotEmpty) return direct;
-  for (final key in const ['srt', 'ass', 'vtt']) {
+  for (final key in const ['srt', 'ass', 'vtt', 'lrc']) {
     final value = task.outputPaths[key]?.trim();
     if (value != null && value.isNotEmpty) return value;
   }

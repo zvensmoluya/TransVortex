@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..app.models import AssStyleConfig, Segment
-from ..core.subtitle_quality import prepare_segments_for_export
+from ..core.subtitle_quality import clean_subtitle_text, prepare_segments_for_export
 from .presentation import (
     ass_style_name,
     ass_text,
@@ -66,6 +66,15 @@ def _vtt_time(seconds: float) -> str:
     s = ms_total // 1000
     ms = ms_total % 1000
     return f"{h:02}:{m:02}:{s:02}.{ms:03}"
+
+
+def _lrc_time(seconds: float) -> str:
+    cs_total = int(round(max(seconds, 0) * 100))
+    minutes = cs_total // 6000
+    cs_total %= 6000
+    s = cs_total // 100
+    cs = cs_total % 100
+    return f"{minutes:02}:{s:02}.{cs:02}"
 
 
 def _ass_float(value: float | int) -> str:
@@ -225,6 +234,34 @@ def export_vtt(
         lines.append("")
     output.write_text("\n".join(lines), encoding="utf-8")
     return output
+
+
+def export_lrc(
+    segments: list[Segment],
+    output: Path,
+    bilingual: bool,
+    *,
+    style: AssStyleConfig | None = None,
+) -> Path:
+    resolved = resolve_ass_style(style)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    prepared_segments = prepare_segments_for_export(segments)
+    lines: list[str] = []
+    for segment in prepared_segments:
+        target = _lrc_line_text(segment.text_tgt or segment.text_src)
+        source = _lrc_line_text(segment.text_src)
+        parts = [target]
+        if bilingual and source and source != target:
+            parts = [source, target] if resolved.bilingual_order == "source_target" else [target, source]
+        text = " / ".join(part for part in parts if part)
+        if text:
+            lines.append(f"[{_lrc_time(segment.start)}]{text}")
+    output.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return output
+
+
+def _lrc_line_text(value: str | None) -> str:
+    return " ".join(clean_subtitle_text(value).splitlines())
 
 
 def subtitle_delivery_report(

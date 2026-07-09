@@ -2817,6 +2817,7 @@ void main() {
     expect(find.text('导出复核'), findsOneWidget);
     expect(find.text('将导出 SRT · 双语字幕'), findsOneWidget);
     expect(find.text('已有输出 SRT review-source.zh-CN.srt'), findsOneWidget);
+    expect(find.text('LRC'), findsOneWidget);
     expect(find.text('Good morning.'), findsOneWidget);
     expect(find.text('早上好。'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
