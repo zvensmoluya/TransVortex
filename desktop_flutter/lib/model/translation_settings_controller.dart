@@ -24,6 +24,19 @@ enum TranslationBusy {
   savingProfile,
 }
 
+@immutable
+class ConnectionTestResult {
+  const ConnectionTestResult({
+    required this.title,
+    required this.detail,
+    required this.ok,
+  });
+
+  final String title;
+  final String detail;
+  final bool ok;
+}
+
 /// A "connection → model" reference. Both the primary and every fallback route
 /// are expressed with this type, so the routing tab never deals with free-text
 /// model names — a model can only be picked from a saved connection.
@@ -98,6 +111,7 @@ class TranslationSettingsController extends ChangeNotifier {
   TranslationBusy _busy = TranslationBusy.idle;
   String? _message;
   String? _error;
+  ConnectionTestResult? _testResult;
   String? _selectedConnection;
   final ConnectionDraft _draft = ConnectionDraft();
 
@@ -116,6 +130,7 @@ class TranslationSettingsController extends ChangeNotifier {
   bool get isBusy => _busy != TranslationBusy.idle;
   String? get message => _message;
   String? get error => _error;
+  ConnectionTestResult? get testResult => _testResult;
   int get draftRevision => _draftRevision;
 
   List<ProviderOption> get connections => _snapshot?.providers ?? const [];
@@ -268,6 +283,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _loadDraftFromSelection();
     _message = null;
     _error = null;
+    _testResult = null;
     notifyListeners();
   }
 
@@ -282,6 +298,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _loadDraftFromTemplate(template);
     _message = null;
     _error = null;
+    _testResult = null;
     _bumpDraft();
     notifyListeners();
   }
@@ -292,6 +309,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _loadDraftFromTemplate(template);
     _message = null;
     _error = null;
+    _testResult = null;
     _bumpDraft();
     notifyListeners();
   }
@@ -307,6 +325,7 @@ class TranslationSettingsController extends ChangeNotifier {
     }
     _message = null;
     _error = null;
+    _testResult = null;
     _bumpDraft();
     notifyListeners();
   }
@@ -322,6 +341,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.modelInput = '';
     _message = null;
     _error = null;
+    _testResult = null;
     _bumpDraft();
     notifyListeners();
   }
@@ -449,6 +469,7 @@ class TranslationSettingsController extends ChangeNotifier {
       return;
     }
     _begin(TranslationBusy.testingConnection);
+    _testResult = null;
     try {
       final result = await _client.providerTest(
         providerDraft: _connectionPayload(name, models),
@@ -460,10 +481,19 @@ class TranslationSettingsController extends ChangeNotifier {
       final first = checks.isEmpty
           ? const <String, Object?>{}
           : _map(checks.first);
-      _message =
-          '$status：${_str(first['hint_zh']) ?? _str(first['message']) ?? '连接测试完成'}';
+      final ok = status.toUpperCase() == 'PASS' || status.toUpperCase() == 'OK';
+      _testResult = ConnectionTestResult(
+        title: ok ? '测试通过' : '测试完成',
+        detail:
+            _str(first['hint_zh']) ?? _str(first['message']) ?? '模型服务已返回测试结果。',
+        ok: ok,
+      );
     } on Object catch (error) {
-      _error = friendlySettingsError(error);
+      _testResult = ConnectionTestResult(
+        title: '测试未通过',
+        detail: friendlySettingsError(error),
+        ok: false,
+      );
     } finally {
       _end();
     }
@@ -474,28 +504,15 @@ class TranslationSettingsController extends ChangeNotifier {
   Future<void> switchProfile(String id) async {
     final snapshot = _snapshot;
     if (snapshot == null || id == activeProfileId) return;
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: [for (final item in snapshot.routingProfiles) item.raw],
-        activeProfile: id,
-        nextProfileSeq: snapshot.routingProfileNextSeq,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      final profile = activeProfile;
-      if (profile != null) {
-        await _onLabel(
-          profile.routeLabel,
-          configured: profile.provider.isNotEmpty,
-        );
-      }
-      _message = '已切换常用模型：$activeProfileName。';
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    final profiles = [for (final item in snapshot.routingProfiles) item.raw];
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: profiles,
+      activeProfile: id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => '已切换常用模型：$activeProfileName。',
+      syncLabel: true,
+    );
   }
 
   Future<void> renameProfile(String name) async {
@@ -507,21 +524,13 @@ class TranslationSettingsController extends ChangeNotifier {
       _fail('常用模型名称不能为空');
       return;
     }
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: _profilePayloads(snapshot, profile.id, name: trimmed),
-        activeProfile: profile.id,
-        nextProfileSeq: snapshot.routingProfileNextSeq,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      _message = '常用模型已重命名：$trimmed。';
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: _profilePayloads(snapshot, profile.id, name: trimmed),
+      activeProfile: profile.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => '常用模型已重命名：$trimmed。',
+    );
   }
 
   Future<void> createProfile(String name) async {
@@ -553,28 +562,14 @@ class TranslationSettingsController extends ChangeNotifier {
         'fallback': fallback,
       },
     ];
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: profiles,
-        activeProfile: newId,
-        nextProfileSeq: snapshot.routingProfileNextSeq + 1,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      final profile = activeProfile;
-      if (profile != null) {
-        await _onLabel(
-          profile.routeLabel,
-          configured: profile.provider.isNotEmpty,
-        );
-      }
-      _message = '已新建常用模型：$finalName。';
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: profiles,
+      activeProfile: newId,
+      nextProfileSeq: snapshot.routingProfileNextSeq + 1,
+      messageBuilder: () => '已新建常用模型：$finalName。',
+      syncLabel: true,
+    );
   }
 
   Future<void> deleteProfile() async {
@@ -589,25 +584,14 @@ class TranslationSettingsController extends ChangeNotifier {
         .where((item) => item.id != profile.id)
         .toList();
     final nextActive = kept.first;
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: [for (final item in kept) _profilePayload(item)],
-        activeProfile: nextActive.id,
-        nextProfileSeq: snapshot.routingProfileNextSeq,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      await _onLabel(
-        nextActive.routeLabel,
-        configured: nextActive.provider.isNotEmpty,
-      );
-      _message = '已删除常用模型：${profileDisplayName(profile)}。';
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: [for (final item in kept) _profilePayload(item)],
+      activeProfile: nextActive.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => '已删除常用模型：${profileDisplayName(profile)}。',
+      syncLabel: true,
+    );
   }
 
   Future<void> setPrimary(ModelRef ref) async {
@@ -618,27 +602,19 @@ class TranslationSettingsController extends ChangeNotifier {
       _fail('请选择连接和模型');
       return;
     }
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: _profilePayloads(
-          snapshot,
-          profile.id,
-          provider: ref.connection,
-          model: ref.model,
-        ),
-        activeProfile: profile.id,
-        nextProfileSeq: snapshot.routingProfileNextSeq,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      await _onLabel(ref.label, configured: true);
-      _message = '主模型已设为 ${ref.label}。';
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: _profilePayloads(
+        snapshot,
+        profile.id,
+        provider: ref.connection,
+        model: ref.model,
+      ),
+      activeProfile: profile.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => '主模型已设为 ${ref.label}。',
+      syncLabel: true,
+    );
   }
 
   Future<void> addFallback(ModelRef ref) async {
@@ -689,32 +665,20 @@ class TranslationSettingsController extends ChangeNotifier {
     final snapshot = _snapshot;
     final profile = activeProfile;
     if (snapshot == null || profile == null) return;
-    _begin(TranslationBusy.savingProfile);
-    try {
-      await _client.saveTranslationRoutingProfiles(
-        profiles: _profilePayloads(
-          snapshot,
-          profile.id,
-          fallback: [
-            for (final ref in routes)
-              {'provider': ref.connection, 'model': ref.model},
-          ],
-        ),
-        activeProfile: profile.id,
-        nextProfileSeq: snapshot.routingProfileNextSeq,
-        expectedVersion: snapshot.providersFileVersion,
-      );
-      await _reload();
-      await _onLabel(
-        profile.routeLabel,
-        configured: profile.provider.isNotEmpty,
-      );
-      _message = message;
-    } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
-    }
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: _profilePayloads(
+        snapshot,
+        profile.id,
+        fallback: [
+          for (final ref in routes)
+            {'provider': ref.connection, 'model': ref.model},
+        ],
+      ),
+      activeProfile: profile.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => message,
+    );
   }
 
   // ---- draft / payload builders -------------------------------------------
@@ -869,6 +833,118 @@ class TranslationSettingsController extends ChangeNotifier {
               )
             : _profilePayload(profile),
     ];
+  }
+
+  Future<void> _saveProfiles({
+    required DesktopSnapshot snapshot,
+    required List<Object?> profiles,
+    required String activeProfile,
+    required int nextProfileSeq,
+    required String Function() messageBuilder,
+    bool syncLabel = false,
+  }) async {
+    final before = _snapshot;
+    if (before == null) return;
+    _begin(TranslationBusy.savingProfile);
+    _snapshot = _snapshotWithRouting(
+      snapshot,
+      profiles: profiles,
+      activeProfile: activeProfile,
+      nextProfileSeq: nextProfileSeq,
+    );
+    notifyListeners();
+    try {
+      final result = await _client.saveTranslationRoutingProfiles(
+        profiles: profiles,
+        activeProfile: activeProfile,
+        nextProfileSeq: nextProfileSeq,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      _snapshot = _snapshotWithRouting(
+        _snapshot ?? snapshot,
+        profiles: _list(result['routing_profiles']).isEmpty
+            ? profiles
+            : _list(result['routing_profiles']),
+        activeProfile: _str(result['active_routing_profile']) ?? activeProfile,
+        nextProfileSeq:
+            _int(result['routing_profile_next_seq']) ?? nextProfileSeq,
+        routing: _map(result['routing']).isEmpty
+            ? null
+            : _map(result['routing']),
+        providersFileVersion: _map(result['providers_file_version']).isEmpty
+            ? null
+            : _map(result['providers_file_version']),
+      );
+      if (syncLabel) {
+        final profile = _activeProfileOption(_snapshot);
+        if (profile != null) {
+          await _onLabel(
+            profile.routeLabel,
+            configured: profile.provider.isNotEmpty,
+          );
+        }
+      }
+      _message = messageBuilder();
+    } on Object catch (error) {
+      _snapshot = before;
+      _error = friendlySettingsError(error);
+    } finally {
+      _end();
+    }
+  }
+
+  RoutingProfileOption? _activeProfileOption(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    final active = snapshot.activeRoutingProfile;
+    for (final profile in snapshot.routingProfiles) {
+      if (profile.id == active) return profile;
+    }
+    return snapshot.routingProfiles.isEmpty
+        ? null
+        : snapshot.routingProfiles.first;
+  }
+
+  DesktopSnapshot _snapshotWithRouting(
+    DesktopSnapshot snapshot, {
+    required List<Object?> profiles,
+    required String activeProfile,
+    required int nextProfileSeq,
+    Map<String, Object?>? routing,
+    Map<String, Object?>? providersFileVersion,
+  }) {
+    final profileRows = [for (final item in profiles) _map(item)];
+    final active = profileRows.firstWhere(
+      (item) => _str(item['id']) == activeProfile,
+      orElse: () =>
+          profileRows.isEmpty ? const <String, Object?>{} : profileRows.first,
+    );
+    final activeId = _str(active['id']) ?? activeProfile;
+    final activePrimary = _map(active['primary']);
+    final activeFallback = _list(active['fallback']);
+    final incomingRouting = routing ?? const <String, Object?>{};
+    final primaryFromRouting = _map(incomingRouting['primary']);
+    final fallbackFromRouting = _list(incomingRouting['fallback']);
+    final hasRoutingFallback = incomingRouting.containsKey('fallback');
+    final nextRouting = <String, Object?>{
+      ..._map(snapshot.config['routing']),
+      ...incomingRouting,
+      'active_profile': activeId,
+      'next_profile_seq': nextProfileSeq,
+      'primary': primaryFromRouting.isEmpty
+          ? activePrimary
+          : primaryFromRouting,
+      'fallback': hasRoutingFallback ? fallbackFromRouting : activeFallback,
+    };
+    final nextConfig = <String, Object?>{
+      ...snapshot.config,
+      'routing': nextRouting,
+      'active_routing_profile': activeId,
+      'routing_profile_next_seq': nextProfileSeq,
+      'routing_profiles': profileRows,
+      if (providersFileVersion != null && providersFileVersion.isNotEmpty)
+        'providers_file_version': providersFileVersion,
+    };
+    return snapshot.copyWith(config: nextConfig);
   }
 
   // ---- template resolution (ported from the legacy state) -----------------
@@ -1117,4 +1193,10 @@ class TranslationSettingsController extends ChangeNotifier {
       value is List ? [for (final item in value) '$item'] : const <String>[];
 
   static String? _str(Object? value) => value == null ? null : '$value';
+
+  static int? _int(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}');
+  }
 }

@@ -1779,7 +1779,9 @@ void main() {
     await tester.pump();
     // The primary picker lists connection then model pills; tap the backup
     // model under the RealProvider connection to set it as primary.
-    await tester.tap(find.text('backup-model').first);
+    await tester.tap(
+      find.byKey(const ValueKey('primary-model-RealProvider-backup-model')),
+    );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1896,9 +1898,10 @@ void main() {
     );
     expect(nameField, findsOneWidget);
     await tester.enterText(nameField, '正式翻译');
-    await tester.ensureVisible(find.text('重命名'));
+    final saveName = find.byKey(const ValueKey('save-profile-name'));
+    await tester.ensureVisible(saveName);
     await tester.pump();
-    await tester.tap(find.text('重命名'));
+    await tester.tap(saveName);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1950,9 +1953,10 @@ void main() {
     await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.ensureVisible(find.text('新建常用模型'));
+    final createProfile = find.byKey(const ValueKey('create-profile'));
+    await tester.ensureVisible(createProfile);
     await tester.pump();
-    await tester.tap(find.text('新建常用模型'));
+    await tester.tap(createProfile);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -2009,9 +2013,10 @@ void main() {
     await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.ensureVisible(find.text('删除当前常用模型'));
+    final deleteProfile = find.byKey(const ValueKey('delete-profile'));
+    await tester.ensureVisible(deleteProfile);
     await tester.pump();
-    await tester.tap(find.text('删除当前常用模型'));
+    await tester.tap(deleteProfile);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 

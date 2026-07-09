@@ -185,6 +185,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       children: [
         Text(creating ? '添加连接' : provider.name, style: T.tSection),
         const SizedBox(height: T.s16),
+        if (!creating && _connectionTestStatus() != null) ...[
+          _connectionTestStatus()!,
+          const SizedBox(height: T.s16),
+        ],
         if (creating) ...[
           SettingsSection(
             title: '选择厂商',
@@ -306,6 +310,14 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     );
   }
 
+  Widget? _connectionTestStatus() {
+    if (c.busy == TranslationBusy.testingConnection) {
+      return const _ConnectionTestCard.loading();
+    }
+    final result = c.testResult;
+    return result == null ? null : _ConnectionTestCard.result(result);
+  }
+
   String _presetLabel() {
     final id = c.draft.presetId;
     if (id == null) return '自定义厂商';
@@ -338,105 +350,440 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       );
     }
     final busy = c.isBusy;
-    return ToolPanel(
-      footer: const [],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SettingsSection(
-          title: '常用模型',
-          divider: false,
-          children: [
-            Wrap(
-              spacing: T.s8,
-              runSpacing: T.s8,
-              children: [
-                for (final profile in c.profiles)
-                  ChoicePill(
-                    label: c.profileDisplayName(profile),
-                    selected: profile.id == c.activeProfileId,
-                    onTap: () => c.switchProfile(profile.id),
+        SizedBox(width: 210, child: _profileList(busy)),
+        const SizedBox(width: T.s32),
+        Expanded(
+          child: ToolPanel(
+            footer: const [],
+            children: [
+              _profileEditorHeader(busy),
+              SettingsSection(
+                title: '主模型',
+                divider: false,
+                children: [
+                  _PrimarySummary(primary: c.primary),
+                  const SizedBox(height: T.s12),
+                  _ModelRefPicker(
+                    connections: c.connections,
+                    selected: c.primary,
+                    onPick: busy ? null : c.setPrimary,
                   ),
-                ActionButton(
-                  label: '新建常用模型',
-                  onTap: busy ? null : () => c.createProfile(_profileName.text),
-                ),
-              ],
-            ),
-            const SizedBox(height: T.s12),
-            Row(
-              children: [
-                Text(c.activeProfileName, style: T.tSection),
-                const SizedBox(width: T.s8),
-                const _GlobalDefaultBadge(),
-              ],
-            ),
-            const SizedBox(height: T.s12),
-            Input(label: '名称', controller: _profileName),
-            const SizedBox(height: T.s12),
-            Wrap(
-              spacing: T.s12,
-              runSpacing: T.s8,
-              children: [
-                ActionButton(
-                  label: '重命名',
-                  onTap: busy ? null : () => c.renameProfile(_profileName.text),
-                ),
-                ActionButton(
-                  label: '删除当前常用模型',
-                  onTap: busy || c.profiles.length <= 1
-                      ? null
-                      : c.deleteProfile,
-                ),
-              ],
-            ),
-          ],
-        ),
-        SettingsSection(
-          title: '主模型',
-          divider: false,
-          children: [
-            Text('当前主模型：${c.primary?.label ?? '未设置'}', style: T.tBody),
-            const SizedBox(height: T.s12),
-            _ModelRefPicker(
-              connections: c.connections,
-              selected: c.primary,
-              onPick: busy ? null : c.setPrimary,
-            ),
-          ],
-        ),
-        SettingsSection(
-          title: '备用模型',
-          divider: false,
-          children: [
-            if (c.fallback.isEmpty)
-              const Text('暂未设置备用模型', style: T.tCaption)
-            else
-              for (var index = 0; index < c.fallback.length; index += 1)
-                Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == c.fallback.length - 1 ? 0 : T.s8,
+                ],
+              ),
+              SettingsSection(
+                title: '备用模型',
+                divider: false,
+                children: [
+                  if (c.fallback.isEmpty)
+                    const _EmptyFallbackStrip()
+                  else
+                    for (var index = 0; index < c.fallback.length; index += 1)
+                      Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index == c.fallback.length - 1 ? 0 : T.s8,
+                        ),
+                        child: FallbackRouteRow(
+                          provider: c.fallback[index].connection,
+                          model: c.fallback[index].model,
+                          canMoveUp: index > 0,
+                          canMoveDown: index < c.fallback.length - 1,
+                          onMoveUp: busy
+                              ? null
+                              : () => c.moveFallback(index, -1),
+                          onMoveDown: busy
+                              ? null
+                              : () => c.moveFallback(index, 1),
+                          onRemove: busy ? null : () => c.removeFallback(index),
+                        ),
+                      ),
+                  const SizedBox(height: T.s12),
+                  const Text('加入备用模型', style: T.tCaption),
+                  const SizedBox(height: T.s8),
+                  _ModelRefPicker(
+                    connections: c.connections,
+                    selected: null,
+                    actionLabel: '加入备用',
+                    onPick: busy ? null : c.addFallback,
                   ),
-                  child: FallbackRouteRow(
-                    provider: c.fallback[index].connection,
-                    model: c.fallback[index].model,
-                    canMoveUp: index > 0,
-                    canMoveDown: index < c.fallback.length - 1,
-                    onMoveUp: busy ? null : () => c.moveFallback(index, -1),
-                    onMoveDown: busy ? null : () => c.moveFallback(index, 1),
-                    onRemove: busy ? null : () => c.removeFallback(index),
-                  ),
-                ),
-            const SizedBox(height: T.s12),
-            const Text('加入备用模型', style: T.tCaption),
-            const SizedBox(height: T.s8),
-            _ModelRefPicker(
-              connections: c.connections,
-              selected: null,
-              actionLabel: '加入备用',
-              onPick: busy ? null : c.addFallback,
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _profileList(bool busy) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('常用模型', style: T.tSection)),
+            IconToolButton(
+              icon: Icons.add_rounded,
+              tooltip: '新建常用模型',
+              buttonKey: const ValueKey('create-profile'),
+              onTap: busy ? null : () => c.createProfile(_profileName.text),
+            ),
+          ],
+        ),
+        const SizedBox(height: T.s12),
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              for (final profile in c.profiles)
+                _ProfileListRow(
+                  name: c.profileDisplayName(profile),
+                  primary: profile.model.isEmpty ? '未选主模型' : profile.model,
+                  detail: _profileRowDetail(profile),
+                  fallbackCount: profile.fallback.length,
+                  selected: profile.id == c.activeProfileId,
+                  onTap: busy ? null : () => c.switchProfile(profile.id),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _profileEditorHeader(bool busy) {
+    final fallbackCount = c.fallback.length;
+    final primaryModel = c.primary?.model ?? '未选主模型';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: T.s16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            c.activeProfileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: T.tSection,
+                          ),
+                        ),
+                        const SizedBox(width: T.s8),
+                        const _GlobalDefaultBadge(),
+                      ],
+                    ),
+                    const SizedBox(height: T.s4),
+                    Text(
+                      '$primaryModel · ${fallbackCount == 0 ? '无备用' : '备用 $fallbackCount 个'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption,
+                    ),
+                  ],
+                ),
+              ),
+              IconToolButton(
+                icon: Icons.delete_outline_rounded,
+                tooltip: '删除常用模型',
+                buttonKey: const ValueKey('delete-profile'),
+                onTap: busy || c.profiles.length <= 1 ? null : c.deleteProfile,
+              ),
+            ],
+          ),
+          const SizedBox(height: T.s16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Input(label: '名称', controller: _profileName),
+              ),
+              const SizedBox(width: T.s8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: IconToolButton(
+                  icon: Icons.check_rounded,
+                  tooltip: '保存名称',
+                  buttonKey: const ValueKey('save-profile-name'),
+                  onTap: busy ? null : () => c.renameProfile(_profileName.text),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: T.s12),
+          const Divider(height: 1, color: T.line),
+        ],
+      ),
+    );
+  }
+
+  String _profileRowDetail(RoutingProfileOption profile) {
+    final parts = <String>[
+      if (profile.provider.isNotEmpty) profile.provider,
+      profile.fallback.isEmpty ? '无备用' : '备用 ${profile.fallback.length} 个',
+    ];
+    return parts.isEmpty ? '待配置' : parts.join(' · ');
+  }
+}
+
+class _ProfileListRow extends StatefulWidget {
+  const _ProfileListRow({
+    required this.name,
+    required this.primary,
+    required this.detail,
+    required this.fallbackCount,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String name;
+  final String primary;
+  final String detail;
+  final int fallbackCount;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  State<_ProfileListRow> createState() => _ProfileListRowState();
+}
+
+class _ProfileListRowState extends State<_ProfileListRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 62),
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
+          decoration: BoxDecoration(
+            color: widget.selected || _hover ? T.accentSoft : null,
+            border: Border(
+              left: BorderSide(
+                color: widget.selected ? T.accent : const Color(0x00000000),
+                width: 3,
+              ),
+              bottom: const BorderSide(color: T.line, width: 1),
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: T.tBody.copyWith(
+                              color: widget.selected ? T.accentStrong : T.ink,
+                              fontWeight: widget.selected ? T.wBold : T.wMedium,
+                            ),
+                          ),
+                        ),
+                        if (widget.selected) ...[
+                          const SizedBox(width: T.s8),
+                          const _MiniDefaultBadge(),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.primary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption.copyWith(color: T.ink),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      widget.detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption,
+                    ),
+                  ],
+                ),
+              ),
+              if (widget.fallbackCount > 0) ...[
+                const SizedBox(width: T.s8),
+                Text(
+                  '${widget.fallbackCount}',
+                  style: T.tCaption.copyWith(
+                    color: widget.selected ? T.accentStrong : T.muted,
+                    fontWeight: T.wBold,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PrimarySummary extends StatelessWidget {
+  const _PrimarySummary({required this.primary});
+
+  final ModelRef? primary;
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = primary;
+    final configured = ref != null && !ref.isEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: configured ? T.accentSoft : T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: configured ? T.accent : T.line, width: 1),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            configured ? Icons.check_rounded : Icons.radio_button_unchecked,
+            size: 17,
+            color: configured ? T.accentStrong : T.muted,
+          ),
+          const SizedBox(width: T.s8),
+          Expanded(
+            child: RichText(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              text: TextSpan(
+                style: T.tCaption.copyWith(
+                  color: T.ink,
+                  fontFamily: T.fontFamily,
+                ),
+                children: [
+                  TextSpan(
+                    text: configured ? ref.model : '未选主模型',
+                    style: const TextStyle(fontWeight: T.wBold),
+                  ),
+                  if (configured) ...[
+                    const TextSpan(
+                      text: ' · ',
+                      style: TextStyle(color: T.muted),
+                    ),
+                    TextSpan(text: ref.connection),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyFallbackStrip extends StatelessWidget {
+  const _EmptyFallbackStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Text('无备用模型', style: T.tCaption),
+    );
+  }
+}
+
+class _ConnectionTestCard extends StatelessWidget {
+  const _ConnectionTestCard.loading()
+    : title = '正在测试服务',
+      detail = '等待模型服务返回测试结果',
+      ok = null;
+
+  _ConnectionTestCard.result(ConnectionTestResult result)
+    : title = result.title,
+      detail = result.detail,
+      ok = result.ok;
+
+  final String title;
+  final String detail;
+  final bool? ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final running = ok == null;
+    final color = running ? T.sky : (ok! ? T.ok : T.danger);
+    final background = running
+        ? T.sky.withValues(alpha: 0.12)
+        : color.withValues(alpha: 0.10);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: color.withValues(alpha: 0.42), width: 1),
+      ),
+      child: Row(
+        children: [
+          if (running)
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            )
+          else
+            Icon(
+              ok! ? Icons.check_rounded : Icons.close_rounded,
+              size: 18,
+              color: color,
+            ),
+          const SizedBox(width: T.s8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tBody.copyWith(color: T.ink, fontWeight: T.wBold),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption.copyWith(color: T.muted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -533,6 +880,30 @@ class _GlobalDefaultBadge extends StatelessWidget {
       child: Text(
         '全局默认',
         style: T.tCaption.copyWith(color: T.accentStrong, fontWeight: T.wBold),
+      ),
+    );
+  }
+}
+
+class _MiniDefaultBadge extends StatelessWidget {
+  const _MiniDefaultBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.accent, width: 1),
+      ),
+      child: Text(
+        '默认',
+        style: T.tCaption.copyWith(
+          color: T.accentStrong,
+          fontWeight: T.wBold,
+          height: 1,
+        ),
       ),
     );
   }
@@ -779,6 +1150,11 @@ class _ModelRefPickerState extends State<_ModelRefPicker> {
               children: [
                 for (final model in provider.models)
                   ChoicePill(
+                    key: ValueKey(
+                      widget.actionLabel == null
+                          ? 'primary-model-${provider.name}-$model'
+                          : 'fallback-model-${provider.name}-$model',
+                    ),
                     label: model,
                     selected: widget.actionLabel == null
                         ? selectedModel?.connection == provider.name &&

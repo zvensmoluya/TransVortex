@@ -110,6 +110,7 @@ void main() {
       final methods = callsAfterInitialLoad().map((c) => c.method).toList();
       expect(methods, contains('provider.routing.save'));
       expect(methods, isNot(contains('provider.save')));
+      expect(methods, isNot(contains('desktop.snapshot')));
 
       final save = transport.calls.firstWhere(
         (c) => c.method == 'provider.routing.save',
@@ -134,6 +135,7 @@ void main() {
       final methods = callsAfterInitialLoad().map((c) => c.method).toList();
       expect(methods, contains('provider.routing.save'));
       expect(methods, isNot(contains('provider.save')));
+      expect(methods, isNot(contains('desktop.snapshot')));
 
       final save = transport.calls.firstWhere(
         (c) => c.method == 'provider.routing.save',

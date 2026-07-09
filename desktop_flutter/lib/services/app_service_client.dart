@@ -734,6 +734,23 @@ class DesktopSnapshot {
     );
   }
 
+  DesktopSnapshot copyWith({
+    Map<String, Object?>? config,
+    List<TaskSummary>? tasks,
+    Map<String, Object?>? runtime,
+    Map<String, Object?>? environment,
+    Map<String, Object?>? raw,
+  }) {
+    final nextConfig = config ?? this.config;
+    return DesktopSnapshot(
+      config: nextConfig,
+      tasks: tasks ?? this.tasks,
+      runtime: runtime ?? this.runtime,
+      environment: environment ?? this.environment,
+      raw: raw ?? {...this.raw, 'config': nextConfig},
+    );
+  }
+
   ConfigReadiness get configReadiness => ConfigReadiness.fromConfig(config);
 
   List<ProviderOption> get providers {
