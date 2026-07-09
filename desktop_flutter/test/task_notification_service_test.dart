@@ -122,7 +122,7 @@ MainWindowViewModel _view(
     taskId: taskId,
     source: MainSourceDraft(name: name, path: path, kind: SourceKind.video),
     translationLabel: 'RealProvider · real-model',
-    translationDetail: 'Default · 无备用 · 连接 RealProvider',
+    translationDetail: '默认模型 · 无备用 · 连接 RealProvider',
     translationConfigured: true,
     asrLabel: '本机 · large-v3',
     asrConfigured: true,

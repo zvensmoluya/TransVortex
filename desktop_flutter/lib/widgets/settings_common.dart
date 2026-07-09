@@ -21,12 +21,14 @@ class DefaultBar extends StatelessWidget {
     required this.busy,
     this.error,
     this.message,
+    this.onRetry,
   });
 
   final String text;
   final bool busy;
   final String? error;
   final String? message;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +50,10 @@ class DefaultBar extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+          if (!busy && error != null && onRetry != null) ...[
+            const SizedBox(width: T.s8),
+            ActionButton(label: '重试', onTap: onRetry),
+          ],
           if (!busy && error == null && message != null)
             Flexible(
               child: Text(
@@ -551,10 +557,12 @@ class ChoicePill extends StatefulWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.showCheck = false,
   });
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final bool showCheck;
 
   @override
   State<ChoicePill> createState() => _ChoicePillState();
@@ -582,13 +590,24 @@ class _ChoicePillState extends State<ChoicePill> {
               width: 1,
             ),
           ),
-          child: Text(
-            widget.label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: T.tCaption.copyWith(
-              color: widget.selected ? T.accentStrong : T.ink,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.showCheck && widget.selected) ...[
+                Icon(Icons.check_rounded, size: 14, color: T.accentStrong),
+                const SizedBox(width: 3),
+              ],
+              Flexible(
+                child: Text(
+                  widget.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption.copyWith(
+                    color: widget.selected ? T.accentStrong : T.ink,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

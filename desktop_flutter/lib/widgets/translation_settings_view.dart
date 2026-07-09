@@ -6,9 +6,9 @@ import '../theme/tokens.dart';
 import 'settings_common.dart';
 
 /// Translation model settings body. Splits into two segments:
-///  - 模型连接 (connections): manage providers and their supported models.
-///  - 翻译方案 (profiles): pick the primary + fallback models for the active
-///    routing profile.
+///  - 连接 (connections): manage provider access and saved model names.
+///  - 常用模型 (profiles): pick the primary + fallback models for the active
+///    global default profile.
 ///
 /// All state and side effects live in [TranslationSettingsController]; this
 /// widget only renders it and forwards intents. Text fields are owned here and
@@ -33,7 +33,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
 
   int _seededDraftRevision = -1;
   String? _seededProfileId;
-  bool _showAdvanced = false;
 
   TranslationSettingsController get c => widget.controller;
 
@@ -110,25 +109,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
           busy: c.busy == TranslationBusy.loading,
           error: c.error,
           message: c.message,
+          onRetry: c.snapshot == null && !c.isBusy ? c.refresh : null,
         ),
         const SizedBox(height: T.s16),
-        Row(
-          children: [
-            SegmentButton(
-              label: '模型连接',
-              detail: '${c.connections.length} 个连接',
-              selected: c.tab == TranslationTab.connections,
-              onTap: () => c.switchTab(TranslationTab.connections),
-            ),
-            const SizedBox(width: T.s8),
-            SegmentButton(
-              label: '翻译方案',
-              detail: c.activeProfileName,
-              selected: c.tab == TranslationTab.profiles,
-              onTap: () => c.switchTab(TranslationTab.profiles),
-            ),
-          ],
-        ),
+        _TranslationTabs(selected: c.tab, onPick: c.switchTab),
         const SizedBox(height: T.s24),
         Expanded(
           child: c.tab == TranslationTab.connections
@@ -187,19 +171,19 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
           label: c.busy == TranslationBusy.deletingConnection ? '删除中' : '删除连接',
           onTap: busy ? null : c.deleteConnection,
         ),
-      ActionButton(
-        label: c.busy == TranslationBusy.loading ? '刷新中' : '刷新',
-        onTap: busy ? null : c.refresh,
-      ),
     ];
+
+    if (isBlank) {
+      return ToolPanel(
+        footer: footer,
+        children: const [_EmptyConnectionState()],
+      );
+    }
 
     return ToolPanel(
       footer: footer,
       children: [
-        Text(
-          creating ? '添加模型连接' : (isBlank ? '选择一个连接或添加连接' : provider.name),
-          style: T.tSection,
-        ),
+        Text(creating ? '添加连接' : provider.name, style: T.tSection),
         const SizedBox(height: T.s16),
         if (creating) ...[
           SettingsSection(
@@ -248,7 +232,12 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
             ] else ...[
               ReadonlyRow(label: '连接名称', value: provider.name),
               const SizedBox(height: T.s12),
-              ReadonlyRow(label: '协议', value: _providerProtocolLabel(provider)),
+              ReadonlyRow(
+                label: '服务类型',
+                value: _providerProtocolLabel(provider),
+              ),
+              const SizedBox(height: T.s12),
+              ReadonlyRow(label: '来源', value: _providersFileLabel(c.snapshot)),
             ],
             const SizedBox(height: T.s12),
             Input(
@@ -298,41 +287,21 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
             ],
           ],
         ),
-        if (!isBlank && !creating) _advancedSection(provider),
+        if (!creating) _connectionStatusSection(provider),
       ],
     );
   }
 
-  Widget _advancedSection(ProviderOption provider) {
+  Widget _connectionStatusSection(ProviderOption provider) {
     return SettingsSection(
-      title: '高级配置',
+      title: '连接状态',
       divider: false,
       children: [
-        ActionButton(
-          label: _showAdvanced ? '收起高级配置' : '展开高级配置',
-          onTap: () => setState(() => _showAdvanced = !_showAdvanced),
-        ),
-        if (_showAdvanced) ...[
-          const SizedBox(height: T.s12),
-          ReadonlyRow(label: '配置来源', value: _providersFileLabel(c.snapshot)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '协议标识', value: _providerCompatModeLabel(provider)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '凭据 ID', value: _providerCredentialId(provider)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '环境变量', value: _providerEnvKey(provider)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '请求端点', value: _providerEndpointLabel(provider)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '模型列表', value: _modelListEndpointLabel(provider)),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(
-            label: '响应提取',
-            value: _providerResponseMappingLabel(provider),
-          ),
-          const SizedBox(height: T.s8),
-          ReadonlyRow(label: '调用限制', value: _providerLimitsLabel(provider)),
-        ],
+        ReadonlyRow(label: '服务类型', value: _providerProtocolLabel(provider)),
+        const SizedBox(height: T.s8),
+        ReadonlyRow(label: '凭据', value: _credentialStatusLabel(provider)),
+        const SizedBox(height: T.s8),
+        ReadonlyRow(label: '来源', value: _providersFileLabel(c.snapshot)),
       ],
     );
   }
@@ -358,7 +327,7 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('还没有连接，先到「模型连接」添加。', style: T.tBody),
+          const _EmptyRecipeState(),
           const SizedBox(height: T.s12),
           ActionButton(
             label: '去添加连接',
@@ -370,16 +339,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     }
     final busy = c.isBusy;
     return ToolPanel(
-      footer: [
-        ActionButton(
-          label: c.busy == TranslationBusy.loading ? '刷新中' : '刷新',
-          onTap: busy ? null : c.refresh,
-        ),
-      ],
-      footnote: '主模型和备用模型都从「模型连接」里已保存的连接中选择。',
+      footer: const [],
       children: [
         SettingsSection(
-          title: '翻译方案',
+          title: '常用模型',
           divider: false,
           children: [
             Wrap(
@@ -388,29 +351,37 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
               children: [
                 for (final profile in c.profiles)
                   ChoicePill(
-                    label: profile.displayName,
+                    label: c.profileDisplayName(profile),
                     selected: profile.id == c.activeProfileId,
                     onTap: () => c.switchProfile(profile.id),
                   ),
+                ActionButton(
+                  label: '新建常用模型',
+                  onTap: busy ? null : () => c.createProfile(_profileName.text),
+                ),
               ],
             ),
             const SizedBox(height: T.s12),
-            Input(label: '方案名称', controller: _profileName),
+            Row(
+              children: [
+                Text(c.activeProfileName, style: T.tSection),
+                const SizedBox(width: T.s8),
+                const _GlobalDefaultBadge(),
+              ],
+            ),
+            const SizedBox(height: T.s12),
+            Input(label: '名称', controller: _profileName),
             const SizedBox(height: T.s12),
             Wrap(
               spacing: T.s12,
               runSpacing: T.s8,
               children: [
                 ActionButton(
-                  label: '重命名方案',
+                  label: '重命名',
                   onTap: busy ? null : () => c.renameProfile(_profileName.text),
                 ),
                 ActionButton(
-                  label: '另存为新方案',
-                  onTap: busy ? null : () => c.createProfile(_profileName.text),
-                ),
-                ActionButton(
-                  label: '删除当前方案',
+                  label: '删除当前常用模型',
                   onTap: busy || c.profiles.length <= 1
                       ? null
                       : c.deleteProfile,
@@ -468,6 +439,225 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       ],
     );
   }
+}
+
+class _TranslationTabs extends StatelessWidget {
+  const _TranslationTabs({required this.selected, required this.onPick});
+
+  final TranslationTab selected;
+  final ValueChanged<TranslationTab> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _TranslationTabButton(
+            label: '连接',
+            selected: selected == TranslationTab.connections,
+            onTap: () => onPick(TranslationTab.connections),
+          ),
+          _TranslationTabButton(
+            label: '常用模型',
+            selected: selected == TranslationTab.profiles,
+            onTap: () => onPick(TranslationTab.profiles),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TranslationTabButton extends StatelessWidget {
+  const _TranslationTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: 96,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? T.accentSoft : const Color(0x00000000),
+          borderRadius: BorderRadius.circular(T.rSm),
+          border: Border.all(
+            color: selected ? T.accent : const Color(0x00000000),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: T.tBody.copyWith(
+            color: selected ? T.accentStrong : T.ink,
+            fontWeight: selected ? T.wBold : T.wMedium,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GlobalDefaultBadge extends StatelessWidget {
+  const _GlobalDefaultBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 3),
+      decoration: BoxDecoration(
+        color: T.accentSoft,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.accent, width: 1),
+      ),
+      child: Text(
+        '全局默认',
+        style: T.tCaption.copyWith(color: T.accentStrong, fontWeight: T.wBold),
+      ),
+    );
+  }
+}
+
+class _EmptyConnectionState extends StatelessWidget {
+  const _EmptyConnectionState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _IllustratedEmptyState(
+      kind: _EmptyIllustrationKind.connection,
+      title: '插槽空着',
+      detail: '添加一个模型服务后，就能保存可用模型。',
+    );
+  }
+}
+
+class _EmptyRecipeState extends StatelessWidget {
+  const _EmptyRecipeState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _IllustratedEmptyState(
+      kind: _EmptyIllustrationKind.recipe,
+      title: '先添加连接',
+      detail: '常用模型由主模型和备用模型组成。',
+    );
+  }
+}
+
+class _IllustratedEmptyState extends StatelessWidget {
+  const _IllustratedEmptyState({
+    required this.kind,
+    required this.title,
+    required this.detail,
+  });
+
+  final _EmptyIllustrationKind kind;
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 78,
+          height: 58,
+          child: CustomPaint(painter: _EmptyIllustrationPainter(kind)),
+        ),
+        const SizedBox(width: T.s16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: T.tSection),
+              const SizedBox(height: 4),
+              Text(detail, style: T.tCaption),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+enum _EmptyIllustrationKind { connection, recipe }
+
+class _EmptyIllustrationPainter extends CustomPainter {
+  const _EmptyIllustrationPainter(this.kind);
+
+  final _EmptyIllustrationKind kind;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final line = Paint()
+      ..color = T.inkLine
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final fill = Paint()
+      ..color = T.accentSoft
+      ..style = PaintingStyle.fill;
+    final blue = Paint()
+      ..color = T.sky.withValues(alpha: 0.22)
+      ..style = PaintingStyle.fill;
+
+    if (kind == _EmptyIllustrationKind.connection) {
+      final body = RRect.fromRectAndRadius(
+        Rect.fromLTWH(10, 18, 38, 26),
+        const Radius.circular(7),
+      );
+      canvas.drawRRect(body, fill);
+      canvas.drawRRect(body, line);
+      canvas.drawCircle(const Offset(21, 30), 3, line);
+      canvas.drawCircle(const Offset(36, 30), 3, line);
+      canvas.drawPath(
+        Path()
+          ..moveTo(48, 31)
+          ..cubicTo(57, 31, 58, 17, 67, 17)
+          ..lineTo(70, 17),
+        line,
+      );
+      canvas.drawLine(const Offset(66, 12), const Offset(66, 22), line);
+      canvas.drawLine(const Offset(72, 12), const Offset(72, 22), line);
+      return;
+    }
+
+    final ticket = RRect.fromRectAndRadius(
+      Rect.fromLTWH(12, 13, 48, 34),
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(ticket, fill);
+    canvas.drawRRect(ticket, line);
+    canvas.drawCircle(const Offset(12, 30), 4, blue);
+    canvas.drawCircle(const Offset(60, 30), 4, blue);
+    canvas.drawLine(const Offset(23, 24), const Offset(49, 24), line);
+    canvas.drawLine(const Offset(23, 34), const Offset(43, 34), line);
+  }
+
+  @override
+  bool shouldRepaint(covariant _EmptyIllustrationPainter oldDelegate) =>
+      oldDelegate.kind != kind;
 }
 
 /// A removable model chip in the connection's model list.
@@ -594,6 +784,7 @@ class _ModelRefPickerState extends State<_ModelRefPicker> {
                         ? selectedModel?.connection == provider.name &&
                               selectedModel?.model == model
                         : model == stagedModel,
+                    showCheck: widget.actionLabel == null,
                     onTap: () => _onModelTap(provider.name, model),
                   ),
               ],
@@ -658,35 +849,6 @@ String _providerProtocolLabel(ProviderOption provider) {
   };
 }
 
-String _providerCompatModeLabel(ProviderOption provider) {
-  final compat = provider.compatMode.trim();
-  return compat.isEmpty ? '未指定' : compat;
-}
-
-String _providerEndpointLabel(ProviderOption provider) {
-  final endpoint = _map(provider.raw['endpoint']);
-  final method = _str(endpoint['method']) ?? 'POST';
-  final path =
-      _str(endpoint['path_template']) ?? _str(endpoint['pathTemplate']) ?? '/';
-  return '$method $path';
-}
-
-String _providerResponseMappingLabel(ProviderOption provider) {
-  final response = _map(provider.raw['response_mapping']);
-  final paths = _strList(response['text_paths']);
-  if (paths.isEmpty) return '按协议默认响应路径';
-  return paths.join(', ');
-}
-
-String _providerLimitsLabel(ProviderOption provider) {
-  final limits = _map(provider.raw['limits']);
-  final concurrency = _str(limits['concurrency']) ?? '默认';
-  final timeout =
-      _str(limits['timeout_seconds']) ?? _str(limits['timeoutSeconds']) ?? '默认';
-  final retry = _str(limits['retry']) ?? '默认';
-  return '并发 $concurrency · 超时 ${timeout}s · 重试 $retry';
-}
-
 String _credentialSourceLabel(String source) {
   return switch (source.trim().toLowerCase()) {
     'auth_json' => '用户级凭据',
@@ -706,44 +868,19 @@ String _credentialStatusLabel(ProviderOption provider) {
   return provider.hasKey ? '已配置 · $source' : '缺密钥 · $source';
 }
 
-String _providerCredentialId(ProviderOption provider) {
-  if (provider.credentialId.isNotEmpty) return provider.credentialId;
-  return provider.name.isEmpty ? '待填写' : provider.name;
-}
-
-String _providerEnvKey(ProviderOption provider) {
-  if (provider.envKey.isNotEmpty) return provider.envKey;
-  final name = provider.name.trim();
-  if (name.isEmpty) return '待填写';
-  final slug = name
-      .toUpperCase()
-      .replaceAll(RegExp(r'[^A-Z0-9]+'), '_')
-      .replaceAll(RegExp(r'^_+|_+$'), '');
-  return 'TVX_PROVIDER_${slug.isEmpty ? 'CUSTOM' : slug}_API_KEY';
-}
-
-String _modelListEndpointLabel(ProviderOption provider) {
-  final modelList = _map(provider.raw['model_list']);
-  final path =
-      _str(modelList['path_template']) ?? _str(modelList['pathTemplate']);
-  if (path == null || path.isEmpty) return '手动填写';
-  final method = _str(modelList['method']) ?? 'GET';
-  return '$method $path';
-}
-
 String _providersFileLabel(DesktopSnapshot? snapshot) {
   final raw = _str(snapshot?.config['providers_file']);
-  if (raw == null || raw.isEmpty) return '未知';
+  if (raw == null || raw.isEmpty) return '本机配置';
   final normalized = raw.replaceAll('\\', '/');
   const marker = '/.transvortex-desktop/';
   final markerIndex = normalized.indexOf(marker);
   if (markerIndex >= 0) {
     final tail = normalized.substring(markerIndex + 1).replaceAll('/', '\\');
-    return '${_providersFileKindLabel(tail)} · $tail';
+    return _providersFileKindLabel(tail);
   }
   final parts = normalized.split('/');
   final fileName = parts.isEmpty ? raw : parts.last;
-  return '${_providersFileKindLabel(fileName)} · $fileName';
+  return _providersFileKindLabel(fileName);
 }
 
 String _providersFileKindLabel(String path) {
@@ -762,12 +899,6 @@ String _providersFileKindLabel(String path) {
   }
   return '配置文件';
 }
-
-Map<String, Object?> _map(Object? value) =>
-    value is Map ? value.map((k, v) => MapEntry('$k', v)) : const {};
-
-List<String> _strList(Object? value) =>
-    value is List ? [for (final item in value) '$item'] : const <String>[];
 
 String? _str(Object? value) {
   if (value == null) return null;

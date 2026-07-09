@@ -943,7 +943,7 @@ class MainWindowController extends ChangeNotifier {
       snapshot,
       routing,
       source: TranslationChoiceSource.profile,
-      profileName: profile.displayName,
+      profileName: _profileDisplayName(profile),
     );
   }
 
@@ -1020,6 +1020,17 @@ class MainWindowController extends ChangeNotifier {
       if (provider.name == providerName) return provider.hasKey;
     }
     return false;
+  }
+
+  static String _profileDisplayName(RoutingProfileOption profile) {
+    final name = profile.displayName.trim();
+    if (profile.id == 'default' ||
+        name.isEmpty ||
+        name.toLowerCase() == 'default' ||
+        name == '默认方案') {
+      return '默认模型';
+    }
+    return name;
   }
 
   static String _modelLabel(String model, String provider) {

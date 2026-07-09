@@ -1194,13 +1194,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    // Default tab is 模型连接: the connection list + detail are visible.
+    // Default tab is 连接: the connection list + detail are visible.
     expect(find.text('翻译模型设置'), findsOneWidget);
-    expect(find.text('模型连接'), findsWidgets);
-    expect(find.text('翻译方案'), findsWidgets);
+    expect(find.text('连接'), findsWidgets);
+    expect(find.text('常用模型'), findsWidgets);
+    expect(find.text('模型连接'), findsNothing);
+    expect(find.text('翻译方案'), findsNothing);
+    expect(find.text('刷新'), findsNothing);
     expect(find.text('已配置连接'), findsOneWidget);
     expect(find.text('服务地址 (Base URL)'), findsOneWidget);
     expect(find.text('连接设置'), findsOneWidget);
+    expect(find.text('连接状态'), findsOneWidget);
     expect(find.text('RealProvider'), findsWidgets);
     expect(find.text('OpenAI Chat 兼容'), findsWidgets);
     expect(find.textContaining('用户级凭据'), findsWidgets);
@@ -1268,7 +1272,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('还没有连接'), findsOneWidget);
-    expect(find.text('选择一个连接或添加连接'), findsOneWidget);
+    expect(find.text('添加一个模型服务后，就能保存可用模型。'), findsOneWidget);
     expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });
@@ -1297,10 +1301,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('还没有连接'), findsWidgets);
+    expect(find.text('先添加连接'), findsOneWidget);
+    expect(find.text('常用模型由主模型和备用模型组成。'), findsOneWidget);
     expect(find.text('去添加连接'), findsOneWidget);
     expectNoFlutterException();
   });
@@ -1331,7 +1336,7 @@ void main() {
 
     expect(find.text('gemini-2.0-flash-lite-preview-02-05'), findsOneWidget);
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.ensureVisible(find.text('主模型'));
     await tester.pump();
@@ -1477,7 +1482,7 @@ void main() {
     await tester.tap(removeModel);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('这个模型正在被翻译方案使用'), findsOneWidget);
+    expect(find.textContaining('这个模型正在被常用模型使用'), findsOneWidget);
     expect(find.text('real-model'), findsWidgets);
     expect(calls, isNot(contains('provider.save')));
     expect(calls, isNot(contains('provider.routing.save')));
@@ -1613,41 +1618,46 @@ void main() {
     },
   );
 
-  testWidgets(
-    'translation settings shows provider preset protocol and advanced summary',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1000, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final store = WindowStateStore();
-      final bridge = WindowStateBridge.main(store);
-      bridge.attachServiceCaller((method, params) async {
-        if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
-        throw RpcRemoteException('method_not_found', method);
-      });
+  testWidgets('translation settings hides provider internals from the app UI', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
 
-      await tester.pumpWidget(
-        TransVortexApp(
-          windowType: AppWindowType.translationSettings,
-          store: store,
-          bridge: bridge,
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
 
-      await tester.ensureVisible(find.text('展开高级配置'));
-      await tester.pump();
-      expect(find.text('协议标识'), findsNothing);
-      await tester.tap(find.text('展开高级配置'));
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.text('协议标识'), findsOneWidget);
-      expect(find.text('请求端点'), findsOneWidget);
-      expect(find.text('凭据 ID'), findsOneWidget);
-      expect(find.text('环境变量'), findsOneWidget);
-      expectNoFlutterException();
-    },
-  );
+    await tester.ensureVisible(find.text('连接状态'));
+    await tester.pump();
+    expect(find.text('连接状态'), findsOneWidget);
+    expect(find.text('服务类型'), findsWidgets);
+    expect(find.text('来源'), findsWidgets);
+    expect(find.text('凭据'), findsOneWidget);
+    expect(find.text('本机配置'), findsWidgets);
+    expect(find.text('OpenAI Chat 兼容'), findsWidgets);
+    expect(find.text('展开高级配置'), findsNothing);
+    expect(find.text('高级配置'), findsNothing);
+    expect(find.text('协议标识'), findsNothing);
+    expect(find.text('环境变量'), findsNothing);
+    expect(find.text('请求端点'), findsNothing);
+    expect(find.text('响应提取'), findsNothing);
+    expect(find.text('调用限制'), findsNothing);
+    expect(find.text('凭据 ID'), findsNothing);
+    expectNoFlutterException();
+  });
 
   testWidgets('translation settings deletes an unused connection', (
     tester,
@@ -1723,7 +1733,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('正在被翻译方案使用'), findsOneWidget);
+    expect(find.textContaining('正在被常用模型使用'), findsOneWidget);
     expect(find.text('RealProvider'), findsWidgets);
     expectNoFlutterException();
   });
@@ -1762,7 +1772,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     await tester.ensureVisible(find.text('主模型'));
@@ -1827,7 +1837,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('配置 1'), findsWidgets);
@@ -1841,7 +1851,7 @@ void main() {
     expect(savedRouting?['next_profile_seq'], 3);
     expect(savedRouting?['expected_version'], {'mtime_ns': 3, 'size': 4});
     expect(savedRouting?['profiles'], isA<List>());
-    expect(find.textContaining('已切换翻译方案：配置 2'), findsOneWidget);
+    expect(find.textContaining('已切换常用模型：配置 2'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1878,7 +1888,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     final nameField = find.byWidgetPredicate(
@@ -1886,9 +1896,9 @@ void main() {
     );
     expect(nameField, findsOneWidget);
     await tester.enterText(nameField, '正式翻译');
-    await tester.ensureVisible(find.text('重命名方案'));
+    await tester.ensureVisible(find.text('重命名'));
     await tester.pump();
-    await tester.tap(find.text('重命名方案'));
+    await tester.tap(find.text('重命名'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1898,7 +1908,7 @@ void main() {
     );
     expect(renamed?['name'], '正式翻译');
     expect(savedRouting?['active_profile'], 'route_1');
-    expect(find.textContaining('翻译方案已重命名：正式翻译'), findsOneWidget);
+    expect(find.textContaining('常用模型已重命名：正式翻译'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1937,12 +1947,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.ensureVisible(find.text('另存为新方案'));
+    await tester.ensureVisible(find.text('新建常用模型'));
     await tester.pump();
-    await tester.tap(find.text('另存为新方案'));
+    await tester.tap(find.text('新建常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1952,12 +1962,12 @@ void main() {
     );
     expect(savedRouting?['active_profile'], 'route_3');
     expect(savedRouting?['next_profile_seq'], 4);
-    expect(created?['name'], '方案 3');
+    expect(created?['name'], '常用模型 3');
     expect(created?['primary'], {
       'provider': 'RealProvider',
       'model': 'real-model',
     });
-    expect(find.textContaining('已新建翻译方案：方案 3'), findsOneWidget);
+    expect(find.textContaining('已新建常用模型：常用模型 3'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1996,19 +2006,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.ensureVisible(find.text('删除当前方案'));
+    await tester.ensureVisible(find.text('删除当前常用模型'));
     await tester.pump();
-    await tester.tap(find.text('删除当前方案'));
+    await tester.tap(find.text('删除当前常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
     final profiles = savedRouting?['profiles'] as List?;
     expect(savedRouting?['active_profile'], 'route_2');
     expect(profiles?.cast<Map>().map((item) => item['id']), ['route_2']);
-    expect(find.textContaining('已删除翻译方案：配置 1'), findsOneWidget);
+    expect(find.textContaining('已删除常用模型：配置 1'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -2045,7 +2055,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     await tester.ensureVisible(find.text('加入备用'));
@@ -2105,7 +2115,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     final removeFallback = find.byTooltip('移除备用模型');
@@ -2161,7 +2171,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('翻译方案'));
+    await tester.tap(find.text('常用模型'));
     await tester.pump(const Duration(milliseconds: 100));
 
     final moveDown = find.byTooltip('下移备用模型').first;

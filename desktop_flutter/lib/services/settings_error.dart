@@ -10,7 +10,7 @@ String friendlySettingsError(Object error) {
   if (error is PlatformException) {
     final rawMessage = error.message ?? '';
     if (rawMessage.contains('Local Service caller')) {
-      return '本地服务未连接，请稍后刷新。';
+      return '本地服务未连接，请稍后重试。';
     }
     if (error.code == 'service_unavailable') {
       final message = rawMessage.trim();
@@ -34,7 +34,7 @@ String friendlySettingsError(Object error) {
   final text = '$error';
   if (text.contains('CHANNEL_UNREGISTERED') ||
       text.contains('WindowChannelException')) {
-    return '本地服务未连接，请稍后刷新。';
+    return '本地服务未连接，请稍后重试。';
   }
   return text;
 }

@@ -22,7 +22,7 @@ void main() {
 
       expect(controller.view.state, MainState.ready);
       expect(controller.view.translationLabel, 'real-model');
-      expect(controller.view.translationDetail, contains('Default'));
+      expect(controller.view.translationDetail, contains('默认模型'));
       expect(controller.view.translationDetail, contains('备用 fallback-model'));
       expect(controller.view.asrLabel, '本机 · large-v3');
     },

@@ -218,7 +218,7 @@ void main() {
       controller.selectConnection('deepseek');
       await controller.deleteConnection();
 
-      expect(controller.error, contains('正在被翻译方案使用'));
+      expect(controller.error, contains('正在被常用模型使用'));
     });
 
     test('fetchModels merges results into the draft model list', () async {
@@ -237,7 +237,7 @@ void main() {
         await controller.load();
         controller.removeModel('deepseek-v4-pro');
 
-        expect(controller.error, contains('正在被翻译方案使用'));
+        expect(controller.error, contains('正在被常用模型使用'));
         expect(controller.draft.models, contains('deepseek-v4-pro'));
         expect(callsAfterInitialLoad(), isEmpty);
       },

@@ -165,7 +165,21 @@ class TranslationSettingsController extends ChangeNotifier {
         : snapshot.routingProfiles.first;
   }
 
-  String get activeProfileName => activeProfile?.displayName ?? '默认方案';
+  String get activeProfileName {
+    final profile = activeProfile;
+    return profile == null ? '默认模型' : profileDisplayName(profile);
+  }
+
+  String profileDisplayName(RoutingProfileOption profile) {
+    final name = profile.displayName.trim();
+    if (profile.id == 'default' ||
+        name.isEmpty ||
+        name.toLowerCase() == 'default' ||
+        name == '默认方案') {
+      return '默认模型';
+    }
+    return name;
+  }
 
   ModelRef? get primary {
     final profile = activeProfile;
@@ -192,10 +206,10 @@ class TranslationSettingsController extends ChangeNotifier {
   String get headerText {
     final profile = activeProfile;
     final ref = primary;
-    if (profile == null || ref == null) return '当前方案还没选主模型';
+    if (profile == null || ref == null) return '默认模型还没选主模型';
     final fallbackCount = fallback.length;
     final fallbackText = fallbackCount == 0 ? '无备用' : '备用 $fallbackCount 个';
-    return '当前方案：${profile.displayName} · 主模型 ${ref.label} · $fallbackText';
+    return '${profileDisplayName(profile)} · ${ref.model} · $fallbackText';
   }
 
   bool get configured =>
@@ -331,7 +345,7 @@ class TranslationSettingsController extends ChangeNotifier {
   void removeModel(String model) {
     final normalized = model.trim();
     if (_isModelReferencedByProfiles(_draftName(), normalized)) {
-      _fail('这个模型正在被翻译方案使用，请先修改主模型或备用模型。');
+      _fail('这个模型正在被常用模型使用，请先修改主模型或备用模型。');
       return;
     }
     _draft.models = _draft.models.where((m) => m != model).toList();
@@ -351,7 +365,7 @@ class TranslationSettingsController extends ChangeNotifier {
     }
     final missingReferenced = _missingReferencedModels(name, models);
     if (missingReferenced.isNotEmpty) {
-      _fail('这个模型正在被翻译方案使用，请先修改主模型或备用模型。');
+      _fail('这个模型正在被常用模型使用，请先修改主模型或备用模型。');
       return;
     }
     _begin(TranslationBusy.savingConnection);
@@ -384,7 +398,7 @@ class TranslationSettingsController extends ChangeNotifier {
       );
       if (result['blocked'] == true ||
           _str(result['code']) == 'provider_in_use') {
-        _error = '这个连接正在被翻译方案使用，请先修改主模型或备用模型。';
+        _error = '这个连接正在被常用模型使用，请先修改主模型或备用模型。';
         return;
       }
       _selectedConnection = null;
@@ -476,7 +490,7 @@ class TranslationSettingsController extends ChangeNotifier {
           configured: profile.provider.isNotEmpty,
         );
       }
-      _message = '已切换翻译方案：$activeProfileName。';
+      _message = '已切换常用模型：$activeProfileName。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
     } finally {
@@ -490,7 +504,7 @@ class TranslationSettingsController extends ChangeNotifier {
     if (snapshot == null || profile == null) return;
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
-      _fail('翻译方案名称不能为空');
+      _fail('常用模型名称不能为空');
       return;
     }
     _begin(TranslationBusy.savingProfile);
@@ -502,7 +516,7 @@ class TranslationSettingsController extends ChangeNotifier {
         expectedVersion: snapshot.providersFileVersion,
       );
       await _reload();
-      _message = '翻译方案已重命名：$trimmed。';
+      _message = '常用模型已重命名：$trimmed。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
     } finally {
@@ -516,10 +530,13 @@ class TranslationSettingsController extends ChangeNotifier {
     final current = activeProfile;
     final newId = _nextProfileId(snapshot);
     final desired = name.trim();
-    final fallbackName = '方案 ${snapshot.routingProfileNextSeq}';
+    final fallbackName = '常用模型 ${snapshot.routingProfileNextSeq}';
+    final currentName = current == null ? '' : profileDisplayName(current);
     final finalName = _uniqueProfileName(
       snapshot,
-      desired.isEmpty || desired == current?.displayName
+      desired.isEmpty ||
+              desired == current?.displayName ||
+              desired == currentName
           ? fallbackName
           : desired,
     );
@@ -552,7 +569,7 @@ class TranslationSettingsController extends ChangeNotifier {
           configured: profile.provider.isNotEmpty,
         );
       }
-      _message = '已新建翻译方案：$finalName。';
+      _message = '已新建常用模型：$finalName。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
     } finally {
@@ -565,7 +582,7 @@ class TranslationSettingsController extends ChangeNotifier {
     final profile = activeProfile;
     if (snapshot == null || profile == null) return;
     if (snapshot.routingProfiles.length <= 1) {
-      _fail('至少保留一个翻译方案');
+      _fail('至少保留一个常用模型');
       return;
     }
     final kept = snapshot.routingProfiles
@@ -585,7 +602,7 @@ class TranslationSettingsController extends ChangeNotifier {
         nextActive.routeLabel,
         configured: nextActive.provider.isNotEmpty,
       );
-      _message = '已删除翻译方案：${profile.displayName}。';
+      _message = '已删除常用模型：${profileDisplayName(profile)}。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
     } finally {
@@ -1010,11 +1027,13 @@ class TranslationSettingsController extends ChangeNotifier {
   }
 
   String _uniqueProfileName(DesktopSnapshot snapshot, String seed) {
-    final used = snapshot.routingProfiles
-        .map((p) => p.displayName.trim())
-        .where((name) => name.isNotEmpty)
-        .toSet();
-    final base = seed.trim().isEmpty ? '方案' : seed.trim();
+    final used = <String>{
+      for (final profile in snapshot.routingProfiles) ...[
+        profile.displayName.trim(),
+        profileDisplayName(profile).trim(),
+      ],
+    }..removeWhere((name) => name.isEmpty);
+    final base = seed.trim().isEmpty ? '常用模型' : seed.trim();
     if (!used.contains(base)) return base;
     for (var index = 2; index < 100; index += 1) {
       final candidate = '$base $index';
