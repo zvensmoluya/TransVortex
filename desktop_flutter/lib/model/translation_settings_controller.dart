@@ -8,6 +8,8 @@ import '../services/settings_error.dart';
 typedef TranslationLabelSink =
     Future<void> Function(String label, {required bool configured});
 
+typedef TranslationConfigChangedSink = Future<void> Function();
+
 /// Which half of the translation settings window is showing.
 enum TranslationTab { connections, profiles }
 
@@ -101,10 +103,15 @@ class ConnectionDraft {
 ///    least a synthesized `default` profile), so the single-route RPC is
 ///    unused from the desktop side.
 class TranslationSettingsController extends ChangeNotifier {
-  TranslationSettingsController(this._client, this._onLabel);
+  TranslationSettingsController(
+    this._client,
+    this._onLabel, {
+    this.onConfigChanged,
+  });
 
   final AppServiceClient _client;
   final TranslationLabelSink _onLabel;
+  final TranslationConfigChangedSink? onConfigChanged;
 
   DesktopSnapshot? _snapshot;
   TranslationTab _tab = TranslationTab.connections;
@@ -398,6 +405,7 @@ class TranslationSettingsController extends ChangeNotifier {
       _draft.creating = false;
       _selectedConnection = name;
       await _reload();
+      await _notifyConfigChanged();
       _message = '连接已保存。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
@@ -423,6 +431,7 @@ class TranslationSettingsController extends ChangeNotifier {
       }
       _selectedConnection = null;
       await _reload();
+      await _notifyConfigChanged();
       _message = '连接已删除：$name。';
     } on Object catch (error) {
       _error = friendlySettingsError(error);
@@ -884,6 +893,7 @@ class TranslationSettingsController extends ChangeNotifier {
           );
         }
       }
+      await _notifyConfigChanged();
       _message = messageBuilder();
     } on Object catch (error) {
       _snapshot = before;
@@ -1173,6 +1183,12 @@ class TranslationSettingsController extends ChangeNotifier {
   void _fail(String message) {
     _error = message;
     notifyListeners();
+  }
+
+  Future<void> _notifyConfigChanged() async {
+    final callback = onConfigChanged;
+    if (callback == null) return;
+    await callback();
   }
 
   Future<void> _reload() async {

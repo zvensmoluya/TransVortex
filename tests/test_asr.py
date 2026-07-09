@@ -20,6 +20,8 @@ def test_normalize_whisper_language() -> None:
     assert _normalize_whisper_language("ja") == "ja"
     assert _normalize_whisper_language("zh-CN") == "zh"
     assert _normalize_whisper_language("EN-us") == "en"
+    assert _normalize_whisper_language("auto") is None
+    assert _normalize_whisper_language("auto-detect") is None
     assert _normalize_whisper_language("") is None
 
 

@@ -129,6 +129,8 @@ MainWindowViewModel _view(
     translationOptions: const [],
     translationDirectOptions: const [],
     asrOptions: const [],
+    sourceLang: 'auto',
+    targetLang: 'zh-CN',
     bilingual: true,
     formats: const ['SRT', 'ASS'],
     termsEnabled: true,

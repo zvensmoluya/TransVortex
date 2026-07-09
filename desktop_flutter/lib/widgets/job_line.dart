@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../model/main_window_controller.dart';
+import '../model/task_labels.dart';
 import '../theme/tokens.dart';
 import 'designed_tooltip.dart';
 
@@ -12,6 +13,8 @@ class JobLine extends StatelessWidget {
     required this.view,
     required this.onPickTranslation,
     required this.onPickAsr,
+    required this.onPickSourceLanguage,
+    required this.onPickTargetLanguage,
     required this.onPickBilingual,
     required this.onPickFormats,
     required this.onToggleTerms,
@@ -22,6 +25,8 @@ class JobLine extends StatelessWidget {
   final MainWindowViewModel view;
   final VoidCallback onPickTranslation;
   final VoidCallback onPickAsr;
+  final VoidCallback onPickSourceLanguage;
+  final VoidCallback onPickTargetLanguage;
   final VoidCallback onPickBilingual;
   final VoidCallback onPickFormats;
   final VoidCallback onToggleTerms;
@@ -42,7 +47,13 @@ class JobLine extends StatelessWidget {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            const Text('会用', style: T.tBody),
+            const Text('会按', style: T.tBody),
+            _Word(
+              label: languageLabel(view.sourceLang),
+              tooltip: '源语：${languageLabel(view.sourceLang)}',
+              onPick: onPickSourceLanguage,
+            ),
+            const Text('源语，用', style: T.tBody),
             _Word(
               label: asrLabel,
               fullLabel: view.asrConfigured ? view.asrLabel : null,
@@ -63,6 +74,12 @@ class JobLine extends StatelessWidget {
                   : onConfigureTranslation,
             ),
             const Text('翻译', style: T.tBody),
+            const Text('成', style: T.tBody),
+            _Word(
+              label: languageLabel(view.targetLang),
+              tooltip: '目标语：${languageLabel(view.targetLang)}',
+              onPick: onPickTargetLanguage,
+            ),
           ],
         ),
         const SizedBox(height: T.s8),

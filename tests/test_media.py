@@ -40,6 +40,30 @@ def test_subtitle_stream_selection_prefers_matching_default(monkeypatch, tmp_pat
     assert streams[0]["supported"] is False
 
 
+def test_subtitle_stream_selection_auto_prefers_default_supported(tmp_path: Path) -> None:
+    streams = [
+        {
+            "index": 1,
+            "codec_name": "subrip",
+            "language": "eng",
+            "default": False,
+            "supported": True,
+        },
+        {
+            "index": 2,
+            "codec_name": "ass",
+            "language": "jpn",
+            "default": True,
+            "supported": True,
+        },
+    ]
+
+    selected = media.select_subtitle_stream(streams, source_lang="auto")
+
+    assert selected is not None
+    assert selected["index"] == 2
+
+
 def test_extract_subtitle_stream_invokes_ffmpeg(monkeypatch, tmp_path: Path) -> None:
     calls = []
 
@@ -80,6 +104,82 @@ def test_extract_audio_for_asr_selects_matching_language_track(monkeypatch, tmp_
     assert meta["audio_stream_index"] == 2
     assert meta["audio_stream_language"] == "jpn"
     assert meta["duration_seconds"] == 12.5
+
+
+def test_extract_audio_for_asr_auto_selects_default_track(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    def fake_probe(_path: Path) -> dict:
+        return {
+            "streams": [
+                {
+                    "index": 1,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "tags": {"language": "eng"},
+                    "disposition": {"default": 0},
+                },
+                {
+                    "index": 2,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "tags": {"language": "jpn"},
+                    "disposition": {"default": 1},
+                    "duration": "12.5",
+                },
+            ],
+            "format": {"duration": "13.0"},
+        }
+
+    def fake_run(cmd: list[str]):
+        calls.append(cmd)
+
+    monkeypatch.setattr(media, "probe_audio", fake_probe)
+    monkeypatch.setattr(media, "_run", fake_run)
+
+    meta = media.extract_audio_for_asr(
+        tmp_path / "demo.mkv",
+        tmp_path / "audio.m4a",
+        source_lang="auto",
+    )
+
+    assert calls[0][calls[0].index("-map") + 1] == "0:2"
+    assert meta["audio_stream_index"] == 2
+    assert meta["audio_stream_language"] == "jpn"
+
+
+def test_extract_audio_for_asr_transcodes_mp3_when_output_is_m4a(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    def fake_probe(_path: Path) -> dict:
+        return {
+            "streams": [
+                {"index": 0, "codec_type": "audio", "codec_name": "mp3"},
+            ],
+            "format": {"duration": "13.0"},
+        }
+
+    def fake_run(cmd: list[str]):
+        calls.append(cmd)
+
+    monkeypatch.setattr(media, "probe_audio", fake_probe)
+    monkeypatch.setattr(media, "_run", fake_run)
+
+    meta = media.extract_audio_for_asr(
+        tmp_path / "demo.mp3",
+        tmp_path / "audio.m4a",
+        source_lang="ja",
+    )
+
+    assert "-c:a" in calls[0]
+    assert calls[0][calls[0].index("-c:a") + 1] == "aac"
+    assert meta["copy_mode"] is False
 
 
 def test_split_audio_for_asr_writes_trusted_regions(monkeypatch, tmp_path: Path) -> None:

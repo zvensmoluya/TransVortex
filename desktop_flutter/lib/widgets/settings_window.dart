@@ -168,6 +168,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       final controller = TranslationSettingsController(
         _client,
         widget.bridge.setTranslationDefault,
+        onConfigChanged: widget.bridge.refreshServiceSnapshot,
       );
       _translationController = controller;
       controller.addListener(_onTranslationChanged);
@@ -191,7 +192,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
     super.dispose();
   }
 
-  Future<void> _initTranslation(TranslationSettingsController controller) async {
+  Future<void> _initTranslation(
+    TranslationSettingsController controller,
+  ) async {
     await controller.load();
     if (!mounted) return;
     final snapshot = controller.snapshot;
@@ -291,8 +294,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     await reportFile.parent.create(recursive: true);
     final translation = _translationController;
     final provider = _isTranslation
-        ? (translation?.selectedConnection ??
-              translation?.primary?.connection)
+        ? (translation?.selectedConnection ?? translation?.primary?.connection)
         : null;
     final selectedModel = _isTranslation
         ? (translation?.primary?.model ?? '')

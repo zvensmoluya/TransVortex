@@ -142,6 +142,15 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             hint_zh="没有解析到可用字幕片段，请检查输入 SRT 或 segments 文件。",
             retryable=False,
         )
+    if "ffmpeg" in lowered or "returned non-zero exit status" in lowered:
+        return error_info(
+            code="media_processing_failed",
+            error_type="input_error",
+            stage=stage,
+            message=message,
+            hint_zh="音频处理失败，请确认片源能正常播放，或换一个文件重试。",
+            retryable=False,
+        )
     if "gateway_timeout" in lowered or "http error 504" in lowered or "gateway timeout" in lowered:
         return error_info(
             code="provider_gateway_timeout",
@@ -183,6 +192,6 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
         error_type="runtime_error",
         stage=stage,
         message=message,
-        hint_zh="任务运行失败，请查看 events.jsonl 和 stderr 日志。",
+        hint_zh="任务运行失败，请稍后重试；如果仍失败，可以打开诊断查看任务详情。",
         retryable=False,
     )

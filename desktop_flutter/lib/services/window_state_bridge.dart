@@ -20,6 +20,7 @@ class WindowStateBridge {
   Future<Object?> Function(String method, Map<String, Object?> params)?
   _serviceCaller;
   Future<void> Function(AppWindowArgs args)? _toolWindowOpener;
+  Future<void> Function()? _serviceRefresher;
 
   void attachServiceCaller(
     Future<Object?> Function(String method, Map<String, Object?> params) caller,
@@ -31,6 +32,10 @@ class WindowStateBridge {
     Future<void> Function(AppWindowArgs args) opener,
   ) {
     _toolWindowOpener = opener;
+  }
+
+  void attachServiceRefresher(Future<void> Function() refresher) {
+    _serviceRefresher = refresher;
   }
 
   Future<void> initializeMain() async {
@@ -67,6 +72,12 @@ class WindowStateBridge {
           args['label'] as String? ?? '本机',
           configured: args['configured'] as bool? ?? true,
         );
+        return store.value.toJson();
+      case 'state.refreshServiceSnapshot':
+        final refresher = _serviceRefresher;
+        if (refresher != null) {
+          await refresher();
+        }
         return store.value.toJson();
       case 'service.call':
         final args = _asMap(call.arguments);
@@ -142,6 +153,25 @@ class WindowStateBridge {
       store.replace(AppWindowState.fromJson(result));
     } on Object {
       // Keep the local optimistic state; the main window refreshes from service snapshots.
+    }
+  }
+
+  Future<void> refreshServiceSnapshot() async {
+    final refresher = _serviceRefresher;
+    if (refresher != null) {
+      await refresher();
+      return;
+    }
+    final channel = _channel;
+    if (channel == null) return;
+    try {
+      final result = await channel.invokeMethod<Object?>(
+        'state.refreshServiceSnapshot',
+      );
+      store.replace(AppWindowState.fromJson(result));
+    } on Object {
+      // Settings windows can still update their local snapshot even if the
+      // parent window is not available.
     }
   }
 

@@ -22,7 +22,7 @@ class Session {
     this.fileName,
     this.filePath,
     this.kind,
-    this.sourceLang = 'en',
+    this.sourceLang = 'auto',
     this.targetLang = 'zh-CN',
     this.translateConfigured = true,
     this.asrConfigured = true,

@@ -118,6 +118,8 @@ class MainWindowViewModel {
     required this.translationOptions,
     required this.translationDirectOptions,
     required this.asrOptions,
+    required this.sourceLang,
+    required this.targetLang,
     required this.bilingual,
     required this.formats,
     required this.termsEnabled,
@@ -143,6 +145,8 @@ class MainWindowViewModel {
   final List<TranslationRuntimeChoice> translationOptions;
   final List<TranslationRuntimeChoice> translationDirectOptions;
   final List<TaskOption> asrOptions;
+  final String sourceLang;
+  final String targetLang;
   final bool bilingual;
   final List<String> formats;
   final bool termsEnabled;
@@ -172,7 +176,7 @@ class MainWindowController extends ChangeNotifier {
   final PathOpener _pathOpener;
   Timer? _taskPoll;
   MainSourceDraft? _source;
-  String _sourceLang = 'en';
+  String _sourceLang = 'auto';
   String _targetLang = 'zh-CN';
   bool _bilingual = true;
   List<String> _formats = const ['SRT', 'ASS'];
@@ -263,6 +267,19 @@ class MainWindowController extends ChangeNotifier {
 
   void setBilingual(bool value) {
     _bilingual = value;
+    _publish();
+  }
+
+  void setSourceLang(String value) {
+    final normalized = value.trim();
+    _sourceLang = normalized.isEmpty ? 'auto' : normalized;
+    _publish();
+  }
+
+  void setTargetLang(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return;
+    _targetLang = normalized;
     _publish();
   }
 
@@ -734,6 +751,8 @@ class MainWindowController extends ChangeNotifier {
       translationOptions: _translationOptions(snapshot),
       translationDirectOptions: _translationDirectOptions(snapshot),
       asrOptions: _asrOptions(snapshot),
+      sourceLang: _sourceLang,
+      targetLang: _targetLang,
       bilingual: _bilingual,
       formats: _formats,
       termsEnabled: _termsEnabled,
@@ -782,9 +801,9 @@ class MainWindowController extends ChangeNotifier {
 
   String _homeTaskReminderReason(TaskSummary task) {
     final hint = '${task.errorInfo['hint_zh'] ?? ''}'.trim();
-    if (hint.isNotEmpty) return hint;
+    if (hint.isNotEmpty) return _userFacingFailureReason(hint);
     final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
-    if (message.isNotEmpty) return message;
+    if (message.isNotEmpty) return _userFacingFailureReason(message);
     if (task.status == 'INTERRUPTED') return '上次任务中断，可以继续。';
     if (task.status == 'CANCELLED') return '上次任务已取消，可以继续。';
     return '上次任务未完成，可以继续。';
@@ -1094,9 +1113,9 @@ class MainWindowController extends ChangeNotifier {
     final code = '${task.errorInfo['code'] ?? ''}'.trim();
     final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
     final reason = hint.isNotEmpty
-        ? hint
+        ? _userFacingFailureReason(hint)
         : (message.isNotEmpty
-              ? message
+              ? _userFacingFailureReason(message)
               : _latestEventMessage(_recentEvents) ?? '制作失败');
     final mapped = _recoveryForCode(code, task: task);
     return MainFailureView(
@@ -1117,16 +1136,32 @@ class MainWindowController extends ChangeNotifier {
       final code = '${info['code'] ?? error.code}'.trim();
       final mapped = _recoveryForCode(code);
       return MainFailureView(
-        reason: hint.isNotEmpty ? hint : error.message,
+        reason: _userFacingFailureReason(
+          hint.isNotEmpty ? hint : error.message,
+        ),
         actionLabel: mapped.$1,
         target: mapped.$2,
       );
     }
     return MainFailureView(
-      reason: '$error',
+      reason: _userFacingFailureReason('$error'),
       actionLabel: fallbackAction,
       target: MainRecoveryTarget.retry,
     );
+  }
+
+  String _userFacingFailureReason(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '制作失败';
+    final lower = text.toLowerCase();
+    if (lower.contains('events.json') || lower.contains('stderr')) {
+      return '任务运行失败，可以打开诊断查看任务详情。';
+    }
+    if (lower.contains('ffmpeg') ||
+        lower.contains('returned non-zero exit status')) {
+      return '音频处理失败，请确认片源能正常播放，或换一个文件重试。';
+    }
+    return text;
   }
 
   (String, MainRecoveryTarget) _recoveryForCode(

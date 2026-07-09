@@ -433,6 +433,73 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main language menus update submitted language pair', (
+    tester,
+  ) async {
+    installFilePickerMock(tester);
+    final transport = _FakeTransport({
+      'service.info': {
+        'service': 'transvortex.app_service',
+        'protocol_version': 1,
+        'app_version': 'test',
+        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+      },
+      'service.health': {
+        'service': 'transvortex.app_service',
+        'status': 'healthy',
+        'runtime': {'active': null},
+        'pump': {'enabled': true},
+      },
+      'desktop.snapshot': _desktopSnapshot().raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_language_pair',
+        'status': 'QUEUED',
+      },
+      'tasks.events': {
+        'task_id': 'tvx_language_pair',
+        'events': [],
+        'cursor': 0,
+        'next_cursor': 0,
+        'has_more': false,
+      },
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _controllerForTransport(transport),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('自动识别'), findsOneWidget);
+    expect(find.text('简体中文'), findsOneWidget);
+
+    await tester.tap(find.text('自动识别'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('源语言'), findsOneWidget);
+    activatePopupMenuItem(tester, const ValueKey('source-language-ja'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('简体中文'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('目标语言'), findsOneWidget);
+    activatePopupMenuItem(tester, const ValueKey('target-language-en'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('开始译制'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final submitParams = transport.lastParams['runtime.submitRun'];
+    final request = submitParams?['request'] as Map<String, Object?>?;
+    expect(request?['source_lang'], 'ja');
+    expect(request?['target_lang'], 'en');
+    expectNoFlutterException();
+  });
+
   testWidgets('main translation menu direct model has no fallback', (
     tester,
   ) async {

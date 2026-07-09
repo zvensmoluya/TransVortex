@@ -128,6 +128,11 @@ def select_subtitle_stream(
             return None
         return next((stream for stream in supported if int(stream.get("index", -1)) == wanted), None)
     wanted_lang = _normalize_language(source_lang)
+    if wanted_lang in {"", "auto", "detect"}:
+        return sorted(
+            supported,
+            key=lambda stream: (not stream.get("default"), stream.get("index", 9999)),
+        )[0] if supported else None
     matched = [
         stream
         for stream in supported
@@ -161,7 +166,7 @@ def extract_audio(video_path: Path, output_audio: Path) -> dict:
     if not audio_streams:
         raise RuntimeError(f"No audio stream found in {video_path}")
     codec = audio_streams[0].get("codec_name", "")
-    copy_ok = codec in {"aac", "mp3"}
+    copy_ok = _can_copy_audio(codec, output_audio)
     output_audio.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["ffmpeg", "-y", "-i", str(video_path), "-vn"]
     if copy_ok:
@@ -191,6 +196,8 @@ def _select_audio_stream(audio_streams: list[dict[str, Any]], *, source_lang: st
             raise RuntimeError(f"audio_track_not_found: {audio_track}")
         return match
     wanted_lang = _normalize_language(source_lang)
+    if wanted_lang in {"", "auto", "detect"}:
+        return sorted(audio_streams, key=lambda stream: (not _stream_disposition(stream).get("default", 0), stream.get("index", 9999)))[0]
     matched = [
         stream
         for stream in audio_streams
@@ -214,7 +221,7 @@ def extract_audio_for_asr(
     selected = _select_audio_stream(audio_streams, source_lang=source_lang, audio_track=audio_track)
     stream_index = int(selected.get("index", -1))
     codec = str(selected.get("codec_name") or "")
-    copy_ok = codec in {"aac", "mp3"}
+    copy_ok = _can_copy_audio(codec, output_audio)
     tags = _stream_tags(selected)
     output_audio.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["ffmpeg", "-y", "-i", str(video_path), "-map", f"0:{stream_index}", "-vn"]
@@ -238,6 +245,16 @@ def extract_audio_for_asr(
         "audio_stream_title": tags.get("title", ""),
         "audio_track": audio_track,
     }
+
+
+def _can_copy_audio(codec: str, output_audio: Path) -> bool:
+    normalized = codec.strip().lower()
+    suffix = output_audio.suffix.lower()
+    if normalized == "aac":
+        return suffix in {".aac", ".m4a", ".mp4"}
+    if normalized == "mp3":
+        return suffix == ".mp3"
+    return False
 
 
 def split_audio_with_overlap(

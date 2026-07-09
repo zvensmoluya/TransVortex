@@ -452,7 +452,10 @@ def _add_dll_directory(path: Path) -> None:
 def _normalize_whisper_language(source_lang: str | None) -> str | None:
     if not source_lang:
         return None
-    return source_lang.split("-", 1)[0].strip().lower() or None
+    normalized = source_lang.strip().lower().replace("_", "-")
+    if normalized in {"auto", "detect", "auto-detect"}:
+        return None
+    return normalized.split("-", 1)[0].strip() or None
 
 
 def _format_form_number(value: float) -> str:

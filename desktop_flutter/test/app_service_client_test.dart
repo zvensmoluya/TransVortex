@@ -1234,6 +1234,19 @@ routing:
     ]);
     expect(opened[1].taskId, 'tvx_processing_1');
   });
+
+  test('WindowStateBridge runs attached service refresher', () async {
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var refreshCount = 0;
+    bridge.attachServiceRefresher(() async {
+      refreshCount += 1;
+    });
+
+    await bridge.refreshServiceSnapshot();
+
+    expect(refreshCount, 1);
+  });
 }
 
 class _FakeTransport implements AppServiceTransport {

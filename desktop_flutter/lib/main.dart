@@ -79,6 +79,29 @@ Future<void> _showConfiguredWindowAfterFirstRaster() async {
   await showConfiguredWindow();
 }
 
+const List<String> _sourceLanguageOptions = [
+  'auto',
+  'ja',
+  'en',
+  'zh-CN',
+  'zh-TW',
+  'ko',
+  'fr',
+  'de',
+  'es',
+];
+
+const List<String> _targetLanguageOptions = [
+  'zh-CN',
+  'zh-TW',
+  'en',
+  'ja',
+  'ko',
+  'fr',
+  'de',
+  'es',
+];
+
 class TransVortexApp extends StatelessWidget {
   const TransVortexApp({
     super.key,
@@ -225,6 +248,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       return client.call(method, params);
     });
     widget.bridge.attachToolWindowOpener(_openToolWindowFromArgs);
+    widget.bridge.attachServiceRefresher(_controller.refreshSnapshot);
     unawaited(_controller.startService());
     final smoke = widget.smoke;
     if (smoke != null) {
@@ -464,7 +488,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       'task_id': 'tvx_release_smoke_${status.toLowerCase()}',
       'status': status,
       'input_file': r'D:\Media\sample-opening-line.mp4',
-      'source_lang': 'en',
+      'source_lang': 'auto',
       'target_lang': 'zh-CN',
       'bilingual': true,
       'created_at': DateTime.now().toUtc().toIso8601String(),
@@ -555,7 +579,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           'request_version': 1,
           'input_type': 'video_asr',
           'input': inputPath,
-          'source_lang': 'en',
+          'source_lang': 'auto',
           'target_lang': 'zh-CN',
           'source_mode': 'embedded_subtitle',
         })
@@ -897,6 +921,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             view: view,
             onPickTranslation: _pickTranslation,
             onPickAsr: _pickAsr,
+            onPickSourceLanguage: _pickSourceLanguage,
+            onPickTargetLanguage: _pickTargetLanguage,
             onPickBilingual: _pickBilingual,
             onPickFormats: _pickFormats,
             onToggleTerms: _toggleTerms,
@@ -1337,6 +1363,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (selected != null) _controller.selectAsr(selected);
   }
 
+  Future<void> _pickSourceLanguage() async {
+    final selected = await _showOptionMenu<String>(
+      title: '源语言',
+      options: _sourceLanguageOptions,
+      emptyLabel: '',
+      labelOf: languageLabel,
+      keyOf: (value) => ValueKey('source-language-$value'),
+    );
+    if (selected != null) _controller.setSourceLang(selected);
+  }
+
+  Future<void> _pickTargetLanguage() async {
+    final selected = await _showOptionMenu<String>(
+      title: '目标语言',
+      options: _targetLanguageOptions,
+      emptyLabel: '',
+      labelOf: languageLabel,
+      keyOf: (value) => ValueKey('target-language-$value'),
+    );
+    if (selected != null) _controller.setTargetLang(selected);
+  }
+
   Future<void> _pickBilingual() async {
     final selected = await _showOptionMenu<bool>(
       title: '字幕语言',
@@ -1371,6 +1419,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     required List<TValue> options,
     required String emptyLabel,
     required String Function(TValue option) labelOf,
+    Key? Function(TValue option)? keyOf,
     String? footerLabel,
     VoidCallback? onFooter,
   }) async {
@@ -1391,6 +1440,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         else
           for (final option in options)
             PopupMenuItem<Object>(
+              key: keyOf?.call(option),
               value: option as Object,
               child: Text(labelOf(option), style: T.tBody),
             ),

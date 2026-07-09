@@ -7,6 +7,7 @@ void main() {
     late _RecordingTransport transport;
     late AppServiceClient client;
     late List<String> labelUpdates;
+    late int configChangedCount;
     late TranslationSettingsController controller;
 
     setUp(() {
@@ -27,12 +28,16 @@ void main() {
       });
       client = AppServiceClient(transport);
       labelUpdates = [];
-      controller = TranslationSettingsController(client, (
-        label, {
-        required configured,
-      }) async {
-        labelUpdates.add(label);
-      });
+      configChangedCount = 0;
+      controller = TranslationSettingsController(
+        client,
+        (label, {required configured}) async {
+          labelUpdates.add(label);
+        },
+        onConfigChanged: () async {
+          configChangedCount += 1;
+        },
+      );
     });
 
     List<_RecordedCall> callsAfterInitialLoad() => transport.calls
@@ -99,6 +104,7 @@ void main() {
       expect(draft['models'], contains('gpt-4o'));
       expect(save.params['api_key'], 'sk-test');
       expect(controller.message, '连接已保存。');
+      expect(configChangedCount, 1);
     });
 
     test('setPrimary writes only the routing profiles', () async {
@@ -124,6 +130,7 @@ void main() {
       expect(primary['provider'], 'openai');
       expect(primary['model'], 'gpt-4o');
       expect(labelUpdates, contains('openai · gpt-4o'));
+      expect(configChangedCount, 1);
     });
 
     test('addFallback appends a route without touching the provider', () async {

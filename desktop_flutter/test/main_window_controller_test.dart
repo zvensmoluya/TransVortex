@@ -25,6 +25,8 @@ void main() {
       expect(controller.view.translationDetail, contains('默认模型'));
       expect(controller.view.translationDetail, contains('备用 fallback-model'));
       expect(controller.view.asrLabel, '本机 · large-v3');
+      expect(controller.view.sourceLang, 'auto');
+      expect(controller.view.targetLang, 'zh-CN');
     },
   );
 
@@ -431,6 +433,8 @@ void main() {
     final overrides = payload['overrides'] as Map<String, Object?>;
 
     expect(payload['input_type'], 'video_asr_translate');
+    expect(payload['source_lang'], 'auto');
+    expect(payload['target_lang'], 'zh-CN');
     expect(payload['output_dir'], 'D:\\');
     final routing = payload['routing'] as Map<String, Object?>;
     final primary = routing['primary'] as Map<String, Object?>;
@@ -448,6 +452,21 @@ void main() {
     expect(overrides['memory_patch_enabled'], isTrue);
     expect(overrides['asr_provider'], 'local');
     expect(overrides['asr_model'], 'large-v3');
+  });
+
+  test('controller sends selected language pair in run payload', () async {
+    final controller = MainWindowController(service: _readyController());
+    await controller.startService();
+    controller.pickSource(r'D:\movie.mp4');
+    controller.setSourceLang('ja');
+    controller.setTargetLang('en');
+
+    final payload = controller.buildRunRequest();
+
+    expect(controller.view.sourceLang, 'ja');
+    expect(controller.view.targetLang, 'en');
+    expect(payload['source_lang'], 'ja');
+    expect(payload['target_lang'], 'en');
   });
 
   test('controller exposes routing profiles as model-first choices', () async {
@@ -680,6 +699,46 @@ void main() {
     expect(controller.view.failure?.actionLabel, '重新选择片源');
     expect(controller.view.failure?.target, MainRecoveryTarget.pickSource);
   });
+
+  test(
+    'controller hides internal log hints from failed task summaries',
+    () async {
+      final controller = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            tasks: [
+              _task(
+                status: 'FAILED',
+                inputFile: r'D:\media\broken.mp3',
+                errorInfo: const {
+                  'code': 'runtime_error',
+                  'hint_zh': '任务运行失败，请查看 events.jsonl 和 stderr 日志。',
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await controller.startService();
+      controller.applySmokeTask(
+        TaskSummary.fromJson(
+          _task(
+            status: 'FAILED',
+            inputFile: r'D:\media\broken.mp3',
+            errorInfo: const {
+              'code': 'runtime_error',
+              'hint_zh': '任务运行失败，请查看 events.jsonl 和 stderr 日志。',
+            },
+          ),
+        ),
+      );
+
+      expect(controller.view.failure?.reason, '任务运行失败，可以打开诊断查看任务详情。');
+      expect(controller.view.failure?.reason, isNot(contains('events.json')));
+      expect(controller.view.failure?.reason, isNot(contains('stderr')));
+    },
+  );
 
   test('controller localizes internal task event messages', () async {
     final controller = MainWindowController(
