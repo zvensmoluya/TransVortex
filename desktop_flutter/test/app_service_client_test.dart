@@ -976,6 +976,7 @@ routing:
         'models': ['model-a'],
       },
       'provider.test': {'status': 'PASS', 'checks': []},
+      'provider.delete': {'deleted': true},
       'provider.routing.save': {
         'routing': {
           'primary': {'provider': 'p1', 'model': 'model-a'},
@@ -994,6 +995,10 @@ routing:
     );
     await client.providerModels(providerDraft: {'name': 'p1'});
     await client.providerTest(providerDraft: {'name': 'p1'}, model: 'model-a');
+    await client.providerDelete(
+      name: 'p1',
+      expectedVersion: {'mtime_ns': 7, 'size': 8},
+    );
     await client.saveTranslationRouting(
       provider: 'p1',
       model: 'model-a',
@@ -1028,25 +1033,32 @@ routing:
       'provider.save',
       'provider.models',
       'provider.test',
+      'provider.delete',
       'provider.routing.save',
       'provider.routing.save',
       'asr.provider.save',
     ]);
     expect(transport.calls.first.params['api_key'], 'secret');
-    expect(transport.calls[3].params['primary'], {
+    expect(transport.calls[3].params['name'], 'p1');
+    expect(transport.calls[3].params['expected_version'], {
+      'mtime_ns': 7,
+      'size': 8,
+    });
+    expect(transport.calls[3].params.containsKey('api_key'), isFalse);
+    expect(transport.calls[4].params['primary'], {
       'provider': 'p1',
       'model': 'model-a',
     });
-    expect(transport.calls[3].params['fallback'], [
+    expect(transport.calls[4].params['fallback'], [
       {'provider': 'p2', 'model': 'model-b'},
     ]);
-    expect(transport.calls[3].params['expected_version'], {
+    expect(transport.calls[4].params['expected_version'], {
       'mtime_ns': 1,
       'size': 2,
     });
-    expect(transport.calls[4].params['active_profile'], 'route_1');
-    expect(transport.calls[4].params['next_profile_seq'], 2);
-    expect(transport.calls[4].params['expected_version'], {
+    expect(transport.calls[5].params['active_profile'], 'route_1');
+    expect(transport.calls[5].params['next_profile_seq'], 2);
+    expect(transport.calls[5].params['expected_version'], {
       'mtime_ns': 5,
       'size': 6,
     });

@@ -420,7 +420,18 @@ function Add-WindowCaptureTypes {
     if ("TransVortexWindowCapture" -as [type]) {
         return
     }
-    Add-Type -AssemblyName System.Drawing
+    $referencedAssemblies = @("System.Drawing")
+    foreach ($assemblyName in @(
+        "System.Drawing.Common.dll",
+        "System.Drawing.Primitives.dll",
+        "System.Threading.Thread.dll",
+        "System.Private.Windows.Core.dll"
+    )) {
+        $assemblyPath = Join-Path $PSHOME $assemblyName
+        if (Test-Path -LiteralPath $assemblyPath) {
+            $referencedAssemblies += $assemblyPath
+        }
+    }
     $captureCode = @(
         'using System;',
         'using System.Drawing;',
@@ -469,7 +480,6 @@ function Add-WindowCaptureTypes {
         '        BringWindowToTop(handle);',
         '        SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);',
         '        SetForegroundWindow(handle);',
-        '        Thread.Sleep(500);',
         '    }',
         '',
         '    public static int[] WindowRect(IntPtr handle)',
@@ -546,7 +556,7 @@ function Add-WindowCaptureTypes {
         '    }',
         '}'
     ) -join "`n"
-    Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition $captureCode
+    Add-Type -ReferencedAssemblies $referencedAssemblies -TypeDefinition $captureCode
 }
 
 function Capture-DesktopCompositeScreenshot {

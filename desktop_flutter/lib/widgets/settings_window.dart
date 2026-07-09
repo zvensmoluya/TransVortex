@@ -139,7 +139,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String? _selectedDiagnosticTaskId;
   String? _selectedProvider;
   String? _selectedModel;
-  String? _selectedProviderTemplate;
+  String? _selectedProviderPreset;
+  String? _selectedProtocolTemplate;
   bool _creatingProvider = false;
   final Map<String, List<String>> _fetchedProviderModels = {};
   String _selectedAsrProvider = 'faster_whisper_large_v3';
@@ -148,6 +149,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String? _error;
   bool _loading = false;
   bool _savingProvider = false;
+  bool _deletingProvider = false;
   bool _savingDefault = false;
   bool _loadingModels = false;
   bool _testingProvider = false;
@@ -155,6 +157,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _loadingDiagnosticTasks = false;
   bool _loadingDiagnosticResult = false;
   bool _updatingProviderName = false;
+  bool _showAdvancedProviderConfig = false;
 
   bool get _isTranslation => widget.type == AppWindowType.translationSettings;
   bool get _isAsr => widget.type == AppWindowType.asrSettings;
@@ -265,7 +268,16 @@ class _SettingsWindowState extends State<SettingsWindow> {
           _loadProviderDraftFields();
           _loadRoutingProfileDraftFields(snapshot);
         } else if (_isTranslation) {
-          _selectedProviderTemplate ??= _defaultProviderTemplate(snapshot)?.id;
+          final template = _defaultProviderTemplate(snapshot);
+          _selectedProviderPreset ??= template == null
+              ? null
+              : _isProviderPreset(snapshot, template.id)
+              ? template.id
+              : null;
+          _selectedProtocolTemplate ??=
+              template?.protocolTemplateId.isNotEmpty == true
+              ? template?.protocolTemplateId
+              : template?.id;
         } else if (_isAsr) {
           _selectedAsrProvider = _asrSelectionIdForProvider(
             snapshot,
@@ -466,7 +478,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final provider = _activeTranslationProvider();
     final visibleModels = _visibleModels(provider);
     final model = _translationModelSelection(provider);
-    final template = _selectedProviderTemplateOption();
+    final providerPreset = _selectedProviderPresetOption();
     final isBlank = provider.name.isEmpty && !_creatingProvider;
     final modelHelp = _modelListHelp(provider);
     final routingProfiles = _snapshot?.routingProfiles ?? const [];
@@ -474,31 +486,56 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final activeProfileId =
         activeProfile?.id ?? _snapshot?.activeRoutingProfile ?? 'default';
     final fallbackRoutes = _fallbackRouteRows(activeProfile);
+    final footerActions = _creatingProvider
+        ? [
+            _ActionButton(
+              label: _savingProvider ? '保存中' : '保存连接',
+              strong: true,
+              onTap: _savingProvider ? null : _saveProvider,
+            ),
+            _ActionButton(
+              label: _testingProvider ? '测试中' : '测试连接',
+              onTap: _testingProvider ? null : _testProvider,
+            ),
+            _ActionButton(
+              label: _loadingModels ? '拉取中' : '拉取模型',
+              onTap: _loadingModels ? null : _fetchModels,
+            ),
+            _ActionButton(
+              label: _loading ? '刷新中' : '刷新',
+              onTap: _loading ? null : _loadConfig,
+            ),
+          ]
+        : [
+            _ActionButton(
+              label: _savingProvider ? '保存中' : '保存连接',
+              onTap: _savingProvider ? null : _saveProvider,
+            ),
+            _ActionButton(
+              label: _savingDefault ? '保存中' : '设为翻译默认',
+              strong: true,
+              onTap: _savingDefault ? null : _saveTranslationDefault,
+            ),
+            _ActionButton(
+              label: _testingProvider ? '测试中' : '测试连接',
+              onTap: _testingProvider ? null : _testProvider,
+            ),
+            _ActionButton(
+              label: _loadingModels ? '拉取中' : '拉取模型',
+              onTap: _loadingModels ? null : _fetchModels,
+            ),
+            if (provider.name.isNotEmpty)
+              _ActionButton(
+                label: _deletingProvider ? '删除中' : '删除连接',
+                onTap: _deletingProvider ? null : _deleteProvider,
+              ),
+            _ActionButton(
+              label: _loading ? '刷新中' : '刷新',
+              onTap: _loading ? null : _loadConfig,
+            ),
+          ];
     return _ToolPanel(
-      footer: [
-        _ActionButton(
-          label: _loadingModels ? '拉取中' : '拉取模型列表',
-          onTap: _loadingModels ? null : _fetchModels,
-        ),
-        _ActionButton(
-          label: _testingProvider ? '测试中' : '测试连接',
-          onTap: _testingProvider ? null : _testProvider,
-        ),
-        _ActionButton(
-          label: _savingProvider ? '保存中' : '保存连接',
-          onTap: _savingProvider ? null : _saveProvider,
-        ),
-        _ActionButton(
-          label: _savingDefault ? '保存中' : '设为翻译默认',
-          strong: true,
-          onTap: _savingDefault ? null : _saveTranslationDefault,
-        ),
-        _ActionButton(
-          label: _loading ? '刷新中' : '刷新配置',
-          onTap: _loading ? null : _loadConfig,
-        ),
-      ],
-      footnote: '连接保存协议、服务地址和模型清单；密钥只写入用户级凭据。',
+      footer: footerActions,
       children: [
         Text(
           _creatingProvider
@@ -506,109 +543,82 @@ class _SettingsWindowState extends State<SettingsWindow> {
               : (provider.name.isEmpty ? '选择一个连接或添加连接' : provider.name),
           style: T.tSection,
         ),
-        const SizedBox(height: T.s12),
-        Wrap(
-          spacing: T.s8,
-          runSpacing: T.s8,
-          children: [
-            _MetaPill(label: '默认', value: _translationRouteLabel(_snapshot)),
-            _MetaPill(label: '配置组', value: _routingProfileLabel(_snapshot)),
-            _MetaPill(
-              label: '类型',
-              value: _creatingProvider
-                  ? (template == null
-                        ? '待选择'
-                        : _providerTemplateLabel(template))
-                  : _providerProtocolLabel(provider),
-            ),
-            _MetaPill(
-              label: '凭据',
-              value: _creatingProvider
-                  ? '待保存'
-                  : _credentialStatusLabel(provider),
-            ),
-          ],
-        ),
         const SizedBox(height: T.s16),
-        if (!_creatingProvider && routingProfiles.length > 1)
+        if (_creatingProvider) ...[
           _SettingsSection(
-            title: '配置组',
+            title: '选择厂商',
+            divider: false,
             children: [
               Wrap(
                 spacing: T.s8,
                 runSpacing: T.s8,
                 children: [
-                  for (final profile in routingProfiles)
+                  for (final template in _providerPresetTemplates())
                     _ChoicePill(
-                      label: profile.displayName,
-                      selected: profile.id == activeProfileId,
-                      onTap: () => _switchRoutingProfile(profile),
+                      label: _providerTemplateLabel(template),
+                      selected: template.id == _selectedProviderPreset,
+                      onTap: () => _pickProviderPreset(template),
                     ),
-                ],
-              ),
-              const SizedBox(height: T.s12),
-              _Input(label: '配置组名称', controller: _routingProfileName),
-              const SizedBox(height: T.s12),
-              Wrap(
-                spacing: T.s12,
-                runSpacing: T.s8,
-                children: [
-                  _ActionButton(
-                    label: '重命名配置组',
-                    onTap: _savingDefault ? null : _renameRoutingProfile,
-                  ),
-                  _ActionButton(
-                    label: '另存为新组',
-                    onTap: _savingDefault ? null : _createRoutingProfile,
-                  ),
-                  _ActionButton(
-                    label: '删除当前组',
-                    onTap: _savingDefault || routingProfiles.length <= 1
-                        ? null
-                        : _deleteRoutingProfile,
+                  _ChoicePill(
+                    label: '自定义厂商',
+                    selected: _selectedProviderPreset == null,
+                    onTap: _startCustomProvider,
                   ),
                 ],
               ),
             ],
           ),
-        if (_creatingProvider) ...[
           _SettingsSection(
-            title: '常用厂商',
+            title: '选择协议',
+            divider: false,
             children: [
-              _TemplatePicker(
-                templates: _providerPresetTemplates(),
-                selected: _selectedProviderTemplate,
-                onPick: _pickProviderTemplate,
-              ),
-            ],
-          ),
-          _SettingsSection(
-            title: '通用协议',
-            children: [
-              _TemplatePicker(
+              _TemplateSelect(
                 templates: _protocolProviderTemplates(),
-                selected: _selectedProviderTemplate,
-                onPick: _pickProviderTemplate,
+                selected: _selectedProtocolTemplate,
+                onPick: _pickProtocolTemplate,
               ),
             ],
           ),
         ],
         _SettingsSection(
-          title: '连接',
+          title: _creatingProvider ? '连接信息' : '连接设置',
+          divider: false,
           children: [
-            if (_creatingProvider)
-              _Input(label: '连接名称', controller: _providerName)
-            else
+            if (_creatingProvider) ...[
+              _ReadonlyRow(
+                label: '厂商',
+                value: providerPreset == null
+                    ? '自定义厂商'
+                    : _providerTemplateLabel(providerPreset),
+              ),
+              const SizedBox(height: T.s12),
+              _Input(label: '连接名称', controller: _providerName),
+            ] else ...[
               _ReadonlyRow(label: '连接名称', value: provider.name),
-            const SizedBox(height: T.s12),
-            _ReadonlyRow(label: '协议', value: _providerProtocolLabel(provider)),
+              const SizedBox(height: T.s12),
+              _ReadonlyRow(
+                label: '协议',
+                value: _providerProtocolLabel(provider),
+              ),
+            ],
             const SizedBox(height: T.s12),
             _Input(label: '服务地址 (Base URL)', controller: _baseUrl),
-          ],
-        ),
-        _SettingsSection(
-          title: '模型',
-          children: [
+            const SizedBox(height: T.s12),
+            _ReadonlyRow(
+              label: '凭据状态',
+              value: _creatingProvider
+                  ? '待保存'
+                  : _credentialStatusLabel(provider),
+            ),
+            const SizedBox(height: T.s12),
+            _Input(
+              label: 'API key（留空则沿用已保存凭据）',
+              controller: _key,
+              obscure: true,
+            ),
+            const SizedBox(height: T.s16),
+            Text('模型', style: T.tCaption.copyWith(fontWeight: T.wBold)),
+            const SizedBox(height: T.s8),
             Wrap(
               spacing: T.s8,
               runSpacing: T.s8,
@@ -641,10 +651,51 @@ class _SettingsWindowState extends State<SettingsWindow> {
             ],
           ],
         ),
-        if (!_creatingProvider && activeProfile != null)
+        if (!_creatingProvider)
           _SettingsSection(
-            title: '备用模型',
+            title: '默认与备用',
+            divider: false,
             children: [
+              if (routingProfiles.isNotEmpty) ...[
+                Wrap(
+                  spacing: T.s8,
+                  runSpacing: T.s8,
+                  children: [
+                    for (final profile in routingProfiles)
+                      _ChoicePill(
+                        label: profile.displayName,
+                        selected: profile.id == activeProfileId,
+                        onTap: () => _switchRoutingProfile(profile),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: T.s12),
+                _Input(label: '翻译方案名称', controller: _routingProfileName),
+                const SizedBox(height: T.s12),
+                Wrap(
+                  spacing: T.s12,
+                  runSpacing: T.s8,
+                  children: [
+                    _ActionButton(
+                      label: '重命名翻译方案',
+                      onTap: _savingDefault ? null : _renameRoutingProfile,
+                    ),
+                    _ActionButton(
+                      label: '另存为新方案',
+                      onTap: _savingDefault ? null : _createRoutingProfile,
+                    ),
+                    _ActionButton(
+                      label: '删除当前方案',
+                      onTap: _savingDefault || routingProfiles.length <= 1
+                          ? null
+                          : _deleteRoutingProfile,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: T.s16),
+              ],
+              Text('备用模型', style: T.tCaption.copyWith(fontWeight: T.wBold)),
+              const SizedBox(height: T.s8),
               if (fallbackRoutes.isEmpty)
                 Text('暂未设置备用模型', style: T.tCaption)
               else
@@ -676,55 +727,56 @@ class _SettingsWindowState extends State<SettingsWindow> {
               ),
             ],
           ),
-        _SettingsSection(
-          title: '凭据',
-          children: [
-            _ReadonlyRow(
-              label: '状态',
-              value: _creatingProvider
-                  ? '待保存'
-                  : _credentialStatusLabel(provider),
-            ),
-            const SizedBox(height: T.s8),
-            _ReadonlyRow(
-              label: '凭据 ID',
-              value: _providerCredentialId(provider),
-            ),
-            const SizedBox(height: T.s8),
-            _ReadonlyRow(label: '环境变量', value: _providerEnvKey(provider)),
-            const SizedBox(height: T.s12),
-            _Input(
-              label: 'API key（留空则沿用已保存凭据）',
-              controller: _key,
-              obscure: true,
-            ),
-          ],
-        ),
         if (!isBlank)
           _SettingsSection(
-            title: '高级',
+            title: '高级配置',
+            divider: false,
             children: [
-              _ReadonlyRow(
-                label: '配置来源',
-                value: _providersFileLabel(_snapshot),
+              _ActionButton(
+                label: _showAdvancedProviderConfig ? '收起高级配置' : '展开高级配置',
+                onTap: () {
+                  setState(() {
+                    _showAdvancedProviderConfig = !_showAdvancedProviderConfig;
+                  });
+                },
               ),
-              const SizedBox(height: T.s8),
-              _ReadonlyRow(
-                label: '模型列表',
-                value: _modelListEndpointLabel(provider),
-              ),
-              if (!_creatingProvider &&
-                  routingProfiles.length <= 1 &&
-                  routingProfiles.isNotEmpty) ...[
+              if (_showAdvancedProviderConfig) ...[
+                const SizedBox(height: T.s12),
+                _ReadonlyRow(
+                  label: '配置来源',
+                  value: _providersFileLabel(_snapshot),
+                ),
                 const SizedBox(height: T.s8),
                 _ReadonlyRow(
-                  label: '配置组',
-                  value: routingProfiles.first.displayName,
+                  label: '协议标识',
+                  value: _providerCompatModeLabel(provider),
                 ),
-                const SizedBox(height: T.s12),
-                _ActionButton(
-                  label: '另存为新组',
-                  onTap: _savingDefault ? null : _createRoutingProfile,
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '凭据 ID',
+                  value: _providerCredentialId(provider),
+                ),
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(label: '环境变量', value: _providerEnvKey(provider)),
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '请求端点',
+                  value: _providerEndpointLabel(provider),
+                ),
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '模型列表',
+                  value: _modelListEndpointLabel(provider),
+                ),
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '响应提取',
+                  value: _providerResponseMappingLabel(provider),
+                ),
+                const SizedBox(height: T.s8),
+                _ReadonlyRow(
+                  label: '调用限制',
+                  value: _providerLimitsLabel(provider),
                 ),
               ],
             ],
@@ -926,17 +978,49 @@ class _SettingsWindowState extends State<SettingsWindow> {
     setState(() {
       _creatingProvider = true;
       _selectedProvider = null;
-      _selectedProviderTemplate = template?.id;
+      _selectedProviderPreset =
+          template != null && _isProviderPreset(_snapshot, template.id)
+          ? template.id
+          : null;
+      _selectedProtocolTemplate = _protocolTemplateIdFor(template);
       _loadProviderTemplateDraftFields(template);
       _message = null;
       _error = null;
     });
   }
 
-  void _pickProviderTemplate(ProviderTemplateOption template) {
+  void _pickProviderPreset(ProviderTemplateOption template) {
     setState(() {
-      _selectedProviderTemplate = template.id;
+      _selectedProviderPreset = template.id;
+      _selectedProtocolTemplate = _protocolTemplateIdFor(template);
       _loadProviderTemplateDraftFields(template);
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _pickProtocolTemplate(ProviderTemplateOption template) {
+    setState(() {
+      _selectedProtocolTemplate = template.id;
+      _loadProtocolTemplateDraftFields(template);
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _startCustomProvider() {
+    final protocolTemplate =
+        _selectedProtocolTemplateOption() ??
+        _defaultProtocolTemplate(_snapshot);
+    setState(() {
+      _selectedProviderPreset = null;
+      _selectedProtocolTemplate = protocolTemplate?.id;
+      _setProviderNameText(_uniqueProviderName('custom_provider'));
+      _baseUrl.text = protocolTemplate?.baseUrl ?? '';
+      final models = _normalizedModels(protocolTemplate?.models ?? const []);
+      _selectedModel = models.isEmpty ? null : models.first;
+      _model.clear();
+      _key.clear();
       _message = null;
       _error = null;
     });
@@ -957,6 +1041,22 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _selectedModel = models.isEmpty ? null : models.first;
     _model.clear();
     _key.clear();
+  }
+
+  void _loadProtocolTemplateDraftFields(ProviderTemplateOption template) {
+    final providerTemplate = _selectedProviderPresetOption();
+    if (providerTemplate == null || _baseUrl.text.trim().isEmpty) {
+      _baseUrl.text = template.baseUrl;
+    }
+    final models = _normalizedModels([
+      ...?providerTemplate?.models,
+      ...template.models,
+    ]);
+    if ((_selectedModel == null || _selectedModel!.isEmpty) &&
+        models.isNotEmpty) {
+      _selectedModel = models.first;
+      _model.clear();
+    }
   }
 
   void _setProviderNameText(String value) {
@@ -1119,22 +1219,110 @@ class _SettingsWindowState extends State<SettingsWindow> {
   ProviderTemplateOption? _selectedProviderTemplateOption() {
     final snapshot = _snapshot;
     if (snapshot == null) return null;
-    return _providerTemplateById(snapshot, _selectedProviderTemplate) ??
-        _defaultProviderTemplate(snapshot);
+    final providerTemplate = _selectedProviderPresetOption();
+    final protocolTemplate = _selectedProtocolTemplateOption();
+    if (providerTemplate == null && protocolTemplate == null) {
+      return _creatingProvider ? null : _defaultProviderTemplate(snapshot);
+    }
+    if (providerTemplate == null) return protocolTemplate;
+    if (protocolTemplate == null) return providerTemplate;
+    return _mergeProviderAndProtocolTemplate(
+      providerTemplate,
+      protocolTemplate,
+    );
   }
 
-  ProviderTemplateOption? _providerTemplateById(
+  ProviderTemplateOption? _selectedProviderPresetOption() {
+    final snapshot = _snapshot;
+    if (snapshot == null) return null;
+    return _providerPresetById(snapshot, _selectedProviderPreset);
+  }
+
+  ProviderTemplateOption? _selectedProtocolTemplateOption() {
+    final snapshot = _snapshot;
+    if (snapshot == null) return null;
+    return _protocolTemplateById(snapshot, _selectedProtocolTemplate) ??
+        _protocolTemplateById(
+          snapshot,
+          _protocolTemplateIdFor(_selectedProviderPresetOption()),
+        );
+  }
+
+  ProviderTemplateOption _mergeProviderAndProtocolTemplate(
+    ProviderTemplateOption providerTemplate,
+    ProviderTemplateOption protocolTemplate,
+  ) {
+    final sameProtocol =
+        providerTemplate.protocolTemplateId == protocolTemplate.id ||
+        providerTemplate.compatMode == protocolTemplate.compatMode;
+    final raw = <String, Object?>{
+      ...protocolTemplate.raw,
+      ...providerTemplate.raw,
+      'api_type': protocolTemplate.apiType,
+      'compat_mode': protocolTemplate.compatMode,
+      'endpoint': protocolTemplate.raw['endpoint'],
+      'auth': protocolTemplate.raw['auth'],
+      'request_mapping': sameProtocol
+          ? (providerTemplate.raw['request_mapping'] ??
+                protocolTemplate.raw['request_mapping'])
+          : protocolTemplate.raw['request_mapping'],
+      'response_mapping': sameProtocol
+          ? (providerTemplate.raw['response_mapping'] ??
+                protocolTemplate.raw['response_mapping'])
+          : protocolTemplate.raw['response_mapping'],
+      'model_list': protocolTemplate.raw['model_list'],
+      'capabilities': protocolTemplate.raw['capabilities'],
+      'protocol_template_id': protocolTemplate.id,
+    };
+    return ProviderTemplateOption.fromJson(raw);
+  }
+
+  ProviderTemplateOption? _providerPresetById(
+    DesktopSnapshot snapshot,
+    String? id,
+  ) {
+    if (id == null || id.isEmpty) return null;
+    for (final template in snapshot.providerPresets) {
+      if (template.id == id) return template;
+    }
+    return null;
+  }
+
+  ProviderTemplateOption? _protocolTemplateById(
     DesktopSnapshot snapshot,
     String? id,
   ) {
     if (id == null || id.isEmpty) return null;
     for (final template in [
-      ...snapshot.providerPresets,
       ...snapshot.protocolTemplates,
       if (snapshot.customAdapterTemplate != null)
         snapshot.customAdapterTemplate!,
     ]) {
       if (template.id == id) return template;
+    }
+    return null;
+  }
+
+  bool _isProviderPreset(DesktopSnapshot? snapshot, String id) {
+    if (snapshot == null) return false;
+    return snapshot.providerPresets.any((template) => template.id == id);
+  }
+
+  String? _protocolTemplateIdFor(ProviderTemplateOption? template) {
+    if (template == null) return null;
+    if (template.protocolTemplateId.isNotEmpty) {
+      return template.protocolTemplateId;
+    }
+    final snapshot = _snapshot;
+    if (snapshot == null) return template.id;
+    if (_protocolTemplateById(snapshot, template.id) != null) {
+      return template.id;
+    }
+    for (final protocol in _protocolProviderTemplates()) {
+      if (protocol.compatMode.isNotEmpty &&
+          protocol.compatMode == template.compatMode) {
+        return protocol.id;
+      }
     }
     return null;
   }
@@ -1146,6 +1334,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
     }
     if (snapshot.providerPresets.isNotEmpty) {
       return snapshot.providerPresets.first;
+    }
+    if (snapshot.protocolTemplates.isNotEmpty) {
+      return snapshot.protocolTemplates.first;
+    }
+    return snapshot.customAdapterTemplate;
+  }
+
+  ProviderTemplateOption? _defaultProtocolTemplate(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    for (final template in snapshot.protocolTemplates) {
+      if (template.id == 'openai_chat') return template;
     }
     if (snapshot.protocolTemplates.isNotEmpty) {
       return snapshot.protocolTemplates.first;
@@ -1257,6 +1456,45 @@ class _SettingsWindowState extends State<SettingsWindow> {
     }
   }
 
+  Future<void> _deleteProvider() async {
+    final snapshot = _snapshot;
+    final provider = _selectedProvider;
+    if (snapshot == null || provider == null || provider.isEmpty) return;
+    setState(() {
+      _deletingProvider = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final result = await _client.providerDelete(
+        name: provider,
+        expectedVersion: snapshot.providersFileVersion,
+      );
+      if (result['blocked'] == true ||
+          _stringValue(result['code']) == 'provider_in_use') {
+        if (!mounted) return;
+        setState(() {
+          _error = '这个连接正在被翻译方案使用，请先修改默认或备用模型。';
+        });
+        return;
+      }
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() {
+        _selectedProvider = _snapshot?.providers.isNotEmpty == true
+            ? _snapshot?.providers.first.name
+            : null;
+        _selectedModel = null;
+        _message = '连接已删除：$provider。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _deletingProvider = false);
+    }
+  }
+
   Future<void> _saveTranslationDefault() async {
     final providerOption = _activeTranslationProvider();
     final provider = _translationProviderName(providerOption);
@@ -1365,7 +1603,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
             ? _selectedProvider
             : profile.provider;
         _selectedModel = profile.model.isEmpty ? _selectedModel : profile.model;
-        _message = '已切换配置组：${profile.displayName}。';
+        _message = '已切换翻译方案：${profile.displayName}。';
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -1381,7 +1619,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     if (snapshot == null || profile == null) return;
     final name = _routingProfileName.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = '配置组名称不能为空');
+      setState(() => _error = '翻译方案名称不能为空');
       return;
     }
     setState(() {
@@ -1402,7 +1640,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       );
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _message = '配置组已重命名：$name。');
+      setState(() => _message = '翻译方案已重命名：$name。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -1459,7 +1697,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       );
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _message = '已新建配置组：$name。');
+      setState(() => _message = '已新建翻译方案：$name。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -1473,7 +1711,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final profile = _activeRoutingProfile(snapshot);
     if (snapshot == null || profile == null) return;
     if (snapshot.routingProfiles.length <= 1) {
-      setState(() => _error = '至少保留一个配置组');
+      setState(() => _error = '至少保留一个翻译方案');
       return;
     }
     final kept = snapshot.routingProfiles
@@ -1498,7 +1736,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       );
       await _loadConfig();
       if (!mounted) return;
-      setState(() => _message = '已删除配置组：${profile.displayName}。');
+      setState(() => _message = '已删除翻译方案：${profile.displayName}。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -2641,21 +2879,43 @@ String _providerProtocolLabel(ProviderOption provider) {
   };
 }
 
+String _providerCompatModeLabel(ProviderOption provider) {
+  final compat = provider.compatMode.trim();
+  return compat.isEmpty ? '未指定' : compat;
+}
+
+String _providerEndpointLabel(ProviderOption provider) {
+  final endpoint = _stringMap(provider.raw['endpoint']);
+  final method = _stringValue(endpoint['method']) ?? 'POST';
+  final path =
+      _stringValue(endpoint['path_template']) ??
+      _stringValue(endpoint['pathTemplate']) ??
+      '/';
+  return '$method $path';
+}
+
+String _providerResponseMappingLabel(ProviderOption provider) {
+  final response = _stringMap(provider.raw['response_mapping']);
+  final paths = _stringList(response['text_paths']);
+  if (paths.isEmpty) return '按协议默认响应路径';
+  return paths.join(', ');
+}
+
+String _providerLimitsLabel(ProviderOption provider) {
+  final limits = _stringMap(provider.raw['limits']);
+  final concurrency = _stringValue(limits['concurrency']) ?? '默认';
+  final timeout =
+      _stringValue(limits['timeout_seconds']) ??
+      _stringValue(limits['timeoutSeconds']) ??
+      '默认';
+  final retry = _stringValue(limits['retry']) ?? '默认';
+  return '并发 $concurrency · 超时 ${timeout}s · 重试 $retry';
+}
+
 String _providerTemplateLabel(ProviderTemplateOption template) {
   final label = template.label.trim();
   if (label.isNotEmpty) return label;
   return template.id;
-}
-
-String _providerTemplateProtocolLabel(ProviderTemplateOption template) {
-  return _providerProtocolLabel(
-    ProviderOption(
-      name: template.id,
-      models: template.models,
-      apiType: template.apiType,
-      compatMode: template.compatMode,
-    ),
-  );
 }
 
 String _credentialSourceLabel(String source) {
@@ -2675,34 +2935,6 @@ String _credentialStatusLabel(ProviderOption provider) {
   if (provider.name.isEmpty) return '未选择连接';
   final source = _credentialSourceLabel(provider.credentialSource);
   return provider.hasKey ? '已配置 · $source' : '缺密钥 · $source';
-}
-
-String _translationRouteLabel(DesktopSnapshot? snapshot) {
-  final provider = snapshot?.translationProvider;
-  final model = snapshot?.translationModel;
-  if (provider == null || provider.isEmpty) return '还没选默认模型';
-  if (model == null || model.isEmpty) return provider;
-  return '$provider · $model';
-}
-
-String _routingProfileLabel(DesktopSnapshot? snapshot) {
-  if (snapshot == null) return 'Default · 无备用';
-  final activeId = snapshot.activeRoutingProfile;
-  final profiles = snapshot.routingProfiles;
-  RoutingProfileOption? activeProfile;
-  for (final item in profiles) {
-    if (item.id == activeId) {
-      activeProfile = item;
-      break;
-    }
-  }
-  activeProfile ??= profiles.isEmpty ? null : profiles.first;
-  final profile = activeProfile?.displayName ?? 'Default';
-  final fallbackCount =
-      activeProfile?.fallback.length ?? snapshot.translationFallback.length;
-  return fallbackCount == 0
-      ? '$profile · 无备用'
-      : '$profile · $fallbackCount 个备用';
 }
 
 String _providersFileLabel(DesktopSnapshot? snapshot) {
@@ -2895,52 +3127,16 @@ class _DefaultBar extends StatelessWidget {
   }
 }
 
-class _MetaPill extends StatelessWidget {
-  const _MetaPill({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 240),
-      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 5),
-      decoration: BoxDecoration(
-        color: T.surface,
-        borderRadius: BorderRadius.circular(T.rSm),
-        border: Border.all(color: T.line, width: 1),
-      ),
-      child: RichText(
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        text: TextSpan(
-          style: T.tCaption,
-          children: [
-            TextSpan(
-              text: '$label ',
-              style: const TextStyle(color: T.muted),
-            ),
-            TextSpan(
-              text: value,
-              style: const TextStyle(
-                color: T.ink,
-                fontWeight: T.wMedium,
-                fontFamily: T.fontFamily,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({required this.title, required this.children});
+  const _SettingsSection({
+    required this.title,
+    required this.children,
+    this.divider = true,
+  });
 
   final String title;
   final List<Widget> children;
+  final bool divider;
 
   @override
   Widget build(BuildContext context) {
@@ -2952,8 +3148,10 @@ class _SettingsSection extends StatelessWidget {
           Text(title, style: T.tCaption.copyWith(fontWeight: T.wBold)),
           const SizedBox(height: T.s8),
           ...children,
-          const SizedBox(height: T.s12),
-          const Divider(height: 1, color: T.line),
+          if (divider) ...[
+            const SizedBox(height: T.s12),
+            const Divider(height: 1, color: T.line),
+          ],
         ],
       ),
     );
@@ -2997,8 +3195,9 @@ class _ProviderList extends StatelessWidget {
                   _ChoiceRow(
                     label: provider.name,
                     detail: [
-                      if (provider.name == defaultProvider) '默认',
-                      _providerProtocolLabel(provider),
+                      provider.models.isEmpty
+                          ? '未保存模型'
+                          : '${provider.models.length} 个模型',
                       provider.hasKey ? '密钥已配置' : '未配置密钥',
                     ].join(' · '),
                     selected: provider.name == selected,
@@ -3013,8 +3212,8 @@ class _ProviderList extends StatelessWidget {
   }
 }
 
-class _TemplatePicker extends StatelessWidget {
-  const _TemplatePicker({
+class _TemplateSelect extends StatelessWidget {
+  const _TemplateSelect({
     required this.templates,
     required this.selected,
     required this.onPick,
@@ -3027,89 +3226,54 @@ class _TemplatePicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (templates.isEmpty) {
-      return const Text('没有可用模板', style: T.tCaption);
+      return const Text('没有可用协议', style: T.tCaption);
     }
-    return Wrap(
-      spacing: T.s8,
-      runSpacing: T.s8,
-      children: [
-        for (final template in templates)
-          _TemplateChoice(
-            label: _providerTemplateLabel(template),
-            detail: _providerTemplateProtocolLabel(template),
-            selected: template.id == selected,
-            onTap: () => onPick(template),
-          ),
-      ],
+    final selectedTemplate = templates.firstWhere(
+      (template) => template.id == selected,
+      orElse: () => templates.first,
     );
-  }
-}
-
-class _TemplateChoice extends StatefulWidget {
-  const _TemplateChoice({
-    required this.label,
-    required this.detail,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final String detail;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  State<_TemplateChoice> createState() => _TemplateChoiceState();
-}
-
-class _TemplateChoiceState extends State<_TemplateChoice> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 176,
-          height: 62,
-          padding: const EdgeInsets.symmetric(
+    return SizedBox(
+      width: 360,
+      child: DropdownButtonFormField<String>(
+        initialValue: selectedTemplate.id,
+        isExpanded: true,
+        decoration: InputDecoration(
+          isDense: true,
+          filled: true,
+          fillColor: T.surface,
+          contentPadding: const EdgeInsets.symmetric(
             horizontal: T.s12,
-            vertical: T.s8,
+            vertical: 10,
           ),
-          decoration: BoxDecoration(
-            color: widget.selected || _hover ? T.accentSoft : T.surface,
+          border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(
-              color: widget.selected ? T.accent : T.line,
-              width: 1.2,
-            ),
+            borderSide: const BorderSide(color: T.line),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                widget.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: T.tBody.copyWith(
-                  fontWeight: widget.selected ? T.wBold : T.wMedium,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                widget.detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: T.tCaption,
-              ),
-            ],
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rMd),
+            borderSide: const BorderSide(color: T.accent, width: 1.4),
           ),
         ),
+        style: T.tBody.copyWith(color: T.ink),
+        items: [
+          for (final template in templates)
+            DropdownMenuItem<String>(
+              value: template.id,
+              child: Text(
+                _providerTemplateLabel(template),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: (value) {
+          if (value == null) return;
+          for (final template in templates) {
+            if (template.id == value) {
+              onPick(template);
+              return;
+            }
+          }
+        },
       ),
     );
   }
@@ -3920,11 +4084,11 @@ class _ToolPanel extends StatelessWidget {
   const _ToolPanel({
     required this.children,
     required this.footer,
-    required this.footnote,
+    this.footnote,
   });
   final List<Widget> children;
   final List<Widget> footer;
-  final String footnote;
+  final String? footnote;
 
   @override
   Widget build(BuildContext context) {
@@ -3936,13 +4100,15 @@ class _ToolPanel extends StatelessWidget {
         ),
         const SizedBox(height: T.s12),
         Wrap(spacing: T.s12, runSpacing: T.s8, children: footer),
-        const SizedBox(height: T.s8),
-        Text(
-          footnote,
-          style: T.tCaption,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
+        if (footnote != null && footnote!.isNotEmpty) ...[
+          const SizedBox(height: T.s8),
+          Text(
+            footnote!,
+            style: T.tCaption,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ],
     );
   }

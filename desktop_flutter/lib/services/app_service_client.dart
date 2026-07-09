@@ -506,6 +506,16 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> providerDelete({
+    required String name,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('provider.delete', {
+      'name': name,
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
+  }
+
   Future<Map<String, Object?>> providerModels({
     required Map<String, Object?> providerDraft,
     String? apiKey,
