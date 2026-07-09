@@ -27,6 +27,7 @@ class RunRequest:
     output: str = ""
     provider: str = ""
     model: str = ""
+    routing: dict[str, Any] = field(default_factory=dict)
     overrides: dict[str, Any] = field(default_factory=dict)
 
 
@@ -37,6 +38,7 @@ class ResumeRequest:
     output: str = ""
     provider: str = ""
     model: str = ""
+    routing: dict[str, Any] = field(default_factory=dict)
     overrides: dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,11 +51,18 @@ def load_resume_request(path: Path) -> ResumeRequest:
 
 
 def run_request_to_payload(request: RunRequest) -> dict[str, Any]:
-    return asdict(request)
+    return _request_payload(request)
 
 
 def resume_request_to_payload(request: ResumeRequest) -> dict[str, Any]:
-    return asdict(request)
+    return _request_payload(request)
+
+
+def _request_payload(request: RunRequest | ResumeRequest) -> dict[str, Any]:
+    payload = asdict(request)
+    if not payload.get("routing"):
+        payload.pop("routing", None)
+    return payload
 
 
 def run_request_from_flags(
@@ -67,6 +76,7 @@ def run_request_from_flags(
     provider: str | None,
     model: str | None,
     overrides: dict[str, Any],
+    routing: dict[str, Any] | None = None,
 ) -> RunRequest:
     return RunRequest(
         input=str(Path(input_path).resolve()),
@@ -77,6 +87,7 @@ def run_request_from_flags(
         output=_optional_resolved_path(output),
         provider=_optional_text(provider),
         model=_optional_text(model),
+        routing=_routing_payload(routing),
         overrides=_clean_overrides(overrides),
     )
 
@@ -88,12 +99,14 @@ def resume_request_from_flags(
     provider: str | None,
     model: str | None,
     overrides: dict[str, Any],
+    routing: dict[str, Any] | None = None,
 ) -> ResumeRequest:
     return ResumeRequest(
         task_id=_require_text(task_id, "task_id"),
         output=_optional_resolved_path(output),
         provider=_optional_text(provider),
         model=_optional_text(model),
+        routing=_routing_payload(routing),
         overrides=_clean_overrides(overrides),
     )
 
@@ -120,6 +133,7 @@ def run_request_from_payload(payload: dict[str, Any]) -> RunRequest:
         output=_optional_resolved_path(output),
         provider=_optional_text(_first(payload, "provider", default="")),
         model=_optional_text(_first(payload, "model", default="")),
+        routing=_routing_payload(_first(payload, "routing", default=None)),
         overrides=overrides,
     )
 
@@ -133,6 +147,7 @@ def resume_request_from_payload(payload: dict[str, Any]) -> ResumeRequest:
         output=_optional_resolved_path(_first(payload, "output", "output_file", default="")),
         provider=_optional_text(_first(payload, "provider", default="")),
         model=_optional_text(_first(payload, "model", default="")),
+        routing=_routing_payload(_first(payload, "routing", default=None)),
         overrides=overrides,
     )
 
@@ -183,6 +198,7 @@ def _request_overrides(payload: dict[str, Any]) -> dict[str, Any]:
             "output_dir",
             "provider",
             "model",
+            "routing",
             "task_id",
             "taskId",
             "overrides",
@@ -194,6 +210,51 @@ def _request_overrides(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _clean_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in overrides.items() if value is not None and value != ""}
+
+
+def _routing_payload(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise RequestValidationError("routing must be an object")
+    primary = _route_payload(
+        value.get("primary", {}),
+        field="routing.primary",
+        required=True,
+    )
+    fallback_raw = value.get("fallback", [])
+    if fallback_raw is None:
+        fallback_raw = []
+    if not isinstance(fallback_raw, list):
+        raise RequestValidationError("routing.fallback must be a list")
+    return {
+        "primary": primary,
+        "fallback": [
+            _route_payload(item, field=f"routing.fallback[{idx}]", required=True)
+            for idx, item in enumerate(fallback_raw)
+        ],
+    }
+
+
+def _route_payload(
+    value: Any,
+    *,
+    field: str,
+    required: bool = False,
+) -> dict[str, str]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise RequestValidationError(f"{field} must be an object")
+    route = {
+        "provider": _optional_text(_first(value, "provider", default="")),
+        "model": _optional_text(_first(value, "model", default="")),
+    }
+    if required and (not route["provider"] or not route["model"]):
+        raise RequestValidationError(
+            f"{field}.provider and {field}.model are required"
+        )
+    return route
 
 
 def _first(payload: dict[str, Any], *keys: str, default: Any = _UNSET) -> Any:

@@ -80,6 +80,29 @@ class TaskOption {
   final String? model;
 }
 
+enum TranslationChoiceSource { profile, direct, task }
+
+@immutable
+class TranslationRuntimeChoice {
+  const TranslationRuntimeChoice({
+    required this.label,
+    required this.configured,
+    required this.routing,
+    required this.source,
+    this.detail = '',
+    this.provider,
+    this.model,
+  });
+
+  final String label;
+  final String detail;
+  final bool configured;
+  final String? provider;
+  final String? model;
+  final Map<String, Object?> routing;
+  final TranslationChoiceSource source;
+}
+
 @immutable
 class MainWindowViewModel {
   const MainWindowViewModel({
@@ -88,10 +111,12 @@ class MainWindowViewModel {
     required this.taskId,
     required this.source,
     required this.translationLabel,
+    required this.translationDetail,
     required this.translationConfigured,
     required this.asrLabel,
     required this.asrConfigured,
     required this.translationOptions,
+    required this.translationDirectOptions,
     required this.asrOptions,
     required this.bilingual,
     required this.formats,
@@ -111,10 +136,12 @@ class MainWindowViewModel {
   final String? taskId;
   final MainSourceDraft? source;
   final String translationLabel;
+  final String translationDetail;
   final bool translationConfigured;
   final String asrLabel;
   final bool asrConfigured;
-  final List<TaskOption> translationOptions;
+  final List<TranslationRuntimeChoice> translationOptions;
+  final List<TranslationRuntimeChoice> translationDirectOptions;
   final List<TaskOption> asrOptions;
   final bool bilingual;
   final List<String> formats;
@@ -162,7 +189,7 @@ class MainWindowController extends ChangeNotifier {
   MainFailureView? _failure;
   int _eventCursor = 0;
   List<Map<String, Object?>> _recentEvents = const [];
-  TaskOption? _selectedTranslation;
+  TranslationRuntimeChoice? _selectedTranslation;
   TaskOption? _selectedAsr;
   final Set<String> _dismissedHomeTaskReminderIds = <String>{};
 
@@ -258,7 +285,7 @@ class MainWindowController extends ChangeNotifier {
     _publish();
   }
 
-  void selectTranslation(TaskOption option) {
+  void selectTranslation(TranslationRuntimeChoice option) {
     _selectedTranslation = option;
     _publish();
   }
@@ -551,7 +578,7 @@ class MainWindowController extends ChangeNotifier {
       throw StateError(source.unsupportedReason ?? '片源暂不支持');
     }
     final snapshot = service.snapshot.desktopSnapshot;
-    final translation = _effectiveTranslationOption(snapshot);
+    final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
     final outputDirectory = _effectiveOutputDirectory(source);
     final overrides = <String, Object?>{
@@ -571,9 +598,14 @@ class MainWindowController extends ChangeNotifier {
       'bilingual': _bilingual,
       if (outputDirectory != null && outputDirectory.isNotEmpty)
         'output_dir': outputDirectory,
-      if (translation.provider != null && translation.provider!.isNotEmpty)
+      if (translation.routing.isNotEmpty) 'routing': translation.routing,
+      if (translation.routing.isEmpty &&
+          translation.provider != null &&
+          translation.provider!.isNotEmpty)
         'provider': translation.provider,
-      if (translation.model != null && translation.model!.isNotEmpty)
+      if (translation.routing.isEmpty &&
+          translation.model != null &&
+          translation.model!.isNotEmpty)
         'model': translation.model,
       'overrides': overrides,
     };
@@ -585,7 +617,7 @@ class MainWindowController extends ChangeNotifier {
       throw StateError('还没有可继续的任务');
     }
     final snapshot = service.snapshot.desktopSnapshot;
-    final translation = _effectiveTranslationOption(snapshot);
+    final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
@@ -598,9 +630,14 @@ class MainWindowController extends ChangeNotifier {
     return {
       'request_version': 1,
       'task_id': taskId,
-      if (translation.provider != null && translation.provider!.isNotEmpty)
+      if (translation.routing.isNotEmpty) 'routing': translation.routing,
+      if (translation.routing.isEmpty &&
+          translation.provider != null &&
+          translation.provider!.isNotEmpty)
         'provider': translation.provider,
-      if (translation.model != null && translation.model!.isNotEmpty)
+      if (translation.routing.isEmpty &&
+          translation.model != null &&
+          translation.model!.isNotEmpty)
         'model': translation.model,
       'overrides': overrides,
     };
@@ -681,7 +718,7 @@ class MainWindowController extends ChangeNotifier {
   MainWindowViewModel _buildView() {
     final snapshot = service.snapshot.desktopSnapshot;
     final readiness = snapshot?.configReadiness;
-    final translation = _effectiveTranslationOption(snapshot);
+    final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
     final state = _deriveState(readiness, translation, asr);
     return MainWindowViewModel(
@@ -690,10 +727,12 @@ class MainWindowController extends ChangeNotifier {
       taskId: _taskId,
       source: _source,
       translationLabel: translation.configured ? translation.label : '需配置',
+      translationDetail: translation.configured ? translation.detail : '',
       translationConfigured: translation.configured,
       asrLabel: asr.configured ? asr.label : '需配置',
       asrConfigured: asr.configured,
       translationOptions: _translationOptions(snapshot),
+      translationDirectOptions: _translationDirectOptions(snapshot),
       asrOptions: _asrOptions(snapshot),
       bilingual: _bilingual,
       formats: _formats,
@@ -753,7 +792,7 @@ class MainWindowController extends ChangeNotifier {
 
   MainState _deriveState(
     ConfigReadiness? readiness,
-    TaskOption translation,
+    TranslationRuntimeChoice translation,
     TaskOption asr,
   ) {
     if (_failure != null) return MainState.failed;
@@ -768,7 +807,7 @@ class MainWindowController extends ChangeNotifier {
   }
 
   String _statusLine(MainState state) {
-    final translationConfigured = _effectiveTranslationOption(
+    final translationConfigured = _effectiveTranslationChoice(
       service.snapshot.desktopSnapshot,
     ).configured;
     final base = switch (state) {
@@ -789,21 +828,51 @@ class MainWindowController extends ChangeNotifier {
     };
   }
 
-  TaskOption _effectiveTranslationOption(DesktopSnapshot? snapshot) {
+  TranslationRuntimeChoice _effectiveTranslationChoice(
+    DesktopSnapshot? snapshot,
+  ) {
     final selected = _selectedTranslation;
     if (selected != null) return selected;
-    final provider = snapshot?.translationProvider;
-    final model = snapshot?.translationModel;
-    final readiness = snapshot?.configReadiness;
-    final label = provider == null || provider.isEmpty
-        ? readiness?.translationLabel ?? '需配置'
-        : (model == null || model.isEmpty ? provider : '$provider · $model');
-    return TaskOption(
-      label: label,
-      configured: readiness?.translationConfigured ?? false,
-      provider: provider,
-      model: model,
+    final taskChoice = _taskRoutingChoice(snapshot);
+    if (taskChoice != null) return taskChoice;
+    final activeChoice = _activeProfileChoice(snapshot);
+    if (activeChoice != null) return activeChoice;
+    return const TranslationRuntimeChoice(
+      label: '需配置',
+      configured: false,
+      routing: {},
+      source: TranslationChoiceSource.profile,
     );
+  }
+
+  TranslationRuntimeChoice? _taskRoutingChoice(DesktopSnapshot? snapshot) {
+    final task = _taskFromSnapshot(snapshot);
+    if (task == null) return null;
+    final routing = _normalizedRouting(_asStringMap(task.settings['routing']));
+    if (routing.isEmpty) return null;
+    return _choiceFromRouting(
+      snapshot,
+      routing,
+      source: TranslationChoiceSource.task,
+      profileName: '本次任务',
+    );
+  }
+
+  TranslationRuntimeChoice? _activeProfileChoice(DesktopSnapshot? snapshot) {
+    if (snapshot == null) return null;
+    final activeId = snapshot.activeRoutingProfile;
+    RoutingProfileOption? active;
+    for (final profile in snapshot.routingProfiles) {
+      if (profile.id == activeId) {
+        active = profile;
+        break;
+      }
+    }
+    active ??= snapshot.routingProfiles.isEmpty
+        ? null
+        : snapshot.routingProfiles.first;
+    if (active == null) return null;
+    return _choiceFromProfile(snapshot, active);
   }
 
   TaskOption _effectiveAsrOption(DesktopSnapshot? snapshot) {
@@ -821,24 +890,93 @@ class MainWindowController extends ChangeNotifier {
     );
   }
 
-  List<TaskOption> _translationOptions(DesktopSnapshot? snapshot) {
+  List<TranslationRuntimeChoice> _translationOptions(
+    DesktopSnapshot? snapshot,
+  ) {
+    if (snapshot == null) return const [];
+    return snapshot.routingProfiles
+        .map((profile) => _choiceFromProfile(snapshot, profile))
+        .whereType<TranslationRuntimeChoice>()
+        .where((choice) => choice.configured)
+        .toList(growable: false);
+  }
+
+  List<TranslationRuntimeChoice> _translationDirectOptions(
+    DesktopSnapshot? snapshot,
+  ) {
     if (snapshot == null) return const [];
     return snapshot.providers
         .where((provider) => provider.hasKey)
         .expand((provider) {
-          final models = provider.models.isEmpty ? [''] : provider.models;
-          return models.map(
-            (model) => TaskOption(
-              label: model.isEmpty
-                  ? provider.name
-                  : '${provider.name} · $model',
+          final models = provider.models.where(
+            (model) => model.trim().isNotEmpty,
+          );
+          return models.map((model) {
+            final routing = _routingPayload(
+              provider: provider.name,
+              model: model,
+              fallback: const [],
+            );
+            return TranslationRuntimeChoice(
+              label: _modelLabel(model, provider.name),
+              detail: '本次直接使用 · 无备用 · 连接 ${provider.name}',
               configured: true,
               provider: provider.name,
-              model: model.isEmpty ? null : model,
-            ),
-          );
+              model: model,
+              routing: routing,
+              source: TranslationChoiceSource.direct,
+            );
+          });
         })
         .toList(growable: false);
+  }
+
+  TranslationRuntimeChoice? _choiceFromProfile(
+    DesktopSnapshot snapshot,
+    RoutingProfileOption profile,
+  ) {
+    final routing = _normalizedRouting({
+      'primary': {'provider': profile.provider, 'model': profile.model},
+      'fallback': profile.fallback,
+    });
+    return _choiceFromRouting(
+      snapshot,
+      routing,
+      source: TranslationChoiceSource.profile,
+      profileName: profile.displayName,
+    );
+  }
+
+  TranslationRuntimeChoice? _choiceFromRouting(
+    DesktopSnapshot? snapshot,
+    Map<String, Object?> routing, {
+    required TranslationChoiceSource source,
+    required String profileName,
+  }) {
+    final primary = _asStringMap(routing['primary']);
+    final provider = '${primary['provider'] ?? ''}'.trim();
+    final model = '${primary['model'] ?? ''}'.trim();
+    if (provider.isEmpty || model.isEmpty) return null;
+    final fallback = _routeList(routing['fallback']);
+    final label = _modelLabel(model, provider);
+    final fallbackText = fallback.isEmpty
+        ? '无备用'
+        : fallback.length == 1
+        ? '备用 ${_routeShortLabel(fallback.first)}'
+        : '备用 ${fallback.length} 个';
+    return TranslationRuntimeChoice(
+      label: label,
+      detail: '$profileName · $fallbackText · 连接 $provider',
+      configured: _providerHasKey(snapshot, provider),
+      provider: provider,
+      model: model,
+      routing: _routingPayload(
+        provider: provider,
+        model: model,
+        fallback: fallback,
+      ),
+      source: source,
+    );
   }
 
   List<TaskOption> _asrOptions(DesktopSnapshot? snapshot) {
@@ -874,6 +1012,70 @@ class MainWindowController extends ChangeNotifier {
     final label = option?.displayLabel ?? providerName;
     final modelText = model ?? option?.model ?? '';
     return modelText.isEmpty ? label : '$label · $modelText';
+  }
+
+  static bool _providerHasKey(DesktopSnapshot? snapshot, String providerName) {
+    if (snapshot == null || providerName.isEmpty) return false;
+    for (final provider in snapshot.providers) {
+      if (provider.name == providerName) return provider.hasKey;
+    }
+    return false;
+  }
+
+  static String _modelLabel(String model, String provider) {
+    final trimmed = model.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    return provider.trim().isEmpty ? '需配置' : provider.trim();
+  }
+
+  static String _routeShortLabel(Map<String, Object?> route) {
+    final provider = '${route['provider'] ?? ''}'.trim();
+    final model = '${route['model'] ?? ''}'.trim();
+    if (model.isEmpty) return provider;
+    return model;
+  }
+
+  static Map<String, Object?> _normalizedRouting(Map<String, Object?> raw) {
+    if (raw.isEmpty) return const {};
+    final primary = _asStringMap(raw['primary']);
+    final provider = '${primary['provider'] ?? ''}'.trim();
+    final model = '${primary['model'] ?? ''}'.trim();
+    if (provider.isEmpty && model.isEmpty) return const {};
+    return _routingPayload(
+      provider: provider,
+      model: model,
+      fallback: _routeList(raw['fallback']),
+    );
+  }
+
+  static List<Map<String, Object?>> _routeList(Object? raw) {
+    if (raw is! List) return const [];
+    final routes = <Map<String, Object?>>[];
+    for (final item in raw) {
+      final route = _asStringMap(item);
+      final provider = '${route['provider'] ?? ''}'.trim();
+      final model = '${route['model'] ?? ''}'.trim();
+      if (provider.isEmpty || model.isEmpty) continue;
+      routes.add({'provider': provider, 'model': model});
+    }
+    return routes;
+  }
+
+  static Map<String, Object?> _routingPayload({
+    required String provider,
+    required String model,
+    required List<Map<String, Object?>> fallback,
+  }) {
+    return {
+      'primary': {'provider': provider.trim(), 'model': model.trim()},
+      'fallback': [
+        for (final route in fallback)
+          {
+            'provider': '${route['provider'] ?? ''}'.trim(),
+            'model': '${route['model'] ?? ''}'.trim(),
+          },
+      ],
+    };
   }
 
   MainFailureView _failureFromTask(TaskSummary task) {

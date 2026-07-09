@@ -8,8 +8,16 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from transvortex.cli import main
-from transvortex.app.desktop_requests import run_request_from_flags, run_request_from_payload
+from transvortex.app.desktop_requests import (
+    RequestValidationError,
+    resume_request_from_payload,
+    run_request_from_flags,
+    run_request_from_payload,
+    run_request_to_payload,
+)
 from transvortex.protocol.errors import PipelineTaskError, error_info
 from transvortex.app.models import TaskRecord
 from transvortex.artifacts.runtime import TaskRuntime
@@ -396,6 +404,59 @@ def test_run_request_contract_matches_flags_and_json(tmp_path: Path) -> None:
     )
 
     assert from_json == from_flags
+
+
+def test_request_json_preserves_routing_outside_overrides(tmp_path: Path) -> None:
+    routing = {
+        "primary": {"provider": "p2", "model": "m2"},
+        "fallback": [{"provider": "p1", "model": "m1"}],
+    }
+    request = run_request_from_payload(
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+            "routing": routing,
+            "overrides": {"output_format": "srt"},
+        }
+    )
+    resume = resume_request_from_payload(
+        {
+            "request_version": 1,
+            "task_id": "tvx_1",
+            "routing": routing,
+        }
+    )
+
+    assert request.routing == routing
+    assert resume.routing == routing
+    assert "routing" not in request.overrides
+    assert run_request_to_payload(request)["routing"] == routing
+
+
+def test_request_json_rejects_incomplete_routing(tmp_path: Path) -> None:
+    with pytest.raises(RequestValidationError, match="routing.primary.provider"):
+        run_request_from_payload(
+            {
+                "request_version": 1,
+                "input": str(tmp_path / "demo.mp4"),
+                "source_lang": "ja",
+                "target_lang": "zh-CN",
+                "routing": {},
+            }
+        )
+    with pytest.raises(RequestValidationError, match=r"routing\.fallback\[0\]"):
+        resume_request_from_payload(
+            {
+                "request_version": 1,
+                "task_id": "tvx_1",
+                "routing": {
+                    "primary": {"provider": "p1", "model": "m1"},
+                    "fallback": [{"provider": "p2"}],
+                },
+            }
+        )
 
 
 def test_run_request_json_stream_events_uses_pipeline_contract(tmp_path: Path, monkeypatch, capsys) -> None:

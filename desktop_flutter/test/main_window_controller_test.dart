@@ -21,7 +21,9 @@ void main() {
       controller.pickSource(r'D:\movie.mp4');
 
       expect(controller.view.state, MainState.ready);
-      expect(controller.view.translationLabel, 'RealProvider · real-model');
+      expect(controller.view.translationLabel, 'real-model');
+      expect(controller.view.translationDetail, contains('Default'));
+      expect(controller.view.translationDetail, contains('备用 fallback-model'));
       expect(controller.view.asrLabel, '本机 · large-v3');
     },
   );
@@ -430,8 +432,14 @@ void main() {
 
     expect(payload['input_type'], 'video_asr_translate');
     expect(payload['output_dir'], 'D:\\');
-    expect(payload['provider'], 'RealProvider');
-    expect(payload['model'], 'real-model');
+    final routing = payload['routing'] as Map<String, Object?>;
+    final primary = routing['primary'] as Map<String, Object?>;
+    final fallback = routing['fallback'] as List<Object?>;
+    expect(primary['provider'], 'RealProvider');
+    expect(primary['model'], 'real-model');
+    expect((fallback.first as Map<String, Object?>)['model'], 'fallback-model');
+    expect(payload.containsKey('provider'), isFalse);
+    expect(payload.containsKey('model'), isFalse);
     expect(overrides['output_format'], 'both');
     expect(overrides['subtitle_quality_mode'], 'balanced');
     expect(overrides['allowSystemSuggestions'], isTrue);
@@ -441,6 +449,70 @@ void main() {
     expect(overrides['asr_provider'], 'local');
     expect(overrides['asr_model'], 'large-v3');
   });
+
+  test('controller exposes routing profiles as model-first choices', () async {
+    final controller = MainWindowController(
+      service: _readyController(
+        snapshot: _desktopSnapshot(
+          routingProfiles: [
+            {
+              'id': 'route_1',
+              'name': '日常省钱',
+              'primary': {'provider': 'RealProvider', 'model': 'real-model'},
+              'fallback': [
+                {'provider': 'RealProvider', 'model': 'fallback-model'},
+              ],
+            },
+            {
+              'id': 'route_2',
+              'name': '精修质量',
+              'primary': {'provider': 'RealProvider', 'model': 'pro-model'},
+              'fallback': const [],
+            },
+          ],
+        ),
+      ),
+    );
+    await controller.startService();
+
+    expect(controller.view.translationOptions.map((item) => item.label), [
+      'real-model',
+      'pro-model',
+    ]);
+    expect(controller.view.translationOptions.first.detail, contains('日常省钱'));
+    expect(
+      controller.view.translationOptions.first.detail,
+      contains('备用 fallback-model'),
+    );
+  });
+
+  test(
+    'controller direct model choice sends routing without fallback',
+    () async {
+      final controller = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(extraModels: const ['pro-model']),
+        ),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\movie.mp4');
+
+      final direct = controller.view.translationDirectOptions.firstWhere(
+        (item) => item.model == 'pro-model',
+      );
+      controller.selectTranslation(direct);
+      final payload = controller.buildRunRequest();
+      final routing = payload['routing'] as Map<String, Object?>;
+      final primary = routing['primary'] as Map<String, Object?>;
+      final fallback = routing['fallback'] as List<Object?>;
+
+      expect(primary['provider'], 'RealProvider');
+      expect(primary['model'], 'pro-model');
+      expect(fallback, isEmpty);
+      expect(payload.containsKey('provider'), isFalse);
+      expect(payload.containsKey('model'), isFalse);
+    },
+  );
 
   test('controller disables memory generation through run payload', () async {
     final controller = MainWindowController(service: _readyController());
@@ -680,6 +752,17 @@ void main() {
               status: 'FAILED',
               inputFile: r'D:\movie.mp4',
               runtime: {'can_resume': true},
+              settings: {
+                'routing': {
+                  'primary': {
+                    'provider': 'RealProvider',
+                    'model': 'resume-model',
+                  },
+                  'fallback': [
+                    {'provider': 'RealProvider', 'model': 'fallback-model'},
+                  ],
+                },
+              },
             ),
           ],
         ),
@@ -701,9 +784,18 @@ void main() {
           handle.transport.lastParams['runtime.submitResume']!['request']
               as Map<String, Object?>;
       final overrides = request['overrides'] as Map<String, Object?>;
+      final routing = request['routing'] as Map<String, Object?>;
+      final primary = routing['primary'] as Map<String, Object?>;
+      final fallback = routing['fallback'] as List<Object?>;
       expect(request['task_id'], 'tvx_controller_FAILED');
-      expect(request['provider'], 'RealProvider');
-      expect(request['model'], 'real-model');
+      expect(primary['provider'], 'RealProvider');
+      expect(primary['model'], 'resume-model');
+      expect(
+        (fallback.first as Map<String, Object?>)['model'],
+        'fallback-model',
+      );
+      expect(request.containsKey('provider'), isFalse);
+      expect(request.containsKey('model'), isFalse);
       expect(overrides['output_format'], 'both');
       expect(overrides['allowSystemSuggestions'], isTrue);
       expect(overrides['memory_enabled'], isTrue);
@@ -762,16 +854,28 @@ LocalServiceController _readyController({
 DesktopSnapshot _desktopSnapshot({
   bool translationHasKey = true,
   bool asrHasKey = true,
+  List<String> extraModels = const [],
+  List<Map<String, Object?>> routingProfiles = const [],
   List<Map<String, Object?>> tasks = const [],
 }) {
+  final models = ['real-model', 'fallback-model', ...extraModels];
+  final activeProfile = routingProfiles.isEmpty ? null : routingProfiles.first;
   return DesktopSnapshot.fromJson({
     'config': {
       'routing': {
-        'primary': {'provider': 'RealProvider', 'model': 'real-model'},
-        'fallback': [
-          {'provider': 'FallbackProvider', 'model': 'fallback-model'},
-        ],
+        'active_profile': activeProfile?['id'] ?? 'default',
+        'primary':
+            activeProfile?['primary'] ??
+            {'provider': 'RealProvider', 'model': 'real-model'},
+        'fallback':
+            activeProfile?['fallback'] ??
+            [
+              {'provider': 'RealProvider', 'model': 'fallback-model'},
+            ],
       },
+      if (routingProfiles.isNotEmpty) 'routing_profiles': routingProfiles,
+      if (routingProfiles.isNotEmpty)
+        'active_routing_profile': activeProfile?['id'],
       'pipeline': {'asr_provider': 'local'},
       'providers': [
         {
@@ -781,7 +885,7 @@ DesktopSnapshot _desktopSnapshot({
           'api_type': 'openai-compatible',
           'compat_mode': 'openai_chat',
           'credential_id': 'RealProvider',
-          'models': ['real-model'],
+          'models': models,
         },
       ],
       'asr_providers': {
@@ -809,6 +913,7 @@ Map<String, Object?> _task({
   Map<String, String> outputPaths = const {},
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
+  Map<String, Object?> settings = const {},
 }) {
   return {
     'task_id': taskId ?? 'tvx_controller_$status',
@@ -822,6 +927,7 @@ Map<String, Object?> _task({
     if (outputPaths.isNotEmpty) 'output_paths': outputPaths,
     if (errorInfo.isNotEmpty) 'error_info': errorInfo,
     if (runtime.isNotEmpty) 'runtime': runtime,
+    if (settings.isNotEmpty) 'settings': settings,
   };
 }
 

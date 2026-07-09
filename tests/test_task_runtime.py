@@ -68,6 +68,30 @@ def test_runtime_submit_run_queues_task_and_saves_request(tmp_path: Path) -> Non
     assert not runtime.worker_file(task_id).exists()
 
 
+def test_runtime_submit_run_saves_routing_snapshot(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    runtime = TaskRuntime(tmp_path / "artifacts")
+    routing = {
+        "primary": {"provider": "p1", "model": "m2"},
+        "fallback": [],
+    }
+    request = RunRequest(
+        input=str(tmp_path / "demo.mp4"),
+        source_lang="en",
+        target_lang="zh-CN",
+        routing=routing,
+    )
+
+    payload = runtime.submit_run(root_dir=tmp_path, request=request, providers_file=tmp_path / "providers.yaml")
+
+    task_id = payload["task_id"]
+    task = runtime.store.load_task(task_id)
+    saved = runtime.load_worker_request(task_id)
+    assert task.settings["routing"] == routing
+    assert saved is not None
+    assert saved[1].routing == routing
+
+
 def test_runtime_acquire_next_is_fifo_and_single_active(tmp_path: Path) -> None:
     runtime = TaskRuntime(tmp_path / "artifacts")
     store = runtime.store

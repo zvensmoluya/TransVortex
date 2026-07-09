@@ -1118,12 +1118,13 @@ def create_pipeline_task(
     cli_overrides: dict | None = None,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | None = None,
     input_type: str = "video_asr_translate",
     status: str = "QUEUED",
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[str, Path]:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=routing)
     normalized_input_type = input_type if input_type in {"video_asr_translate", "srt_translate", "segments_translate", "video_asr"} else "video_asr_translate"
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
     task = _create_task(
@@ -1173,6 +1174,30 @@ def _apply_saved_pipeline_settings(config: AppConfig, settings: dict[str, Any]) 
             setattr(target, name, value)
 
     apply_dataclass(config.pipeline, settings)
+
+
+def _task_routing_override(
+    task: TaskRecord,
+    *,
+    routing: dict[str, Any] | None,
+    provider_name: str | None,
+    model: str | None,
+) -> dict[str, Any] | None:
+    if routing is not None:
+        return routing
+    if provider_name or model:
+        return None
+    saved = task.settings.get("routing")
+    return saved if isinstance(saved, dict) else None
+
+
+def _save_task_routing_settings(
+    store: TaskStore,
+    task: TaskRecord,
+    config: AppConfig,
+) -> None:
+    task.settings["routing"] = to_plain(config.routing)
+    store.save_task(task)
 
 
 def _resolve_video_source_mode(config: AppConfig, task: TaskRecord) -> tuple[str, dict | None, list[dict]]:
@@ -1674,6 +1699,7 @@ def run_pipeline(
     cli_overrides: dict | None = None,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | None = None,
     input_type: str = "video_asr_translate",
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
@@ -1687,12 +1713,13 @@ def run_pipeline(
         cli_overrides=cli_overrides,
         provider_name=provider_name,
         model=model,
+        routing=routing,
         input_type=input_type,
         status="INIT",
         event_sink=event_sink,
     )
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
+    config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=routing)
     store = TaskStore(artifacts_dir, event_sink=event_sink)
     _execute_task(
         config,
@@ -1714,13 +1741,21 @@ def resume_pipeline(
     cli_overrides: dict | None = None,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
     task = store.load_task(task_id)
+    effective_routing = _task_routing_override(
+        task,
+        routing=routing,
+        provider_name=provider_name,
+        model=model,
+    )
+    config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
     _apply_saved_pipeline_settings(config, task.settings)
+    _save_task_routing_settings(store, task, config)
     store.clear_cancel(task_id)
     store.update_task_status(task_id, "QUEUED", clear_error=True)
     store.append_event(task_id, "resume_requested", stage="QUEUED", message="Resume requested")
@@ -1743,12 +1778,20 @@ def queue_resume_task(
     cli_overrides: dict | None = None,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
-    store.load_task(task_id)
+    task = store.load_task(task_id)
+    effective_routing = _task_routing_override(
+        task,
+        routing=routing,
+        provider_name=provider_name,
+        model=model,
+    )
+    config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
+    _save_task_routing_settings(store, task, config)
     store.clear_cancel(task_id)
     store.update_task_status(task_id, "QUEUED", clear_error=True)
     store.append_event(task_id, "resume_requested", stage="QUEUED", message="Resume requested")
@@ -1764,12 +1807,20 @@ def execute_pipeline_task(
     cli_overrides: dict | None = None,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     config = load_app_config(root_dir=root_dir, providers_file=providers_file, cli_overrides=cli_overrides)
-    config = apply_route_overrides(config, provider_name=provider_name, model=model)
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
-    store.load_task(task_id)
+    task = store.load_task(task_id)
+    effective_routing = _task_routing_override(
+        task,
+        routing=routing,
+        provider_name=provider_name,
+        model=model,
+    )
+    config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
+    _save_task_routing_settings(store, task, config)
     _execute_task(
         config,
         store,

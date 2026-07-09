@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from transvortex.app.config import load_app_config
+from transvortex.app.config import apply_route_overrides, load_app_config
 from transvortex.memory.plan import resolve_memory_plan
 
 
@@ -447,6 +447,42 @@ routing_profiles:
     assert cfg.routing.fallback[0].model == "m1"
     assert [item.name for item in cfg.routing_profiles] == ["配置 1", "配置 2"]
     assert cfg.routing_profile_next_seq == 3
+
+
+def test_apply_route_overrides_prefers_full_routing_over_legacy_pair(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1, m2]
+routing:
+  primary: {provider: p1, model: m1}
+  fallback:
+    - {provider: p1, model: m2}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("artifacts_dir: artifacts\n", encoding="utf-8")
+    cfg = load_app_config(root_dir=tmp_path)
+
+    legacy = apply_route_overrides(cfg, provider_name="p1", model="legacy")
+    assert legacy.routing.primary.model == "legacy"
+    assert legacy.routing.fallback[0].model == "m2"
+
+    routed = apply_route_overrides(
+        cfg,
+        provider_name="p1",
+        model="legacy",
+        routing={
+            "primary": {"provider": "p1", "model": "m2"},
+            "fallback": [],
+        },
+    )
+    assert routed.routing.primary.model == "m2"
+    assert routed.routing.fallback == []
 
 
 def test_routing_profiles_fallback_to_first_when_active_missing(tmp_path: Path) -> None:

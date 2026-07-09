@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -256,6 +257,13 @@ void main() {
     );
   });
 
+  test('translation settings view source contains no NUL bytes', () {
+    final bytes = File(
+      'lib/widgets/translation_settings_view.dart',
+    ).readAsBytesSync();
+    expect(bytes.contains(0), isFalse);
+  });
+
   testWidgets('app uses packaged CJK font family', (tester) async {
     await tester.pumpWidget(
       TransVortexApp(localServiceController: _readyController()),
@@ -351,6 +359,150 @@ void main() {
         .toList();
     expect(disabledTooltips, contains('本次不生成新的术语记忆。已有术语表不受影响。'));
     expect(find.text('开始译制'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('main translation menu submits profile routing snapshot', (
+    tester,
+  ) async {
+    installFilePickerMock(tester);
+    final transport = _FakeTransport({
+      'service.info': {
+        'service': 'transvortex.app_service',
+        'protocol_version': 1,
+        'app_version': 'test',
+        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+      },
+      'service.health': {
+        'service': 'transvortex.app_service',
+        'status': 'healthy',
+        'runtime': {'active': null},
+        'pump': {'enabled': true},
+      },
+      'desktop.snapshot': _desktopSnapshot(
+        multiRoutingProfiles: true,
+        withRoutingFallback: true,
+      ).raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_profile_route',
+        'status': 'QUEUED',
+      },
+      'tasks.events': {
+        'task_id': 'tvx_profile_route',
+        'events': [],
+        'cursor': 0,
+        'next_cursor': 0,
+        'has_more': false,
+      },
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _controllerForTransport(transport),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.text('real-model'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('配置 1'), findsOneWidget);
+    expect(find.text('backup-model'), findsOneWidget);
+
+    activatePopupMenuItem(
+      tester,
+      const ValueKey('translation-choice-profile-RealProvider-backup-model'),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('开始译制'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final submitParams = transport.lastParams['runtime.submitRun'];
+    final request = submitParams?['request'] as Map<String, Object?>?;
+    final routing = request?['routing'] as Map<String, Object?>?;
+    final primary = routing?['primary'] as Map<String, Object?>?;
+    final fallback = routing?['fallback'] as List<Object?>?;
+    expect(primary?['provider'], 'RealProvider');
+    expect(primary?['model'], 'backup-model');
+    expect(fallback, isEmpty);
+    expect(request?.containsKey('provider'), isFalse);
+    expect(request?.containsKey('model'), isFalse);
+    expectNoFlutterException();
+  });
+
+  testWidgets('main translation menu direct model has no fallback', (
+    tester,
+  ) async {
+    installFilePickerMock(tester);
+    final transport = _FakeTransport({
+      'service.info': {
+        'service': 'transvortex.app_service',
+        'protocol_version': 1,
+        'app_version': 'test',
+        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+      },
+      'service.health': {
+        'service': 'transvortex.app_service',
+        'status': 'healthy',
+        'runtime': {'active': null},
+        'pump': {'enabled': true},
+      },
+      'desktop.snapshot': _desktopSnapshot(
+        multiRoutingProfiles: true,
+        withTwoRoutingFallbacks: true,
+      ).raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_direct_route',
+        'status': 'QUEUED',
+      },
+      'tasks.events': {
+        'task_id': 'tvx_direct_route',
+        'events': [],
+        'cursor': 0,
+        'next_cursor': 0,
+        'has_more': false,
+      },
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _controllerForTransport(transport),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.text('real-model'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('third-model'), findsNothing);
+    activatePopupMenuItem(tester, const ValueKey('translation-more-models'));
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.text('更多翻译模型'), findsOneWidget);
+
+    activatePopupMenuItem(
+      tester,
+      const ValueKey('translation-choice-direct-RealProvider-third-model'),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('开始译制'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final submitParams = transport.lastParams['runtime.submitRun'];
+    final request = submitParams?['request'] as Map<String, Object?>?;
+    final routing = request?['routing'] as Map<String, Object?>?;
+    final primary = routing?['primary'] as Map<String, Object?>?;
+    final fallback = routing?['fallback'] as List<Object?>?;
+    expect(primary?['provider'], 'RealProvider');
+    expect(primary?['model'], 'third-model');
+    expect(fallback, isEmpty);
+    expect(request?.containsKey('provider'), isFalse);
+    expect(request?.containsKey('model'), isFalse);
     expectNoFlutterException();
   });
 
@@ -780,9 +932,13 @@ void main() {
     final resumeParams = transport.lastParams['runtime.submitResume'];
     final request = resumeParams?['request'] as Map<String, Object?>?;
     final overrides = request?['overrides'] as Map<String, Object?>?;
+    final routing = request?['routing'] as Map<String, Object?>?;
+    final primary = routing?['primary'] as Map<String, Object?>?;
     expect(request?['task_id'], 'tvx_resumable_failed');
-    expect(request?['provider'], 'RealProvider');
-    expect(request?['model'], 'real-model');
+    expect(primary?['provider'], 'RealProvider');
+    expect(primary?['model'], 'real-model');
+    expect(request?.containsKey('provider'), isFalse);
+    expect(request?.containsKey('model'), isFalse);
     expect(overrides?['output_format'], 'both');
     expect(overrides?['memory_enabled'], isTrue);
     expectNoFlutterException();
@@ -1016,19 +1172,39 @@ void main() {
     },
   );
 
-  testWidgets('translation settings window renders provider tool layout', (
+  testWidgets('translation settings window renders connections and profiles', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
     await tester.pumpWidget(
-      const TransVortexApp(windowType: AppWindowType.translationSettings),
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
     );
     await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
 
+    // Default tab is 模型连接: the connection list + detail are visible.
     expect(find.text('翻译模型设置'), findsOneWidget);
+    expect(find.text('模型连接'), findsWidgets);
+    expect(find.text('翻译方案'), findsWidgets);
     expect(find.text('已配置连接'), findsOneWidget);
     expect(find.text('服务地址 (Base URL)'), findsOneWidget);
+    expect(find.text('连接设置'), findsOneWidget);
+    expect(find.text('RealProvider'), findsWidgets);
+    expect(find.text('OpenAI Chat 兼容'), findsWidgets);
+    expect(find.textContaining('用户级凭据'), findsWidgets);
     expect(find.textContaining('中文备注'), findsNothing);
-    expect(find.textContaining('spike'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -1060,7 +1236,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('RealProvider'), findsWidgets);
-      expect(find.text('real-model'), findsWidgets);
       expect(find.textContaining('需要从主窗口打开设置'), findsNothing);
       expect(find.textContaining('CHANNEL_UNREGISTERED'), findsNothing);
       expect(find.textContaining('WindowChannelException'), findsNothing);
@@ -1068,46 +1243,7 @@ void main() {
     },
   );
 
-  testWidgets('translation settings window reads providers through bridge', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1000, 720));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    bridge.attachServiceCaller((method, params) async {
-      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
-      throw RpcRemoteException('method_not_found', method);
-    });
-
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.translationSettings,
-        store: store,
-        bridge: bridge,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.text('RealProvider'), findsWidgets);
-    expect(find.text('real-model'), findsWidgets);
-    expect(find.text('连接设置'), findsOneWidget);
-    expect(find.widgetWithText(TextField, '自定义模型名'), findsOneWidget);
-    final fields = tester.widgetList<TextField>(find.byType(TextField));
-    expect(
-      fields.map((field) => field.controller?.text),
-      isNot(contains('real-model')),
-    );
-    expect(find.text('OpenAI Chat 兼容'), findsWidgets);
-    expect(find.textContaining('用户级凭据'), findsWidgets);
-    expect(find.text('openai-compatible'), findsNothing);
-    expect(find.textContaining('auth.json'), findsNothing);
-    expect(find.textContaining('provider YAML'), findsNothing);
-    expectNoFlutterException();
-  });
-
-  testWidgets('translation settings window explains empty provider config', (
+  testWidgets('translation settings window explains empty connections', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(820, 600));
@@ -1131,14 +1267,45 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('还没选默认模型'), findsOneWidget);
     expect(find.text('还没有连接'), findsOneWidget);
     expect(find.text('选择一个连接或添加连接'), findsOneWidget);
     expect(find.textContaining('method_not_found'), findsNothing);
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings window tolerates long model lists', (
+  testWidgets('translation profiles tab guides when there are no connections', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(withProviders: false).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('还没有连接'), findsWidgets);
+    expect(find.text('去添加连接'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings tolerates long model names', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(820, 600));
@@ -1162,12 +1329,18 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('gemini-3.5-flash'), findsWidgets);
-    expect(find.text('设为翻译默认'), findsOneWidget);
+    expect(find.text('gemini-2.0-flash-lite-preview-02-05'), findsOneWidget);
+
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.ensureVisible(find.text('主模型'));
+    await tester.pump();
+
+    expect(find.text('gemini-2.0-flash-lite-preview-02-05'), findsWidgets);
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings window fetches models into the picker', (
+  testWidgets('translation settings window fetches models into the draft', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(820, 600));
@@ -1202,19 +1375,18 @@ void main() {
 
     expect(find.text('model-a'), findsOneWidget);
     expect(find.text('model-b'), findsOneWidget);
-    expect(find.textContaining('已显示在可用模型里'), findsOneWidget);
-    expect(find.textContaining('拉取结果还未保存'), findsOneWidget);
+    expect(find.textContaining('并入模型清单'), findsOneWidget);
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings window saves provider without routing', (
+  testWidgets('translation settings window saves a connection only', (
     tester,
   ) async {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
     Map<String, Object?>? savedProviderDraft;
-    Map<String, Object?>? savedRouting;
+    String? savedApiKey;
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
@@ -1222,15 +1394,8 @@ void main() {
         savedProviderDraft = Map<String, Object?>.from(
           params['provider_draft'] as Map,
         );
+        savedApiKey = params['api_key'] as String?;
         return {'ok': true};
-      }
-      if (method == 'provider.routing.save') {
-        savedRouting = Map<String, Object?>.from(params);
-        return {
-          'routing': {
-            'primary': {'provider': 'RealProvider', 'model': 'real-model'},
-          },
-        };
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -1245,15 +1410,77 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    final baseUrlField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.controller?.text == 'https://example.com/v1',
+    );
+    expect(baseUrlField, findsOneWidget);
+    await tester.enterText(baseUrlField, 'https://edited.example/v1');
+
+    final apiKeyField = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.obscureText,
+    );
+    expect(apiKeyField, findsOneWidget);
+    await tester.enterText(apiKeyField, 'sk-edited');
+
+    final modelInput = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.decoration?.hintText == '添加模型名',
+    );
+    expect(modelInput, findsOneWidget);
+    await tester.enterText(modelInput, 'typed-model');
+
     await tester.tap(find.text('保存连接'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(calls, contains('provider.save'));
     expect(calls, isNot(contains('provider.routing.save')));
+    expect(savedProviderDraft?['base_url'], 'https://edited.example/v1');
     expect(savedProviderDraft?['models'], contains('real-model'));
-    expect(savedRouting, isNull);
+    expect(savedProviderDraft?['models'], contains('typed-model'));
+    expect(savedProviderDraft?.containsKey('api_key'), isFalse);
+    expect(savedApiKey, 'sk-edited');
+    expect(calls.where((method) => method == 'provider.save').length, 1);
     expect(find.textContaining('连接已保存'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings prevents removing referenced model', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final removeModel = find.byKey(const ValueKey('remove-model-real-model'));
+    expect(removeModel, findsOneWidget);
+    await tester.ensureVisible(removeModel);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(removeModel);
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('这个模型正在被翻译方案使用'), findsOneWidget);
+    expect(find.text('real-model'), findsWidgets);
+    expect(calls, isNot(contains('provider.save')));
+    expect(calls, isNot(contains('provider.routing.save')));
     expectNoFlutterException();
   });
 
@@ -1356,17 +1583,29 @@ void main() {
       expect(find.text('自定义厂商'), findsWidgets);
       expect(find.text('OpenAI-compatible Chat'), findsWidgets);
 
+      final nameField = find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.controller?.text == 'custom_provider',
+      );
+      expect(nameField, findsOneWidget);
+      await tester.enterText(nameField, 'my_gateway');
+
+      final baseUrlField = find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField &&
+            widget.controller?.text == 'https://api.openai.com/v1',
+      );
+      expect(baseUrlField, findsOneWidget);
+      await tester.enterText(baseUrlField, 'https://gateway.example/v1');
+
       await tester.tap(find.text('保存连接'));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(savedProviderDraft?['name'], 'custom_provider');
-      expect(savedProviderDraft?['base_url'], 'https://api.openai.com/v1');
-      expect(
-        savedProviderDraft?['env_key'],
-        'TVX_PROVIDER_CUSTOM_PROVIDER_API_KEY',
-      );
-      expect(savedProviderDraft?['credential_id'], 'custom_provider');
+      expect(savedProviderDraft?['name'], 'my_gateway');
+      expect(savedProviderDraft?['base_url'], 'https://gateway.example/v1');
+      expect(savedProviderDraft?['env_key'], 'TVX_PROVIDER_MY_GATEWAY_API_KEY');
+      expect(savedProviderDraft?['credential_id'], 'my_gateway');
       expect(savedProviderDraft?['compat_mode'], 'openai_chat');
       expect(savedProviderDraft?['models'], contains('custom-model'));
       expect(find.textContaining('连接已保存'), findsOneWidget);
@@ -1396,25 +1635,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
 
-      await tester.tap(find.text('添加连接'));
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.text('选择厂商'), findsOneWidget);
-      expect(find.text('选择协议'), findsOneWidget);
-      await tester.ensureVisible(find.text('连接信息'));
+      await tester.ensureVisible(find.text('展开高级配置'));
       await tester.pump();
-      expect(find.text('连接信息'), findsOneWidget);
-      expect(find.text('DeepSeek'), findsWidgets);
-      expect(find.text('OpenAI-compatible Chat'), findsWidgets);
-
       expect(find.text('协议标识'), findsNothing);
       await tester.tap(find.text('展开高级配置'));
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('协议标识'), findsOneWidget);
       expect(find.text('请求端点'), findsOneWidget);
-      expect(find.textContaining('/chat/completions'), findsOneWidget);
+      expect(find.text('凭据 ID'), findsOneWidget);
+      expect(find.text('环境变量'), findsOneWidget);
       expectNoFlutterException();
     },
   );
@@ -1498,85 +1728,64 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets(
-    'translation settings default saves unsaved fetched models first',
-    (tester) async {
-      final store = WindowStateStore();
-      final bridge = WindowStateBridge.main(store);
-      final calls = <String>[];
-      Map<String, Object?>? savedProviderDraft;
-      Map<String, Object?>? savedRouting;
-      bridge.attachServiceCaller((method, params) async {
-        calls.add(method);
-        if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
-        if (method == 'provider.models') {
-          return {
-            'status': 'PASS',
-            'models': ['model-a', 'model-b'],
-          };
-        }
-        if (method == 'provider.save') {
-          savedProviderDraft = Map<String, Object?>.from(
-            params['provider_draft'] as Map,
-          );
-          return {
-            'providers_file_version': {'mtime_ns': 5, 'size': 6},
-          };
-        }
-        if (method == 'provider.routing.save') {
-          savedRouting = Map<String, Object?>.from(params);
-          return {
-            'routing': {
-              'primary': {'provider': 'RealProvider', 'model': 'model-a'},
-            },
-          };
-        }
-        throw RpcRemoteException('method_not_found', method);
-      });
+  testWidgets('translation profiles tab sets the primary model', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(multiRoutingProfiles: true).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': 'route_1',
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
 
-      await tester.pumpWidget(
-        TransVortexApp(
-          windowType: AppWindowType.translationSettings,
-          store: store,
-          bridge: bridge,
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
 
-      await tester.tap(find.text('拉取模型'));
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.tap(find.text('设为翻译默认'));
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
 
-      expect(
-        calls,
-        containsAllInOrder([
-          'provider.models',
-          'provider.save',
-          'provider.routing.save',
-        ]),
-      );
-      expect(
-        savedProviderDraft?['models'],
-        containsAll(['model-a', 'model-b']),
-      );
-      final profiles = savedRouting?['profiles'] as List?;
-      final defaultProfile = profiles?.cast<Map>().firstWhere(
-        (item) => item['id'] == 'default',
-      );
-      expect(defaultProfile?['primary'], {
-        'provider': 'RealProvider',
-        'model': 'model-a',
-      });
-      expect(savedRouting?['active_profile'], 'default');
-      expect(savedRouting?['expected_version'], {'mtime_ns': 5, 'size': 6});
-      expect(find.textContaining('默认翻译已切换'), findsOneWidget);
-      expectNoFlutterException();
-    },
-  );
+    await tester.ensureVisible(find.text('主模型'));
+    await tester.pump();
+    // The primary picker lists connection then model pills; tap the backup
+    // model under the RealProvider connection to set it as primary.
+    await tester.tap(find.text('backup-model').first);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, contains('provider.routing.save'));
+    expect(calls, isNot(contains('provider.save')));
+    final profiles = savedRouting?['profiles'] as List?;
+    final active = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect(active?['primary'], {
+      'provider': 'RealProvider',
+      'model': 'backup-model',
+    });
+    expect(find.textContaining('主模型已设为'), findsOneWidget);
+    expectNoFlutterException();
+  });
 
   testWidgets('translation settings switches routing profiles', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 1000));
@@ -1618,9 +1827,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('翻译方案'), findsWidgets);
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
     expect(find.text('配置 1'), findsWidgets);
-    expect(find.text('配置 2'), findsOneWidget);
+    expect(find.text('配置 2'), findsWidgets);
 
     await tester.tap(find.text('配置 2'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -1667,14 +1878,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
     final nameField = find.byWidgetPredicate(
       (widget) => widget is TextField && widget.controller?.text == '配置 1',
     );
     expect(nameField, findsOneWidget);
     await tester.enterText(nameField, '正式翻译');
-    await tester.ensureVisible(find.text('重命名翻译方案'));
+    await tester.ensureVisible(find.text('重命名方案'));
     await tester.pump();
-    await tester.tap(find.text('重命名翻译方案'));
+    await tester.tap(find.text('重命名方案'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -1723,6 +1937,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
     await tester.ensureVisible(find.text('另存为新方案'));
     await tester.pump();
     await tester.tap(find.text('另存为新方案'));
@@ -1735,12 +1952,12 @@ void main() {
     );
     expect(savedRouting?['active_profile'], 'route_3');
     expect(savedRouting?['next_profile_seq'], 4);
-    expect(created?['name'], '配置 3');
+    expect(created?['name'], '方案 3');
     expect(created?['primary'], {
       'provider': 'RealProvider',
       'model': 'real-model',
     });
-    expect(find.textContaining('已新建翻译方案：配置 3'), findsOneWidget);
+    expect(find.textContaining('已新建翻译方案：方案 3'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1779,6 +1996,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
     await tester.ensureVisible(find.text('删除当前方案'));
     await tester.pump();
     await tester.tap(find.text('删除当前方案'));
@@ -1792,10 +2012,8 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings adds selected model as fallback', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(820, 980));
+  testWidgets('translation settings adds a fallback model', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1100));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
@@ -1827,7 +2045,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('backup-model'));
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.ensureVisible(find.text('加入备用'));
+    await tester.pump();
+    // Stage the backup model in the fallback picker, then confirm.
+    await tester.tap(find.text('backup-model').last);
     await tester.pump();
     await tester.ensureVisible(find.text('加入备用'));
     await tester.pump();
@@ -1839,10 +2063,6 @@ void main() {
     final active = profiles?.cast<Map>().firstWhere(
       (item) => item['id'] == 'route_1',
     );
-    expect(active?['primary'], {
-      'provider': 'RealProvider',
-      'model': 'real-model',
-    });
     expect(active?['fallback'], [
       {'provider': 'RealProvider', 'model': 'backup-model'},
     ]);
@@ -1852,7 +2072,7 @@ void main() {
   });
 
   testWidgets('translation settings removes fallback model', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(820, 980));
+    await tester.binding.setSurfaceSize(const Size(900, 1100));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
@@ -1885,6 +2105,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
     final removeFallback = find.byTooltip('移除备用模型');
     await tester.ensureVisible(removeFallback);
     await tester.pump();
@@ -1899,6 +2122,66 @@ void main() {
     expect(active?['fallback'], isEmpty);
     expect(savedRouting?['active_profile'], 'route_1');
     expect(find.textContaining('已移除备用模型'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings moves fallback model', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    Map<String, Object?>? savedRouting;
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          multiRoutingProfiles: true,
+          activeRoutingProfile: 'route_1',
+          withTwoRoutingFallbacks: true,
+        ).raw;
+      }
+      if (method == 'provider.routing.save') {
+        savedRouting = Map<String, Object?>.from(params);
+        return {
+          'active_routing_profile': params['active_profile'],
+          'routing_profiles': params['profiles'],
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('翻译方案'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final moveDown = find.byTooltip('下移备用模型').first;
+    await tester.ensureVisible(moveDown);
+    await tester.pump();
+    await tester.tap(moveDown);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final profiles = savedRouting?['profiles'] as List?;
+    final active = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect(active?['fallback'], [
+      {'provider': 'RealProvider', 'model': 'third-model'},
+      {'provider': 'RealProvider', 'model': 'backup-model'},
+    ]);
+    expect(calls, contains('provider.routing.save'));
+    expect(calls, isNot(contains('provider.save')));
+    expect(find.textContaining('备用模型顺序已更新'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -2967,6 +3250,14 @@ Future<void> pickSourceAndStart(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 100));
 }
 
+void activatePopupMenuItem(WidgetTester tester, Key key) {
+  final state = tester.state<PopupMenuItemState<Object, PopupMenuItem<Object>>>(
+    find.byKey(key),
+  );
+  // ignore: invalid_use_of_protected_member
+  state.handleTap();
+}
+
 LocalServiceController _readyController({DesktopSnapshot? snapshot}) {
   return LocalServiceController(
     sessionFactory: () async => _FakeHandle(
@@ -3001,6 +3292,7 @@ DesktopSnapshot _desktopSnapshot({
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
   bool withRoutingFallback = false,
+  bool withTwoRoutingFallbacks = false,
   List<Map<String, Object?>> tasks = const [],
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
@@ -3015,7 +3307,11 @@ DesktopSnapshot _desktopSnapshot({
           'gemini-2.5-flash-lite',
           'gemini-2.0-flash-lite-preview-02-05',
         ]
-      : ['real-model', if (multiRoutingProfiles) 'backup-model'];
+      : [
+          'real-model',
+          if (multiRoutingProfiles) 'backup-model',
+          if (withTwoRoutingFallbacks) 'third-model',
+        ];
   final activeRouteId = activeRoutingProfile.isNotEmpty
       ? activeRoutingProfile
       : (multiRoutingProfiles ? 'route_1' : 'default');
@@ -3025,7 +3321,12 @@ DesktopSnapshot _desktopSnapshot({
             'id': 'route_1',
             'name': '配置 1',
             'primary': {'provider': 'RealProvider', 'model': 'real-model'},
-            'fallback': withRoutingFallback
+            'fallback': withTwoRoutingFallbacks
+                ? [
+                    {'provider': 'RealProvider', 'model': 'backup-model'},
+                    {'provider': 'RealProvider', 'model': 'third-model'},
+                  ]
+                : withRoutingFallback
                 ? [
                     {'provider': 'RealProvider', 'model': 'backup-model'},
                   ]

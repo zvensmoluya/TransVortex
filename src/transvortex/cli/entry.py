@@ -1003,6 +1003,7 @@ def main() -> None:
                         cli_overrides=request.overrides,
                         provider_name=request.provider or None,
                         model=request.model or None,
+                        routing=request.routing or None,
                         event_sink=_print_jsonl_event,
                     )
                 else:
@@ -1072,6 +1073,7 @@ def main() -> None:
                     cli_overrides=request.overrides,
                     provider_name=request.provider or None,
                     model=request.model or None,
+                    routing=request.routing or None,
                     input_type=request.input_type,
                     status="QUEUED",
                 ),
@@ -1108,6 +1110,7 @@ def main() -> None:
                 cli_overrides=request.overrides,
                 provider_name=request.provider or None,
                 model=request.model or None,
+                routing=request.routing or None,
                 input_type=request.input_type,
                 event_sink=_print_jsonl_event if args.stream_events else None,
             )
@@ -1161,6 +1164,7 @@ def main() -> None:
                     cli_overrides=request.overrides,
                     provider_name=request.provider or None,
                     model=request.model or None,
+                    routing=request.routing or None,
                 ),
                 json_mode=args.json,
                 stream_events=False,
@@ -1198,6 +1202,7 @@ def main() -> None:
                 cli_overrides=request.overrides,
                 provider_name=request.provider or None,
                 model=request.model or None,
+                routing=request.routing or None,
                 event_sink=_print_jsonl_event if args.stream_events else None,
             )
 

@@ -84,6 +84,7 @@ class TaskRuntime:
             cli_overrides=request.overrides,
             provider_name=request.provider or None,
             model=request.model or None,
+            routing=request.routing or None,
             input_type=request.input_type,
             status="QUEUED",
         )
@@ -105,6 +106,7 @@ class TaskRuntime:
             cli_overrides=request.overrides,
             provider_name=request.provider or None,
             model=request.model or None,
+            routing=request.routing or None,
         )
         self.save_runtime_request(request.task_id, "resume", resume_request_to_payload(request))
         task = self.store.load_task(request.task_id)

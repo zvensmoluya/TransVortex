@@ -1313,7 +1313,19 @@ def apply_route_overrides(
     *,
     provider_name: str | None = None,
     model: str | None = None,
+    routing: dict[str, Any] | RoutingConfig | None = None,
 ) -> AppConfig:
+    if routing is not None:
+        if isinstance(routing, RoutingConfig):
+            next_routing = routing
+        elif isinstance(routing, dict):
+            next_routing = RoutingConfig(
+                primary=_route_target(routing.get("primary") if isinstance(routing.get("primary"), dict) else {}),
+                fallback=_route_fallback(routing.get("fallback")),
+            )
+        else:
+            raise ValueError("routing override must be an object")
+        return replace(config, routing=next_routing)
     if not provider_name and not model:
         return config
     primary = replace(

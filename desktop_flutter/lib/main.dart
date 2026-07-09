@@ -1235,15 +1235,93 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   Future<void> _pickTranslation() async {
     final view = _controller.view;
-    final selected = await _showOptionMenu<TaskOption>(
-      title: '翻译模型',
-      options: view.translationOptions,
-      emptyLabel: '还没有可用翻译模型',
-      footerLabel: '去翻译模型设置',
-      onFooter: () => _openToolWindow(AppWindowType.translationSettings),
-      labelOf: (option) => option.label,
+    final selected = await showMenu<Object>(
+      context: context,
+      color: T.surface,
+      position: const RelativeRect.fromLTRB(248, 318, 248, 0),
+      items: [
+        PopupMenuItem<Object>(
+          enabled: false,
+          child: Text('翻译模型', style: T.tSection),
+        ),
+        if (view.translationOptions.isEmpty)
+          const PopupMenuItem<Object>(
+            enabled: false,
+            child: Text('还没有常用翻译模型', style: T.tCaption),
+          )
+        else
+          for (final option in view.translationOptions)
+            _translationMenuItem(option),
+        const PopupMenuDivider(),
+        PopupMenuItem<Object>(
+          key: const ValueKey('translation-more-models'),
+          value: _menuMoreTranslationModels,
+          child: Text('更多模型', style: T.tBody),
+        ),
+        PopupMenuItem<Object>(
+          value: _menuFooter,
+          child: Text(
+            '去翻译模型设置',
+            style: T.tBody.copyWith(color: T.accentStrong),
+          ),
+        ),
+      ],
     );
-    if (selected != null) _controller.selectTranslation(selected);
+    if (identical(selected, _menuFooter)) {
+      _openToolWindow(AppWindowType.translationSettings);
+      return;
+    }
+    if (identical(selected, _menuMoreTranslationModels)) {
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      if (!mounted) return;
+      await _selectDirectTranslation();
+      return;
+    }
+    if (selected is TranslationRuntimeChoice) {
+      _controller.selectTranslation(selected);
+    }
+  }
+
+  Future<void> _selectDirectTranslation() async {
+    final direct = await _pickDirectTranslation();
+    if (!mounted || direct == null) return;
+    _controller.selectTranslation(direct);
+  }
+
+  Future<TranslationRuntimeChoice?> _pickDirectTranslation() async {
+    final view = _controller.view;
+    final selected = await showMenu<Object>(
+      context: context,
+      color: T.surface,
+      position: const RelativeRect.fromLTRB(248, 318, 248, 0),
+      items: [
+        PopupMenuItem<Object>(
+          enabled: false,
+          child: Text('更多翻译模型', style: T.tSection),
+        ),
+        if (view.translationDirectOptions.isEmpty)
+          const PopupMenuItem<Object>(
+            enabled: false,
+            child: Text('还没有可用翻译模型', style: T.tCaption),
+          )
+        else
+          for (final option in view.translationDirectOptions)
+            _translationMenuItem(option),
+        const PopupMenuDivider(),
+        PopupMenuItem<Object>(
+          value: _menuFooter,
+          child: Text(
+            '去翻译模型设置',
+            style: T.tBody.copyWith(color: T.accentStrong),
+          ),
+        ),
+      ],
+    );
+    if (identical(selected, _menuFooter)) {
+      _openToolWindow(AppWindowType.translationSettings);
+      return null;
+    }
+    return selected is TranslationRuntimeChoice ? selected : null;
   }
 
   Future<void> _pickAsr() async {
@@ -1332,6 +1410,38 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       return null;
     }
     return selected as TValue?;
+  }
+
+  PopupMenuItem<Object> _translationMenuItem(TranslationRuntimeChoice option) {
+    return PopupMenuItem<Object>(
+      key: ValueKey(
+        'translation-choice-${option.source.name}-${option.provider ?? ''}-${option.model ?? ''}',
+      ),
+      value: option,
+      child: SizedBox(
+        width: 300,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              option.label,
+              style: T.tBody,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (option.detail.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                option.detail,
+                style: T.tCaption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _runRecovery(MainFailureView? failure) async {
@@ -1506,7 +1616,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 }
 
-const Object _menuFooter = Object();
+enum _MenuAction { footer, moreTranslationModels }
+
+const Object _menuFooter = _MenuAction.footer;
+const Object _menuMoreTranslationModels = _MenuAction.moreTranslationModels;
 
 class _TypeTag extends StatelessWidget {
   const _TypeTag({required this.kind});

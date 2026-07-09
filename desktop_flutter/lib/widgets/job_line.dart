@@ -53,7 +53,9 @@ class JobLine extends StatelessWidget {
             _Word(
               label: translationLabel,
               fullLabel: view.translationConfigured
-                  ? view.translationLabel
+                  ? (view.translationDetail.isNotEmpty
+                        ? view.translationDetail
+                        : view.translationLabel)
                   : null,
               warn: !view.translationConfigured,
               onPick: view.translationConfigured
