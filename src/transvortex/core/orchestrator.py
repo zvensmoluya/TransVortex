@@ -809,6 +809,7 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "memory_current_chunk",
         "memory_current_chunk_ids",
         "memory_attempt_started_at",
+        "memory_last_completed_at",
         "memory_bootstrap_status",
         "memory_bootstrap_actions",
         "translate_total_chunks",
@@ -822,12 +823,23 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "translate_current_model",
         "translate_current_mode",
         "translate_attempt_started_at",
+        "translate_last_completed_at",
         "translate_memory_entries",
         "translate_recovery_chunk",
         "translate_recovery_batch_index",
         "translate_recovery_batch_total",
         "translate_recovery_segment_count",
         "quality_status",
+        "quality_current_mode",
+        "quality_current_attempt",
+        "quality_current_max_attempts",
+        "quality_current_provider",
+        "quality_current_model",
+        "quality_current_chunk",
+        "quality_current_chunk_ids",
+        "quality_current_segment_id",
+        "quality_attempt_started_at",
+        "quality_last_completed_at",
         "quality_issue_counts",
         "quality_residual_counts",
         "delivery_status",
@@ -840,6 +852,12 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "bytes_received",
         "adaptive_parent_chunk",
         "adaptive_child_chunks",
+        "model_request_count",
+        "model_request_counts",
+        "model_request_stage_counts",
+        "model_request_last_mode",
+        "model_request_last_stage",
+        "model_request_last_started_at",
     ]
     detail = {key: checkpoint[key] for key in keys if key in checkpoint}
     if "translate_done_chunks" in checkpoint:
@@ -892,34 +910,63 @@ def _translation_progress_callback(
             mode = str(event.get("mode") or "translate")
             now = utc_now_iso()
             effective_stage = str(stage or "TRANSLATE").upper()
-            prefix = "memory" if effective_stage == "MEMORY" else "translate"
-            checkpoint["status"] = effective_stage
-            checkpoint[f"{prefix}_current_mode"] = mode
-            checkpoint[f"{prefix}_current_attempt"] = int(event.get("attempt") or 1)
-            checkpoint[f"{prefix}_current_max_attempts"] = int(event.get("max_attempts") or 1)
-            checkpoint[f"{prefix}_attempt_started_at"] = now
-            if event.get("provider") is not None:
-                checkpoint[f"{prefix}_current_provider"] = str(event.get("provider"))
-            if event.get("model") is not None:
-                checkpoint[f"{prefix}_current_model"] = str(event.get("model"))
-            if event.get("chunk_id") is not None:
-                checkpoint[f"{prefix}_current_chunk"] = str(event.get("chunk_id"))
-                checkpoint.pop(f"{prefix}_current_chunk_ids", None)
-            if event.get("chunk_ids") is not None:
-                checkpoint[f"{prefix}_current_chunk_ids"] = [str(item) for item in event.get("chunk_ids") or []]
-                checkpoint.pop(f"{prefix}_current_chunk", None)
-            if event.get("segment_id") is not None:
-                checkpoint["translate_current_segment_id"] = int(event.get("segment_id"))
-            else:
-                checkpoint.pop("translate_current_segment_id", None)
-            if event.get("memory_entries") is not None:
-                checkpoint["translate_memory_entries"] = int(event.get("memory_entries") or 0)
-            if mode == "batch_recovery":
-                checkpoint["translate_recovery_chunk"] = str(event.get("recovery_chunk_id") or "")
-                checkpoint["translate_recovery_batch_index"] = int(event.get("batch_index") or 1)
-                checkpoint["translate_recovery_batch_total"] = int(event.get("batch_total") or 1)
-                checkpoint["translate_recovery_segment_count"] = len(event.get("segment_ids") or [])
+            prefix = {"MEMORY": "memory", "QUALITY": "quality"}.get(effective_stage, "translate")
             provider_meta = event.get("provider_meta") if isinstance(event.get("provider_meta"), dict) else {}
+            request_state = str(event.get("request_state") or "").strip().lower()
+            if not request_state:
+                if provider_meta:
+                    request_state = "completed"
+                elif event.get("provider") is not None and event.get("model") is not None:
+                    request_state = "started"
+                else:
+                    request_state = "activity"
+            checkpoint["status"] = effective_stage
+            request_number = int(checkpoint.get("model_request_count") or 0)
+            if request_state != "completed":
+                checkpoint[f"{prefix}_current_mode"] = mode
+                if event.get("attempt") is not None:
+                    checkpoint[f"{prefix}_current_attempt"] = int(event.get("attempt") or 1)
+                if event.get("max_attempts") is not None:
+                    checkpoint[f"{prefix}_current_max_attempts"] = int(event.get("max_attempts") or 1)
+                if request_state == "started":
+                    checkpoint[f"{prefix}_attempt_started_at"] = now
+                if event.get("provider") is not None:
+                    checkpoint[f"{prefix}_current_provider"] = str(event.get("provider"))
+                if event.get("model") is not None:
+                    checkpoint[f"{prefix}_current_model"] = str(event.get("model"))
+                if event.get("chunk_id") is not None:
+                    checkpoint[f"{prefix}_current_chunk"] = str(event.get("chunk_id"))
+                    checkpoint.pop(f"{prefix}_current_chunk_ids", None)
+                if event.get("chunk_ids") is not None:
+                    checkpoint[f"{prefix}_current_chunk_ids"] = [str(item) for item in event.get("chunk_ids") or []]
+                    checkpoint.pop(f"{prefix}_current_chunk", None)
+                if event.get("segment_id") is not None:
+                    checkpoint[f"{prefix}_current_segment_id"] = int(event.get("segment_id"))
+                else:
+                    checkpoint.pop(f"{prefix}_current_segment_id", None)
+                if event.get("memory_entries") is not None:
+                    checkpoint["translate_memory_entries"] = int(event.get("memory_entries") or 0)
+                if mode == "batch_recovery":
+                    checkpoint["translate_recovery_chunk"] = str(event.get("recovery_chunk_id") or "")
+                    checkpoint["translate_recovery_batch_index"] = int(event.get("batch_index") or 1)
+                    checkpoint["translate_recovery_batch_total"] = int(event.get("batch_total") or 1)
+                    checkpoint["translate_recovery_segment_count"] = len(event.get("segment_ids") or [])
+            else:
+                checkpoint[f"{prefix}_last_completed_at"] = now
+            if request_state == "started":
+                request_number += 1
+                checkpoint["model_request_count"] = request_number
+                mode_counts = dict(checkpoint.get("model_request_counts") or {})
+                mode_counts[mode] = int(mode_counts.get(mode) or 0) + 1
+                checkpoint["model_request_counts"] = mode_counts
+                stage_counts = dict(checkpoint.get("model_request_stage_counts") or {})
+                current_stage_counts = dict(stage_counts.get(effective_stage) or {})
+                current_stage_counts[mode] = int(current_stage_counts.get(mode) or 0) + 1
+                stage_counts[effective_stage] = current_stage_counts
+                checkpoint["model_request_stage_counts"] = stage_counts
+                checkpoint["model_request_last_mode"] = mode
+                checkpoint["model_request_last_stage"] = effective_stage
+                checkpoint["model_request_last_started_at"] = now
             for source_key, target_key in [
                 ("transport", "transport"),
                 ("http_version", "http_version"),
@@ -934,21 +981,33 @@ def _translation_progress_callback(
                 if value is not None:
                     checkpoint[target_key] = value
             store.save_checkpoint(task_id, checkpoint)
-            if mode == "memory_patch":
+            if request_state == "completed":
+                event_type = "provider_response"
+                label = "Provider response received"
+            elif request_state == "activity":
+                event_type = "progress"
+                label = "Adaptive translation split" if mode == "adaptive_split" else f"Translation {mode} activity"
+            elif mode == "memory_patch":
+                event_type = "provider_attempt"
                 label = "Memory patch request"
             elif mode == "adaptive_split":
+                event_type = "progress"
                 label = "Adaptive translation split"
             else:
+                event_type = "provider_attempt"
                 label = f"Translation {mode} request"
             store.append_event(
                 task_id,
-                "provider_attempt",
+                event_type,
                 stage=effective_stage,
                 message=label,
                 details={
                     key: value
                     for key, value in {
                         "mode": mode,
+                        "request_state": request_state,
+                        "request_number": request_number if request_state == "started" else None,
+                        "request_part": event.get("request_part"),
                         "chunk_id": event.get("chunk_id"),
                         "chunk_ids": event.get("chunk_ids"),
                         "recovery_chunk_id": event.get("recovery_chunk_id"),
@@ -2411,6 +2470,7 @@ def _execute_task(
 
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "QUALITY", "Optimizing subtitle readability")
+        quality_progress = _translation_progress_callback(store, task_id, checkpoint, stage="QUALITY")
         quality_result = optimize_subtitles(aligned_segments, config.pipeline.subtitle.quality)
         final_segments = quality_result.segments
         paths["quality"].mkdir(parents=True, exist_ok=True)
@@ -2422,6 +2482,7 @@ def _execute_task(
                 source_lang=task.source_lang,
                 target_lang=task.target_lang,
                 memory_dir=paths["memory"] if translates_with_memory(config.pipeline.memory) else None,
+                progress_callback=quality_progress,
             )
             for row in compression_rows:
                 append_jsonl(paths["quality"] / "compression.jsonl", row)
@@ -2436,6 +2497,7 @@ def _execute_task(
                 source_lang=task.source_lang,
                 target_lang=task.target_lang,
                 memory_dir=paths["memory"] if translates_with_memory(config.pipeline.memory) else None,
+                progress_callback=quality_progress,
             )
             for row in reflow_rows:
                 append_jsonl(paths["quality"] / "reflow.jsonl", row)

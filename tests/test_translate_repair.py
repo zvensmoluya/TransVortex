@@ -750,4 +750,4 @@ def test_patch_enabled_uses_serial_windows(monkeypatch, tmp_path) -> None:
 
     list(iter_translate_all_chunks(config, chunks, "en", "zh-CN", memory_dir=tmp_path / "memory"))
 
-    assert window_sizes == [1, 1]
+    assert window_sizes == [2]

@@ -1498,11 +1498,24 @@ class TaskSummary {
   bool get isTerminal => isDone || isFailed || isCancelled;
   bool get canCancel => runtime['can_cancel'] == true;
   bool get canResume => runtime['can_resume'] == true;
+  Map<String, Object?> get progressDetail => _stringMap(raw['progress_detail']);
+  int get asrDoneCount => _intValue(progressDetail['asr_done_count']) ?? 0;
+  int get asrTotalSegments =>
+      _intValue(progressDetail['asr_total_segments']) ?? 0;
+  int get translationDoneCount =>
+      _intValue(progressDetail['translate_done_count']) ?? 0;
+  int get translationTotalChunks =>
+      _intValue(progressDetail['translate_total_chunks']) ?? 0;
+  int get modelRequestCount =>
+      _intValue(progressDetail['model_request_count']) ?? 0;
+  Map<String, int> get modelRequestCounts => _stringMap(
+    progressDetail['model_request_counts'],
+  ).map((key, value) => MapEntry(key, _intValue(value) ?? 0));
 
   double? get latestProgress {
     final progress = _numValue(raw['progress']);
     if (progress != null) return progress.toDouble().clamp(0.0, 1.0);
-    final detail = _stringMap(raw['progress_detail']);
+    final detail = progressDetail;
     final done = _numValue(detail['translate_done_count']);
     final total = _numValue(detail['translate_total_chunks']);
     if (done != null && total != null && total > 0) {

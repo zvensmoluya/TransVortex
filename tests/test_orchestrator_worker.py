@@ -110,7 +110,59 @@ def test_memory_provider_progress_keeps_memory_checkpoint_stage(tmp_path: Path) 
     assert checkpoint["status"] == "MEMORY"
     assert checkpoint["memory_current_mode"] == "memory_bootstrap"
     assert checkpoint["memory_current_chunk_ids"] == ["bootstrap"]
+    assert checkpoint["model_request_count"] == 1
+    assert checkpoint["model_request_counts"] == {"memory_bootstrap": 1}
     assert "translate_current_mode" not in checkpoint
+
+
+def test_provider_progress_counts_request_start_once_and_separates_response(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task_id = "tvx_request_lifecycle"
+    checkpoint: dict = {}
+    callback = _translation_progress_callback(store, task_id, checkpoint)
+
+    callback(
+        {
+            "mode": "translate",
+            "request_state": "started",
+            "chunk_id": "c00000",
+            "provider": "p1",
+            "model": "m1",
+            "attempt": 1,
+            "max_attempts": 2,
+        }
+    )
+    callback(
+        {
+            "mode": "translate",
+            "request_state": "completed",
+            "chunk_id": "c00000",
+            "provider": "p1",
+            "model": "m1",
+            "attempt": 1,
+            "max_attempts": 2,
+            "provider_meta": {"transport": "httpx", "bytes_received": 123},
+        }
+    )
+    callback(
+        {
+            "mode": "adaptive_split",
+            "request_state": "activity",
+            "chunk_id": "c00000",
+            "chunk_ids": ["c00000a", "c00000b"],
+        }
+    )
+
+    assert checkpoint["model_request_count"] == 1
+    assert checkpoint["model_request_counts"] == {"translate": 1}
+    assert checkpoint["model_request_stage_counts"] == {"TRANSLATE": {"translate": 1}}
+    assert checkpoint["translate_last_completed_at"]
+    assert checkpoint["transport"] == "httpx"
+    payload = _checkpoint_status_payload(store, task_id)
+    assert payload["progress_detail"]["model_request_count"] == 1
+    events = [json.loads(line) for line in store.events_file(task_id).read_text(encoding="utf-8").splitlines()]
+    assert [event["type"] for event in events] == ["provider_attempt", "provider_response", "progress"]
+    assert events[0]["details"]["request_number"] == 1
 
 
 def _indent_yaml_block(block: str, prefix: str) -> str:

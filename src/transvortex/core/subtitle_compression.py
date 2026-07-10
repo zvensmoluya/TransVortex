@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQualityConfig
 from ..memory.injector import build_memory_prompt
@@ -19,6 +19,17 @@ COMPRESSION_STYLE_PROMPT = (
     "Compress the translated subtitle for readability. Preserve the meaning, tone, names, jokes, profanity, "
     "and key facts. Prefer natural concise subtitles over literal wording. Output only the requested numbered line."
 )
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
 
 
 def _budget(seg: Segment, config: SubtitleQualityConfig) -> int:
@@ -46,6 +57,7 @@ def _compress_segment(
     model: str,
     quality: SubtitleQualityConfig,
     memory_prompt: str = "",
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[Segment | None, list[dict[str, Any]]]:
     provider = config.providers[provider_name]
     client = build_provider_client(provider)
@@ -54,6 +66,16 @@ def _compress_segment(
     budget = _budget(seg, quality)
     for attempt in range(attempts):
         try:
+            _notify_progress(
+                progress_callback,
+                mode="quality_compression",
+                request_state="started",
+                segment_id=seg.id,
+                provider=provider_name,
+                model=model,
+                attempt=attempt + 1,
+                max_attempts=attempts,
+            )
             req = NormalizedRequest(
                 model=model,
                 lines=[f"[{seg.id}] {seg.text_tgt or seg.text_src}"],
@@ -107,6 +129,7 @@ def compress_overlong_subtitles(
     source_lang: str,
     target_lang: str,
     memory_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Segment], list[dict[str, Any]]]:
     if not config.pipeline.subtitle.compression.enabled:
         return segments, []
@@ -155,6 +178,7 @@ def compress_overlong_subtitles(
                 model=route.model,
                 quality=quality,
                 memory_prompt=memory_prompt,
+                progress_callback=progress_callback,
             )
             row_errors.extend(errors)
             if compressed is not None:

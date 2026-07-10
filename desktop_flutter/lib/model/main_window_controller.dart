@@ -802,6 +802,7 @@ class MainWindowController extends ChangeNotifier {
     if (_termsEnabled) 'memory_enabled': true,
     'memory_bootstrap_enabled': _termsEnabled,
     'memory_patch_enabled': _termsEnabled,
+    if (_termsEnabled) 'memory_patch_window_chunks': 3,
   };
 
   void _applyServiceSnapshot() {
@@ -1582,18 +1583,26 @@ class MainWindowController extends ChangeNotifier {
       case 'MEMORY':
         final mode = '${detail['memory_current_mode'] ?? ''}';
         final actions = _integer(detail['memory_bootstrap_actions']);
+        final requestCount = _integer(detail['model_request_count']);
         return MainRunProgress(
           stage: MainRunStage.memory,
           title: '整理术语',
           detail: actions > 0
               ? '已整理 $actions 条名称与术语候选'
+              : mode == 'memory_bootstrap_extract'
+              ? '从全片提取名称、称呼和固定表达'
+              : mode == 'memory_bootstrap_classify'
+              ? '筛选候选并整理成可用术语'
               : mode == 'memory_bootstrap'
               ? '从全片提取名称、称呼和固定译法'
               : '合并预设术语与运行时术语记忆',
           overallProgress: overall,
           phaseProgress: actions > 0 ? 1 : 0.5,
           phaseIndex: 3,
-          counter: actions > 0 ? '$actions 条' : '',
+          counter: [
+            if (actions > 0) '$actions 条',
+            if (requestCount > 0) '模型 $requestCount 次',
+          ].join(' · '),
           activity: activity,
         );
       case 'SEGMENT':
@@ -1617,6 +1626,7 @@ class MainWindowController extends ChangeNotifier {
         final recoveryCount = _integer(
           detail['translate_recovery_segment_count'],
         );
+        final requestCount = _integer(detail['model_request_count']);
         final modeDetail = switch (mode) {
           'batch_recovery' when recoveryCount > 0 =>
             '批量补回被截断的 $recoveryCount 行字幕',
@@ -1633,7 +1643,10 @@ class MainWindowController extends ChangeNotifier {
           overallProgress: overall,
           phaseProgress: ratio,
           phaseIndex: 5,
-          counter: total > 0 ? '$done/$total' : '',
+          counter: [
+            if (total > 0) '$done/$total',
+            if (requestCount > 0) '模型 $requestCount 次',
+          ].join(' · '),
           activity: activity,
         );
       case 'ALIGN':
@@ -1648,10 +1661,16 @@ class MainWindowController extends ChangeNotifier {
         );
       case 'QUALITY':
         final status = '${detail['quality_status'] ?? ''}'.toUpperCase();
+        final mode = '${detail['quality_current_mode'] ?? ''}';
+        final requestCount = _integer(detail['model_request_count']);
         return MainRunProgress(
           stage: MainRunStage.quality,
           title: '检查可读性',
-          detail: status == 'FAIL'
+          detail: mode == 'quality_compression'
+              ? '压缩阅读速度过快的长字幕'
+              : mode == 'quality_reflow'
+              ? '重排难读的对白和时间窗口'
+              : status == 'FAIL'
               ? '发现需要人工审看的字幕'
               : status == 'WARN'
               ? '正在整理可读性提醒'
@@ -1659,6 +1678,7 @@ class MainWindowController extends ChangeNotifier {
           overallProgress: overall,
           phaseProgress: status.isEmpty ? 0.5 : 1,
           phaseIndex: 7,
+          counter: requestCount > 0 ? '模型 $requestCount 次' : '',
           activity: activity,
         );
       case 'EXPORT':
@@ -1728,11 +1748,15 @@ class MainWindowController extends ChangeNotifier {
     final segmentId = _integer(details['segment_id'] ?? event['segment_id']);
     final text = switch (mode) {
       'memory_bootstrap' => '正在生成初始术语记忆',
+      'memory_bootstrap_extract' => '正在提取名称和称呼',
+      'memory_bootstrap_classify' => '正在整理候选术语',
       'memory_patch' => '正在合并本段新增术语',
       'batch_recovery' when count > 0 => '正在批量补回 $count 行',
       'adaptive_split' => '分片已自动拆小后重试',
       'protocol_recovery' => '正在校正返回格式',
       'repair' when segmentId > 0 => '正在修复第 $segmentId 行',
+      'quality_compression' => '正在压缩过长字幕',
+      'quality_reflow' => '正在重排难读对白',
       _ => '',
     };
     return text.isEmpty ? null : text;

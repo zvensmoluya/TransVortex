@@ -471,7 +471,7 @@ class MemoryInjectConfig:
 class MemoryPatchConfig:
     enabled: bool = False
     mode: str = "serial"
-    window_chunks: int = 1
+    window_chunks: int = 3
     system_prompt: str = ""
 
 

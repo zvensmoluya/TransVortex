@@ -64,6 +64,7 @@ def _config(tmp_path, *, enabled: bool = True) -> AppConfig:
 
 def test_compression_shortens_overlong_subtitle(monkeypatch, tmp_path) -> None:
     FakeCompressionClient.calls = []
+    progress_events = []
     monkeypatch.setattr(
         "transvortex.core.subtitle_compression.build_provider_client",
         lambda provider: FakeCompressionClient(provider),
@@ -74,10 +75,22 @@ def test_compression_shortens_overlong_subtitle(monkeypatch, tmp_path) -> None:
         segments=segments,
         source_lang="en",
         target_lang="zh-CN",
+        progress_callback=progress_events.append,
     )
     assert out[0].text_tgt == "太长了"
     assert out[0].meta["compressed"] is True
     assert artifacts[0]["status"] == "compressed"
+    assert progress_events == [
+        {
+            "mode": "quality_compression",
+            "request_state": "started",
+            "segment_id": 1,
+            "provider": "p1",
+            "model": "m1",
+            "attempt": 1,
+            "max_attempts": 1,
+        }
+    ]
 
 
 def test_compression_receives_memory_prompt(monkeypatch, tmp_path) -> None:

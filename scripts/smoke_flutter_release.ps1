@@ -209,7 +209,8 @@ function Write-SmokeTaskFixture {
         [string]$ErrorCode = "",
         [string]$ErrorHint = "",
         [string]$ErrorStage = "",
-        [string]$ErrorRetryable = ""
+        [string]$ErrorRetryable = "",
+        [hashtable]$Checkpoint = @{}
     )
 
     $taskDir = Join-Path (Join-Path $serviceRoot "artifacts") $TaskId
@@ -249,6 +250,13 @@ function Write-SmokeTaskFixture {
         ($taskPayload | ConvertTo-Json -Depth 8),
         $utf8NoBom
     )
+    if ($Checkpoint.Count -gt 0) {
+        [System.IO.File]::WriteAllText(
+            (Join-Path $taskDir "checkpoint.json"),
+            ($Checkpoint | ConvertTo-Json -Depth 8),
+            $utf8NoBom
+        )
+    }
     return $taskDir
 }
 
@@ -374,6 +382,30 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         ErrorHint = $fixtureErrorHint
         ErrorStage = $fixtureErrorStage
         ErrorRetryable = $fixtureErrorRetryable
+    }
+    if ($WindowType -eq "taskProcessing") {
+        $checkpointStatus = if ($isTaskProcessingFailure) {
+            "TRANSLATE"
+        } elseif ($TaskProcessingScenario -eq "cancel") {
+            "TRANSLATE"
+        } else {
+            "DONE"
+        }
+        $contextFixtureArgs.Checkpoint = @{
+            status = $checkpointStatus
+            asr_done_count = 61
+            asr_total_segments = 61
+            translate_done_count = $(if ($checkpointStatus -eq "DONE") { 8 } else { 4 })
+            translate_total_chunks = 8
+            model_request_count = 14
+            model_request_counts = @{
+                translate = 8
+                memory_bootstrap_extract = 1
+                memory_bootstrap_classify = 1
+                memory_patch = 3
+                batch_recovery = 1
+            }
+        }
     }
     $taskDir = Write-SmokeTaskFixture @contextFixtureArgs
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
@@ -837,6 +869,9 @@ try {
             if ($report.task_submission_path -eq "controller" -and ($report.controller_state -ne "completed" -or $report.result_open_ok -ne $true -or $report.result_open_same_directory -ne $true -or $report.reexport_ok -ne $true -or $report.reexport_event -ne $true -or $report.reexport_same_directory -ne $true)) {
                 throw "Release smoke did not open and re-export completed task results: $($report | ConvertTo-Json -Compress -Depth 5)"
             }
+            if ($report.task_submission_path -eq "controller" -and ($report.task_model_request_count -lt 1 -or $report.task_model_request_counts.translate -lt 1)) {
+                throw "Release smoke did not expose model request lifecycle counts through task status: $($report | ConvertTo-Json -Compress -Depth 5)"
+            }
         }
         if ($CheckNotifications) {
             if ($report.notification_check_ok -ne $true -or $report.notification_show_calls -ne 1 -or $report.notification_trigger_path -ne "observer_state_transition") {
@@ -896,6 +931,9 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE")) {
             throw "Release task processing smoke did not read and select the completed task: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_model_request_count -ne 14 -or $report.task_processing_model_request_counts.batch_recovery -ne 1)) {
+            throw "Release task processing smoke did not expose the structured model request summary: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_output_dir_checked -ne $true -or $report.task_processing_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.task_processing_output_dir_path))) {
             throw "Release task processing smoke did not verify the selected task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"

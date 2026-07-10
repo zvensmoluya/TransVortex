@@ -135,6 +135,7 @@ def _two_failure_segments() -> list[Segment]:
 def test_reflow_merges_quality_failure_window(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("transvortex.core.subtitle_reflow.build_provider_client", lambda provider: FakeReflowClient(provider))
     config = _config(tmp_path)
+    progress_events = []
     segments = [
         Segment(id=1, start=0.0, end=0.1, text_src="a", text_tgt="这是一条很长的字幕"),
         Segment(id=2, start=0.5, end=1.6, text_src="b", text_tgt="下一句"),
@@ -148,12 +149,17 @@ def test_reflow_merges_quality_failure_window(monkeypatch, tmp_path) -> None:
         quality_report=quality_report,
         source_lang="ja",
         target_lang="zh-CN",
+        progress_callback=progress_events.append,
     )
 
     assert artifacts[0]["status"] == "reflowed"
     assert [seg.id for seg in out] == [1, 3]
     assert out[0].text_tgt == "短句合并"
     assert out[0].meta["source_ids"] == [1, 2]
+    assert len(progress_events) == 1
+    assert progress_events[0]["mode"] == "quality_reflow"
+    assert progress_events[0]["request_state"] == "started"
+    assert progress_events[0]["segment_ids"][:2] == [1, 2]
 
 
 def test_reflow_rejects_merge_containing_high_risk_asr_segment(monkeypatch, tmp_path) -> None:

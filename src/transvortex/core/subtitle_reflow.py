@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment, SubtitleQualityConfig
 from ..memory.json_utils import json_object_from_model_text
@@ -27,6 +27,17 @@ REFLOW_SYSTEM_PROMPT = (
     "You are a subtitle post-editor. Repair readability and timing failures in already translated subtitles. "
     "Do not retranslate the whole scene, do not globally rewrite unaffected subtitles, and return only the requested schema."
 )
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -605,6 +616,7 @@ def _run_batch(
     rows_by_id: dict[int, dict[str, Any]],
     memory_dir: Path | None,
     fallback: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Segment], list[dict[str, Any]], bool]:
     reflow_config = config.pipeline.subtitle.reflow
     windows: list[ReflowWindow] = list(batch["windows"])
@@ -650,6 +662,17 @@ def _run_batch(
                 row_artifact["memory_entries"] = memory_entries
         for attempt in range(attempts):
             try:
+                _notify_progress(
+                    progress_callback,
+                    mode="quality_reflow",
+                    request_state="started",
+                    chunk_id=f"reflow_{int(batch['batch_index'])}",
+                    segment_ids=[segment_id for window in windows for segment_id in window.window_ids],
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt + 1,
+                    max_attempts=attempts,
+                )
                 response = client.translate_request(req)
                 payload_by_window = _replacement_payloads_for_windows(response.raw_text, windows)
                 output, _any_accepted = _apply_batch_payload(
@@ -728,6 +751,7 @@ def reflow_subtitles(
     source_lang: str,
     target_lang: str,
     memory_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Segment], list[dict[str, Any]]]:
     reflow_config = config.pipeline.subtitle.reflow
     if not reflow_config.enabled:
@@ -770,6 +794,7 @@ def reflow_subtitles(
             target_lang=target_lang,
             rows_by_id=rows_by_id,
             memory_dir=memory_dir,
+            progress_callback=progress_callback,
         )
         if parse_ok or len(batch["windows"]) == 1:
             artifacts.extend(rows)
@@ -795,6 +820,7 @@ def reflow_subtitles(
                 rows_by_id=rows_by_id,
                 memory_dir=memory_dir,
                 fallback=True,
+                progress_callback=progress_callback,
             )
             artifacts.extend(fallback_rows)
     return output, artifacts

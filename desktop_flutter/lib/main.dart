@@ -460,6 +460,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               'translate_total_chunks': 38,
               'translate_current_mode': 'batch_recovery',
               'translate_recovery_segment_count': 79,
+              'model_request_count': 5,
+              'model_request_counts': {
+                'translate': 3,
+                'memory_bootstrap_extract': 1,
+                'batch_recovery': 1,
+              },
             },
             runtime: const {'state': 'running', 'progress': 0.707},
           ),
@@ -665,6 +671,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       terminalEvidence = 'desktop_snapshot';
     }
     doneEvent = await _waitForTaskEvent(client, taskId, 'done', deadline);
+    var modelRequestCount = 0;
+    var modelRequestCounts = const <String, int>{};
+    try {
+      final tasks = await client.taskList().timeout(_remaining(deadline));
+      final summary = tasks.where((task) => task.taskId == taskId).firstOrNull;
+      modelRequestCount = summary?.modelRequestCount ?? 0;
+      modelRequestCounts = summary?.modelRequestCounts ?? const <String, int>{};
+    } on Object {
+      // The remaining smoke evidence still reports the missing request summary.
+    }
     var resultOpenOk = false;
     var resultOpenOutputPath = '';
     var resultOpenOutputPaths = const <String, String>{};
@@ -743,6 +759,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       'task_done_event': doneEvent,
       'task_terminal_evidence': terminalEvidence,
       'task_error': taskError,
+      'task_model_request_count': modelRequestCount,
+      'task_model_request_counts': modelRequestCounts,
       'controller_state': _controller.view.state.name,
       'result_open_ok': resultOpenOk,
       'result_open_output_path': resultOpenOutputPath,

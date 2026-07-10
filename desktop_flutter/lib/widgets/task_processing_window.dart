@@ -684,6 +684,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_task_count': tasks.length,
       'task_processing_selected_task_id': selected?.taskId ?? '',
       'task_processing_selected_status': selected?.status ?? '',
+      'task_processing_model_request_count': selected?.modelRequestCount ?? 0,
+      'task_processing_model_request_counts':
+          selected?.modelRequestCounts ?? const <String, int>{},
       'task_processing_result_segment_count': _smokeResultSegmentCount,
       'task_processing_result_issue_count': _smokeResultIssueCount,
       'task_processing_edit_saved': _smokeEditSaved,
@@ -1580,6 +1583,31 @@ class _TaskSummaryPanel extends StatelessWidget {
     final createdAt = taskTimestampLabel(task.createdAt);
     final updatedAt = taskTimestampLabel(task.updatedAt);
     final runtimeState = _runtimeStateLabel(task.runtimeState);
+    final requestCounts = task.modelRequestCounts;
+    final translationRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode == 'translate',
+    );
+    final protocolRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode == 'protocol_recovery',
+    );
+    final batchRecoveryRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode == 'batch_recovery',
+    );
+    final repairRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode == 'repair',
+    );
+    final memoryRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode.startsWith('memory_'),
+    );
+    final qualityRequests = _requestModeTotal(
+      requestCounts,
+      (mode) => mode.startsWith('quality_'),
+    );
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: T.s12),
@@ -1606,10 +1634,48 @@ class _TaskSummaryPanel extends StatelessWidget {
               value: runtimeState,
               danger: task.isRuntimeStale,
             ),
+          if (task.asrTotalSegments > 0)
+            _InfoPill(
+              label: '语音分窗',
+              value: '${task.asrDoneCount}/${task.asrTotalSegments}',
+            ),
+          if (task.translationTotalChunks > 0)
+            _InfoPill(
+              label: '翻译分片',
+              value:
+                  '${task.translationDoneCount}/${task.translationTotalChunks}',
+            ),
+          if (task.modelRequestCount > 0)
+            _InfoPill(label: '模型请求', value: '${task.modelRequestCount} 次'),
+          if (translationRequests > 0)
+            _InfoPill(label: '分片翻译', value: '$translationRequests 次'),
+          if (protocolRequests > 0)
+            _InfoPill(label: '格式重试', value: '$protocolRequests 次'),
+          if (batchRecoveryRequests > 0)
+            _InfoPill(label: '批量补回', value: '$batchRecoveryRequests 次'),
+          if (repairRequests > 0)
+            _InfoPill(
+              label: '单行修复',
+              value: '$repairRequests 次',
+              danger: repairRequests > 8,
+            ),
+          if (memoryRequests > 0)
+            _InfoPill(label: '术语请求', value: '$memoryRequests 次'),
+          if (qualityRequests > 0)
+            _InfoPill(label: '质量请求', value: '$qualityRequests 次'),
         ],
       ),
     );
   }
+}
+
+int _requestModeTotal(
+  Map<String, int> counts,
+  bool Function(String mode) matches,
+) {
+  return counts.entries
+      .where((entry) => matches(entry.key))
+      .fold(0, (total, entry) => total + entry.value);
 }
 
 class _InfoPill extends StatelessWidget {

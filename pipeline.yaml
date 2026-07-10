@@ -116,7 +116,7 @@ memory:
   patch:
     enabled: false
     mode: serial
-    window_chunks: 1
+    window_chunks: 3
   merge:
     auto_confirm_high_confidence: false
     conflict_policy: record

@@ -38,6 +38,8 @@ String taskEventTypeLabel(String type) {
   }
   if (lower == 'stage') return '阶段';
   if (lower == 'progress') return '进度';
+  if (lower == 'provider_attempt') return '模型请求';
+  if (lower == 'provider_response') return '模型返回';
   return taskStatusLabel(raw, fallback: raw.isEmpty ? '事件' : raw);
 }
 
@@ -72,6 +74,9 @@ String taskEventMessageLabel({
     message,
   ].where((item) => item.trim().isNotEmpty).join(' ').toLowerCase();
   if (normalized.isEmpty) return '任务事件已记录';
+  if (type.trim().toLowerCase() == 'provider_response') {
+    return '模型返回已接收';
+  }
   if (normalized.contains('resume')) return '已请求继续任务';
   if (normalized.contains('created') || normalized.contains('queued')) {
     return '任务已创建，等待调度';

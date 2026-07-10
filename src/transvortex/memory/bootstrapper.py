@@ -251,17 +251,19 @@ def bootstrap_memory(
             continue
         client = build_provider_client(provider)
         try:
-            _notify_progress(
-                progress_callback,
-                mode="memory_bootstrap",
-                chunk_ids=["bootstrap"],
-                provider=route.provider,
-                model=route.model,
-                attempt=attempt,
-                max_attempts=len(route_candidates),
-            )
             candidates_payload = None
             if str(config.pipeline.memory.bootstrap.pipeline or "").strip().lower() == "staged":
+                _notify_progress(
+                    progress_callback,
+                    mode="memory_bootstrap_extract",
+                    request_state="started",
+                    request_part="extract",
+                    chunk_ids=["bootstrap"],
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt,
+                    max_attempts=len(route_candidates),
+                )
                 candidates_payload, extract_raw_text = _extract_candidates(
                     client=client,
                     route_model=route.model,
@@ -269,6 +271,17 @@ def bootstrap_memory(
                     bootstrap_input_text=bootstrap_input_text,
                     source_lang=source_lang,
                     target_lang=target_lang,
+                )
+                _notify_progress(
+                    progress_callback,
+                    mode="memory_bootstrap_classify",
+                    request_state="started",
+                    request_part="classify",
+                    chunk_ids=["bootstrap"],
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt,
+                    max_attempts=len(route_candidates),
                 )
                 payload, raw_text, usage, provider_meta, rejected_candidates = _classify_candidates(
                     client=client,
@@ -282,6 +295,17 @@ def bootstrap_memory(
                 payload["extract_raw_text"] = extract_raw_text
                 payload["extract_candidates"] = len(candidates_payload.get("candidates", []))
             else:
+                _notify_progress(
+                    progress_callback,
+                    mode="memory_bootstrap",
+                    request_state="started",
+                    request_part="single",
+                    chunk_ids=["bootstrap"],
+                    provider=route.provider,
+                    model=route.model,
+                    attempt=attempt,
+                    max_attempts=len(route_candidates),
+                )
                 payload, raw_text, usage, provider_meta, candidates_payload, rejected_candidates = _single_pass_bootstrap(
                     client=client,
                     route_model=route.model,

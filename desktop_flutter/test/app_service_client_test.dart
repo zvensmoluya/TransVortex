@@ -1090,6 +1090,13 @@ routing:
       'progress_detail': {
         'translate_done_count': 2,
         'translate_total_chunks': 4,
+        'model_request_count': 7,
+        'model_request_counts': {
+          'translate': 4,
+          'memory_bootstrap_extract': 1,
+          'memory_bootstrap_classify': 1,
+          'batch_recovery': 1,
+        },
       },
     });
 
@@ -1103,6 +1110,10 @@ routing:
     expect(task.isRuntimeStale, isTrue);
     expect(task.latestProgress, 0.5);
     expect(task.displayStatus, 'TRANSLATE');
+    expect(task.translationDoneCount, 2);
+    expect(task.translationTotalChunks, 4);
+    expect(task.modelRequestCount, 7);
+    expect(task.modelRequestCounts['batch_recovery'], 1);
     expect(task.outputPaths['srt'], r'D:\out.srt');
   });
 
@@ -1166,6 +1177,15 @@ routing:
     expect(taskStatusLabel('TRANSLATE'), '翻译字幕');
     expect(taskStatusLabel('EXPORT'), '写出字幕');
     expect(taskStageLabel('checkpoint: translate'), '翻译字幕');
+    expect(taskEventTypeLabel('provider_attempt'), '模型请求');
+    expect(taskEventTypeLabel('provider_response'), '模型返回');
+    expect(
+      taskEventMessageLabel(
+        type: 'provider_response',
+        message: 'Provider response received',
+      ),
+      '模型返回已接收',
+    );
     expect(languageLabel('en'), '英语');
     expect(languageLabel('zh-CN'), '简体中文');
     expect(languageLabel('zh_TW'), '繁体中文');

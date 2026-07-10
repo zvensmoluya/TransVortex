@@ -46,13 +46,13 @@
 - **主窗口运行设置只有三个**（对过代码，均不含糊）：
   1. 输出格式（SRT / ASS / VTT，可多选）— `output.formats`
   2. 双语 — `output.bilingual`
-  3. 生成术语建议（允许系统自动积累术语建议，开/关）— `allowSystemSuggestions`，驱动 `memory_bootstrap_enabled` + `memory_patch_enabled`；打开时可写入 `memory_enabled=true` 确保生成链路可用，关闭时不得写入 `memory_enabled=false`，避免把后续“使用术语 / 预设术语表”一并关掉
+  3. 生成术语建议（允许系统自动积累术语建议，开/关）— `allowSystemSuggestions`，驱动 `memory_bootstrap_enabled` + `memory_patch_enabled`；打开时可写入 `memory_enabled=true` 确保生成链路可用，并用 `memory_patch_window_chunks=3` 合并术语更新请求；关闭时不得写入 `memory_enabled=false`，避免把后续“使用术语 / 预设术语表”一并关掉
 - **「质量」砍出主窗口**：它是 `subtitleQualityMode`（off/conservative/balanced），本质是字幕整形力度的粗档（[subtitle_optimizer.py:254](src/transvortex/core/subtitle_optimizer.py#L254)）。主窗口默认走 `balanced`，未来若暴露归详细设置，并改用「字幕整形：轻/标准/关」这类说人话措辞。
 - **输出目录砍出主窗口**：默认生成到**片源同目录**；目录不可写时由失败修复件给「选个文件夹」，不设常驻控件。
 - **没有常驻「输出位」、没有平行输出框**：完成是**主体自己的状态**（封套变成「已带字幕」），不另起区域、不铺海报、不做对等的右侧输出/日志面板。
 - **三个任务设置以「一句话 + 可点词」承载，不是表单/控件带**：`将做成〈双语〉〈SRT·ASS〉字幕`，点词在已配好的里选；不并排三个常驻旋钮。
 - **主窗口「翻译模型」保留为高频运行时选择**：第一视觉仍是模型名；默认候选不是裸 provider/model 全展开，而是设置窗里整理好的常用翻译项（routing profile），每项实际携带主模型 + 备用模型的完整 routing snapshot。底部「更多模型」可临时直选任一已保存连接模型；直选项只带主模型、备用为空，不暗中沿用当前方案 fallback。
-- **主窗口「生成术语建议」开关语义已按 Flutter 收窄**：冻结旧 Tauri 的 `toggleTerms`（[ClientHomePage.tsx:613](desktop/src/pages/ClientHomePage/ClientHomePage.tsx#L613)）切的是 `useProjectTerms`（使用术语/inject），**不是术语生成**。Flutter 实现只把主窗口短开关映射为 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`，并且只有打开生成时才补 `memory_enabled=true`；可点词说明它不会关闭已有人工术语表或预设术语表。
+- **主窗口「生成术语建议」开关语义已按 Flutter 收窄**：冻结旧 Tauri 的 `toggleTerms`（[ClientHomePage.tsx:613](desktop/src/pages/ClientHomePage/ClientHomePage.tsx#L613)）切的是 `useProjectTerms`（使用术语/inject），**不是术语生成**。Flutter 实现只把主窗口短开关映射为 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`，打开时补 `memory_enabled=true`，并按 3 个翻译分片合并一次运行时术语更新；可点词说明它不会关闭已有人工术语表或预设术语表。
 - **使用术语 / 术语维护 / 预设术语表 另设计**，暂不进主窗口。耦合提醒：bootstrap/patch 负责「攒」、inject 负责「用」；设计「使用术语」时必须把「生成的术语回流到翻译」接上，否则主窗口「生成术语建议」单开会语义落空。
 
 ---
@@ -166,11 +166,11 @@
 | 空（无片源） | 主体=投递口；job 描述显示当前会话的新任务草稿并可提前调整；主动作「选择片源」可打开系统文件对话框 | 无 |
 | 就绪（有片源 + 所需能力已配） | 主体=封套；job 描述显当前选择；SRT 不显示识别方案；「开始译制」高亮 | 无 |
 | 受阻（翻译或媒体识别需配） | job 描述对应可点词变 `需配置 ●`（warn）gate；SRT 不因识别缺失受阻；主动作=「去配置翻译/识别」；picker 引到准备配置 | 无 |
-| 制作中 | 主体字幕纸带显示九段制作轨迹；下方固定显示当前阶段、阶段内计数和当前动作；「停止任务」保持可用 | 无 |
+| 制作中 | 主体字幕纸带显示九段制作轨迹；下方固定显示当前阶段、阶段内计数、累计模型请求和当前动作；「停止任务」保持可用 | 无 |
 | 完成 | 主体变交付态 + 〔打开字幕〕〔打开所在文件夹〕；有残留质量问题或交付格式提醒时，在结果动作前明确提示人工审看 | 后台时发「字幕已生成·点击打开」 |
 | 失败 | 修理贴贴在主体下：一句话阻塞点 + 恢复动作（「目录不可写 →〔选文件夹〕」「翻译连不上 →〔去配置〕」）；数据由 doctor 的 `code`/`hint_zh`/`details.path` 喂 | 后台时发「制作失败·点击查看」 |
 
-制作中采用稳定的九阶段生产模型：检查任务、读取片源、识别台词、整理术语、编排分片、翻译字幕、对齐时间轴、检查可读性、写出字幕。SRT 等不需要语音识别的输入允许直接跨过对应阶段。主阶段和总体进度来自 worker checkpoint；语音识别显示已完成/总分窗，翻译显示已完成/总分片。模型请求事件只用于补充「批量补回」「自动拆小」「校正格式」「修复某行」等最新短时动作，不得替代主阶段、循环播放历史注释或让文案闪烁。翻译分片数是生产计划，不等于 HTTP 请求次数；发生协议恢复或缺失行补回时，界面必须把额外动作说清楚。
+制作中采用稳定的九阶段生产模型：检查任务、读取片源、识别台词、整理术语、编排分片、翻译字幕、对齐时间轴、检查可读性、写出字幕。SRT 等不需要语音识别的输入允许直接跨过对应阶段。主阶段和总体进度来自 worker checkpoint；语音识别显示已完成/总分窗，翻译显示已完成/总分片。模型请求事件只用于补充「批量补回」「自动拆小」「校正格式」「修复某行」等最新短时动作，不得替代主阶段、循环播放历史注释或让文案闪烁。翻译分片数是生产计划，不等于 HTTP 请求次数；界面另显示累计模型请求，且只在真实请求开始时加一，模型返回、进度事件和本地拆分不得重复计数。任务处理窗按分片翻译、术语、格式恢复、批量补回、单行修复和质量阶段保留分类摘要。
 
 ---
 
@@ -304,8 +304,9 @@
 
 - 系统通知已接 Windows Toast 路径和点击聚焦回调；release smoke 已覆盖任务状态转移触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；portable 包脚本可验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为验收（§7）。
 - 已打包真实多档字重字体：`desktop_flutter/assets/fonts/NotoSansSC-VF.ttf`，release 构建的 `FontManifest.json` 可验证 `TransVortexNotoSansSC` 注册。
-- 主窗口「生成术语建议」开关已写入 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时补 `memory_enabled=true`，关闭生成时不写 `memory_enabled=false`，并在可点词说明中避免误伤后续“使用术语 / 预设术语表”；后续仍需结合术语维护窗口校准“生成→回流使用”的完整产品语义。
+- 主窗口「生成术语建议」开关已写入 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时补 `memory_enabled=true`，并用 `memory_patch_window_chunks=3` 把逐分片术语更新合并为每 3 片一次，关闭生成时不写 `memory_enabled=false`；后续仍需结合术语维护窗口校准“生成→回流使用”的完整产品语义。
 - 主窗口制作中已接 worker checkpoint 的结构化阶段数据：字幕纸带按九段生产轨迹显示当前阶段和阶段内进度，语音识别显示分窗计数，翻译显示分片计数，术语初始化和批量补回 / 自动拆分 / 格式校正 / 单行修复显示为当前动作；事件游标不前进时不得重复消费旧事件，阶段切换、取消和继续任务会清理上一阶段动作。完成态会区分字幕质量残留与交付格式提醒。该能力仍需结合真实外部模型任务做一次可见窗口人工复验。
+- 模型请求生命周期已区分 started / completed / activity：checkpoint 只累计真实 started 请求，主分片完成回调不再伪装成第二次 attempt，自适应拆分不计模型请求；统计覆盖两步术语初始化、分片翻译、术语更新、格式恢复、批量补回、单行修复、质量压缩和重排。任务处理窗展示总数与分类制作摘要。
 - 两个配置窗已改为主从工具窗结构；右侧详情区允许局部滚动，release 主菜单路径已验证能打开翻译 / 语音识别设置窗并读取服务数据；诊断工具窗已能从 `desktop.snapshot.environment` 读取 doctor 报告并展示 PASS / WARN / FAIL 检查项，也能从 `desktop.snapshot` 展示活动任务、任务数、队列和中断任务的只读上下文摘要，队列 / 中断任务可用短线索跳转任务处理窗，并可通过真实 `tasks.list` 刷新最近任务、通过 `result.open` 读取完成任务结果摘要；常见翻译 / 语音识别检查项可跳转对应设置窗，产物目录检查项可打开 doctor 报告里的目录路径，任务 / runtime / queue / interrupted / resume 类检查项和最近任务行可跳转任务处理窗并定位任务，最近任务行也可检查有输出记录任务的结果目录可写性。任务处理窗已成为任务历史 / 详情 / 结果编辑的新主入口，可通过真实 `tasks.list` 展示任务片列、按全部 / 制作中 / 待处理 / 已完成筛选任务、按片源 / 任务 ID / 状态 / 失败摘要 / 目录线索搜索任务、选中任务预览、创建 / 更新时间、运行记录、可用操作摘要、失败 / 中断线索、最近事件、按 cursor 加载更多事件和已加载事件本地搜索、完成任务内嵌编辑、失败任务继续动作、运行中任务取消动作和用户触发的结果目录可写性检查；旧结果审看窗、任务历史窗和任务详情独立窗已移除，旧启动 ID 兼容进入任务处理窗。release exe 隔离 smoke 已覆盖启动 Local Service、读取配置摘要，并通过主窗口 controller 的正常 `runtime.submitRun` 路径提交内嵌字幕视频，使用临时本地 OpenAI-compatible 翻译服务跑 `video_asr_translate` 到真实 worker `DONE`，产出 SRT / ASS；单次 smoke 成功报告会写入 `frontend_design_mvp_complete=false`、自动化覆盖范围和仍需人工验收清单；`-WindowType translationSettings` / `-WindowType asrSettings` / `-WindowType diagnostics` / `-WindowType taskProcessing` 已覆盖 release 非主窗口启动、读取临时配置、诊断报告、诊断窗最近任务结果目录检查、任务处理窗任务片、Flutter 渲染树截图和 Flutter overflow 警告条检查，其中 `taskProcessing` 已覆盖浏览 DONE 任务片和结果目录可写性、内嵌结果编辑保存、ASS / 单语重新导出、失败线索停留态、失败任务继续重新排队和运行中任务取消请求。无翻译配置、缺凭据阻塞、翻译服务测试失败、语音识别空保存方案、诊断窗读取 doctor 报告、产物目录路径打开、任务上下文摘要、队列 / 中断任务线索定位、任务相关诊断和最近任务回到任务处理窗、最近任务刷新、最近任务结果目录检查、结果摘要、任务处理窗任务片读取、任务片状态筛选、任务片搜索、任务失败 / 中断线索、任务事件 cursor 加载、任务事件搜索、结果审看、片段筛查、片段搜索、结果编辑保存、选择导出格式 / 单双语、重新导出、任务目录 / 结果目录打开、结果目录可写性检查、创建 / 更新时间、运行记录、可用操作摘要和任务详情已有自动化覆盖；后续 G1 继续做真实可见 release 窗口完整任务端到端人工验收。
 - `scripts\smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态、4 个非主窗口基础 case、`taskProcessing` 编辑 / 失败线索 / 恢复 / 取消四个追加 case 和长模型名设置窗固化为单命令，矩阵 summary 会记录每个 case 的截图路径、渲染尺寸、非背景采样、Flutter overflow 警告条采样、任务处理窗选中状态、编辑 / 重导出 / 失败线索 / 恢复 / 取消结果、失败线索字段（错误码 / 阶段 / 重试性 / 可继续）、诊断窗 / 任务处理窗结果目录可写性、通知 show 调用、AUMID / GUID registry 和通知设置 key 结果；传入 `-CheckDesktopComposite` 时还会记录桌面合成层截图采样。summary 也会写入 `frontend_design_mvp_complete=false`、自动化覆盖范围和仍需人工验收清单，明确自动 smoke 绿灯不能直接推出“前端设计 MVP 完成”。
 - `taskProcessing -TaskProcessingScenario edit` release smoke 的临时结果包含空译文片段，会通过真实 `result.open` 产生问题计数，用于证明问题提示、最小片段筛查和片段搜索的数据链路不是前端假数据。

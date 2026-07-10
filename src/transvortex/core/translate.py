@@ -555,6 +555,7 @@ def _recover_rows_in_batches(
         _notify_progress(
             progress_callback,
             mode="batch_recovery",
+            request_state="started",
             chunk_id=chunk.chunk_id,
             recovery_chunk_id=recovery_chunk.chunk_id,
             segment_ids=batch_ids,
@@ -649,6 +650,7 @@ def _repair_row(
             _notify_progress(
                 progress_callback,
                 mode="repair",
+                request_state="started",
                 chunk_id=chunk.chunk_id,
                 segment_id=seg_id,
                 provider=provider_name,
@@ -834,6 +836,7 @@ def translate_chunk(
                     _notify_progress(
                         progress_callback,
                         mode="protocol_recovery" if protocol_attempt else "translate",
+                        request_state="started",
                         chunk_id=request_chunk.chunk_id,
                         segment_ids=request_chunk.segment_ids,
                         provider=route.provider,
@@ -934,6 +937,7 @@ def translate_chunk(
                 _notify_progress(
                     progress_callback,
                     mode="translate",
+                    request_state="completed",
                     chunk_id=request_chunk.chunk_id,
                     segment_ids=request_chunk.segment_ids,
                     provider=route.provider,
@@ -1063,6 +1067,7 @@ def translate_chunk_adaptive(
         _notify_progress(
             progress_callback,
             mode="adaptive_split",
+            request_state="activity",
             chunk_id=chunk.chunk_id,
             chunk_ids=[left.chunk_id, right.chunk_id],
             adaptive_parent_chunk=parent_id,
@@ -1343,48 +1348,58 @@ def _iter_translate_all_chunks_with_memory(
         window = chunks[start : start + window_size]
         patch_chunks: list[Chunk] = []
         patch_results: list[dict] = []
-        for result in _iter_translate_window(
-            config,
-            window,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            memory_store=memory_store,
-            progress_callback=progress_callback,
-            already_done=already_done,
-        ):
-            matching_chunk = next((chunk for chunk in window if chunk.chunk_id == result.get("chunk_id")), None)
-            if matching_chunk is not None:
-                patch_chunks.append(matching_chunk)
-            else:
-                rows = result.get("rows") or []
-                patch_chunks.append(
-                    Chunk(
-                        chunk_id=str(result.get("chunk_id") or ""),
-                        segment_ids=[
-                            int(item.get("id"))
-                            for item in rows
-                            if isinstance(item, dict) and item.get("id") is not None
-                        ],
-                        lines=[
-                            f"[{item.get('id')}]"
-                            for item in rows
-                            if isinstance(item, dict) and item.get("id") is not None
-                        ],
+        def commit_patch_window() -> None:
+            nonlocal snapshot_index
+            if not patch_results:
+                return
+            _update_memory_after_window(
+                config,
+                patch_chunks,
+                patch_results,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                memory_store=memory_store,
+                progress_callback=progress_callback,
+            )
+            snapshot_index += 1
+            memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
+
+        try:
+            for result in _iter_translate_window(
+                config,
+                window,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                memory_store=memory_store,
+                progress_callback=progress_callback,
+                already_done=already_done,
+            ):
+                matching_chunk = next((chunk for chunk in window if chunk.chunk_id == result.get("chunk_id")), None)
+                if matching_chunk is not None:
+                    patch_chunks.append(matching_chunk)
+                else:
+                    rows = result.get("rows") or []
+                    patch_chunks.append(
+                        Chunk(
+                            chunk_id=str(result.get("chunk_id") or ""),
+                            segment_ids=[
+                                int(item.get("id"))
+                                for item in rows
+                                if isinstance(item, dict) and item.get("id") is not None
+                            ],
+                            lines=[
+                                f"[{item.get('id')}]"
+                                for item in rows
+                                if isinstance(item, dict) and item.get("id") is not None
+                            ],
+                        )
                     )
-                )
-            patch_results.append(result)
-            yield result
-        _update_memory_after_window(
-            config,
-            patch_chunks,
-            patch_results,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            memory_store=memory_store,
-            progress_callback=progress_callback,
-        )
-        snapshot_index += 1
-        memory_store.write_snapshot(memory_store.load_runtime(), snapshot_index)
+                patch_results.append(result)
+                yield result
+        except Exception:
+            commit_patch_window()
+            raise
+        commit_patch_window()
 
 
 def translate_all_chunks(

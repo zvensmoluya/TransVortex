@@ -181,7 +181,7 @@ memory:
   patch:
     enabled: false
     mode: serial
-    window_chunks: 1
+    window_chunks: 3
 ```
 
 说明：
@@ -189,7 +189,7 @@ memory:
 - `memory.presets` 有条目时会加载用户选择的预设术语表；空列表表示不加载预设。
 - `memory.bootstrap.enabled: true` 会在翻译前生成运行时术语库文件 `translation_memory.json`。
 - `memory.inject.enabled: true` 才会把预设术语表和运行时术语库注入翻译；`memory.inject.intensity` 只控制强度：`low`、`auto`、`high`、`max`。
-- `memory.patch.enabled: true` 会开启翻译中的动态维护；当前只支持 `mode: serial`，即翻译一组 chunk 后先合并 patch，再继续后续翻译。开启 patch 要求 `memory.inject.enabled: true`。
+- `memory.patch.enabled: true` 会开启翻译中的动态维护；当前只支持 `mode: serial`，即默认每 3 个 chunk 合并一次修改建议，再继续后续翻译。这样既能让新译名回流后续分片，也避免每片单独请求造成调用放大。开启 patch 要求 `memory.inject.enabled: true`。
 - 只生成术语表草稿不属于主翻译 pipeline 的 memory 模式，请使用 `transvortex memory bootstrap` 独立命令。
 
 ## 5. ASR 与视频字幕来源

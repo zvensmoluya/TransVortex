@@ -1010,7 +1010,7 @@ def load_app_config(
         patch=MemoryPatchConfig(
             enabled=memory_patch_enabled,
             mode=memory_patch_mode,
-            window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 1),
+            window_chunks=_to_int(memory_patch_raw.get("window_chunks"), 3),
             system_prompt=load_prompt(
                 "memory_patch_system",
                 root_dir=root_dir,

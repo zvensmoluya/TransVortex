@@ -491,6 +491,7 @@ void main() {
     expect(overrides['memory_enabled'], isTrue);
     expect(overrides['memory_bootstrap_enabled'], isTrue);
     expect(overrides['memory_patch_enabled'], isTrue);
+    expect(overrides['memory_patch_window_chunks'], 3);
     expect(overrides['asr_provider'], 'local');
     expect(overrides['asr_model'], 'large-v3');
   });
@@ -601,6 +602,7 @@ void main() {
     expect(overrides.containsKey('memory_enabled'), isFalse);
     expect(overrides['memory_bootstrap_enabled'], isFalse);
     expect(overrides['memory_patch_enabled'], isFalse);
+    expect(overrides.containsKey('memory_patch_window_chunks'), isFalse);
   });
 
   test(
@@ -858,6 +860,7 @@ void main() {
             'translate_total_chunks': 3,
             'translate_current_mode': 'batch_recovery',
             'translate_recovery_segment_count': 79,
+            'model_request_count': 5,
           },
           runtime: const {'state': 'running'},
         ),
@@ -866,7 +869,7 @@ void main() {
 
     expect(controller.view.runProgress?.title, '翻译字幕');
     expect(controller.view.runProgress?.detail, '批量补回被截断的 79 行字幕');
-    expect(controller.view.runProgress?.counter, '1/3');
+    expect(controller.view.runProgress?.counter, '1/3 · 模型 5 次');
   });
 
   test('controller surfaces residual quality issues after completion', () {
@@ -1044,6 +1047,7 @@ void main() {
       expect(overrides['memory_enabled'], isTrue);
       expect(overrides['memory_bootstrap_enabled'], isTrue);
       expect(overrides['memory_patch_enabled'], isTrue);
+      expect(overrides['memory_patch_window_chunks'], 3);
     },
   );
 
@@ -1078,6 +1082,7 @@ void main() {
       expect(overrides.containsKey('memory_enabled'), isFalse);
       expect(overrides['memory_bootstrap_enabled'], isFalse);
       expect(overrides['memory_patch_enabled'], isFalse);
+      expect(overrides.containsKey('memory_patch_window_chunks'), isFalse);
     },
   );
 }

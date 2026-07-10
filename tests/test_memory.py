@@ -985,6 +985,7 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
     ]
     seen_prompt = ""
     prompts: list[str] = []
+    progress_events: list[dict] = []
 
     class FakeClient:
         def translate_request(self, req):
@@ -1025,12 +1026,18 @@ def test_memory_bootstrap_writes_artifacts_and_merges_memory(tmp_path: Path, mon
         source_lang="en",
         target_lang="zh-CN",
         memory_dir=tmp_path / "memory",
+        progress_callback=progress_events.append,
     )
 
     assert payload["status"] == "completed"
     assert payload["bootstrap_pipeline"] == "staged"
     assert payload["extract_candidates"] == 1
     assert len(prompts) == 2
+    assert [event["mode"] for event in progress_events] == [
+        "memory_bootstrap_extract",
+        "memory_bootstrap_classify",
+    ]
+    assert all(event["request_state"] == "started" for event in progress_events)
     assert "SOURCE-SIDE CANDIDATE EVIDENCE" in seen_prompt
     assert (tmp_path / "memory" / "bootstrap.json").exists()
     assert (tmp_path / "memory" / "bootstrap_input.json").exists()

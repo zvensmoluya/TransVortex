@@ -101,6 +101,7 @@ def generate_memory_patch(
             _notify_progress(
                 progress_callback,
                 mode="memory_patch",
+                request_state="started",
                 chunk_ids=[chunk.chunk_id for chunk in chunks],
                 provider=route.provider,
                 model=route.model,

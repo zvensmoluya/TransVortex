@@ -372,7 +372,7 @@ routing:
 
     assert cfg.pipeline.memory.patch.enabled is False
     assert cfg.pipeline.memory.patch.mode == "serial"
-    assert cfg.pipeline.memory.patch.window_chunks == 1
+    assert cfg.pipeline.memory.patch.window_chunks == 3
 
 
 def test_repository_default_auto_bootstrap_injects_memory(tmp_path: Path) -> None:
@@ -403,7 +403,7 @@ routing:
     assert cfg.pipeline.memory.inject.intensity == "high"
     assert cfg.pipeline.memory.inject.max_prompt_tokens == 2400
     assert cfg.pipeline.memory.patch.enabled is False
-    assert cfg.pipeline.memory.patch.window_chunks == 1
+    assert cfg.pipeline.memory.patch.window_chunks == 3
 
 
 def test_repository_default_funasr_uses_local_service_chunking(tmp_path: Path) -> None:
