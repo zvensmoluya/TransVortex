@@ -133,9 +133,9 @@
 
 | 状态 | UI 来源 | 主要呈现 | 主动作 | 后端动作 |
 | --- | --- | --- | --- | --- |
-| 空 | 本地 draft | 投递口，无 job 描述 | 选择片源 | 系统文件对话框 |
+| 空 | 本地 draft + `desktop.snapshot.config` | 投递口 + 当前会话的新任务参数 | 选择片源 | 系统文件对话框 |
 | 就绪 | 本地 draft + `desktop.snapshot.config` | 片源封套 + 当前方案摘要 | 开始译制 | `runtime.submitRun` |
-| 受阻 | `desktop.snapshot.configReadiness` | 对应词显示需配置 | 去配置翻译 / 识别 | 打开对应设置窗 |
+| 受阻 | `desktop.snapshot.configReadiness` | 对应词显示需配置；SRT 直译不要求识别配置 | 去配置翻译 / 识别 | 打开对应设置窗 |
 | 制作中 | `runtime.snapshot` + `tasks.events` | 当前阶段文案 + 真实进度 | 停止任务 | `runtime.cancel` |
 | 完成 | task terminal status + result paths | 交付态 + 结果动作 | 审看结果 | `result.open` / `result.reexport` |
 | 失败 | task `error_info` + events | 一句话原因 + 修复动作 | 重试 / 去修复 | 视错误映射决定 |

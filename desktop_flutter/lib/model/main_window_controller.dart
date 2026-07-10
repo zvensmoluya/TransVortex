@@ -160,6 +160,7 @@ class MainWindowViewModel {
   final bool submitting;
 
   bool get hasSource => source != null;
+  bool get requiresAsr => source?.kind != SourceKind.subtitle;
 }
 
 class MainWindowController extends ChangeNotifier {
@@ -344,7 +345,7 @@ class MainWindowController extends ChangeNotifier {
       _publish();
       return;
     }
-    if (readiness != null && !readiness.asrConfigured) {
+    if (readiness != null && _requiresAsr && !readiness.asrConfigured) {
       _failure = null;
       _publish();
       return;
@@ -597,14 +598,16 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
+    final requiresAsr = _requiresAsr;
     final outputDirectory = _effectiveOutputDirectory(source);
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
       ..._memoryGenerationOverrides(),
-      if (asr.provider != null && asr.provider!.isNotEmpty)
+      if (requiresAsr && asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
-      if (asr.model != null && asr.model!.isNotEmpty) 'asr_model': asr.model,
+      if (requiresAsr && asr.model != null && asr.model!.isNotEmpty)
+        'asr_model': asr.model,
     };
     return {
       'request_version': 1,
@@ -636,13 +639,15 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
+    final requiresAsr = _requiresAsr;
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
       ..._memoryGenerationOverrides(),
-      if (asr.provider != null && asr.provider!.isNotEmpty)
+      if (requiresAsr && asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
-      if (asr.model != null && asr.model!.isNotEmpty) 'asr_model': asr.model,
+      if (requiresAsr && asr.model != null && asr.model!.isNotEmpty)
+        'asr_model': asr.model,
     };
     return {
       'request_version': 1,
@@ -819,11 +824,15 @@ class MainWindowController extends ChangeNotifier {
     if (_running) return MainState.running;
     if (_source == null) return MainState.empty;
     if (_source?.supported == false) return MainState.failed;
-    if (readiness == null || !translation.configured || !asr.configured) {
+    if (readiness == null ||
+        !translation.configured ||
+        (_requiresAsr && !asr.configured)) {
       return MainState.blocked;
     }
     return MainState.ready;
   }
+
+  bool get _requiresAsr => _source?.kind != SourceKind.subtitle;
 
   String _statusLine(MainState state) {
     final translationConfigured = _effectiveTranslationChoice(

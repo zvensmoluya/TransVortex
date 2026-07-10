@@ -77,7 +77,10 @@ class Session {
     if (completed) return MainState.completed;
     if (running) return MainState.running;
     if (fileName == null) return MainState.empty;
-    if (!translateConfigured || !asrConfigured) return MainState.blocked;
+    if (!translateConfigured ||
+        (kind != SourceKind.subtitle && !asrConfigured)) {
+      return MainState.blocked;
+    }
     return MainState.ready;
   }
 

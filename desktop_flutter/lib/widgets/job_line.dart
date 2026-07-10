@@ -53,14 +53,17 @@ class JobLine extends StatelessWidget {
               tooltip: '源语：${languageLabel(view.sourceLang)}',
               onPick: onPickSourceLanguage,
             ),
-            const Text('源语，用', style: T.tBody),
-            _Word(
-              label: asrLabel,
-              fullLabel: view.asrConfigured ? view.asrLabel : null,
-              warn: !view.asrConfigured,
-              onPick: view.asrConfigured ? onPickAsr : onConfigureAsr,
-            ),
-            const Text('识别，交给', style: T.tBody),
+            if (view.requiresAsr) ...[
+              const Text('源语，语音用', style: T.tBody),
+              _Word(
+                label: asrLabel,
+                fullLabel: view.asrConfigured ? view.asrLabel : null,
+                warn: !view.asrConfigured,
+                onPick: view.asrConfigured ? onPickAsr : onConfigureAsr,
+              ),
+              const Text('识别，交给', style: T.tBody),
+            ] else
+              const Text('源语，直接交给', style: T.tBody),
             _Word(
               label: translationLabel,
               fullLabel: view.translationConfigured
@@ -73,8 +76,7 @@ class JobLine extends StatelessWidget {
                   ? onPickTranslation
                   : onConfigureTranslation,
             ),
-            const Text('翻译', style: T.tBody),
-            const Text('成', style: T.tBody),
+            const Text('翻译成', style: T.tBody),
             _Word(
               label: languageLabel(view.targetLang),
               tooltip: '目标语：${languageLabel(view.targetLang)}',

@@ -381,6 +381,31 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main SRT draft skips speech recognition setup', (tester) async {
+    installFilePickerMock(
+      tester,
+      name: 'source-subtitle.srt',
+      path: r'D:\media\source-subtitle.srt',
+    );
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _readyController(
+          snapshot: _desktopSnapshot(withAsrProviders: false),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('选择片源'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('source-subtitle.srt'), findsOneWidget);
+    expect(find.text('源语，直接交给'), findsOneWidget);
+    expect(find.text('先配置识别'), findsNothing);
+    expect(find.text('开始译制'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets('main translation menu submits profile routing snapshot', (
     tester,
   ) async {

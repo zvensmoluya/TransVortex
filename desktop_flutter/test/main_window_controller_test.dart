@@ -10,6 +10,24 @@ import 'package:transvortex_desktop_flutter/services/local_service_controller.da
 import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 
 void main() {
+  test('session readiness only requires ASR for media sources', () {
+    const subtitle = Session(
+      fileName: 'source.srt',
+      filePath: r'D:\source.srt',
+      kind: SourceKind.subtitle,
+      asrConfigured: false,
+    );
+    const audio = Session(
+      fileName: 'source.mp3',
+      filePath: r'D:\source.mp3',
+      kind: SourceKind.audio,
+      asrConfigured: false,
+    );
+
+    expect(subtitle.state, MainState.ready);
+    expect(audio.state, MainState.blocked);
+  });
+
   test(
     'controller derives empty and ready states from source and snapshot',
     () async {
@@ -43,6 +61,29 @@ void main() {
       expect(() => controller.buildRunRequest(), throwsStateError);
     },
   );
+
+  test('controller skips ASR readiness for SRT translation', () async {
+    final handle = _FakeHandle(_desktopSnapshot(asrHasKey: false));
+    final controller = MainWindowController(
+      service: _readyController(handle: handle),
+    );
+    await controller.startService();
+
+    controller.pickSource(r'D:\subtitle.srt');
+
+    expect(controller.view.source?.kind, SourceKind.subtitle);
+    expect(controller.view.requiresAsr, isFalse);
+    expect(controller.view.state, MainState.ready);
+    final payload = controller.buildRunRequest();
+    final overrides = payload['overrides'] as Map<String, Object?>;
+    expect(payload['input_type'], 'srt_translate');
+    expect(overrides.containsKey('asr_provider'), isFalse);
+    expect(overrides.containsKey('asr_model'), isFalse);
+
+    await controller.submitRun();
+
+    expect(handle.transport.calls, contains('runtime.submitRun'));
+  });
 
   test(
     'controller keeps launch empty and exposes resumable task reminder',
@@ -613,6 +654,7 @@ void main() {
       controller.pickSource(r'D:\movie.mp4');
 
       expect(controller.view.state, MainState.blocked);
+      expect(controller.view.requiresAsr, isTrue);
       expect(controller.view.statusLine, contains('需要先配置翻译'));
       expect(controller.view.translationLabel, '需配置');
       expect(controller.view.translationConfigured, isFalse);
