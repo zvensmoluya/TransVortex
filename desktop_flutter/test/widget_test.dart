@@ -288,7 +288,7 @@ void main() {
     // 呼吸动画在 repeat，不能 pumpAndSettle；推进一帧即可。
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('把视频或字幕放进来吧'), findsOneWidget);
+    expect(find.text('把音频、视频或字幕放进来吧'), findsOneWidget);
     expect(find.text('浏览文件'), findsNothing);
     expect(
       find.byKey(const ValueKey('main-empty-pick-target')),
@@ -296,10 +296,28 @@ void main() {
     );
     expect(find.textContaining('也可以点击选择'), findsNothing);
     expect(find.textContaining('支持视频'), findsNothing);
-    expect(find.textContaining('翻译'), findsOneWidget);
+    expect(find.textContaining('翻译'), findsNothing);
     expect(find.textContaining('DeepSeek'), findsNothing);
     expect(find.text('TransVortex'), findsOneWidget);
     expect(find.textContaining('调试态'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('main menu exposes product tools without diagnostics', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      TransVortexApp(localServiceController: _readyController()),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byKey(const ValueKey('main-menu-button')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('翻译模型设置'), findsOneWidget);
+    expect(find.text('语音识别设置'), findsOneWidget);
+    expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('诊断'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -338,26 +356,26 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('picked-video.mp4'), findsOneWidget);
-    expect(find.textContaining('也会'), findsOneWidget);
-    final termsToggle = find.text('整理术语记忆');
+    expect(find.text('字幕，并'), findsOneWidget);
+    final termsToggle = find.text('自动生成术语建议');
     expect(termsToggle, findsOneWidget);
     final enabledTooltips = tester
         .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(enabledTooltips, contains('制作时自动整理术语记忆。不会改动人工术语表。'));
+    expect(enabledTooltips, contains('本次制作允许系统生成术语建议。不会改动或关闭已有人工术语。'));
 
     await tester.tap(termsToggle);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('不整理术语记忆'), findsOneWidget);
+    expect(find.text('不生成术语建议'), findsOneWidget);
     final disabledTooltips = tester
         .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(disabledTooltips, contains('本次不生成新的术语记忆。已有术语表不受影响。'));
+    expect(disabledTooltips, contains('本次不生成新的术语建议。已有人工术语是否使用不受这个开关影响。'));
     expect(find.text('开始译制'), findsOneWidget);
     expectNoFlutterException();
   });
@@ -584,7 +602,7 @@ void main() {
     expect(find.text('TransVortex'), findsOneWidget);
     expect(find.textContaining('服务已连接'), findsNothing);
     expect(find.textContaining('等待片源'), findsNothing);
-    expect(find.text('把视频或字幕放进来吧'), findsOneWidget);
+    expect(find.text('把音频、视频或字幕放进来吧'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -642,6 +660,7 @@ void main() {
     expect(find.textContaining('正在翻译字幕'), findsOneWidget);
     expect(find.textContaining('ridiculously-long-tail'), findsOneWidget);
     expect(find.text('停止任务'), findsOneWidget);
+    expect(find.text('自动生成术语建议'), findsNothing);
     expect(find.textContaining('Task created'), findsNothing);
     expectNoFlutterException();
   });
@@ -782,7 +801,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('审看结果'), findsOneWidget);
-    expect(find.text('处理新片源'), findsOneWidget);
+    expect(find.text('制作新片源'), findsOneWidget);
+    expect(find.text('自动生成术语建议'), findsNothing);
     expect(notifications.completed, ['movie.mp4']);
     expect(notifications.failed, isEmpty);
     expectNoFlutterException();
@@ -1271,10 +1291,12 @@ void main() {
     expect(find.text('已配置连接'), findsOneWidget);
     expect(find.text('服务地址 (Base URL)'), findsOneWidget);
     expect(find.text('连接设置'), findsOneWidget);
-    expect(find.text('连接状态'), findsOneWidget);
+    expect(find.text('连接状态'), findsNothing);
     expect(find.text('RealProvider'), findsWidgets);
     expect(find.text('OpenAI Chat 兼容'), findsWidgets);
-    expect(find.textContaining('用户级凭据'), findsWidgets);
+    expect(find.text('已配置'), findsWidgets);
+    expect(find.textContaining('.env'), findsNothing);
+    expect(find.text('来源'), findsNothing);
     expect(find.textContaining('中文备注'), findsNothing);
     expectNoFlutterException();
   });
@@ -1707,13 +1729,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.ensureVisible(find.text('连接状态'));
+    await tester.ensureVisible(find.text('凭据状态'));
     await tester.pump();
-    expect(find.text('连接状态'), findsOneWidget);
+    expect(find.text('连接状态'), findsNothing);
     expect(find.text('服务类型'), findsWidgets);
-    expect(find.text('来源'), findsWidgets);
-    expect(find.text('凭据'), findsOneWidget);
-    expect(find.text('本机配置'), findsWidgets);
+    expect(find.text('来源'), findsNothing);
+    expect(find.text('凭据状态'), findsOneWidget);
+    expect(find.text('本机配置'), findsNothing);
+    expect(find.textContaining('.env'), findsNothing);
     expect(find.text('OpenAI Chat 兼容'), findsWidgets);
     expect(find.text('展开高级配置'), findsNothing);
     expect(find.text('高级配置'), findsNothing);
@@ -3173,7 +3196,6 @@ void main() {
     expect(find.text('创建 2026-07-06 08:00:00'), findsOneWidget);
     expect(find.text('更新 2026-07-06 09:30:00'), findsOneWidget);
     expect(find.text('运行记录 已结束'), findsOneWidget);
-    expect(find.text('操作 可编辑结果'), findsOneWidget);
     expect(find.text('阶段'), findsOneWidget);
     expect(find.text('加载更多事件'), findsOneWidget);
     await tester.tap(find.text('加载更多事件'));
@@ -3202,11 +3224,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(pathOpener.openedDirectories, [r'D:\media']);
     expect(find.text('已打开结果目录'), findsOneWidget);
-
-    await tester.tap(find.text('检查结果目录'));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(directoryProbe.checkedPaths, [r'D:\media']);
-    expect(find.text('结果目录可写，可以重新导出。'), findsOneWidget);
+    expect(find.text('检查结果目录'), findsNothing);
+    expect(directoryProbe.checkedPaths, isEmpty);
 
     expect(find.text('全部 3'), findsOneWidget);
     expect(find.text('制作中 1'), findsOneWidget);
@@ -3247,14 +3266,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('processing-failed.mp4'), findsWidgets);
     expect(find.text('processing-running.mp4'), findsNothing);
-    expect(find.text('操作 可继续任务'), findsOneWidget);
+    expect(find.text('编辑字幕'), findsNothing);
+    expect(find.text('取消任务'), findsNothing);
+    expect(find.text('结果目录'), findsNothing);
     expect(find.text('失败线索'), findsOneWidget);
     expect(find.text('提示 可以继续任务。'), findsOneWidget);
-    expect(find.text('错误码 provider_connection_failed'), findsOneWidget);
     expect(find.text('阶段 翻译字幕'), findsOneWidget);
-    expect(find.text('重试性 可重试'), findsOneWidget);
-    expect(find.text('运行状态 记录过期'), findsOneWidget);
-    expect(find.text('恢复 可继续任务'), findsOneWidget);
+    expect(find.textContaining('provider_connection_failed'), findsNothing);
+    expect(find.text('重试性 可重试'), findsNothing);
+    expect(find.text('运行状态 记录过期'), findsNothing);
 
     await tester.tap(find.text('继续任务'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3270,7 +3290,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('运行记录 运行中'), findsOneWidget);
-    expect(find.text('操作 可取消任务'), findsOneWidget);
+    expect(find.text('编辑字幕'), findsNothing);
+    expect(find.text('继续任务'), findsNothing);
+    expect(find.text('结果目录'), findsNothing);
     await tester.tap(find.text('取消任务'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));

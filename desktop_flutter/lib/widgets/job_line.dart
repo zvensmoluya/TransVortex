@@ -39,7 +39,7 @@ class JobLine extends StatelessWidget {
     final translationLabel = view.translationConfigured
         ? _compactEngineLabel(view.translationLabel)
         : '先配置翻译';
-    final memoryLabel = view.termsEnabled ? '整理术语记忆' : '不整理术语记忆';
+    final memoryLabel = view.termsEnabled ? '自动生成术语建议' : '不生成术语建议';
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -90,12 +90,12 @@ class JobLine extends StatelessWidget {
             const Text('做成', style: T.tBody),
             _Word(label: view.bilingual ? '双语' : '单语', onPick: onPickBilingual),
             _Word(label: view.formats.join('·'), onPick: onPickFormats),
-            const Text('字幕，也会', style: T.tBody),
+            const Text('字幕，并', style: T.tBody),
             _Word(
               label: memoryLabel,
               tooltip: view.termsEnabled
-                  ? '制作时自动整理术语记忆。不会改动人工术语表。'
-                  : '本次不生成新的术语记忆。已有术语表不受影响。',
+                  ? '本次制作允许系统生成术语建议。不会改动或关闭已有人工术语。'
+                  : '本次不生成新的术语建议。已有人工术语是否使用不受这个开关影响。',
               onPick: onToggleTerms,
             ),
           ],

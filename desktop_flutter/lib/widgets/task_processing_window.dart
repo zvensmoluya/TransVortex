@@ -927,7 +927,6 @@ class _TaskProcessingBody extends StatelessWidget {
             resuming: resuming,
             cancellingTaskId: cancellingTaskId,
             checkingOutputDirectory: checkingOutputDirectory,
-            onRefresh: onRefresh,
             onLoadMoreEvents: onLoadMoreEvents,
             onClearEventSearch: onClearEventSearch,
             onOpenResult: onOpenResult,
@@ -1341,7 +1340,6 @@ class _TaskPreview extends StatelessWidget {
     required this.resuming,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
-    required this.onRefresh,
     required this.onLoadMoreEvents,
     required this.onClearEventSearch,
     required this.onOpenResult,
@@ -1368,7 +1366,6 @@ class _TaskPreview extends StatelessWidget {
   final bool resuming;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
-  final VoidCallback onRefresh;
   final VoidCallback? onLoadMoreEvents;
   final VoidCallback onClearEventSearch;
   final ValueChanged<TaskSummary> onOpenResult;
@@ -1447,39 +1444,41 @@ class _TaskPreview extends StatelessWidget {
           spacing: T.s8,
           runSpacing: T.s8,
           children: [
-            _TaskActionButton(label: '刷新', onTap: onRefresh),
-            _TaskActionButton(
-              label: task.isDone ? '编辑字幕' : '编辑字幕',
-              onTap: task.isDone ? () => onOpenResult(task) : null,
-            ),
-            _TaskActionButton(
-              label: resuming ? '继续中' : '继续任务',
-              onTap: task.canResume && !resuming ? () => onResume(task) : null,
-            ),
-            _TaskActionButton(
-              label: cancelling ? '取消中' : '取消任务',
-              onTap: task.canCancel && cancellingTaskId == null
-                  ? () => onCancel(task)
-                  : null,
-            ),
-            _TaskActionButton(
-              label: '任务目录',
-              onTap: task.taskDir.trim().isNotEmpty
-                  ? () => onOpenTaskDirectory(task)
-                  : null,
-            ),
-            _TaskActionButton(
-              label: '结果目录',
-              onTap: outputDir == null
-                  ? null
-                  : () => onOpenOutputDirectory(task),
-            ),
-            _TaskActionButton(
-              label: checkingOutputDirectory ? '检查中' : '检查结果目录',
-              onTap: outputDir == null || checkingOutputDirectory
-                  ? null
-                  : () => onCheckOutputDirectory(task),
-            ),
+            if (task.isDone)
+              _TaskActionButton(
+                label: '编辑字幕',
+                strong: true,
+                onTap: () => onOpenResult(task),
+              ),
+            if (task.canResume)
+              _TaskActionButton(
+                label: resuming ? '继续中' : '继续任务',
+                strong: true,
+                onTap: resuming ? null : () => onResume(task),
+              ),
+            if (task.canCancel)
+              _TaskActionButton(
+                label: cancelling ? '取消中' : '取消任务',
+                danger: true,
+                onTap: cancellingTaskId == null ? () => onCancel(task) : null,
+              ),
+            if (task.isDone && outputDir != null)
+              _TaskActionButton(
+                label: '结果目录',
+                onTap: () => onOpenOutputDirectory(task),
+              ),
+            if (task.taskDir.trim().isNotEmpty)
+              _TaskActionButton(
+                label: '任务目录',
+                onTap: () => onOpenTaskDirectory(task),
+              ),
+            if (error != null && outputDir != null)
+              _TaskActionButton(
+                label: checkingOutputDirectory ? '检查中' : '检查结果目录',
+                onTap: checkingOutputDirectory
+                    ? null
+                    : () => onCheckOutputDirectory(task),
+              ),
           ],
         ),
         const SizedBox(height: T.s12),
@@ -1488,7 +1487,7 @@ class _TaskPreview extends StatelessWidget {
         else if (message != null)
           Text(message!, style: T.tCaption)
         else
-          const Text('在这里取消运行任务、继续失败任务，或进入字幕编辑。', style: T.tCaption),
+          Text(_taskActionHint(task), style: T.tCaption),
         const SizedBox(height: T.s16),
         _TaskSummaryPanel(task: task),
         if (diagnosticClues.isNotEmpty) ...[
@@ -1581,18 +1580,18 @@ class _TaskSummaryPanel extends StatelessWidget {
     final createdAt = taskTimestampLabel(task.createdAt);
     final updatedAt = taskTimestampLabel(task.updatedAt);
     final runtimeState = _runtimeStateLabel(task.runtimeState);
-    final actionability = _taskActionabilityLabel(task);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(T.s16),
-      decoration: BoxDecoration(
-        color: T.surface,
-        border: Border.all(color: T.line),
-        borderRadius: BorderRadius.circular(T.rSm),
+      padding: const EdgeInsets.symmetric(vertical: T.s12),
+      decoration: const BoxDecoration(
+        border: Border(
+          top: BorderSide(color: T.line),
+          bottom: BorderSide(color: T.line),
+        ),
       ),
       child: Wrap(
-        spacing: T.s8,
-        runSpacing: T.s8,
+        spacing: T.s24,
+        runSpacing: T.s12,
         children: [
           _InfoPill(label: '状态', value: taskStatusLabel(task.status)),
           _InfoPill(label: '源语', value: languageLabel(task.sourceLang)),
@@ -1606,18 +1605,6 @@ class _TaskSummaryPanel extends StatelessWidget {
               label: '运行记录',
               value: runtimeState,
               danger: task.isRuntimeStale,
-            ),
-          _InfoPill(
-            label: '操作',
-            value: actionability,
-            danger: _taskActionabilityDanger(task),
-          ),
-          _InfoPill(label: '编号', value: shortTaskIdLabel(task.taskId)),
-          if ((task.error ?? '').isNotEmpty)
-            _InfoPill(
-              label: '错误',
-              value: taskErrorLabel(task.error, task.errorInfo),
-              danger: true,
             ),
         ],
       ),
@@ -1640,18 +1627,16 @@ class _InfoPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 420),
-      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 6),
-      decoration: BoxDecoration(
-        border: Border.all(color: danger ? T.danger : T.line),
-        borderRadius: BorderRadius.circular(T.rSm),
-      ),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 300),
       child: Text(
         '$label ${value.isEmpty ? '未知' : value}',
         maxLines: maxLines,
         overflow: TextOverflow.ellipsis,
-        style: T.tCaption.copyWith(color: danger ? T.danger : T.ink),
+        style: T.tCaption.copyWith(
+          color: danger ? T.danger : T.ink,
+          fontWeight: danger ? T.wMedium : T.wRegular,
+        ),
       ),
     );
   }
@@ -1667,11 +1652,9 @@ class _TaskDiagnosticsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(T.s12),
+      padding: const EdgeInsets.only(left: T.s12),
       decoration: BoxDecoration(
-        color: T.surface,
-        border: Border.all(color: T.line),
-        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border(left: BorderSide(color: T.danger, width: 2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1679,8 +1662,8 @@ class _TaskDiagnosticsPanel extends StatelessWidget {
           Text(title, style: T.tSection),
           const SizedBox(height: T.s8),
           Wrap(
-            spacing: T.s8,
-            runSpacing: T.s8,
+            spacing: T.s24,
+            runSpacing: T.s12,
             children: [
               for (final clue in clues)
                 _InfoPill(
@@ -1797,10 +1780,17 @@ class _EventTag extends StatelessWidget {
 }
 
 class _TaskActionButton extends StatefulWidget {
-  const _TaskActionButton({required this.label, required this.onTap});
+  const _TaskActionButton({
+    required this.label,
+    required this.onTap,
+    this.strong = false,
+    this.danger = false,
+  });
 
   final String label;
   final VoidCallback? onTap;
+  final bool strong;
+  final bool danger;
 
   @override
   State<_TaskActionButton> createState() => _TaskActionButtonState();
@@ -1812,6 +1802,19 @@ class _TaskActionButtonState extends State<_TaskActionButton> {
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onTap != null;
+    final actionColor = widget.danger ? T.danger : T.accentStrong;
+    final background = !enabled
+        ? const Color(0x00000000)
+        : widget.strong
+        ? (_hover ? T.accentStrong : T.accent)
+        : _hover
+        ? (widget.danger ? T.danger.withValues(alpha: 0.08) : T.accentSoft)
+        : const Color(0x00000000);
+    final foreground = !enabled
+        ? T.muted
+        : widget.strong
+        ? const Color(0xFFFFFFFF)
+        : actionColor;
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: enabled ? (_) => setState(() => _hover = true) : null,
@@ -1822,10 +1825,12 @@ class _TaskActionButtonState extends State<_TaskActionButton> {
           constraints: const BoxConstraints(minWidth: 76),
           padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 7),
           decoration: BoxDecoration(
-            color: _hover ? T.accentSoft : const Color(0x00000000),
+            color: background,
             borderRadius: BorderRadius.circular(T.rMd),
             border: Border.all(
-              color: enabled ? T.accentStrong : T.line,
+              color: enabled
+                  ? (widget.strong ? background : actionColor)
+                  : T.line,
               width: 1.2,
             ),
           ),
@@ -1834,10 +1839,7 @@ class _TaskActionButtonState extends State<_TaskActionButton> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: T.tCaption.copyWith(
-              color: enabled ? T.accentStrong : T.muted,
-              fontWeight: T.wBold,
-            ),
+            style: T.tCaption.copyWith(color: foreground, fontWeight: T.wBold),
           ),
         ),
       ),
@@ -1932,8 +1934,15 @@ String _taskActionabilityLabel(TaskSummary task) {
   return '只读查看';
 }
 
-bool _taskActionabilityDanger(TaskSummary task) {
-  return (task.isFailed || task.isRuntimeStale) && !task.canResume;
+String _taskActionHint(TaskSummary task) {
+  if (task.isDone) return '结果已经生成，可以进入字幕编辑或打开结果目录。';
+  if (task.canResume) return '这个任务可以从已有进度继续。';
+  if (task.canCancel) return '任务仍在制作中，需要时可以取消。';
+  if (task.isFailed || task.isRuntimeStale) {
+    return '请根据下方失败线索调整配置或片源后重试。';
+  }
+  if (task.isCancelled) return '这个任务已经结束，没有待执行操作。';
+  return '当前任务只提供记录查看。';
 }
 
 String _taskDiagnosticTitle(TaskSummary task) {
@@ -1969,15 +1978,6 @@ List<_TaskDiagnosticClue> _taskDiagnosticClues(TaskSummary task) {
     );
   }
 
-  final code = _firstDiagnosticText(task.errorInfo, const [
-    'code',
-    'error_code',
-    'kind',
-  ]);
-  if (code != null) {
-    clues.add(_TaskDiagnosticClue(label: '错误码', value: code, danger: true));
-  }
-
   final stage = _firstDiagnosticText(task.errorInfo, const [
     'stage',
     'failed_stage',
@@ -1985,45 +1985,6 @@ List<_TaskDiagnosticClue> _taskDiagnosticClues(TaskSummary task) {
   ]);
   if (stage != null) {
     clues.add(_TaskDiagnosticClue(label: '阶段', value: taskStageLabel(stage)));
-  }
-
-  final retryable = _firstDiagnosticBool(task.errorInfo, const [
-    'retryable',
-    'recoverable',
-    'can_retry',
-  ]);
-  if (retryable != null) {
-    clues.add(
-      _TaskDiagnosticClue(
-        label: '重试性',
-        value: retryable ? '可重试' : '不可重试',
-        danger: !retryable,
-      ),
-    );
-  }
-
-  final runtimeState = _runtimeStateLabel(task.runtimeState);
-  if (runtimeState.isNotEmpty &&
-      (task.isRuntimeStale ||
-          task.isRuntimeActive ||
-          task.status == 'INTERRUPTED')) {
-    clues.add(
-      _TaskDiagnosticClue(
-        label: '运行状态',
-        value: runtimeState,
-        danger: task.isRuntimeStale,
-      ),
-    );
-  }
-
-  if (task.canResume) {
-    clues.add(const _TaskDiagnosticClue(label: '恢复', value: '可继续任务'));
-  } else if (task.isFailed || task.isRuntimeStale) {
-    clues.add(
-      const _TaskDiagnosticClue(label: '恢复', value: '暂无可用恢复动作', danger: true),
-    );
-  } else if (task.isCancelled) {
-    clues.add(const _TaskDiagnosticClue(label: '恢复', value: '任务已结束'));
   }
 
   return clues;
@@ -2045,7 +2006,7 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
       'task_processing_diagnostic_recovery': '',
     };
   }
-  final clues = _taskDiagnosticClues(task);
+  final visibleClues = _taskDiagnosticClues(task);
   final stage = _firstDiagnosticText(task.errorInfo, const [
     'stage',
     'failed_stage',
@@ -2053,11 +2014,14 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
   ]);
   final runtimeState = task.runtimeState;
   return <String, Object?>{
-    'task_processing_diagnostic_title': clues.isEmpty
+    'task_processing_diagnostic_title': visibleClues.isEmpty
         ? ''
         : _taskDiagnosticTitle(task),
-    'task_processing_diagnostic_clue_count': clues.length,
-    'task_processing_diagnostic_prompt': _diagnosticClueValue(clues, '提示'),
+    'task_processing_diagnostic_clue_count': visibleClues.length,
+    'task_processing_diagnostic_prompt': _diagnosticClueValue(
+      visibleClues,
+      '提示',
+    ),
     'task_processing_diagnostic_code':
         _firstDiagnosticText(task.errorInfo, const [
           'code',
@@ -2078,7 +2042,13 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
       runtimeState,
     ),
     'task_processing_diagnostic_can_resume': task.canResume,
-    'task_processing_diagnostic_recovery': _diagnosticClueValue(clues, '恢复'),
+    'task_processing_diagnostic_recovery': task.canResume
+        ? '可继续任务'
+        : task.isFailed || task.isRuntimeStale
+        ? '暂无可用恢复动作'
+        : task.isCancelled
+        ? '任务已结束'
+        : '',
   };
 }
 

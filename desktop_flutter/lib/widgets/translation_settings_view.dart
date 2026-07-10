@@ -240,8 +240,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                 label: '服务类型',
                 value: _providerProtocolLabel(provider),
               ),
-              const SizedBox(height: T.s12),
-              ReadonlyRow(label: '来源', value: _providersFileLabel(c.snapshot)),
             ],
             const SizedBox(height: T.s12),
             Input(
@@ -291,21 +289,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
             ],
           ],
         ),
-        if (!creating) _connectionStatusSection(provider),
-      ],
-    );
-  }
-
-  Widget _connectionStatusSection(ProviderOption provider) {
-    return SettingsSection(
-      title: '连接状态',
-      divider: false,
-      children: [
-        ReadonlyRow(label: '服务类型', value: _providerProtocolLabel(provider)),
-        const SizedBox(height: T.s8),
-        ReadonlyRow(label: '凭据', value: _credentialStatusLabel(provider)),
-        const SizedBox(height: T.s8),
-        ReadonlyRow(label: '来源', value: _providersFileLabel(c.snapshot)),
       ],
     );
   }
@@ -1225,59 +1208,7 @@ String _providerProtocolLabel(ProviderOption provider) {
   };
 }
 
-String _credentialSourceLabel(String source) {
-  return switch (source.trim().toLowerCase()) {
-    'auth_json' => '用户级凭据',
-    'env' => '环境变量',
-    'dotenv' => '开发 .env',
-    'explicit' => '当前输入',
-    'not_required' => '不需要密钥',
-    'missing' => '未找到',
-    '' => '未知',
-    _ => source,
-  };
-}
-
 String _credentialStatusLabel(ProviderOption provider) {
   if (provider.name.isEmpty) return '未选择连接';
-  final source = _credentialSourceLabel(provider.credentialSource);
-  return provider.hasKey ? '已配置 · $source' : '缺密钥 · $source';
-}
-
-String _providersFileLabel(DesktopSnapshot? snapshot) {
-  final raw = _str(snapshot?.config['providers_file']);
-  if (raw == null || raw.isEmpty) return '本机配置';
-  final normalized = raw.replaceAll('\\', '/');
-  const marker = '/.transvortex-desktop/';
-  final markerIndex = normalized.indexOf(marker);
-  if (markerIndex >= 0) {
-    final tail = normalized.substring(markerIndex + 1).replaceAll('/', '\\');
-    return _providersFileKindLabel(tail);
-  }
-  final parts = normalized.split('/');
-  final fileName = parts.isEmpty ? raw : parts.last;
-  return _providersFileKindLabel(fileName);
-}
-
-String _providersFileKindLabel(String path) {
-  final normalized = path.replaceAll('\\', '/').toLowerCase();
-  if (normalized.endsWith('/providers.local.yaml') ||
-      normalized == 'providers.local.yaml') {
-    return '本机配置';
-  }
-  if (normalized.endsWith('/providers.example.yaml') ||
-      normalized == 'providers.example.yaml') {
-    return '示例配置';
-  }
-  if (normalized.endsWith('/providers.yaml') ||
-      normalized == 'providers.yaml') {
-    return normalized.contains('/.transvortex-desktop/') ? '默认副本' : '默认配置';
-  }
-  return '配置文件';
-}
-
-String? _str(Object? value) {
-  if (value == null) return null;
-  if (value is String) return value;
-  return '$value';
+  return provider.hasKey ? '已配置' : '需要配置';
 }

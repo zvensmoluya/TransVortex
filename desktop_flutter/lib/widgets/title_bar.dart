@@ -12,12 +12,14 @@ class TitleBar extends StatelessWidget {
     this.title = 'TransVortex',
     this.status = '',
     this.onMenu,
+    this.menuKey,
     this.canMaximize = false,
   });
 
   final String title;
   final String status;
   final VoidCallback? onMenu;
+  final Key? menuKey;
   final bool canMaximize;
 
   @override
@@ -58,7 +60,8 @@ class TitleBar extends StatelessWidget {
               ),
             ),
           ),
-          if (onMenu != null) _ChromeButton(glyph: _Glyph.menu, onTap: onMenu!),
+          if (onMenu != null)
+            _ChromeButton(key: menuKey, glyph: _Glyph.menu, onTap: onMenu!),
           _ChromeButton(glyph: _Glyph.min, onTap: windowManager.minimize),
           if (canMaximize)
             _ChromeButton(glyph: _Glyph.max, onTap: _toggleMaximized),
@@ -85,6 +88,7 @@ enum _Glyph { menu, min, max, close }
 
 class _ChromeButton extends StatefulWidget {
   const _ChromeButton({
+    super.key,
     required this.glyph,
     required this.onTap,
     this.danger = false,

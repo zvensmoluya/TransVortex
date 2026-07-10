@@ -888,7 +888,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 ),
                 child: Column(
                   children: [
-                    TitleBar(onMenu: () => unawaited(_showChromeMenu())),
+                    TitleBar(
+                      menuKey: const ValueKey('main-menu-button'),
+                      onMenu: () => unawaited(_showChromeMenu()),
+                    ),
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(
@@ -916,7 +919,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         Expanded(
           child: Align(alignment: Alignment.center, child: _subject(view)),
         ),
-        if (view.hasSource || view.state == MainState.empty) ...[
+        if (view.state == MainState.ready ||
+            view.state == MainState.blocked) ...[
           JobLine(
             view: view,
             onPickTranslation: _pickTranslation,
@@ -942,6 +946,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             variant: _ctaVariant(view.state),
             onTap: () => _onCta(view),
           ),
+          if (view.state == MainState.completed) ...[
+            const SizedBox(height: T.s8),
+            _TextAction(
+              label: '制作新片源',
+              onTap: () => unawaited(_controller.resetForNext()),
+            ),
+          ],
           const SizedBox(height: T.s4),
         ] else if (view.state == MainState.failed)
           const SizedBox(height: 50),
@@ -1048,7 +1059,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       builder: (context, _) {
         final active = _drag.value > 0.35;
         return _HeroPrompt(
-          text: active ? '松手就收下啦' : '把视频或字幕放进来吧',
+          text: active ? '松手就收下啦' : '把音频、视频或字幕放进来吧',
           active: active,
         );
       },
@@ -1082,10 +1093,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             spacing: T.s8,
             runSpacing: 6,
             children: [
-              if ((view.taskId ?? '').trim().isNotEmpty)
-                _Chip(label: '审看结果', onTap: () => _openResultReview(view)),
               _Chip(label: '打开字幕', onTap: _openOutputFile),
-              _Chip(label: '打开所在文件夹', onTap: _openOutputFolder),
+              _Chip(label: '打开文件夹', onTap: _openOutputFolder),
               _Chip(label: '重新导出', onTap: _reexportResult),
             ],
           ),
@@ -1138,7 +1147,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       MainState.ready => view.submitting ? '提交中…' : '开始译制',
       MainState.blocked => !view.translationConfigured ? '去配置翻译' : '去配置识别',
       MainState.running => view.canceling ? '取消中…' : '停止任务',
-      MainState.completed => '处理新片源',
+      MainState.completed => '审看结果',
       MainState.failed => view.failure?.actionLabel ?? '重试',
     };
   }
@@ -1170,7 +1179,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         unawaited(_controller.cancelRun());
         break;
       case MainState.completed:
-        unawaited(_controller.resetForNext());
+        _openResultReview(view);
         break;
       case MainState.failed:
         _runRecovery(view.failure);
@@ -1199,8 +1208,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       items: [
         _menuItem('translation', '翻译模型设置'),
         _menuItem('asr', '语音识别设置'),
-        _menuItem('history', '任务历史'),
-        _menuItem('diagnostics', '诊断'),
+        _menuItem('history', '任务处理'),
       ],
     );
     switch (selected) {
@@ -1212,9 +1220,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         break;
       case 'history':
         _openToolWindow(AppWindowType.taskProcessing);
-        break;
-      case 'diagnostics':
-        _openToolWindow(AppWindowType.diagnostics);
         break;
     }
   }
@@ -1779,7 +1784,7 @@ class _HeroPrompt extends StatelessWidget {
       ),
       child: SizedBox(
         key: ValueKey(text),
-        width: 316,
+        width: 390,
         height: 46,
         child: CustomPaint(
           painter: _HeroPromptPainter(active: active),
@@ -1792,7 +1797,7 @@ class _HeroPrompt extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontFamily: T.displayFontFamily,
-                  fontSize: 24,
+                  fontSize: 23,
                   fontWeight: T.wMedium,
                   height: 1.0,
                   letterSpacing: 0,
@@ -2161,6 +2166,46 @@ class _RepairStrip extends StatelessWidget {
             onTap: onTap,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TextAction extends StatefulWidget {
+  const _TextAction({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  State<_TextAction> createState() => _TextActionState();
+}
+
+class _TextActionState extends State<_TextAction> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 4),
+          child: Text(
+            widget.label,
+            style: T.tCaption.copyWith(
+              color: _hover ? T.accentStrong : T.muted,
+              decoration: _hover
+                  ? TextDecoration.underline
+                  : TextDecoration.none,
+              decorationColor: T.accentStrong,
+            ),
+          ),
+        ),
       ),
     );
   }

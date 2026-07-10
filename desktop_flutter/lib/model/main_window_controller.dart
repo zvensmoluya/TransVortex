@@ -707,7 +707,7 @@ class MainWindowController extends ChangeNotifier {
     _completed = task.isDone;
     _progress = task.isDone ? 1 : (task.latestProgress ?? _progress);
     _outputPaths = task.outputPaths;
-    _statusText = _taskStatusLabel(task);
+    _statusText = _taskProgressText(task) ?? _taskStatusLabel(task);
     _failure = task.isFailed || task.isCancelled
         ? _failureFromTask(task)
         : null;
@@ -1155,7 +1155,7 @@ class MainWindowController extends ChangeNotifier {
     if (text.isEmpty) return '制作失败';
     final lower = text.toLowerCase();
     if (lower.contains('events.json') || lower.contains('stderr')) {
-      return '任务运行失败，可以打开诊断查看任务详情。';
+      return '任务运行失败，请在任务处理中查看失败线索后重试。';
     }
     if (lower.contains('ffmpeg') ||
         lower.contains('returned non-zero exit status')) {
@@ -1304,6 +1304,21 @@ class MainWindowController extends ChangeNotifier {
     }
     return _friendlyStatusText(task.status) ??
         taskStageLabel(task.displayStatus);
+  }
+
+  static String? _taskProgressText(TaskSummary task) {
+    final runtimeMessage = '${task.runtime['message'] ?? ''}'.trim();
+    if (runtimeMessage.isNotEmpty &&
+        !_looksInternalEventMessage(runtimeMessage)) {
+      return runtimeMessage;
+    }
+    final detail = _asStringMap(task.raw['progress_detail']);
+    final done = detail['translate_done_count'];
+    final total = detail['translate_total_chunks'];
+    if (done is num && total is num && total > 0) {
+      return '正在翻译第 ${done.toInt()} / ${total.toInt()} 段字幕';
+    }
+    return null;
   }
 
   static Map<String, Object?> _asStringMap(Object? value) {

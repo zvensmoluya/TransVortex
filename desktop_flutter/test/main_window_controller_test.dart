@@ -747,7 +747,7 @@ void main() {
         ),
       );
 
-      expect(controller.view.failure?.reason, '任务运行失败，可以打开诊断查看任务详情。');
+      expect(controller.view.failure?.reason, '任务运行失败，请在任务处理中查看失败线索后重试。');
       expect(controller.view.failure?.reason, isNot(contains('events.json')));
       expect(controller.view.failure?.reason, isNot(contains('stderr')));
     },
