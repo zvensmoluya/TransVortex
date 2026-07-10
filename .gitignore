@@ -22,6 +22,8 @@ docs/RESEARCH/
 tmp/imagegen/
 output/imagegen/logo-variants/
 output/flutter_spike_validation/
+output/ui-review-*/
+output/ui-reset-*/
 output/imagegen/transvortex_frontend_assets/
 output/imagegen/*.png
 output/imagegen/*.jpg
