@@ -143,6 +143,7 @@ def agent_info_payload() -> dict:
             "output/*.srt",
             "output/*.ass",
             "output/*.vtt",
+            "output/*.lrc",
         ],
         "error_info_schema": {
             "fields": ["code", "type", "stage", "message", "hint_zh", "retryable", "details"],

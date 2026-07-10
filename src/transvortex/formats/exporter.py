@@ -226,7 +226,7 @@ def export_vtt(
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     prepared_segments = prepare_segments_for_export(segments)
-    lines = ["WEBVTT", "Kind: captions", "Language: und", ""]
+    lines = ["WEBVTT", ""]
     for idx, seg in enumerate(prepared_segments, start=1):
         lines.append(str(idx))
         lines.append(f"{_vtt_time(seg.start)} --> {_vtt_time(seg.end)} align:center position:50% line:90%")

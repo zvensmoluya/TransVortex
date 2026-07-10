@@ -2477,8 +2477,9 @@ def _execute_task(
                 bilingual=task.bilingual,
                 style=config.pipeline.subtitle_ass_style,
             )
+        delivery_file = paths["quality"] / "subtitle_delivery.json"
         if delivery_reports:
-            write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
+            write_json(delivery_file, delivery_reports)
             delivery_summary = {
                 fmt: report.get("summary", {})
                 for fmt, report in delivery_reports.items()
@@ -2503,6 +2504,8 @@ def _execute_task(
                         message=f"{fmt.upper()} delivery status {summary.get('status')}",
                         details={"issue_counts": summary.get("issue_counts", {})},
                     )
+        elif delivery_file.exists():
+            delivery_file.unlink()
         output_paths_payload = {key: str(path) for key, path in output_paths.items()}
         primary_output = output_paths.get("srt") or output_paths.get("ass") or output_paths.get("vtt") or output_paths.get("lrc")
         checkpoint["status"] = "DONE"

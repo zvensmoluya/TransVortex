@@ -393,7 +393,9 @@ def test_export_vtt_writes_webvtt_without_bom_and_escapes_html(tmp_path: Path) -
     )
 
     body = out_file.read_text(encoding="utf-8")
-    assert body.startswith("WEBVTT\n")
+    assert body.startswith("WEBVTT\n\n")
+    assert "Kind: captions" not in body
+    assert "Language: und" not in body
     assert not out_file.read_bytes().startswith(b"\xef\xbb\xbf")
     assert "00:00:00.000 --> 00:00:01.200" in body
     assert "Hello &lt;world&gt;" in body

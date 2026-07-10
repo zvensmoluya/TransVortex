@@ -164,13 +164,14 @@ transvortex auth set openai_asr
 
 ## 输出格式
 
-TransVortex 可以导出 SRT、ASS 或 WebVTT。
+TransVortex 可以导出 SRT、ASS、WebVTT 或 LRC。
 
 - SRT 是兼容格式，使用 UTF-8 BOM，适合通用播放器、人工审稿和平台交付。
 - ASS 是表现型格式，默认使用 `cinematic` preset，包含 CJK 友好的字体候选说明、主译文/辅原文层级、克制描边阴影、安全区和自动换行。双语顺序可用 `--subtitle-bilingual-order target_source|source_target` 选择，默认译文在上、原文在下；`--subtitle-prefer-single-line true|false` 控制是否尽量保持单行。ASS 样式本身只声明一个 `Fontname`，实际缺字替换取决于播放器和系统字体。
-- WebVTT 是网页/HTML5 格式，可通过 `--format vtt` 或 `output_format: vtt` 导出。
-- 导出阶段会生成 `quality/subtitle_delivery.json`，检查样式、换行、双语拥挤、格式兼容和时间轴表现问题。
-- 结构化 `Segment` 始终是唯一真实来源；SRT、ASS、VTT 是不同 renderer，不会互相作为主中间格式。
+- WebVTT 是适合网页/HTML5 和音视频时间轴的字幕格式，可通过 `--format vtt` 或 `output_format: vtt` 导出。
+- LRC 是紧凑的音频字幕/时间轴文本格式，可通过 `--format lrc` 或 `output_format: lrc` 单独导出；当前不作为输入格式。
+- SRT、ASS 和 WebVTT 导出会生成 `quality/subtitle_delivery.json`，检查样式、换行、双语拥挤、格式兼容和时间轴表现问题；LRC 暂无专用交付检查，重新导出时不会保留其他格式的旧报告。
+- 结构化 `Segment` 始终是唯一真实来源；SRT、ASS、VTT 和 LRC 是不同 renderer，不会互相作为主中间格式。
 - 最终文件写入任务目录的 `output/`。
 
 表现层样例在 `samples/subtitle_delivery/`：
@@ -178,6 +179,7 @@ TransVortex 可以导出 SRT、ASS 或 WebVTT。
 ```powershell
 python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format both --output samples\subtitle_delivery\preview --bilingual --json
 python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format vtt --output samples\subtitle_delivery\preview --bilingual --json
+python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format lrc --output samples\subtitle_delivery\preview --bilingual --json
 ```
 
 ## 参考文档

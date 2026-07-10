@@ -135,6 +135,9 @@ World
     assert result["segments"][0]["model"] == "m1"
     assert "quality" in result
     assert "quality_issues" in result["segments"][0]
+    delivery_file = store.task_dir(task_id) / "quality" / "subtitle_delivery.json"
+    assert delivery_file.exists()
+    assert set(result["delivery"]) == {"srt", "ass"}
 
     edited = result["segments"]
     edited[0]["text_tgt"] = "改过的译文"
@@ -152,6 +155,8 @@ World
     lrc_body = Path(reexported_lrc["output_paths"]["lrc"]).read_text(encoding="utf-8")
     assert "[00:01.00]改过的译文" in lrc_body
     assert "Hello" not in lrc_body
+    assert not delivery_file.exists()
+    assert open_task_result(root_dir=root, task_id=task_id)["delivery"] == {}
     recovery_dir = root / "fixed-output"
     store.update_task_status(
         task_id,
@@ -170,6 +175,7 @@ World
     assert recovered_task.status == "DONE"
     assert recovered_task.error is None
     assert recovered_task.error_info is None
+    assert delivery_file.exists()
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)
@@ -215,12 +221,14 @@ Hello
         cli_overrides={"output_format": "lrc"},
     )
 
-    task = TaskStore(root / "artifacts").load_task(task_id)
+    store = TaskStore(root / "artifacts")
+    task = store.load_task(task_id)
     assert task.status == "DONE"
     assert task.settings["output_format"] == "lrc"
     assert set(task.output_paths) == {"lrc"}
     assert task.output_path == task.output_paths["lrc"]
     assert Path(task.output_paths["lrc"]).read_text(encoding="utf-8") == "[00:01.00]你好\n"
+    assert not (store.task_dir(task_id) / "quality" / "subtitle_delivery.json").exists()
 
 
 def test_srt_translate_reflow_artifacts_and_result_summary(tmp_path: Path, monkeypatch) -> None:

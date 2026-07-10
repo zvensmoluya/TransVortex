@@ -323,8 +323,11 @@ def reexport_task(
         for fmt in output_paths
         if fmt != "lrc"
     }
+    delivery_file = paths["quality"] / "subtitle_delivery.json"
     if delivery_reports:
-        write_json(paths["quality"] / "subtitle_delivery.json", delivery_reports)
+        write_json(delivery_file, delivery_reports)
+    elif delivery_file.exists():
+        delivery_file.unlink()
     output_payload = {key: str(path) for key, path in output_paths.items()}
     primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt") or output_payload.get("lrc")
     store.update_task_status(task_id, "DONE", output_path=primary, output_paths=output_payload)
