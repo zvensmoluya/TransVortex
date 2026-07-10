@@ -289,15 +289,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('把音频、视频或字幕放进来吧'), findsOneWidget);
-    expect(find.text('浏览文件'), findsNothing);
+    expect(find.text('选择片源'), findsOneWidget);
+    expect(find.text('新任务会按'), findsOneWidget);
+    expect(find.text('自动生成术语建议'), findsOneWidget);
+    expect(find.text('字幕，并'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('main-empty-pick-target')),
       findsOneWidget,
     );
     expect(find.textContaining('也可以点击选择'), findsNothing);
     expect(find.textContaining('支持视频'), findsNothing);
-    expect(find.textContaining('翻译'), findsNothing);
-    expect(find.textContaining('DeepSeek'), findsNothing);
     expect(find.text('TransVortex'), findsOneWidget);
     expect(find.textContaining('调试态'), findsNothing);
     expectNoFlutterException();
@@ -352,7 +353,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.byKey(const ValueKey('main-empty-pick-target')));
+    await tester.tap(find.text('选择片源'));
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('picked-video.mp4'), findsOneWidget);

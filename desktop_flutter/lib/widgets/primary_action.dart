@@ -57,24 +57,40 @@ class _PrimaryActionState extends State<PrimaryAction> {
         _hover = false;
         _down = false;
       }),
-      child: GestureDetector(
-        onTapDown: disabled ? null : (_) => setState(() => _down = true),
-        onTapUp: disabled ? null : (_) => setState(() => _down = false),
-        onTapCancel: disabled ? null : () => setState(() => _down = false),
-        onTap: disabled ? null : widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 130),
-          curve: Curves.easeOut,
-          height: 44,
-          constraints: const BoxConstraints(minWidth: 168, maxWidth: 320),
-          padding: const EdgeInsets.symmetric(horizontal: T.s24),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(color: border, width: 1.6),
+      child: AnimatedScale(
+        scale: _down ? 0.985 : 1,
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        child: GestureDetector(
+          onTapDown: disabled ? null : (_) => setState(() => _down = true),
+          onTapUp: disabled ? null : (_) => setState(() => _down = false),
+          onTapCancel: disabled ? null : () => setState(() => _down = false),
+          onTap: disabled ? null : widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 130),
+            curve: Curves.easeOut,
+            height: 44,
+            constraints: const BoxConstraints(minWidth: 168, maxWidth: 320),
+            padding: const EdgeInsets.symmetric(horizontal: T.s24),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(T.rMd),
+              border: Border.all(color: border, width: 1.6),
+              boxShadow: disabled || !filled
+                  ? const []
+                  : [
+                      BoxShadow(
+                        color: T.accentStrong.withValues(
+                          alpha: _down ? 0.08 : 0.18,
+                        ),
+                        offset: Offset(0, _down ? 1 : 4),
+                        blurRadius: _down ? 3 : 9,
+                      ),
+                    ],
+            ),
+            alignment: Alignment.center,
+            child: Text(widget.label, style: T.tCta.copyWith(color: fg)),
           ),
-          alignment: Alignment.center,
-          child: Text(widget.label, style: T.tCta.copyWith(color: fg)),
         ),
       ),
     );

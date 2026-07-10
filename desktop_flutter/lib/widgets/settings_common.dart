@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../services/app_service_client.dart';
@@ -551,6 +553,180 @@ class _ActionButtonState extends State<ActionButton> {
   }
 }
 
+class FeedbackActionButton extends StatefulWidget {
+  const FeedbackActionButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.strong = false,
+    this.busy = false,
+    this.danger = false,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool strong;
+  final bool busy;
+  final bool danger;
+
+  @override
+  State<FeedbackActionButton> createState() => _FeedbackActionButtonState();
+}
+
+class _FeedbackActionButtonState extends State<FeedbackActionButton> {
+  bool _hover = false;
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final active = enabled || widget.busy;
+    final bg = widget.strong
+        ? (active ? (_hover ? T.accentStrong : T.accent) : T.line)
+        : widget.danger
+        ? (_hover && enabled ? T.danger.withValues(alpha: 0.08) : T.surface)
+        : (_hover && enabled
+              ? T.accentSoft.withValues(alpha: 0.55)
+              : T.surface);
+    final fg = widget.strong
+        ? const Color(0xFFFFFFFF)
+        : !active
+        ? T.muted
+        : widget.danger
+        ? T.danger
+        : T.ink;
+    final border = widget.strong
+        ? bg
+        : !active
+        ? T.line
+        : widget.danger
+        ? T.danger.withValues(alpha: 0.76)
+        : _hover
+        ? T.accent.withValues(alpha: 0.76)
+        : T.line;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: enabled ? (_) => setState(() => _hover = true) : null,
+      onExit: enabled
+          ? (_) => setState(() {
+              _hover = false;
+              _down = false;
+            })
+          : null,
+      child: AnimatedScale(
+        scale: _down ? 0.98 : 1,
+        duration: const Duration(milliseconds: 90),
+        child: GestureDetector(
+          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+          onTapCancel: enabled ? () => setState(() => _down = false) : null,
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 130),
+            curve: Curves.easeOut,
+            height: 36,
+            constraints: const BoxConstraints(minWidth: 116),
+            padding: const EdgeInsets.symmetric(horizontal: T.s12),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(T.rMd),
+              border: Border.all(color: border, width: 1.2),
+              boxShadow: widget.strong && active
+                  ? [
+                      BoxShadow(
+                        color: T.accentStrong.withValues(
+                          alpha: _down ? 0.06 : 0.14,
+                        ),
+                        offset: Offset(0, _down ? 1 : 3),
+                        blurRadius: _down ? 2 : 7,
+                      ),
+                    ]
+                  : const [],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  widget.label,
+                  style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium),
+                ),
+                if (widget.busy) ...[
+                  const SizedBox(width: 7),
+                  _WorkingDots(color: fg),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkingDots extends StatefulWidget {
+  const _WorkingDots({required this.color});
+
+  final Color color;
+
+  @override
+  State<_WorkingDots> createState() => _WorkingDotsState();
+}
+
+class _WorkingDotsState extends State<_WorkingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 18,
+      height: 8,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) => CustomPaint(
+          painter: _WorkingDotsPainter(
+            phase: _controller.value,
+            color: widget.color,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkingDotsPainter extends CustomPainter {
+  const _WorkingDotsPainter({required this.phase, required this.color});
+
+  final double phase;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var index = 0; index < 3; index++) {
+      final wave = (math.sin((phase - index * 0.18) * math.pi * 2) + 1) / 2;
+      canvas.drawCircle(
+        Offset(3 + index * 6, size.height / 2),
+        1.5 + wave * 0.45,
+        Paint()..color = color.withValues(alpha: 0.38 + wave * 0.62),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _WorkingDotsPainter oldDelegate) =>
+      oldDelegate.phase != phase || oldDelegate.color != color;
+}
+
 class ChoicePill extends StatefulWidget {
   const ChoicePill({
     super.key,
@@ -637,6 +813,7 @@ class ChoiceRow extends StatefulWidget {
 
 class _ChoiceRowState extends State<ChoiceRow> {
   bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
@@ -644,49 +821,170 @@ class _ChoiceRowState extends State<ChoiceRow> {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _down = false;
+      }),
       child: GestureDetector(
+        onTapDown: (_) => setState(() => _down = true),
+        onTapUp: (_) => setState(() => _down = false),
+        onTapCancel: () => setState(() => _down = false),
         onTap: widget.onTap,
-        child: Container(
-          height: 44,
-          decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(
-                color: widget.selected ? color : const Color(0x00000000),
-                width: 3,
-              ),
-              bottom: const BorderSide(color: T.line, width: 1),
-            ),
-            color: _hover || widget.selected ? T.accentSoft : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          height: 48,
+          transform: Matrix4.translationValues(
+            widget.selected ? 3 : 0,
+            _down ? 1 : 0,
+            0,
           ),
-          padding: const EdgeInsets.symmetric(horizontal: T.s12),
+          decoration: BoxDecoration(
+            border: const Border(bottom: BorderSide(color: T.line, width: 1)),
+            color: widget.selected
+                ? T.accentSoft.withValues(alpha: 0.38)
+                : _hover
+                ? T.surface
+                : const Color(0x00000000),
+          ),
+          padding: const EdgeInsets.only(right: T.s8),
           alignment: Alignment.centerLeft,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Text(
-                widget.warn ? '${widget.label} ●' : widget.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: T.tBody.copyWith(
-                  color: widget.warn ? T.warn : T.ink,
-                  fontWeight: widget.selected ? T.wBold : T.wRegular,
+              SizedBox(
+                width: 14,
+                height: 34,
+                child: CustomPaint(
+                  painter: _ChoiceTapePainter(
+                    color: color,
+                    selected: widget.selected,
+                    active: _hover || widget.warn,
+                  ),
                 ),
               ),
-              if (widget.detail != null && widget.detail!.isNotEmpty)
-                Text(
-                  widget.detail!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: T.tCaption,
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tBody.copyWith(
+                        color: T.ink,
+                        fontWeight: widget.selected ? T.wBold : T.wRegular,
+                      ),
+                    ),
+                    if (widget.detail != null && widget.detail!.isNotEmpty)
+                      Text(
+                        widget.detail!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tCaption.copyWith(
+                          color: widget.warn ? T.warn : T.muted,
+                        ),
+                      ),
+                  ],
                 ),
+              ),
+              if (widget.warn)
+                Text(
+                  '需配置',
+                  maxLines: 1,
+                  style: T.tCaption.copyWith(color: T.warn),
+                ),
+              if (widget.selected) ...[
+                const SizedBox(width: T.s8),
+                SizedBox(
+                  width: 14,
+                  height: 24,
+                  child: CustomPaint(painter: _ChoiceClipPainter(color: color)),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _ChoiceTapePainter extends CustomPainter {
+  const _ChoiceTapePainter({
+    required this.color,
+    required this.selected,
+    required this.active,
+  });
+
+  final Color color;
+  final bool selected;
+  final bool active;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final opacity = selected
+        ? 0.94
+        : active
+        ? 0.42
+        : 0.12;
+    final path = Path()
+      ..moveTo(0, 2)
+      ..lineTo(size.width - 2, 0)
+      ..lineTo(size.width - 1, size.height - 5)
+      ..lineTo(size.width * 0.55, size.height)
+      ..lineTo(1, size.height - 3)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color.withValues(alpha: opacity));
+    if (selected) {
+      canvas.drawLine(
+        Offset(size.width * 0.52, 7),
+        Offset(size.width * 0.52, size.height - 9),
+        Paint()
+          ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.66)
+          ..strokeWidth = 1.2
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChoiceTapePainter oldDelegate) =>
+      oldDelegate.color != color ||
+      oldDelegate.selected != selected ||
+      oldDelegate.active != active;
+}
+
+class _ChoiceClipPainter extends CustomPainter {
+  const _ChoiceClipPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.82)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    final path = Path()
+      ..moveTo(size.width * 0.72, 3)
+      ..quadraticBezierTo(size.width * 0.18, 3, size.width * 0.22, 10)
+      ..lineTo(size.width * 0.22, size.height - 5)
+      ..quadraticBezierTo(
+        size.width * 0.24,
+        size.height - 1,
+        size.width * 0.56,
+        size.height - 4,
+      )
+      ..lineTo(size.width * 0.56, 8);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChoiceClipPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class SegmentButton extends StatefulWidget {

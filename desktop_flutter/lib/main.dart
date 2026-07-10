@@ -919,7 +919,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         Expanded(
           child: Align(alignment: Alignment.center, child: _subject(view)),
         ),
-        if (view.state == MainState.ready ||
+        if (view.state == MainState.empty ||
+            view.state == MainState.ready ||
             view.state == MainState.blocked) ...[
           JobLine(
             view: view,
@@ -936,8 +937,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(height: T.s16),
         ],
-        if (view.state != MainState.failed &&
-            view.state != MainState.empty) ...[
+        if (view.state != MainState.failed) ...[
           PrimaryAction(
             key: ValueKey(
               'main-cta-${view.state.name}-${_ctaVariant(view.state).name}',
@@ -1143,7 +1143,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   String _ctaLabel(MainWindowViewModel view) {
     return switch (view.state) {
-      MainState.empty => '浏览文件',
+      MainState.empty => '选择片源',
       MainState.ready => view.submitting ? '提交中…' : '开始译制',
       MainState.blocked => !view.translationConfigured ? '去配置翻译' : '去配置识别',
       MainState.running => view.canceling ? '取消中…' : '停止任务',

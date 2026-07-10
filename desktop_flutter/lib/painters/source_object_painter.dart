@@ -7,7 +7,7 @@ import '../theme/tokens.dart';
 /// 单主体「片源封套」的自绘世界对象（design spec §4.2 / §9）。
 ///
 /// 一个连贯的 media/film 隐喻：一只带胶片齿孔的封套，片源放进来后它
-/// 「收成封套」，制作时就地显进度，完成时长出字幕带，失败时贴上修理贴。
+/// 「收成封套」，制作时卷动字幕纸带，完成时推出交付件，失败时贴上修理贴。
 /// 平涂赛璐珞 + 统一墨色描边、圆头线帽（§9.1 register B / §9.3）。
 ///
 /// 只画物件；文件名 / 类型签 / 状态短句由上层文本组件叠加，保证 CJK 清晰。
@@ -57,18 +57,21 @@ class SourceObjectPainter extends CustomPainter {
       case MainState.ready:
       case MainState.blocked:
         _drawEnvelope(canvas, body, tint: T.accentSoft);
+        _drawBindingTab(canvas, body, warning: state == MainState.blocked);
         break;
       case MainState.running:
         _drawEnvelope(canvas, body, tint: T.accentSoft);
-        _drawProgress(canvas, body);
+        _drawReels(canvas, body);
+        _drawProductionTape(canvas, body);
         break;
       case MainState.completed:
         _drawEnvelope(canvas, body, tint: T.accentSoft);
-        _drawSubtitleBand(canvas, body);
+        _drawDeliveryStrip(canvas, body);
         _drawCheckBadge(canvas, body);
         break;
       case MainState.failed:
         _drawEnvelope(canvas, body, tint: const Color(0xFFF1EAEC), dim: true);
+        _drawJammedTape(canvas, body);
         _drawRepairPatch(canvas, body);
         break;
     }
@@ -250,60 +253,154 @@ class SourceObjectPainter extends CustomPainter {
 
     // 中部标签带（放文件名的底，文字由组件叠加）。
     final band = RRect.fromRectAndRadius(
-      Rect.fromLTWH(
-        body.left + body.width * 0.16,
-        body.center.dy + body.height * 0.04,
-        body.width * 0.68,
-        body.height * 0.22,
-      ),
+      _bandRect(body),
       const Radius.circular(T.rSm),
     );
     canvas.drawRRect(band, _fill(dim ? const Color(0xFFEDE6E9) : tint));
     canvas.drawRRect(band, _ink..strokeWidth = 1.8);
   }
 
-  // —— 制作中：物件上就地显进度环（G6：只反映真实进度）——
-  void _drawProgress(Canvas canvas, Rect body) {
-    final c = Offset(body.center.dx, body.top + body.height * 0.30);
-    const r = 17.0;
-    canvas.drawCircle(c, r, _fill(T.bg));
-    canvas.drawCircle(
-      c,
-      r,
-      _ink
-        ..strokeWidth = 2.4
-        ..color = T.line,
+  Rect _bandRect(Rect body) => Rect.fromLTWH(
+    body.left + body.width * 0.16,
+    body.center.dy + body.height * 0.04,
+    body.width * 0.68,
+    body.height * 0.22,
+  );
+
+  void _drawBindingTab(Canvas canvas, Rect body, {required bool warning}) {
+    final center = Offset(
+      body.left + body.width * 0.28,
+      body.top + body.height * 0.06,
     );
-    final sweep = 2 * math.pi * progress.clamp(0.0, 1.0);
-    canvas.drawArc(
-      Rect.fromCircle(center: c, radius: r),
-      -math.pi / 2,
-      sweep,
-      false,
-      Paint()
-        ..color = T.accent
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.4
-        ..strokeCap = StrokeCap.round,
+    final tab = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: center,
+        width: body.width * 0.20,
+        height: body.height * 0.16,
+      ),
+      const Radius.circular(3),
+    );
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(-0.07);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawRRect(
+      tab,
+      _fill(warning ? T.warn.withValues(alpha: 0.34) : const Color(0xFFFFE6B8)),
+    );
+    canvas.drawLine(
+      Offset(tab.left + 8, tab.center.dy),
+      Offset(tab.right - 8, tab.center.dy),
+      _ink
+        ..color = T.inkLine.withValues(alpha: 0.46)
+        ..strokeWidth = 1.2,
+    );
+    canvas.restore();
+  }
+
+  // —— 制作中：卷轴持续运动，字幕纸带长度只反映真实进度 ——
+  void _drawReels(Canvas canvas, Rect body) {
+    final y = body.top + body.height * 0.30;
+    final left = Offset(body.center.dx - 15, y);
+    final right = Offset(body.center.dx + 15, y);
+    final line = _ink
+      ..color = T.inkLine.withValues(alpha: 0.72)
+      ..strokeWidth = 1.6;
+    canvas.drawLine(left, right, line);
+    for (final center in [left, right]) {
+      canvas.drawCircle(center, 8, _fill(T.surface));
+      canvas.drawCircle(center, 8, line);
+      final angle = breathe * math.pi * 2 + (center == right ? 0.8 : 0);
+      final spoke = Offset(math.cos(angle), math.sin(angle)) * 5;
+      canvas.drawLine(center - spoke, center + spoke, line..strokeWidth = 1.2);
+    }
+  }
+
+  void _drawProductionTape(Canvas canvas, Rect body) {
+    final band = _bandRect(body).deflate(8);
+    final track = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: band.center, width: band.width, height: 9),
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(track, _fill(T.surface.withValues(alpha: 0.78)));
+    canvas.drawRRect(
+      track,
+      _ink
+        ..color = T.inkLine.withValues(alpha: 0.48)
+        ..strokeWidth = 1.1,
+    );
+
+    final normalized = progress.clamp(0.0, 1.0);
+    final fillWidth = track.width * normalized;
+    if (fillWidth > 0.5) {
+      final filled = RRect.fromRectAndRadius(
+        Rect.fromLTWH(track.left, track.top, fillWidth, track.height),
+        const Radius.circular(5),
+      );
+      canvas.drawRRect(filled, _fill(T.accent.withValues(alpha: 0.78)));
+    }
+
+    final signalX = normalized > 0
+        ? track.left + fillWidth - 2
+        : track.left + (track.width - 8) * breathe;
+    canvas.drawCircle(
+      Offset(
+        signalX.clamp(track.left + 3, track.right - 3).toDouble(),
+        track.center.dy,
+      ),
+      2.7,
+      _fill(const Color(0xFFFFFFFF)),
     );
   }
 
-  // —— 完成：长出字幕带 ——
-  void _drawSubtitleBand(Canvas canvas, Rect body) {
-    final p = _fill(T.ink);
-    for (final f in [0.52, 0.66]) {
-      final lineWidth = body.width * (f == 0.52 ? 0.5 : 0.36);
-      final r = RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          body.center.dx - lineWidth / 2,
-          body.top + body.height * f,
-          lineWidth,
-          4,
-        ),
-        const Radius.circular(2),
-      );
-      canvas.drawRRect(r, p);
-    }
+  // —— 完成：字幕纸带从封套中成为可交付结果 ——
+  void _drawDeliveryStrip(Canvas canvas, Rect body) {
+    final band = _bandRect(body);
+    final strip = Path()
+      ..moveTo(band.left + 8, band.top + 4)
+      ..lineTo(body.right + 18, band.top + 4)
+      ..lineTo(body.right + 12, band.center.dy)
+      ..lineTo(body.right + 18, band.bottom - 4)
+      ..lineTo(band.left + 8, band.bottom - 4)
+      ..close();
+    canvas.drawPath(strip, _fill(const Color(0xFFFFFCF7)));
+    canvas.drawPath(
+      strip,
+      _ink
+        ..color = T.inkLine
+        ..strokeWidth = 1.7,
+    );
+    final linePaint = _ink
+      ..color = T.inkLine.withValues(alpha: 0.86)
+      ..strokeWidth = 2.6;
+    canvas.drawLine(
+      Offset(band.left + 20, band.center.dy - 4),
+      Offset(body.right - 8, band.center.dy - 4),
+      linePaint,
+    );
+    canvas.drawLine(
+      Offset(band.left + 20, band.center.dy + 5),
+      Offset(body.right - 28, band.center.dy + 5),
+      linePaint..strokeWidth = 2,
+    );
+  }
+
+  void _drawJammedTape(Canvas canvas, Rect body) {
+    final band = _bandRect(body);
+    final tape = Path()
+      ..moveTo(band.right - 18, band.center.dy - 8)
+      ..lineTo(body.right + 12, band.center.dy - 8)
+      ..lineTo(body.right + 4, band.center.dy)
+      ..lineTo(body.right + 12, band.center.dy + 8)
+      ..lineTo(band.right - 18, band.center.dy + 8)
+      ..close();
+    canvas.drawPath(tape, _fill(const Color(0xFFFBE4E0)));
+    canvas.drawPath(
+      tape,
+      _ink
+        ..color = T.danger.withValues(alpha: 0.82)
+        ..strokeWidth = 1.8,
+    );
   }
 
   void _drawCheckBadge(Canvas canvas, Rect body) {

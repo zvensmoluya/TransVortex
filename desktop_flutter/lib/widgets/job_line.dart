@@ -47,7 +47,7 @@ class JobLine extends StatelessWidget {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            const Text('会按', style: T.tBody),
+            Text(view.hasSource ? '会按' : '新任务会按', style: T.tBody),
             _Word(
               label: languageLabel(view.sourceLang),
               tooltip: '源语：${languageLabel(view.sourceLang)}',

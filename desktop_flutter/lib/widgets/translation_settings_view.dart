@@ -153,22 +153,27 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     final busy = c.isBusy;
 
     final footer = <Widget>[
-      ActionButton(
-        label: c.busy == TranslationBusy.savingConnection ? '保存中' : '保存连接',
+      FeedbackActionButton(
+        label: '保存连接',
         strong: true,
+        busy: c.busy == TranslationBusy.savingConnection,
         onTap: busy ? null : _saveConnection,
       ),
-      ActionButton(
-        label: c.busy == TranslationBusy.testingConnection ? '测试中' : '测试连接',
+      FeedbackActionButton(
+        label: '测试连接',
+        busy: c.busy == TranslationBusy.testingConnection,
         onTap: busy ? null : _testConnection,
       ),
-      ActionButton(
-        label: c.busy == TranslationBusy.fetchingModels ? '拉取中' : '拉取模型',
+      FeedbackActionButton(
+        label: '拉取模型',
+        busy: c.busy == TranslationBusy.fetchingModels,
         onTap: busy ? null : _fetchModels,
       ),
       if (!creating && c.selectedConnection != null)
-        ActionButton(
-          label: c.busy == TranslationBusy.deletingConnection ? '删除中' : '删除连接',
+        FeedbackActionButton(
+          label: '删除连接',
+          busy: c.busy == TranslationBusy.deletingConnection,
+          danger: true,
           onTap: busy ? null : c.deleteConnection,
         ),
     ];
@@ -700,7 +705,7 @@ class _EmptyFallbackStrip extends StatelessWidget {
   }
 }
 
-class _ConnectionTestCard extends StatelessWidget {
+class _ConnectionTestCard extends StatefulWidget {
   const _ConnectionTestCard.loading()
     : title = '正在测试服务',
       detail = '等待模型服务返回测试结果',
@@ -716,48 +721,75 @@ class _ConnectionTestCard extends StatelessWidget {
   final bool? ok;
 
   @override
+  State<_ConnectionTestCard> createState() => _ConnectionTestCardState();
+}
+
+class _ConnectionTestCardState extends State<_ConnectionTestCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.ok == null) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ConnectionTestCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.ok == null && !_controller.isAnimating) {
+      _controller.repeat();
+    } else if (widget.ok != null && _controller.isAnimating) {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final running = ok == null;
-    final color = running ? T.sky : (ok! ? T.ok : T.danger);
-    final background = running
-        ? T.sky.withValues(alpha: 0.12)
-        : color.withValues(alpha: 0.10);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(T.s12),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(T.rSm),
-        border: Border.all(color: color.withValues(alpha: 0.42), width: 1),
-      ),
+    final running = widget.ok == null;
+    final color = widget.ok == false ? T.danger : T.accentStrong;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: T.s8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (running)
-            SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2, color: color),
-            )
-          else
-            Icon(
-              ok! ? Icons.check_rounded : Icons.close_rounded,
-              size: 18,
-              color: color,
+          SizedBox(
+            width: 96,
+            height: 34,
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) => CustomPaint(
+                painter: _ConnectionSignalPainter(
+                  phase: running ? _controller.value : 1,
+                  status: widget.ok,
+                  color: color,
+                ),
+              ),
             ),
-          const SizedBox(width: T.s8),
+          ),
+          const SizedBox(width: T.s12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  widget.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: T.tBody.copyWith(color: T.ink, fontWeight: T.wBold),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  detail,
+                  widget.detail,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: T.tCaption.copyWith(color: T.muted),
@@ -769,6 +801,78 @@ class _ConnectionTestCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ConnectionSignalPainter extends CustomPainter {
+  const _ConnectionSignalPainter({
+    required this.phase,
+    required this.status,
+    required this.color,
+  });
+
+  final double phase;
+  final bool? status;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = size.height / 2;
+    final line = Paint()
+      ..color = T.inkLine.withValues(alpha: 0.62)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round;
+    final terminal = Paint()
+      ..color = T.surface
+      ..style = PaintingStyle.fill;
+
+    canvas.drawCircle(Offset(8, y), 5, terminal);
+    canvas.drawCircle(Offset(8, y), 5, line);
+    canvas.drawLine(Offset(13, y), Offset(30, y), line);
+
+    if (status == false) {
+      canvas.drawLine(Offset(30, y), Offset(42, y), line);
+      canvas.drawLine(Offset(54, y), Offset(size.width - 13, y), line);
+      final mark = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(44, y - 5), Offset(52, y + 5), mark);
+      canvas.drawLine(Offset(52, y - 5), Offset(44, y + 5), mark);
+    } else {
+      canvas.drawLine(Offset(30, y), Offset(size.width - 13, y), line);
+    }
+
+    canvas.drawCircle(Offset(size.width - 8, y), 5, terminal);
+    canvas.drawCircle(Offset(size.width - 8, y), 5, line);
+
+    if (status == null) {
+      final signalX = 30 + (size.width - 48) * phase;
+      canvas.drawCircle(Offset(signalX, y), 3.4, Paint()..color = T.accent);
+      canvas.drawCircle(
+        Offset(signalX, y),
+        6.5,
+        Paint()..color = T.accent.withValues(alpha: 0.12),
+      );
+    } else if (status == true) {
+      final stamp = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      final x = size.width - 8;
+      canvas.drawLine(Offset(x - 3, y), Offset(x - 0.5, y + 2.5), stamp);
+      canvas.drawLine(Offset(x - 0.5, y + 2.5), Offset(x + 4, y - 3), stamp);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ConnectionSignalPainter oldDelegate) =>
+      oldDelegate.phase != phase ||
+      oldDelegate.status != status ||
+      oldDelegate.color != color;
 }
 
 class _TranslationTabs extends StatelessWidget {
