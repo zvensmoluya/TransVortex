@@ -422,6 +422,36 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 这些问题不属于“UI 细节”，而是 App Host / Local Service 架构的一部分。
 
+### 12.1 当前实现审计（2026-07-10）
+
+当前 Python core、artifact/runtime、JSON-RPC typed client 和跨进程锁已经具备继续演进的基础。发布前的主要问题不在字幕业务核心，而集中在 App Host、Local Service 启动、运行资源定位、用户数据初始化和安装升级这一圈。现有 portable 路径可以证明 release bundle 在开发机上能够启动，但仍是仓库式运行模型，不等于已安装 App 的运行模型。
+
+#### 发布阻塞项
+
+1. **安装目录与用户数据尚未分离。** `LocalServiceSupervisor` 当前在发现到的仓库或包根下创建 `.transvortex-desktop`，其中保存 `pipeline.yaml`、`providers.local.yaml`、artifact 和任务历史；portable 安装脚本使用 `-Force` 时会删除整个安装目录再复制，因此不能安全充当升级器。
+2. **干净机器没有受控运行时。** Flutter 仍调用系统 `python`，通过仓库式 `src/transvortex/app_service.py` 和 `PYTHONPATH` 启动服务；portable 包不包含 Python runtime、Python 依赖或 FFmpeg。开发机上的 Local Service check 只能证明当前机器环境可用，不能证明新机器首启可用。
+3. **缺少版本化初始化与迁移。** 当前初始化主要是“目录不存在则创建、配置不存在则复制”。已有 `pipeline.yaml` 不会随默认配置演进，也没有安装状态文件、配置 schema migration、迁移前备份和失败回滚。`providers_file_version` / `pipeline_file_version` 只是并发写保护，不是数据格式版本。
+4. **安装资源与运行资源没有统一根。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到包根，但正常 App 把 Local Service 的 `--root` 指向 `.transvortex-desktop`，且只复制 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，不能据此认为包内资源已经进入正式运行路径。
+5. **前后端兼容没有真正握手。** `service.info` 已返回 `protocol_version` 和 `app_version`，Dart 侧目前只解析，不校验可接受版本；Python `0.1.0` 与 Flutter `1.0.0+1` 的版本口径也尚未统一。
+
+#### 仍属过渡胶水的实现
+
+- 设置窗口在主窗口 bridge 不可用时会自行启动 Local Service，和“同一 App 会话只有一个后端宿主”的目标边界不一致。跨进程 runtime lock 能避免重复 acquire worker，但不能替代清楚的服务所有权与退出策略。
+- release smoke 的参数解析、伪造状态、自动编辑/恢复/取消和报告写入仍编译在产品 widget 中。它们对当前验收有价值，后续应收敛到独立 automation driver 或受构建开关约束的测试入口。
+- portable 包直接复制整棵 Python `src/` 并由 PowerShell 重复实现 Python 进程启动、环境注入和 JSON-RPC 健康检查。这是有效的开发验证胶水，不应成为正式安装形态。
+- Flutter/Local Service 缺少持久化启动日志和崩溃日志；服务启动前的 Python/依赖错误只能退化成连接失败，无法依赖尚未启动的 `doctor` 完成首次运行引导。
+- 当前安装脚本没有运行进程保护、staging/原子替换、回滚、卸载注册、代码签名或完整性清单。用户级 `auth.json` 已与安装目录分开，但 Windows ACL 或 Credential Manager 的长期安全边界仍需明确。
+
+#### Release Foundation 建议顺序
+
+1. **统一 AppPaths。** 明确只读 `install_root`，以及独立的 `data_root`、`config_root`、`logs_root`、`cache_root` 和临时目录；保留 `TRANSVORTEX_HOME` 作为开发/测试覆盖，并为现有 `.transvortex-desktop` 提供一次性、可回滚迁移。
+2. **固定 Local Service 交付。** 选择内置 Python runtime + 已安装 wheel，或冻结成受控 sidecar；Flutter 使用明确可执行文件路径，不再依赖系统 `python`、仓库发现和 `PYTHONPATH`。FFmpeg 与本地 ASR 的基础/可选组件边界一并确定。
+3. **建立版本化 initializer。** 首次运行创建目录和默认配置；升级时按 schema 执行幂等迁移、备份和回滚；启动服务后校验 protocol、capability 与 App/backend 版本组合。
+4. **收口 Supervisor。** 同一 App 会话只允许一个 Local Service 宿主，页面只依赖 `AppServiceClient`；补持久日志、服务重启、运行中 Worker 的退出策略，并把 smoke 驱动移出产品 widget。
+5. **建立正式安装流水线。** 使用 staging 和安全升级保留用户数据，补卸载、快捷方式/AUMID、签名、hash manifest、干净 Windows 环境首启和已安装目录端到端验收。
+
+当前 G1 可以继续用于锁定真实窗口中的用户流程，但最终 Release Candidate 验收必须在上述安装拓扑上重跑一轮精简 G1。否则通过的仍是“仓库或 portable 包旁运行的 Release”，不是可升级、可恢复的已安装应用。
+
 ## 13. 技术选项与当前取舍
 
 ### 13.1 主 Flutter engine 作为短期 Coordinator
