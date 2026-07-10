@@ -550,6 +550,8 @@ def _complete_asr_segment(
 ) -> None:
     asr_done.add(idx)
     checkpoint["asr_done_segments"] = sorted(asr_done)
+    checkpoint["asr_done_count"] = len(asr_done)
+    checkpoint["asr_total_segments"] = max(0, int(total_segments))
     checkpoint["status"] = "ASR"
     store.save_checkpoint(task_id, checkpoint)
     verb = "Skipped silent" if skipped else "Transcribed"
@@ -795,6 +797,20 @@ def _clear_checkpoint_error(checkpoint: dict[str, Any]) -> None:
 
 def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
     keys = [
+        "ingest_done",
+        "source_segment_count",
+        "asr_total_segments",
+        "asr_done_count",
+        "memory_current_mode",
+        "memory_current_attempt",
+        "memory_current_max_attempts",
+        "memory_current_provider",
+        "memory_current_model",
+        "memory_current_chunk",
+        "memory_current_chunk_ids",
+        "memory_attempt_started_at",
+        "memory_bootstrap_status",
+        "memory_bootstrap_actions",
         "translate_total_chunks",
         "translate_done_count",
         "translate_current_chunk",
@@ -807,6 +823,15 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "translate_current_mode",
         "translate_attempt_started_at",
         "translate_memory_entries",
+        "translate_recovery_chunk",
+        "translate_recovery_batch_index",
+        "translate_recovery_batch_total",
+        "translate_recovery_segment_count",
+        "quality_status",
+        "quality_issue_counts",
+        "quality_residual_counts",
+        "delivery_status",
+        "delivery_issue_counts",
         "transport",
         "http_version",
         "streaming",
@@ -822,6 +847,21 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
     return detail
 
 
+def _checkpoint_progress(checkpoint: dict[str, Any]) -> float:
+    stage = str(checkpoint.get("status") or "").upper()
+    if stage == "ASR":
+        done = int(checkpoint.get("asr_done_count") or len(checkpoint.get("asr_done_segments") or []))
+        total = int(checkpoint.get("asr_total_segments") or 0)
+        if total > 0:
+            return 0.25 + 0.25 * min(1.0, done / total)
+    if stage == "TRANSLATE":
+        done = int(checkpoint.get("translate_done_count") or 0)
+        total = int(checkpoint.get("translate_total_chunks") or 0)
+        if total > 0:
+            return 0.65 + 0.18 * min(1.0, done / total)
+    return _stage_progress(stage)
+
+
 def _checkpoint_status_payload(store: TaskStore, task_id: str) -> dict[str, Any]:
     try:
         checkpoint = store.load_checkpoint(task_id)
@@ -830,6 +870,7 @@ def _checkpoint_status_payload(store: TaskStore, task_id: str) -> dict[str, Any]
     payload: dict[str, Any] = {
         "checkpoint_status": checkpoint.get("status"),
         "checkpoint_updated_at": checkpoint.get("updated_at"),
+        "progress": _checkpoint_progress(checkpoint),
     }
     progress_detail = _progress_detail_from_checkpoint(checkpoint)
     if progress_detail:
@@ -837,34 +878,47 @@ def _checkpoint_status_payload(store: TaskStore, task_id: str) -> dict[str, Any]
     return payload
 
 
-def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: dict[str, Any]):
+def _translation_progress_callback(
+    store: TaskStore,
+    task_id: str,
+    checkpoint: dict[str, Any],
+    *,
+    stage: str = "TRANSLATE",
+):
     lock = threading.Lock()
 
     def handle(event: dict[str, Any]) -> None:
         with lock:
             mode = str(event.get("mode") or "translate")
             now = utc_now_iso()
-            checkpoint["status"] = "TRANSLATE"
-            checkpoint["translate_current_mode"] = mode
-            checkpoint["translate_current_attempt"] = int(event.get("attempt") or 1)
-            checkpoint["translate_current_max_attempts"] = int(event.get("max_attempts") or 1)
-            checkpoint["translate_attempt_started_at"] = now
+            effective_stage = str(stage or "TRANSLATE").upper()
+            prefix = "memory" if effective_stage == "MEMORY" else "translate"
+            checkpoint["status"] = effective_stage
+            checkpoint[f"{prefix}_current_mode"] = mode
+            checkpoint[f"{prefix}_current_attempt"] = int(event.get("attempt") or 1)
+            checkpoint[f"{prefix}_current_max_attempts"] = int(event.get("max_attempts") or 1)
+            checkpoint[f"{prefix}_attempt_started_at"] = now
             if event.get("provider") is not None:
-                checkpoint["translate_current_provider"] = str(event.get("provider"))
+                checkpoint[f"{prefix}_current_provider"] = str(event.get("provider"))
             if event.get("model") is not None:
-                checkpoint["translate_current_model"] = str(event.get("model"))
+                checkpoint[f"{prefix}_current_model"] = str(event.get("model"))
             if event.get("chunk_id") is not None:
-                checkpoint["translate_current_chunk"] = str(event.get("chunk_id"))
-                checkpoint.pop("translate_current_chunk_ids", None)
+                checkpoint[f"{prefix}_current_chunk"] = str(event.get("chunk_id"))
+                checkpoint.pop(f"{prefix}_current_chunk_ids", None)
             if event.get("chunk_ids") is not None:
-                checkpoint["translate_current_chunk_ids"] = [str(item) for item in event.get("chunk_ids") or []]
-                checkpoint.pop("translate_current_chunk", None)
+                checkpoint[f"{prefix}_current_chunk_ids"] = [str(item) for item in event.get("chunk_ids") or []]
+                checkpoint.pop(f"{prefix}_current_chunk", None)
             if event.get("segment_id") is not None:
                 checkpoint["translate_current_segment_id"] = int(event.get("segment_id"))
             else:
                 checkpoint.pop("translate_current_segment_id", None)
             if event.get("memory_entries") is not None:
                 checkpoint["translate_memory_entries"] = int(event.get("memory_entries") or 0)
+            if mode == "batch_recovery":
+                checkpoint["translate_recovery_chunk"] = str(event.get("recovery_chunk_id") or "")
+                checkpoint["translate_recovery_batch_index"] = int(event.get("batch_index") or 1)
+                checkpoint["translate_recovery_batch_total"] = int(event.get("batch_total") or 1)
+                checkpoint["translate_recovery_segment_count"] = len(event.get("segment_ids") or [])
             provider_meta = event.get("provider_meta") if isinstance(event.get("provider_meta"), dict) else {}
             for source_key, target_key in [
                 ("transport", "transport"),
@@ -889,7 +943,7 @@ def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: d
             store.append_event(
                 task_id,
                 "provider_attempt",
-                stage="TRANSLATE",
+                stage=effective_stage,
                 message=label,
                 details={
                     key: value
@@ -897,7 +951,11 @@ def _translation_progress_callback(store: TaskStore, task_id: str, checkpoint: d
                         "mode": mode,
                         "chunk_id": event.get("chunk_id"),
                         "chunk_ids": event.get("chunk_ids"),
+                        "recovery_chunk_id": event.get("recovery_chunk_id"),
                         "segment_id": event.get("segment_id"),
+                        "segment_ids": event.get("segment_ids"),
+                        "batch_index": event.get("batch_index"),
+                        "batch_total": event.get("batch_total"),
                         "provider": event.get("provider"),
                         "model": event.get("model"),
                         "attempt": event.get("attempt"),
@@ -2035,6 +2093,10 @@ def _execute_task(
                 _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
                 asr = _build_asr_engine(config, task=task, root_dir=root_dir)
                 asr_done = set(checkpoint.get("asr_done_segments", []))
+                checkpoint["asr_total_segments"] = len(segments_manifest)
+                checkpoint["asr_done_count"] = len(asr_done)
+                checkpoint["status"] = "ASR"
+                store.save_checkpoint(task_id, checkpoint)
                 segment_files = []
                 pending_asr_items = []
                 for item in segments_manifest:
@@ -2140,6 +2202,8 @@ def _execute_task(
                         )
 
                 source_jsonl = persist_source_segments(paths, all_segments)
+                checkpoint["source_segment_count"] = len(all_segments)
+                store.save_checkpoint(task_id, checkpoint)
                 store.append_event(
                     task_id,
                     "artifact",
@@ -2207,8 +2271,17 @@ def _execute_task(
                     source_lang=task.source_lang,
                     target_lang=task.target_lang,
                     memory_dir=paths["memory"],
-                    progress_callback=_translation_progress_callback(store, task_id, checkpoint),
+                    progress_callback=_translation_progress_callback(
+                        store,
+                        task_id,
+                        checkpoint,
+                        stage="MEMORY",
+                    ),
                 )
+                checkpoint["status"] = "MEMORY"
+                checkpoint["memory_bootstrap_status"] = str(bootstrap_payload.get("status") or "")
+                checkpoint["memory_bootstrap_actions"] = len(bootstrap_payload.get("actions") or [])
+                store.save_checkpoint(task_id, checkpoint)
                 store.append_event(
                     task_id,
                     "artifact",
@@ -2249,6 +2322,7 @@ def _execute_task(
             )
         write_json(paths["chunks"] / "chunks.json", chunks)
         checkpoint["status"] = "SEGMENT"
+        checkpoint["source_segment_count"] = len(all_segments)
         checkpoint["translate_total_chunks"] = len(chunks)
         checkpoint["translate_done_count"] = _translation_done_count(
             chunks,
@@ -2384,6 +2458,9 @@ def _execute_task(
         write_json(paths["quality"] / "subtitle_quality.json", quality_result.report)
         quality_summary = quality_result.report.get("summary", {})
         quality_status = str(quality_summary.get("status") or "")
+        checkpoint["quality_status"] = quality_status
+        checkpoint["quality_issue_counts"] = dict(quality_summary.get("issue_counts") or {})
+        checkpoint["quality_residual_counts"] = dict(quality_summary.get("residual_counts") or {})
         for code, count in quality_result.report.get("summary", {}).get("issue_counts", {}).items():
             store.append_event(
                 task_id,
@@ -2483,12 +2560,31 @@ def _execute_task(
                 style=config.pipeline.subtitle_ass_style,
             )
         delivery_file = paths["quality"] / "subtitle_delivery.json"
+        checkpoint.pop("delivery_status", None)
+        checkpoint.pop("delivery_issue_counts", None)
         if delivery_reports:
             write_json(delivery_file, delivery_reports)
             delivery_summary = {
                 fmt: report.get("summary", {})
                 for fmt, report in delivery_reports.items()
                 if isinstance(report, dict)
+            }
+            delivery_statuses = [
+                str(summary.get("status") or "")
+                for summary in delivery_summary.values()
+                if isinstance(summary, dict)
+            ]
+            checkpoint["delivery_status"] = (
+                "FAIL"
+                if "FAIL" in delivery_statuses
+                else "WARN"
+                if "WARN" in delivery_statuses
+                else "PASS"
+            )
+            checkpoint["delivery_issue_counts"] = {
+                fmt: dict(summary.get("issue_counts") or {})
+                for fmt, summary in delivery_summary.items()
+                if isinstance(summary, dict)
             }
             store.append_event(
                 task_id,

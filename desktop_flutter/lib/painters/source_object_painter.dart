@@ -15,6 +15,9 @@ class SourceObjectPainter extends CustomPainter {
   SourceObjectPainter({
     required this.state,
     required this.progress,
+    required this.phaseIndex,
+    required this.phaseCount,
+    required this.phaseProgress,
     required this.breathe,
     required this.dragOver,
     required this.pickHover,
@@ -23,6 +26,9 @@ class SourceObjectPainter extends CustomPainter {
 
   final MainState state;
   final double progress; // 0..1 真实进度
+  final int phaseIndex;
+  final int phaseCount;
+  final double phaseProgress;
   final double breathe; // 0..1 连续呼吸相位
   final double dragOver; // 0..1 拖入强反馈
   final bool pickHover; // 空态点击投递区的 hover 反馈
@@ -317,39 +323,94 @@ class SourceObjectPainter extends CustomPainter {
   }
 
   void _drawProductionTape(Canvas canvas, Rect body) {
-    final band = _bandRect(body).deflate(8);
-    final track = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: band.center, width: band.width, height: 9),
-      const Radius.circular(5),
-    );
-    canvas.drawRRect(track, _fill(T.surface.withValues(alpha: 0.78)));
+    final band = _bandRect(body).deflate(4);
+    final tape = RRect.fromRectAndRadius(band, const Radius.circular(4));
+    canvas.drawRRect(tape, _fill(T.surface.withValues(alpha: 0.92)));
     canvas.drawRRect(
-      track,
+      tape,
       _ink
-        ..color = T.inkLine.withValues(alpha: 0.48)
-        ..strokeWidth = 1.1,
+        ..color = T.inkLine.withValues(alpha: 0.52)
+        ..strokeWidth = 1,
+    );
+
+    final safePhaseCount = math.max(1, phaseCount);
+    final gap = 2.0;
+    final track = Rect.fromLTWH(
+      band.left + 5,
+      band.bottom - 8,
+      band.width - 10,
+      4,
+    );
+    final cellWidth =
+        (track.width - gap * (safePhaseCount - 1)) / safePhaseCount;
+    for (var index = 0; index < safePhaseCount; index += 1) {
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          track.left + index * (cellWidth + gap),
+          track.top,
+          cellWidth,
+          track.height,
+        ),
+        const Radius.circular(2),
+      );
+      final completed = index < phaseIndex;
+      final active = index == phaseIndex;
+      final color = completed
+          ? T.ok.withValues(alpha: 0.72)
+          : active
+          ? T.accent.withValues(alpha: 0.82)
+          : T.line;
+      canvas.drawRRect(rect, _fill(color));
+      if (active && phaseProgress > 0 && phaseProgress < 1) {
+        final fill = RRect.fromRectAndRadius(
+          Rect.fromLTWH(
+            rect.left,
+            rect.top,
+            rect.width * phaseProgress.clamp(0.0, 1.0),
+            rect.height,
+          ),
+          const Radius.circular(2),
+        );
+        canvas.drawRRect(fill, _fill(T.accentStrong));
+      }
+    }
+
+    final perforationY = band.top + 4;
+    for (var index = 0; index < safePhaseCount; index += 1) {
+      final x = track.left + (index + 0.5) * track.width / safePhaseCount;
+      canvas.drawCircle(
+        Offset(x, perforationY),
+        1.25,
+        _fill(index <= phaseIndex ? T.warn : T.line),
+      );
+    }
+
+    final subtitleY = band.center.dy - 1;
+    final subtitlePaint = _ink
+      ..color = T.inkLine.withValues(alpha: 0.62)
+      ..strokeWidth = 1.1;
+    canvas.drawLine(
+      Offset(band.left + 12, subtitleY - 2),
+      Offset(band.center.dx - 3, subtitleY - 2),
+      subtitlePaint,
+    );
+    canvas.drawLine(
+      Offset(band.center.dx + 3, subtitleY + 1.5),
+      Offset(band.right - 12, subtitleY + 1.5),
+      subtitlePaint..color = T.sky.withValues(alpha: 0.76),
     );
 
     final normalized = progress.clamp(0.0, 1.0);
-    final fillWidth = track.width * normalized;
-    if (fillWidth > 0.5) {
-      final filled = RRect.fromRectAndRadius(
-        Rect.fromLTWH(track.left, track.top, fillWidth, track.height),
-        const Radius.circular(5),
-      );
-      canvas.drawRRect(filled, _fill(T.accent.withValues(alpha: 0.78)));
-    }
-
     final signalX = normalized > 0
-        ? track.left + fillWidth - 2
+        ? track.left + track.width * normalized
         : track.left + (track.width - 8) * breathe;
     canvas.drawCircle(
       Offset(
-        signalX.clamp(track.left + 3, track.right - 3).toDouble(),
-        track.center.dy,
+        signalX.clamp(track.left + 2, track.right - 2).toDouble(),
+        track.top - 1,
       ),
-      2.7,
-      _fill(const Color(0xFFFFFFFF)),
+      2.4 + 0.5 * math.sin(breathe * math.pi * 2).abs(),
+      _fill(T.accentStrong),
     );
   }
 
@@ -473,6 +534,9 @@ class SourceObjectPainter extends CustomPainter {
   bool shouldRepaint(SourceObjectPainter old) =>
       old.state != state ||
       old.progress != progress ||
+      old.phaseIndex != phaseIndex ||
+      old.phaseCount != phaseCount ||
+      old.phaseProgress != phaseProgress ||
       old.breathe != breathe ||
       old.dragOver != dragOver ||
       old.pickHover != pickHover ||

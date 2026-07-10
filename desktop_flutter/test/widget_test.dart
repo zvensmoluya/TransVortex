@@ -683,7 +683,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await pickSourceAndStart(tester);
 
-    expect(find.textContaining('正在翻译字幕'), findsOneWidget);
+    expect(find.text('翻译字幕'), findsOneWidget);
+    expect(find.text('按分片翻译对白'), findsOneWidget);
     expect(find.textContaining('ridiculously-long-tail'), findsOneWidget);
     expect(find.text('停止任务'), findsOneWidget);
     expect(find.text('自动生成术语建议'), findsNothing);

@@ -6,6 +6,8 @@ from pathlib import Path
 from textwrap import dedent
 
 from transvortex.core.orchestrator import (
+    _checkpoint_status_payload,
+    _translation_progress_callback,
     _write_translation_experiment_artifacts,
     create_pipeline_task,
     resume_pipeline,
@@ -59,6 +61,56 @@ routing:
         """.strip(),
         encoding="utf-8",
     )
+
+
+def test_checkpoint_status_exposes_structured_asr_progress(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task_id = "tvx_progress"
+    store.save_checkpoint(
+        task_id,
+        {
+            "status": "ASR",
+            "asr_done_segments": [0, 1, 2],
+            "asr_done_count": 3,
+            "asr_total_segments": 10,
+            "source_segment_count": 42,
+        },
+    )
+
+    payload = _checkpoint_status_payload(store, task_id)
+
+    assert payload["checkpoint_status"] == "ASR"
+    assert payload["progress"] == 0.325
+    assert payload["progress_detail"]["asr_done_count"] == 3
+    assert payload["progress_detail"]["asr_total_segments"] == 10
+
+
+def test_memory_provider_progress_keeps_memory_checkpoint_stage(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task_id = "tvx_memory_progress"
+    checkpoint: dict = {}
+    callback = _translation_progress_callback(
+        store,
+        task_id,
+        checkpoint,
+        stage="MEMORY",
+    )
+
+    callback(
+        {
+            "mode": "memory_bootstrap",
+            "chunk_ids": ["bootstrap"],
+            "provider": "p1",
+            "model": "m1",
+            "attempt": 1,
+            "max_attempts": 2,
+        }
+    )
+
+    assert checkpoint["status"] == "MEMORY"
+    assert checkpoint["memory_current_mode"] == "memory_bootstrap"
+    assert checkpoint["memory_current_chunk_ids"] == ["bootstrap"]
+    assert "translate_current_mode" not in checkpoint
 
 
 def _indent_yaml_block(block: str, prefix: str) -> str:

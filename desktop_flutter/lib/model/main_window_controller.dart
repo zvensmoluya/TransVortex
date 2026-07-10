@@ -103,6 +103,69 @@ class TranslationRuntimeChoice {
   final TranslationChoiceSource source;
 }
 
+enum MainRunStage {
+  queued,
+  precheck,
+  ingest,
+  asr,
+  memory,
+  segment,
+  translate,
+  align,
+  quality,
+  export,
+  cancelling,
+}
+
+@immutable
+class MainRunProgress {
+  const MainRunProgress({
+    required this.stage,
+    required this.title,
+    required this.detail,
+    required this.overallProgress,
+    required this.phaseProgress,
+    required this.phaseIndex,
+    this.phaseCount = 9,
+    this.counter = '',
+    this.activity = '',
+  });
+
+  final MainRunStage stage;
+  final String title;
+  final String detail;
+  final double overallProgress;
+  final double phaseProgress;
+  final int phaseIndex;
+  final int phaseCount;
+  final String counter;
+  final String activity;
+
+  MainRunProgress copyWith({
+    MainRunStage? stage,
+    String? title,
+    String? detail,
+    double? overallProgress,
+    double? phaseProgress,
+    int? phaseIndex,
+    int? phaseCount,
+    String? counter,
+    String? activity,
+  }) {
+    return MainRunProgress(
+      stage: stage ?? this.stage,
+      title: title ?? this.title,
+      detail: detail ?? this.detail,
+      overallProgress: overallProgress ?? this.overallProgress,
+      phaseProgress: phaseProgress ?? this.phaseProgress,
+      phaseIndex: phaseIndex ?? this.phaseIndex,
+      phaseCount: phaseCount ?? this.phaseCount,
+      counter: counter ?? this.counter,
+      activity: activity ?? this.activity,
+    );
+  }
+}
+
 @immutable
 class MainWindowViewModel {
   const MainWindowViewModel({
@@ -131,6 +194,8 @@ class MainWindowViewModel {
     required this.failure,
     required this.homeTaskReminder,
     required this.submitting,
+    this.runProgress,
+    this.completionNotice,
   });
 
   final MainState state;
@@ -158,6 +223,8 @@ class MainWindowViewModel {
   final MainFailureView? failure;
   final HomeTaskReminder? homeTaskReminder;
   final bool submitting;
+  final MainRunProgress? runProgress;
+  final String? completionNotice;
 
   bool get hasSource => source != null;
   bool get requiresAsr => source?.kind != SourceKind.subtitle;
@@ -190,6 +257,9 @@ class MainWindowController extends ChangeNotifier {
   bool _running = false;
   double _progress = 0;
   String? _statusText;
+  MainRunProgress? _runProgress;
+  String _eventActivity = '';
+  String? _completionNotice;
   Map<String, String> _outputPaths = const {};
   MainFailureView? _failure;
   int _eventCursor = 0;
@@ -231,6 +301,9 @@ class MainWindowController extends ChangeNotifier {
     _outputDirectory = null;
     _taskId = null;
     _statusText = null;
+    _runProgress = null;
+    _eventActivity = '';
+    _completionNotice = null;
     _completed = false;
     _running = false;
     _canceling = false;
@@ -255,6 +328,9 @@ class MainWindowController extends ChangeNotifier {
     _outputDirectory = null;
     _taskId = null;
     _statusText = null;
+    _runProgress = null;
+    _eventActivity = '';
+    _completionNotice = null;
     _completed = false;
     _running = false;
     _canceling = false;
@@ -356,6 +432,16 @@ class MainWindowController extends ChangeNotifier {
     _canceling = false;
     _progress = 0;
     _statusText = '正在排队';
+    _runProgress = const MainRunProgress(
+      stage: MainRunStage.queued,
+      title: '等待接单',
+      detail: '任务已交给本地制作队列',
+      overallProgress: 0,
+      phaseProgress: 0,
+      phaseIndex: 0,
+    );
+    _eventActivity = '';
+    _completionNotice = null;
     _failure = null;
     _publish();
     try {
@@ -369,11 +455,13 @@ class MainWindowController extends ChangeNotifier {
       _completed = false;
       _eventCursor = 0;
       _recentEvents = const [];
+      _eventActivity = '';
       _ensureTaskPolling();
       await refreshSnapshot();
     } on Object catch (error) {
       _running = false;
       _canceling = false;
+      _runProgress = null;
       _failure = _failureFromError(error);
       _publish();
     } finally {
@@ -388,14 +476,33 @@ class MainWindowController extends ChangeNotifier {
       _running = false;
       _canceling = false;
       _progress = 0;
+      _runProgress = null;
       _publish();
       return;
     }
     _canceling = true;
     _statusText = '正在取消';
+    _eventActivity = '';
+    _runProgress =
+        (_runProgress ??
+                const MainRunProgress(
+                  stage: MainRunStage.queued,
+                  title: '正在取消',
+                  detail: '等待当前步骤安全停下',
+                  overallProgress: 0,
+                  phaseProgress: 0,
+                  phaseIndex: 0,
+                ))
+            .copyWith(
+              stage: MainRunStage.cancelling,
+              title: '正在取消',
+              detail: '等待当前步骤安全停下',
+              activity: '',
+            );
     _publish();
     try {
-      await service.client?.cancel(taskId);
+      final cancelledTask = await service.client?.cancel(taskId);
+      if (cancelledTask != null) _applyTask(cancelledTask);
       await refreshSnapshot();
     } on Object catch (error) {
       _canceling = false;
@@ -421,6 +528,15 @@ class MainWindowController extends ChangeNotifier {
     _completed = false;
     _canceling = false;
     _statusText = '正在继续任务';
+    _runProgress = const MainRunProgress(
+      stage: MainRunStage.queued,
+      title: '等待接单',
+      detail: '正在从上次中断处继续',
+      overallProgress: 0,
+      phaseProgress: 0,
+      phaseIndex: 0,
+    );
+    _eventActivity = '';
     _failure = null;
     _publish();
     try {
@@ -505,18 +621,34 @@ class MainWindowController extends ChangeNotifier {
     final client = service.client;
     if (taskId == null || client == null) return;
     try {
-      final page = await client.taskEvents(taskId, cursor: _eventCursor);
-      final nextEvents = page.events
-          .map(_asStringMap)
-          .where((event) => event.isNotEmpty)
-          .toList();
-      _eventCursor = page.nextCursor;
+      final previousCursor = _eventCursor;
+      final page = await client.taskEvents(taskId, cursor: previousCursor);
+      final nextEvents = page.nextCursor > previousCursor
+          ? page.events
+                .map(_asStringMap)
+                .where((event) => event.isNotEmpty)
+                .toList()
+          : <Map<String, Object?>>[];
+      _eventCursor = page.nextCursor > previousCursor
+          ? page.nextCursor
+          : previousCursor;
       _recentEvents = [..._recentEvents, ...nextEvents];
       if (_recentEvents.length > 12) {
         _recentEvents = _recentEvents.sublist(_recentEvents.length - 12);
       }
-      _progress = _latestEventProgress(_recentEvents) ?? _progress;
-      _statusText = _latestEventMessage(_recentEvents) ?? _statusText;
+      if (nextEvents.isNotEmpty) {
+        _eventActivity = _latestStructuredActivity(nextEvents) ?? '';
+      }
+      if (_runProgress == null || _runProgress?.stage == MainRunStage.queued) {
+        final fallback = _runProgressFromEvents(_recentEvents);
+        if (fallback != null) {
+          _runProgress = fallback.copyWith(activity: _eventActivity);
+          _progress = fallback.overallProgress;
+          _statusText = fallback.title;
+        }
+      } else if (_runProgress != null) {
+        _runProgress = _runProgress!.copyWith(activity: _eventActivity);
+      }
       _publish();
     } on Object catch (error) {
       _statusText = '刷新失败：$error';
@@ -694,6 +826,7 @@ class MainWindowController extends ChangeNotifier {
       _taskId = task.taskId;
       _eventCursor = 0;
       _recentEvents = const [];
+      _eventActivity = '';
     }
     _source ??= MainSourceDraft(
       name: task.displayName,
@@ -707,16 +840,46 @@ class MainWindowController extends ChangeNotifier {
         !task.isTerminal &&
         task.status == 'QUEUED' &&
         (_running || _submitting);
-    _running = !task.isTerminal && (task.isRuntimeActive || pendingCurrentTask);
-    _canceling = task.status == 'CANCEL_REQUESTED';
+    _canceling =
+        task.status == 'CANCEL_REQUESTED' || (_canceling && !task.isTerminal);
+    _running =
+        !task.isTerminal &&
+        (task.isRuntimeActive || pendingCurrentTask || _canceling);
     _completed = task.isDone;
-    _progress = task.isDone ? 1 : (task.latestProgress ?? _progress);
+    var structuredProgress = _runProgressFromTask(
+      task,
+      activity: _eventActivity,
+    );
+    if (structuredProgress != null &&
+        _runProgress != null &&
+        structuredProgress.stage != _runProgress!.stage) {
+      _eventActivity = '';
+      structuredProgress = structuredProgress.copyWith(activity: '');
+    }
+    _runProgress = _canceling
+        ? MainRunProgress(
+            stage: MainRunStage.cancelling,
+            title: '正在取消',
+            detail: '等待当前步骤安全停下',
+            overallProgress: structuredProgress?.overallProgress ?? _progress,
+            phaseProgress: 0,
+            phaseIndex: structuredProgress?.phaseIndex ?? 0,
+          )
+        : _running
+        ? structuredProgress
+        : null;
+    _progress = task.isDone
+        ? 1
+        : (structuredProgress?.overallProgress ??
+              task.latestProgress ??
+              _progress);
     _outputPaths = task.outputPaths;
-    _statusText = _taskProgressText(task) ?? _taskStatusLabel(task);
+    _statusText = structuredProgress?.title ?? _taskStatusLabel(task);
+    _completionNotice = task.isDone ? _completionNoticeFromTask(task) : null;
     _failure = task.isFailed || task.isCancelled
         ? _failureFromTask(task)
         : null;
-    if (task.isTerminal || !_running) {
+    if (task.isTerminal || (!_running && !_canceling)) {
       _taskPoll?.cancel();
       _taskPoll = null;
     } else {
@@ -771,6 +934,8 @@ class MainWindowController extends ChangeNotifier {
           ? _homeTaskReminder(snapshot)
           : null,
       submitting: _submitting,
+      runProgress: _runProgress,
+      completionNotice: _completionNotice,
     );
   }
 
@@ -1315,19 +1480,304 @@ class MainWindowController extends ChangeNotifier {
         taskStageLabel(task.displayStatus);
   }
 
-  static String? _taskProgressText(TaskSummary task) {
-    final runtimeMessage = '${task.runtime['message'] ?? ''}'.trim();
-    if (runtimeMessage.isNotEmpty &&
-        !_looksInternalEventMessage(runtimeMessage)) {
-      return runtimeMessage;
-    }
+  static MainRunProgress? _runProgressFromTask(
+    TaskSummary task, {
+    String activity = '',
+  }) {
+    if (task.isTerminal && !task.isDone) return null;
     final detail = _asStringMap(task.raw['progress_detail']);
-    final done = detail['translate_done_count'];
-    final total = detail['translate_total_chunks'];
-    if (done is num && total is num && total > 0) {
-      return '正在翻译第 ${done.toInt()} / ${total.toInt()} 段字幕';
+    final stage = task.status == 'CANCEL_REQUESTED'
+        ? 'CANCELLING'
+        : task.displayStatus.toUpperCase();
+    final rawProgress = _number(task.raw['progress']);
+    return _runProgressForStage(
+      stage: stage,
+      detail: detail,
+      overallProgress: rawProgress ?? _overallProgressForStage(stage, detail),
+      inputType: task.inputType,
+      settings: task.settings,
+      activity: activity,
+    );
+  }
+
+  static MainRunProgress? _runProgressFromEvents(
+    List<Map<String, Object?>> events,
+  ) {
+    for (final event in events.reversed) {
+      final stage = '${event['stage'] ?? event['status'] ?? ''}'
+          .trim()
+          .toUpperCase();
+      final progress = _number(event['progress']);
+      final result = _runProgressForStage(
+        stage: stage,
+        detail: _asStringMap(event['details']),
+        overallProgress: progress ?? _overallProgressForStage(stage, const {}),
+        inputType: '',
+        settings: const {},
+        activity: _latestStructuredActivity(events) ?? '',
+      );
+      if (result != null) return result;
     }
     return null;
+  }
+
+  static MainRunProgress? _runProgressForStage({
+    required String stage,
+    required Map<String, Object?> detail,
+    required double overallProgress,
+    required String inputType,
+    required Map<String, Object?> settings,
+    required String activity,
+  }) {
+    final normalized = stage.toUpperCase();
+    final overall = overallProgress.clamp(0.0, 1.0);
+    switch (normalized) {
+      case 'INIT':
+      case 'QUEUED':
+      case 'RUNNING':
+        return MainRunProgress(
+          stage: MainRunStage.queued,
+          title: '等待接单',
+          detail: '任务已交给本地制作队列',
+          overallProgress: overall,
+          phaseProgress: 0,
+          phaseIndex: 0,
+          activity: activity,
+        );
+      case 'PRECHECK':
+        return MainRunProgress(
+          stage: MainRunStage.precheck,
+          title: '检查任务',
+          detail: '确认片源、模型、凭据和输出目录',
+          overallProgress: overall,
+          phaseProgress: 0.35,
+          phaseIndex: 0,
+          activity: activity,
+        );
+      case 'INGEST':
+        final subtitleInput = inputType == 'srt_translate';
+        return MainRunProgress(
+          stage: MainRunStage.ingest,
+          title: subtitleInput ? '读取字幕' : '拆分音频',
+          detail: subtitleInput ? '载入原字幕和时间轴' : '提取音轨并按停顿准备语音分窗',
+          overallProgress: overall,
+          phaseProgress: detail['ingest_done'] == true ? 1 : 0.45,
+          phaseIndex: 1,
+          activity: activity,
+        );
+      case 'ASR':
+        final done = _integer(detail['asr_done_count']);
+        final total = _integer(detail['asr_total_segments']);
+        final ratio = total > 0 ? (done / total).clamp(0.0, 1.0) : 0.0;
+        return MainRunProgress(
+          stage: MainRunStage.asr,
+          title: '识别台词',
+          detail: total > 0 ? '语音分窗 $done / $total' : '正在识别语音分窗',
+          overallProgress: overall,
+          phaseProgress: ratio,
+          phaseIndex: 2,
+          counter: total > 0 ? '$done/$total' : '',
+          activity: activity,
+        );
+      case 'MEMORY':
+        final mode = '${detail['memory_current_mode'] ?? ''}';
+        final actions = _integer(detail['memory_bootstrap_actions']);
+        return MainRunProgress(
+          stage: MainRunStage.memory,
+          title: '整理术语',
+          detail: actions > 0
+              ? '已整理 $actions 条名称与术语候选'
+              : mode == 'memory_bootstrap'
+              ? '从全片提取名称、称呼和固定译法'
+              : '合并预设术语与运行时术语记忆',
+          overallProgress: overall,
+          phaseProgress: actions > 0 ? 1 : 0.5,
+          phaseIndex: 3,
+          counter: actions > 0 ? '$actions 条' : '',
+          activity: activity,
+        );
+      case 'SEGMENT':
+        final chunks = _integer(detail['translate_total_chunks']);
+        return MainRunProgress(
+          stage: MainRunStage.segment,
+          title: '编排分片',
+          detail: chunks > 0 ? '已规划 $chunks 个翻译分片' : '按模型容量和对白边界规划分片',
+          overallProgress: overall,
+          phaseProgress: chunks > 0 ? 1 : 0.5,
+          phaseIndex: 4,
+          counter: chunks > 0 ? '$chunks 片' : '',
+          activity: activity,
+        );
+      case 'TRANSLATE':
+        final done = _integer(detail['translate_done_count']);
+        final total = _integer(detail['translate_total_chunks']);
+        final ratio = total > 0 ? (done / total).clamp(0.0, 1.0) : 0.0;
+        final mode = '${detail['translate_current_mode'] ?? 'translate'}';
+        final segmentId = _integer(detail['translate_current_segment_id']);
+        final recoveryCount = _integer(
+          detail['translate_recovery_segment_count'],
+        );
+        final modeDetail = switch (mode) {
+          'batch_recovery' when recoveryCount > 0 =>
+            '批量补回被截断的 $recoveryCount 行字幕',
+          'adaptive_split' => '当前分片超出容量，已自动拆小',
+          'protocol_recovery' => '正在校正模型返回格式',
+          'repair' when segmentId > 0 => '正在修复第 $segmentId 行字幕',
+          'memory_patch' => '整理本段新增名称和术语',
+          _ => total > 0 ? '翻译分片 $done / $total' : '按分片翻译对白',
+        };
+        return MainRunProgress(
+          stage: MainRunStage.translate,
+          title: '翻译字幕',
+          detail: modeDetail,
+          overallProgress: overall,
+          phaseProgress: ratio,
+          phaseIndex: 5,
+          counter: total > 0 ? '$done/$total' : '',
+          activity: activity,
+        );
+      case 'ALIGN':
+        return MainRunProgress(
+          stage: MainRunStage.align,
+          title: '对齐时间轴',
+          detail: '核对字幕编号、顺序和时间范围',
+          overallProgress: overall,
+          phaseProgress: 0.55,
+          phaseIndex: 6,
+          activity: activity,
+        );
+      case 'QUALITY':
+        final status = '${detail['quality_status'] ?? ''}'.toUpperCase();
+        return MainRunProgress(
+          stage: MainRunStage.quality,
+          title: '检查可读性',
+          detail: status == 'FAIL'
+              ? '发现需要人工审看的字幕'
+              : status == 'WARN'
+              ? '正在整理可读性提醒'
+              : '检查行宽、阅读速度和术语一致性',
+          overallProgress: overall,
+          phaseProgress: status.isEmpty ? 0.5 : 1,
+          phaseIndex: 7,
+          activity: activity,
+        );
+      case 'EXPORT':
+        final output = '${settings['output_format'] ?? 'srt'}'.toUpperCase();
+        return MainRunProgress(
+          stage: MainRunStage.export,
+          title: '写出字幕',
+          detail: '生成 $output 文件并检查交付格式',
+          overallProgress: overall,
+          phaseProgress: 0.65,
+          phaseIndex: 8,
+          activity: activity,
+        );
+      case 'CANCELLING':
+      case 'CANCEL_REQUESTED':
+        return MainRunProgress(
+          stage: MainRunStage.cancelling,
+          title: '正在取消',
+          detail: '等待当前步骤安全停下',
+          overallProgress: overall,
+          phaseProgress: 0,
+          phaseIndex: 0,
+          activity: activity,
+        );
+    }
+    return null;
+  }
+
+  static double _overallProgressForStage(
+    String stage,
+    Map<String, Object?> detail,
+  ) {
+    final normalized = stage.toUpperCase();
+    if (normalized == 'ASR') {
+      final done = _integer(detail['asr_done_count']);
+      final total = _integer(detail['asr_total_segments']);
+      if (total > 0) return 0.25 + 0.25 * (done / total).clamp(0.0, 1.0);
+    }
+    if (normalized == 'TRANSLATE') {
+      final done = _integer(detail['translate_done_count']);
+      final total = _integer(detail['translate_total_chunks']);
+      if (total > 0) return 0.65 + 0.18 * (done / total).clamp(0.0, 1.0);
+    }
+    return switch (normalized) {
+      'PRECHECK' => 0.02,
+      'INGEST' => 0.08,
+      'ASR' => 0.25,
+      'MEMORY' => 0.54,
+      'SEGMENT' => 0.55,
+      'TRANSLATE' => 0.65,
+      'ALIGN' => 0.85,
+      'QUALITY' => 0.9,
+      'EXPORT' => 0.95,
+      'DONE' => 1,
+      _ => 0,
+    };
+  }
+
+  static String? _latestStructuredActivity(List<Map<String, Object?>> events) {
+    if (events.isEmpty) return null;
+    final event = events.last;
+    final details = _asStringMap(event['details']);
+    final mode = '${details['mode'] ?? event['mode'] ?? ''}'.trim();
+    final count = details['segment_ids'] is List
+        ? (details['segment_ids'] as List).length
+        : 0;
+    final segmentId = _integer(details['segment_id'] ?? event['segment_id']);
+    final text = switch (mode) {
+      'memory_bootstrap' => '正在生成初始术语记忆',
+      'memory_patch' => '正在合并本段新增术语',
+      'batch_recovery' when count > 0 => '正在批量补回 $count 行',
+      'adaptive_split' => '分片已自动拆小后重试',
+      'protocol_recovery' => '正在校正返回格式',
+      'repair' when segmentId > 0 => '正在修复第 $segmentId 行',
+      _ => '',
+    };
+    return text.isEmpty ? null : text;
+  }
+
+  static String? _completionNoticeFromTask(TaskSummary task) {
+    final detail = _asStringMap(task.raw['progress_detail']);
+    final quality = '${detail['quality_status'] ?? ''}'.toUpperCase();
+    final delivery = '${detail['delivery_status'] ?? ''}'.toUpperCase();
+    if ({'WARN', 'FAIL'}.contains(quality)) {
+      final count = _sumNumericValues(detail['quality_residual_counts']);
+      if (count > 0) return '已生成字幕，仍有 $count 处需要审看';
+      return '已生成字幕，质量检查仍有提醒';
+    }
+    if ({'WARN', 'FAIL'}.contains(delivery)) {
+      return '已生成字幕，交付格式检查仍有提醒';
+    }
+    return null;
+  }
+
+  static double? _number(Object? value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('${value ?? ''}');
+  }
+
+  static int _integer(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  static int _sumNumericValues(Object? value) {
+    if (value is num) return value.toInt();
+    if (value is Map) {
+      return value.values.fold<int>(
+        0,
+        (total, item) => total + _sumNumericValues(item),
+      );
+    }
+    if (value is List) {
+      return value.fold<int>(
+        0,
+        (total, item) => total + _sumNumericValues(item),
+      );
+    }
+    return 0;
   }
 
   static Map<String, Object?> _asStringMap(Object? value) {
@@ -1335,18 +1785,6 @@ class MainWindowController extends ChangeNotifier {
       return value.map((key, item) => MapEntry('$key', item));
     }
     return const {};
-  }
-
-  static double? _latestEventProgress(List<Map<String, Object?>> events) {
-    for (final event in events.reversed) {
-      final value = event['progress'];
-      if (value is num) return value.toDouble().clamp(0.0, 1.0);
-      if (value is String) {
-        final parsed = double.tryParse(value);
-        if (parsed != null) return parsed.clamp(0.0, 1.0);
-      }
-    }
-    return null;
   }
 
   static String? _latestEventMessage(List<Map<String, Object?>> events) {

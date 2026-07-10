@@ -453,12 +453,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _controller.applySmokeTask(
           _smokeTaskSummary(
             status: 'RUNNING',
-            progress: 0.46,
-            runtime: const {
-              'state': 'running',
-              'progress': 0.46,
-              'message': '正在翻译第 12 / 38 段字幕',
+            progress: 0.707,
+            checkpointStatus: 'TRANSLATE',
+            progressDetail: const {
+              'translate_done_count': 12,
+              'translate_total_chunks': 38,
+              'translate_current_mode': 'batch_recovery',
+              'translate_recovery_segment_count': 79,
             },
+            runtime: const {'state': 'running', 'progress': 0.707},
           ),
         );
         return;
@@ -480,6 +483,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   TaskSummary _smokeTaskSummary({
     required String status,
     double? progress,
+    String? checkpointStatus,
+    Map<String, Object?> progressDetail = const {},
     String? error,
     Map<String, Object?> runtime = const {},
     Map<String, Object?> errorInfo = const {},
@@ -494,6 +499,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       'created_at': DateTime.now().toUtc().toIso8601String(),
       'updated_at': DateTime.now().toUtc().toIso8601String(),
       'progress': ?progress,
+      'checkpoint_status': ?checkpointStatus,
+      if (progressDetail.isNotEmpty) 'progress_detail': progressDetail,
       if (runtime.isNotEmpty) 'runtime': runtime,
       'error': ?error,
       if (errorInfo.isNotEmpty) 'error_info': errorInfo,
@@ -995,6 +1002,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                           painter: SourceObjectPainter(
                             state: view.state,
                             progress: view.progress,
+                            phaseIndex: view.runProgress?.phaseIndex ?? 0,
+                            phaseCount: view.runProgress?.phaseCount ?? 9,
+                            phaseProgress: view.runProgress?.phaseProgress ?? 0,
                             breathe: _breathe.value,
                             dragOver: _drag.value,
                             pickHover: _dropTargetHover,
@@ -1074,19 +1084,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         mainAxisSize: MainAxisSize.min,
         children: [
           _fileHeader(view, showType: false),
-          const SizedBox(height: 6),
-          Text(
-            view.runningText ?? (view.canceling ? '正在取消…' : '制作中…'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: T.tCaption.copyWith(color: T.accentStrong),
-          ),
+          const SizedBox(height: T.s4),
+          _runningStatus(view),
         ],
       ),
       MainState.completed => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           _fileHeader(view, showType: false),
+          if (view.completionNotice != null) ...[
+            const SizedBox(height: T.s4),
+            Text(
+              view.completionNotice!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: T.tCaption.copyWith(color: T.warn),
+            ),
+          ],
           const SizedBox(height: T.s8),
           Wrap(
             alignment: WrapAlignment.center,
@@ -1113,6 +1127,45 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       ),
     };
     return caption;
+  }
+
+  Widget _runningStatus(MainWindowViewModel view) {
+    final run = view.runProgress;
+    if (run == null) {
+      return Text(
+        view.runningText ?? (view.canceling ? '正在取消…' : '制作中…'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: T.tCaption.copyWith(color: T.accentStrong),
+      );
+    }
+    final detail = run.activity.isNotEmpty ? run.activity : run.detail;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(run.title, style: T.tSection.copyWith(color: T.accentStrong)),
+            if (run.counter.isNotEmpty) ...[
+              const SizedBox(width: T.s8),
+              Text(run.counter, style: T.tCaption),
+            ],
+          ],
+        ),
+        const SizedBox(height: 2),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 390),
+          child: Text(
+            detail,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: T.tCaption,
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _fileHeader(MainWindowViewModel view, {bool showType = true}) {

@@ -815,8 +815,104 @@ void main() {
 
     await controller.submitRun();
 
-    expect(controller.view.runningText, '正在翻译字幕');
+    expect(controller.view.runningText, '翻译字幕');
     expect(controller.view.progress, 0.35);
+    expect(controller.view.runProgress?.stage, MainRunStage.translate);
+  });
+
+  test('controller derives stable ASR window progress from checkpoint', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'RUNNING',
+          inputFile: r'D:\movie.mp4',
+          progress: 0.375,
+          checkpointStatus: 'ASR',
+          progressDetail: const {'asr_done_count': 5, 'asr_total_segments': 10},
+          runtime: const {'state': 'running'},
+        ),
+      ),
+    );
+
+    expect(controller.view.runProgress?.title, '识别台词');
+    expect(controller.view.runProgress?.detail, '语音分窗 5 / 10');
+    expect(controller.view.runProgress?.counter, '5/10');
+    expect(controller.view.runProgress?.phaseProgress, 0.5);
+    expect(controller.view.progress, 0.375);
+  });
+
+  test('controller exposes batch recovery as translation activity', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'RUNNING',
+          inputFile: r'D:\movie.mp4',
+          progress: 0.71,
+          checkpointStatus: 'TRANSLATE',
+          progressDetail: const {
+            'translate_done_count': 1,
+            'translate_total_chunks': 3,
+            'translate_current_mode': 'batch_recovery',
+            'translate_recovery_segment_count': 79,
+          },
+          runtime: const {'state': 'running'},
+        ),
+      ),
+    );
+
+    expect(controller.view.runProgress?.title, '翻译字幕');
+    expect(controller.view.runProgress?.detail, '批量补回被截断的 79 行字幕');
+    expect(controller.view.runProgress?.counter, '1/3');
+  });
+
+  test('controller surfaces residual quality issues after completion', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'DONE',
+          inputFile: r'D:\movie.mp4',
+          checkpointStatus: 'DONE',
+          progressDetail: const {
+            'quality_status': 'FAIL',
+            'quality_residual_counts': {'hard_cps': 3, 'line_width': 5},
+            'delivery_status': 'WARN',
+          },
+          outputPaths: const {'srt': r'D:\movie.srt'},
+        ),
+      ),
+    );
+
+    expect(controller.view.completionNotice, '已生成字幕，仍有 8 处需要审看');
+  });
+
+  test('controller distinguishes delivery warnings after completion', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'DONE',
+          inputFile: r'D:\movie.mp4',
+          checkpointStatus: 'DONE',
+          progressDetail: const {
+            'quality_status': 'PASS',
+            'delivery_status': 'WARN',
+            'delivery_issue_counts': {
+              'ass': {'line_width': 2},
+            },
+          },
+          outputPaths: const {'ass': r'D:\movie.ass'},
+        ),
+      ),
+    );
+
+    expect(controller.view.completionNotice, '已生成字幕，交付格式检查仍有提醒');
   });
 
   test('controller sends cancel request for running task', () async {
@@ -827,10 +923,30 @@ void main() {
             status: 'RUNNING',
             inputFile: r'D:\movie.mp4',
             progress: 0.2,
+            checkpointStatus: 'TRANSLATE',
+            progressDetail: const {
+              'translate_done_count': 1,
+              'translate_total_chunks': 3,
+            },
             runtime: {'state': 'running'},
           ),
         ],
       ),
+      taskEvents: {
+        'task_id': 'tvx_controller_RUNNING',
+        'events': [
+          {
+            'stage': 'TRANSLATE',
+            'details': {
+              'mode': 'batch_recovery',
+              'segment_ids': [321, 322],
+            },
+          },
+        ],
+        'cursor': 0,
+        'next_cursor': 1,
+        'has_more': false,
+      },
     );
     final controller = MainWindowController(
       service: _readyController(handle: handle),
@@ -843,10 +959,18 @@ void main() {
           status: 'RUNNING',
           inputFile: r'D:\movie.mp4',
           progress: 0.2,
+          checkpointStatus: 'TRANSLATE',
+          progressDetail: const {
+            'translate_done_count': 1,
+            'translate_total_chunks': 3,
+          },
           runtime: {'state': 'running'},
         ),
       ),
     );
+    await controller.pollTaskEvents();
+    expect(controller.view.runProgress?.activity, '正在批量补回 2 行');
+
     await controller.cancelRun();
 
     expect(handle.transport.calls, contains('runtime.cancel'));
@@ -854,6 +978,11 @@ void main() {
       'task_id': 'tvx_controller_RUNNING',
       'force': false,
     });
+    expect(controller.view.state, MainState.running);
+    expect(controller.view.canceling, isTrue);
+    expect(controller.view.runProgress?.stage, MainRunStage.cancelling);
+    expect(controller.view.runProgress?.detail, '等待当前步骤安全停下');
+    expect(controller.view.runProgress?.activity, isEmpty);
   });
 
   test(
@@ -1024,6 +1153,7 @@ Map<String, Object?> _task({
   required String inputFile,
   double? progress,
   String? checkpointStatus,
+  Map<String, Object?> progressDetail = const {},
   Map<String, String> outputPaths = const {},
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
@@ -1038,6 +1168,7 @@ Map<String, Object?> _task({
     'bilingual': true,
     'progress': ?progress,
     'checkpoint_status': ?checkpointStatus,
+    if (progressDetail.isNotEmpty) 'progress_detail': progressDetail,
     if (outputPaths.isNotEmpty) 'output_paths': outputPaths,
     if (errorInfo.isNotEmpty) 'error_info': errorInfo,
     if (runtime.isNotEmpty) 'runtime': runtime,
