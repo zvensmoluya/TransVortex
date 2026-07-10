@@ -11,6 +11,7 @@ from ..memory.plan import translates_with_memory
 LINE_TOKEN_OVERHEAD = 4
 CONTEXT_SECTION_OVERHEAD = 24
 MEMORY_SECTION_OVERHEAD = 64
+UNKNOWN_CAPACITY_MAX_LINES = 120
 
 
 def _numbered_line(seg: Segment) -> str:
@@ -51,6 +52,9 @@ def _text_density(text: str, duration_seconds: float) -> float:
 
 
 def _is_asr_uncertain(seg: Segment) -> bool:
+    meta = seg.meta if isinstance(seg.meta, dict) else {}
+    if meta.get("source_cleaning_warnings"):
+        return True
     if seg.confidence is not None:
         try:
             # faster-whisper stores avg_logprob here; very low values usually mean unstable recognition.
@@ -65,6 +69,11 @@ def _is_asr_uncertain(seg: Segment) -> bool:
     if duration > 0.0 and _text_density(text, duration) > 24:
         return True
     return False
+
+
+def _has_source_cleaning_warning(seg: Segment) -> bool:
+    meta = seg.meta if isinstance(seg.meta, dict) else {}
+    return bool(meta.get("source_cleaning_warnings"))
 
 
 def _uncertain_ids(segments: list[Segment]) -> list[int]:
@@ -251,6 +260,18 @@ def _provider_target_output_tokens(config: AppConfig, providers: list[ProviderCo
     return target, hard
 
 
+def _unknown_token_capacity_providers(providers: list[ProviderConfig]) -> list[str]:
+    return [
+        provider.name
+        for provider in providers
+        if int(provider.capabilities.max_context_tokens or 0) <= 0
+        or (
+            int(provider.capabilities.max_output_tokens or 0) <= 0
+            and int(provider.capabilities.recommended_output_tokens or 0) <= 0
+        )
+    ]
+
+
 def estimate_prompt_tokens(
     *,
     lines: list[str],
@@ -390,6 +411,10 @@ def plan_translation_chunks(
     provider_max_lines = min(max(1, int(item.capabilities.max_batch_lines)) for item in providers) if providers else 0
     configured_max_lines = max(1, int(chunking.max_chunk_lines))
     max_lines = min(configured_max_lines, provider_max_lines) if provider_max_lines else configured_max_lines
+    unknown_capacity_providers = _unknown_token_capacity_providers(providers)
+    conservative_line_limit = UNKNOWN_CAPACITY_MAX_LINES
+    if unknown_capacity_providers:
+        max_lines = min(max_lines, conservative_line_limit)
     min_lines = max(1, min(int(chunking.min_chunk_lines), max_lines))
     target_lines = max(min_lines, min(int(chunking.target_chunk_lines), max_lines))
     target_tokens, hard_tokens = _provider_target_output_tokens(config, providers)
@@ -413,10 +438,26 @@ def plan_translation_chunks(
     if unknown_context_providers:
         warnings.append(
             {
-                "message": "Input token budget disabled for providers without max_context_tokens",
+                "message": "Provider token capacity is unknown; using conservative chunk line limit",
                 "details": {
-                    "providers": unknown_context_providers,
+                    "providers": unknown_capacity_providers,
+                    "providers_without_context_limit": unknown_context_providers,
                     "known_max_input_tokens": max_input_tokens,
+                    "conservative_line_limit": conservative_line_limit,
+                    "effective_max_chunk_lines": max_lines,
+                },
+            }
+        )
+    elif unknown_capacity_providers:
+        warnings.append(
+            {
+                "message": "Provider token capacity is unknown; using conservative chunk line limit",
+                "details": {
+                    "providers": unknown_capacity_providers,
+                    "providers_without_context_limit": [],
+                    "known_max_input_tokens": max_input_tokens,
+                    "conservative_line_limit": conservative_line_limit,
+                    "effective_max_chunk_lines": max_lines,
                 },
             }
         )
@@ -431,6 +472,9 @@ def plan_translation_chunks(
         cut = start
         cut_reason = "end"
         while cut < len(segments):
+            if cut > start and _has_source_cleaning_warning(segments[cut]):
+                cut_reason = "source_warning_boundary"
+                break
             next_line_count = cut - start + 1
             next_tokens = token_total + _estimated_output_tokens(segments[cut])
             next_input_tokens = input_token_total + estimate_line_tokens(_numbered_line(segments[cut]))
@@ -448,6 +492,9 @@ def plan_translation_chunks(
             input_token_total = next_input_tokens
             cut += 1
             line_count = cut - start
+            if _has_source_cleaning_warning(segments[cut - 1]):
+                cut_reason = "source_warning_isolation"
+                break
             if line_count >= min_lines and soft_boundary and cut < len(segments):
                 candidates.append((cut, _boundary_score(segments, cut)))
             if line_count >= target_lines and (target_tokens <= 0 or token_total >= target_tokens):

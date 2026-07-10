@@ -20,6 +20,14 @@ def test_classify_source_text_warns_mixed_sound_effect_line() -> None:
     assert "mixed_sound_effect" in result.reasons
 
 
+def test_classify_source_text_warns_delimiter_free_periodic_repetition() -> None:
+    result = classify_source_text("コシ" * 48)
+
+    assert result.action == "warn"
+    assert result.reasons == ["periodic_repetition"]
+    assert result.flags == ["suspicious", "repetition"]
+
+
 def test_clean_source_segments_only_drops_asr_by_default() -> None:
     segments = [
         Segment(id=1, start=0.0, end=1.0, text_src="耳かき音", meta={"source": "asr"}),
@@ -34,3 +42,15 @@ def test_clean_source_segments_only_drops_asr_by_default() -> None:
     assert result.segments[0].meta["source_cleaning_original_id"] == 2
     assert result.report["dropped_segments"] == 1
     assert result.report["action_counts"]["skipped_non_asr"] == 1
+
+
+def test_clean_source_segments_preserves_but_marks_periodic_asr_text() -> None:
+    segments = [
+        Segment(id=1, start=0.0, end=20.0, text_src="コシ" * 48, meta={"source": "asr"}),
+    ]
+
+    result = clean_source_segments(segments)
+
+    assert len(result.segments) == 1
+    assert result.segments[0].meta["source_cleaning_warnings"] == ["periodic_repetition"]
+    assert result.report["warning_segments"] == 1

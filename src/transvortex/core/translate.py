@@ -34,6 +34,10 @@ class AdaptiveTranslationError(RuntimeError):
         self.partial_results = partial_results or []
 
 
+class TranslationProtocolIncompleteError(RuntimeError):
+    pass
+
+
 def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
     if progress_callback is None:
         return
@@ -67,6 +71,13 @@ _PROTOCOL_RECOVERY_CODES = {
     "context_id_output",
     "extra_id",
 }
+
+_COMPLETION_ERROR_CODES = {"missing_id", "empty_translation"}
+_MAX_INDIVIDUAL_ROW_REPAIRS = 8
+_MIN_TRAILING_BATCH_RECOVERY = 3
+_MAX_BATCH_RECOVERY_LINES = 120
+_RECOVERY_CONTEXT_BEFORE_LINES = 12
+_RECOVERY_CONTEXT_AFTER_LINES = 8
 
 
 def _translate_chunk_accepts_progress_callback() -> bool:
@@ -184,6 +195,28 @@ def _chunk_source_by_id(chunk: Chunk) -> dict[int, str]:
     return out
 
 
+def _contextual_subchunk(chunk: Chunk, segment_ids: list[int], *, chunk_id: str) -> Chunk:
+    selected = set(segment_ids)
+    indexed_lines = list(zip(chunk.segment_ids, chunk.lines))
+    positions = [idx for idx, (seg_id, _line) in enumerate(indexed_lines) if seg_id in selected]
+    if not positions:
+        return replace(chunk, chunk_id=chunk_id, segment_ids=[], lines=[], context_before=[], context_after=[])
+    first = min(positions)
+    last = max(positions)
+    before_pool = [*chunk.context_before, *(line for _seg_id, line in indexed_lines[:first])]
+    after_pool = [*(line for _seg_id, line in indexed_lines[last + 1 :]), *chunk.context_after]
+    return replace(
+        chunk,
+        chunk_id=chunk_id,
+        segment_ids=[seg_id for seg_id, _line in indexed_lines if seg_id in selected],
+        lines=[line for seg_id, line in indexed_lines if seg_id in selected],
+        context_before=before_pool[-_RECOVERY_CONTEXT_BEFORE_LINES:],
+        context_after=after_pool[:_RECOVERY_CONTEXT_AFTER_LINES],
+        asr_uncertain_ids=[seg_id for seg_id in chunk.asr_uncertain_ids if seg_id in selected],
+        meta={**dict(chunk.meta or {}), "recovery_parent_chunk": chunk.chunk_id},
+    )
+
+
 def _split_chunk(chunk: Chunk) -> tuple[Chunk, Chunk]:
     midpoint = max(1, len(chunk.segment_ids) // 2)
     left_ids = chunk.segment_ids[:midpoint]
@@ -274,6 +307,8 @@ def _runtime_chunk_for_request(config: AppConfig, chunk: Chunk, memory_prompt: s
 
 
 def _retryable_split_failure(exc: Exception) -> bool:
+    if isinstance(exc, TranslationProtocolIncompleteError):
+        return True
     text = str(exc)
     lowered = text.lower()
     return any(marker in lowered for marker in _HARD_CAPACITY_SPLIT_MARKERS)
@@ -393,6 +428,189 @@ def _validate(
     )
 
 
+def _provider_response_incomplete_reason(provider_meta: dict[str, Any] | None) -> str:
+    meta = dict(provider_meta or {})
+    status = str(meta.get("response_status") or "").strip().lower()
+    details = meta.get("incomplete_details") if isinstance(meta.get("incomplete_details"), dict) else {}
+    detail_reason = str(details.get("reason") or "").strip()
+    finish_reason = str(meta.get("finish_reason") or "").strip()
+    normalized_finish = finish_reason.lower().replace("-", "_")
+    if status == "incomplete":
+        return detail_reason or finish_reason or "provider reported an incomplete response"
+    if normalized_finish in {"length", "max_tokens", "max_output_tokens", "max_tokens_reached"}:
+        return finish_reason
+    return ""
+
+
+def _raise_for_failed_provider_response(provider_meta: dict[str, Any] | None) -> None:
+    status = str(dict(provider_meta or {}).get("response_status") or "").strip().lower()
+    if status == "failed":
+        raise RuntimeError("provider reported a failed response")
+
+
+def _completion_issue_ids(validation: TranslationValidationResult) -> list[int]:
+    return sorted(
+        {
+            int(issue.segment_id)
+            for issue in validation.errors
+            if issue.code in _COMPLETION_ERROR_CODES and issue.segment_id is not None
+        }
+    )
+
+
+def _trailing_completion_ids(chunk: Chunk, validation: TranslationValidationResult) -> list[int]:
+    completion_ids = set(_completion_issue_ids(validation))
+    trailing: list[int] = []
+    for seg_id in reversed(chunk.segment_ids):
+        if seg_id not in completion_ids:
+            break
+        trailing.append(seg_id)
+    trailing.reverse()
+    return trailing
+
+
+def _completion_requires_capacity_split(chunk: Chunk, validation: TranslationValidationResult) -> bool:
+    completion_ids = _completion_issue_ids(validation)
+    if len(completion_ids) > _MAX_INDIVIDUAL_ROW_REPAIRS:
+        return True
+    if len(completion_ids) < 5:
+        return False
+    return len(completion_ids) / max(len(chunk.segment_ids), 1) >= 0.2
+
+
+def _batched_recovery_ids(
+    chunk: Chunk,
+    validation: TranslationValidationResult,
+    *,
+    response_incomplete: bool,
+) -> list[int]:
+    trailing = _trailing_completion_ids(chunk, validation)
+    if len(trailing) < _MIN_TRAILING_BATCH_RECOVERY:
+        return []
+    start_index = chunk.segment_ids.index(trailing[0])
+    recovery_ids = set(trailing)
+    repairable_ids = {
+        int(issue.segment_id)
+        for issue in validation.repairable_errors
+        if issue.segment_id is not None
+    }
+    boundary_index = max(0, start_index - 1)
+    for seg_id in chunk.segment_ids[boundary_index:]:
+        if seg_id in repairable_ids:
+            recovery_ids.add(seg_id)
+    if response_incomplete and start_index > 0:
+        recovery_ids.add(chunk.segment_ids[start_index - 1])
+    return [seg_id for seg_id in chunk.segment_ids if seg_id in recovery_ids]
+
+
+def _batch_recovery_hint(validation: TranslationValidationResult, segment_ids: list[int]) -> str:
+    return "\n".join(
+        [
+            _protocol_recovery_hint(validation),
+            "- This request contains only the unfinished tail of the previous response and its boundary row.",
+            "- Translate every TRANSLATE_ONLY id in this smaller recovery batch; do not continue from any other id.",
+            "- Recovery ids: " + ", ".join(str(seg_id) for seg_id in segment_ids) + ".",
+        ]
+    )
+
+
+def _recover_rows_in_batches(
+    *,
+    config: AppConfig,
+    client: Any,
+    chunk: Chunk,
+    source_lang: str,
+    target_lang: str,
+    provider_name: str,
+    model: str,
+    validation: TranslationValidationResult,
+    recovery_ids: list[int],
+    memory_prompt: str,
+    progress_callback: ProgressCallback | None,
+) -> tuple[TranslationValidationResult, list[dict], list[dict[str, Any]]]:
+    provider = config.providers[provider_name]
+    max_batch_lines = max(
+        1,
+        min(
+            _MAX_BATCH_RECOVERY_LINES,
+            int(provider.capabilities.max_batch_lines),
+        ),
+    )
+    rows = list(validation.rows)
+    artifacts: list[dict] = []
+    usages: list[dict[str, Any]] = []
+    for batch_index, offset in enumerate(range(0, len(recovery_ids), max_batch_lines)):
+        batch_ids = recovery_ids[offset : offset + max_batch_lines]
+        recovery_chunk = _contextual_subchunk(
+            chunk,
+            batch_ids,
+            chunk_id=f"{chunk.chunk_id}r{batch_index:03d}",
+        )
+        _notify_progress(
+            progress_callback,
+            mode="batch_recovery",
+            chunk_id=chunk.chunk_id,
+            recovery_chunk_id=recovery_chunk.chunk_id,
+            segment_ids=batch_ids,
+            provider=provider_name,
+            model=model,
+            batch_index=batch_index + 1,
+            batch_total=(len(recovery_ids) + max_batch_lines - 1) // max_batch_lines,
+        )
+        req = _base_request(
+            config=config,
+            chunk=_runtime_chunk_for_request(config, recovery_chunk, memory_prompt),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            model=model,
+            memory_prompt=memory_prompt,
+            protocol_recovery_hint=_batch_recovery_hint(validation, batch_ids),
+        )
+        response = client.translate_request(req)
+        _raise_for_failed_provider_response(response.provider_meta)
+        incomplete_reason = _provider_response_incomplete_reason(response.provider_meta)
+        recovery_validation = _validate(
+            config,
+            recovery_chunk,
+            numbered_lines=response.numbered_lines,
+            raw_text=response.raw_text,
+        )
+        if incomplete_reason or recovery_validation.has_chunk_errors or _completion_requires_capacity_split(
+            recovery_chunk, recovery_validation
+        ):
+            issue_text = "; ".join(issue.message for issue in recovery_validation.errors)
+            reason = incomplete_reason or issue_text or "batch recovery remained incomplete"
+            raise TranslationProtocolIncompleteError(
+                f"translation protocol incomplete during batch recovery for {recovery_chunk.chunk_id}: {reason}"
+            )
+        for recovered in recovery_validation.rows:
+            rows = _replace_row(rows, recovered)
+        if response.usage:
+            usages.append(dict(response.usage))
+        artifacts.append(
+            {
+                "chunk_id": chunk.chunk_id,
+                "recovery_chunk_id": recovery_chunk.chunk_id,
+                "mode": "batch_recovery",
+                "ids": list(batch_ids),
+                "line_count": len(batch_ids),
+                "provider": provider_name,
+                "model": model,
+                "provider_meta": dict(response.provider_meta or {}),
+                "usage": dict(response.usage or {}),
+                "validation": validation_to_json(recovery_validation),
+            }
+        )
+    repaired_lines = [f"[{row.id}] {row.text_tgt}" for row in rows]
+    merged_validation = _validate(
+        config,
+        chunk,
+        numbered_lines=repaired_lines,
+        raw_text="\n".join(repaired_lines),
+    )
+    return merged_validation, artifacts, usages
+
+
 def _repair_row(
     *,
     config: AppConfig,
@@ -411,11 +629,13 @@ def _repair_row(
     source_by_id = _chunk_source_by_id(chunk)
     seg_id = int(issue.segment_id or 0)
     bad_translation = next((row.text_tgt for row in current_rows if row.id == seg_id), "")
-    repair_chunk = replace(
-        chunk,
-        segment_ids=[seg_id],
-        lines=[f"[{seg_id}] {source_by_id.get(seg_id, '')}".rstrip()],
-    )
+    repair_chunk = _contextual_subchunk(chunk, [seg_id], chunk_id=f"{chunk.chunk_id}p{seg_id}")
+    if not repair_chunk.lines:
+        repair_chunk = replace(
+            chunk,
+            segment_ids=[seg_id],
+            lines=[f"[{seg_id}] {source_by_id.get(seg_id, '')}".rstrip()],
+        )
     errors: list[dict] = []
     max_attempts = max(1, config.pipeline.translation.repair.max_attempts)
     for attempt in range(max_attempts):
@@ -435,8 +655,8 @@ def _repair_row(
                 lines=repair_chunk.lines,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                context_before=chunk.context_before,
-                context_after=chunk.context_after,
+                context_before=repair_chunk.context_before,
+                context_after=repair_chunk.context_after,
                 asr_uncertain_ids=[seg_id] if seg_id in chunk.asr_uncertain_ids else [],
                 include_asr_uncertainty_hints=config.pipeline.translation.asr_uncertainty_hints.enabled,
                 style_prompt=config.pipeline.translation.style_prompt,
@@ -493,10 +713,23 @@ def _repair_rows(
 ) -> tuple[TranslationValidationResult, list[dict], list[dict]]:
     if not config.pipeline.translation.repair.enabled or not validation.repairable_errors:
         return validation, [], []
+    unique_issues: list[TranslationValidationIssue] = []
+    seen_ids: set[int] = set()
+    for issue in validation.repairable_errors:
+        seg_id = int(issue.segment_id or 0)
+        if seg_id in seen_ids:
+            continue
+        seen_ids.add(seg_id)
+        unique_issues.append(issue)
+    if len(unique_issues) > _MAX_INDIVIDUAL_ROW_REPAIRS:
+        raise TranslationProtocolIncompleteError(
+            "translation protocol incomplete: refusing to amplify "
+            f"{len(unique_issues)} row issues into individual repair requests"
+        )
     rows = list(validation.rows)
     repair_artifacts: list[dict] = []
     repair_errors: list[dict] = []
-    for issue in validation.repairable_errors:
+    for issue in unique_issues:
         repaired, errors = _repair_row(
             config=config,
             chunk=chunk,
@@ -532,20 +765,10 @@ def _repair_rows(
     return repaired_validation, repair_artifacts, repair_errors
 
 
-def _too_many_protocol_completion_errors(chunk: Chunk, validation: TranslationValidationResult) -> bool:
-    completion_codes = {"missing_id", "empty_translation"}
-    count = sum(1 for issue in validation.errors if issue.code in completion_codes)
-    if count < 5:
-        return False
-    return count / max(len(chunk.segment_ids), 1) >= 0.2
-
-
-def _should_protocol_recover(chunk: Chunk, validation: TranslationValidationResult) -> bool:
+def _should_protocol_recover(validation: TranslationValidationResult) -> bool:
     if any(issue.code == "refusal_output" for issue in validation.errors):
         return False
-    if any(issue.code in _PROTOCOL_RECOVERY_CODES for issue in validation.errors):
-        return True
-    return _too_many_protocol_completion_errors(chunk, validation)
+    return any(issue.code in _PROTOCOL_RECOVERY_CODES for issue in validation.errors)
 
 
 def _protocol_recovery_hint(validation: TranslationValidationResult) -> str:
@@ -599,6 +822,8 @@ def translate_chunk(
                 validation = None
                 protocol_recovered = False
                 protocol_hint = ""
+                batch_recovery_artifacts: list[dict] = []
+                batch_recovery_usages: list[dict[str, Any]] = []
                 for protocol_attempt in range(2):
                     _notify_progress(
                         progress_callback,
@@ -622,13 +847,52 @@ def translate_chunk(
                         adaptive_context_hint=_adaptive_context_hint(request_chunk),
                     )
                     response = client.translate_request(req)
+                    _raise_for_failed_provider_response(response.provider_meta)
                     validation = _validate(
                         config,
                         request_chunk,
                         numbered_lines=response.numbered_lines,
                         raw_text=response.raw_text,
                     )
-                    if protocol_attempt == 0 and not protocol_recovery_used and _should_protocol_recover(request_chunk, validation):
+                    incomplete_reason = _provider_response_incomplete_reason(response.provider_meta)
+                    recovery_ids = (
+                        []
+                        if validation.has_chunk_errors
+                        else _batched_recovery_ids(
+                            request_chunk,
+                            validation,
+                            response_incomplete=bool(incomplete_reason),
+                        )
+                    )
+                    if recovery_ids:
+                        validation, recovered_artifacts, recovered_usages = _recover_rows_in_batches(
+                            config=config,
+                            client=client,
+                            chunk=request_chunk,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            provider_name=route.provider,
+                            model=route.model,
+                            validation=validation,
+                            recovery_ids=recovery_ids,
+                            memory_prompt=memory_prompt,
+                            progress_callback=progress_callback,
+                        )
+                        batch_recovery_artifacts.extend(recovered_artifacts)
+                        batch_recovery_usages.extend(recovered_usages)
+                        protocol_recovered = True
+                        break
+                    if incomplete_reason:
+                        raise TranslationProtocolIncompleteError(
+                            "translation protocol incomplete: provider ended the response early "
+                            f"({incomplete_reason})"
+                        )
+                    if _completion_requires_capacity_split(request_chunk, validation):
+                        raise TranslationProtocolIncompleteError(
+                            "translation protocol incomplete: too many missing or empty translation rows "
+                            f"({len(_completion_issue_ids(validation))}/{len(request_chunk.segment_ids)})"
+                        )
+                    if protocol_attempt == 0 and not protocol_recovery_used and _should_protocol_recover(validation):
                         protocol_hint = _protocol_recovery_hint(validation)
                         protocol_recovery_used = True
                         protocol_recovered = True
@@ -638,11 +902,6 @@ def translate_chunk(
                     raise RuntimeError("translation did not return a response")
                 if validation.has_chunk_errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
-                if _too_many_protocol_completion_errors(request_chunk, validation):
-                    raise RuntimeError(
-                        "translation protocol incomplete: too many missing or empty translation rows "
-                        f"({len(validation.errors)}/{len(request_chunk.segment_ids)})"
-                    )
                 validation, repairs, repair_errors = _repair_rows(
                     config=config,
                     chunk=request_chunk,
@@ -654,10 +913,16 @@ def translate_chunk(
                     memory_prompt=memory_prompt,
                     progress_callback=progress_callback,
                 )
+                repairs = [*batch_recovery_artifacts, *repairs]
                 error_messages.extend(repair_errors)
                 if validation.errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
                 provider_meta = dict(response.provider_meta or {})
+                if batch_recovery_artifacts:
+                    provider_meta["batch_recovery_requests"] = len(batch_recovery_artifacts)
+                    provider_meta["batch_recovered_rows"] = sum(
+                        int(item.get("line_count") or 0) for item in batch_recovery_artifacts
+                    )
                 _notify_progress(
                     progress_callback,
                     mode="translate",
@@ -692,6 +957,8 @@ def translate_chunk(
                         "memory_entries": _memory_prompt_entry_count(memory_prompt),
                         "memory_prompt_chars": len(memory_prompt or ""),
                         "protocol_recovered": protocol_recovered,
+                        "batch_recovery_requests": len(batch_recovery_artifacts),
+                        "batch_recovery_usages": batch_recovery_usages,
                         "chunk_meta": dict(request_chunk.meta or {}),
                     },
                     "rows": _rows_to_dicts(validation.rows),
@@ -700,6 +967,8 @@ def translate_chunk(
                     "errors": error_messages,
                 }
             except Exception as exc:  # pragma: no cover - runtime network branches
+                if isinstance(exc, TranslationProtocolIncompleteError):
+                    raise
                 error_messages.append(
                     {
                         "provider": route.provider,

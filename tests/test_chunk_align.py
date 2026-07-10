@@ -103,6 +103,45 @@ def test_chunk_marks_asr_uncertain_lines_from_confidence_and_density() -> None:
     assert chunks[0].asr_uncertain_ids == [2, 3]
 
 
+def test_chunk_marks_source_cleaning_warning_as_asr_uncertain() -> None:
+    segments = [
+        Segment(
+            id=1,
+            start=0.0,
+            end=10.0,
+            text_src="periodic source",
+            meta={"source": "asr", "source_cleaning_warnings": ["periodic_repetition"]},
+        )
+    ]
+
+    chunks = number_and_chunk_segments(segments, batch_size=1)
+
+    assert chunks[0].asr_uncertain_ids == [1]
+
+
+def test_capacity_planner_isolates_source_cleaning_warning_segment(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    segments = [
+        Segment(id=1, start=0.0, end=1.0, text_src="before one"),
+        Segment(id=2, start=1.0, end=2.0, text_src="before two"),
+        Segment(
+            id=3,
+            start=2.0,
+            end=20.0,
+            text_src="コシ" * 48,
+            meta={"source": "asr", "source_cleaning_warnings": ["periodic_repetition"]},
+        ),
+        Segment(id=4, start=20.0, end=21.0, text_src="after one"),
+        Segment(id=5, start=21.0, end=22.0, text_src="after two"),
+    ]
+
+    chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert [chunk.segment_ids for chunk in chunks] == [[1, 2], [3], [4, 5]]
+    assert chunks[1].meta["cut_reason"] == "source_warning_isolation"
+    assert chunks[1].asr_uncertain_ids == [3]
+
+
 def test_capacity_planner_keeps_short_input_in_single_chunk(tmp_path) -> None:
     config = _planner_config(tmp_path)
     segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}") for i in range(1, 40)]
@@ -110,23 +149,39 @@ def test_capacity_planner_keeps_short_input_in_single_chunk(tmp_path) -> None:
     chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 
     assert [warning["message"] for warning in warnings] == [
-        "Input token budget disabled for providers without max_context_tokens"
+        "Provider token capacity is unknown; using conservative chunk line limit"
     ]
+    assert warnings[0]["details"]["effective_max_chunk_lines"] == 120
     assert len(chunks) == 1
     assert chunks[0].segment_ids == list(range(1, 40))
 
 
-def test_capacity_planner_uses_large_target_chunks(tmp_path) -> None:
+def test_capacity_planner_uses_conservative_chunks_when_token_capacity_is_unknown(tmp_path) -> None:
     config = _planner_config(tmp_path)
     segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 1001)]
 
     chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 
-    assert [len(chunk.segment_ids) for chunk in chunks] == [400, 400, 200]
+    assert [len(chunk.segment_ids) for chunk in chunks] == [120] * 8 + [40]
+
+
+def test_capacity_planner_can_exceed_conservative_line_limit_when_capacity_is_explicit(tmp_path) -> None:
+    config = _planner_config(tmp_path, max_context_tokens=128_000, max_output_tokens=32_000)
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 1001)]
+
+    chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert warnings == []
+    assert [len(chunk.segment_ids) for chunk in chunks] == [900, 100]
 
 
 def test_capacity_planner_respects_provider_max_batch_lines(tmp_path) -> None:
-    config = _planner_config(tmp_path, max_batch_lines=180)
+    config = _planner_config(
+        tmp_path,
+        max_batch_lines=180,
+        max_context_tokens=128_000,
+        max_output_tokens=32_000,
+    )
     segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 421)]
 
     chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])

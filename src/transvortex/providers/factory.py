@@ -328,7 +328,7 @@ def _stream_text_parts(event: dict[str, Any], compat_mode: str) -> tuple[list[st
             return [event["delta"]], None
         if event_type in {"response.output_text.done", "output_text.done"} and isinstance(event.get("text"), str):
             return [], event["text"]
-        if event_type in {"response.completed", "response.done"}:
+        if event_type in {"response.completed", "response.done", "response.incomplete", "response.failed"}:
             response = event.get("response")
             if isinstance(response, dict):
                 extracted = _extract_text_by_paths(response, ["output_text", "output[].content[].text"])
@@ -361,6 +361,42 @@ def _stream_text_parts(event: dict[str, Any], compat_mode: str) -> tuple[list[st
     return delta_parts, final_text
 
 
+def _provider_response_metadata(payload: dict[str, Any], compat_mode: str) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    response = payload.get("response") if isinstance(payload.get("response"), dict) else payload
+    if compat_mode == "openai_responses":
+        status = response.get("status")
+        if isinstance(status, str) and status:
+            meta["response_status"] = status
+        incomplete_details = response.get("incomplete_details")
+        if isinstance(incomplete_details, dict) and incomplete_details:
+            meta["incomplete_details"] = dict(incomplete_details)
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        finish_reason = choices[0].get("finish_reason")
+        if isinstance(finish_reason, str) and finish_reason:
+            meta["finish_reason"] = finish_reason
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict):
+        finish_reason = candidates[0].get("finishReason")
+        if isinstance(finish_reason, str) and finish_reason:
+            meta["finish_reason"] = finish_reason
+    return meta
+
+
+def _provider_response_usage(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = [payload]
+    if isinstance(payload.get("response"), dict):
+        candidates.insert(0, payload["response"])
+    for candidate in candidates:
+        usage = candidate.get("usage")
+        if not isinstance(usage, dict):
+            usage = candidate.get("usageMetadata")
+        if isinstance(usage, dict):
+            return usage
+    return {}
+
+
 def _stream_response_payload(
     config: ProviderConfig,
     url: str,
@@ -390,6 +426,7 @@ def _stream_response_payload(
     text_parts: list[str] = []
     final_text: str | None = None
     usage: dict[str, Any] = {}
+    response_meta: dict[str, Any] = {}
     final_payload: dict[str, Any] | None = None
     raw_lines: list[str] = []
     with _get_provider_client(config).stream(method=method, url=stream_url, json=payload, headers=request_headers) as response:
@@ -406,11 +443,10 @@ def _stream_response_payload(
             if event is None:
                 continue
             final_payload = event
-            usage_payload = event.get("usage")
-            if not isinstance(usage_payload, dict):
-                usage_payload = event.get("usageMetadata")
-            if isinstance(usage_payload, dict):
+            usage_payload = _provider_response_usage(event)
+            if usage_payload:
                 usage = usage_payload
+            response_meta.update(_provider_response_metadata(event, config.compat_mode))
             deltas, event_final_text = _stream_text_parts(event, config.compat_mode)
             text_parts.extend(deltas)
             if event_final_text:
@@ -427,11 +463,10 @@ def _stream_response_payload(
                     if not isinstance(item, dict):
                         continue
                     final_payload = item
-                    usage_payload = item.get("usage")
-                    if not isinstance(usage_payload, dict):
-                        usage_payload = item.get("usageMetadata")
-                    if isinstance(usage_payload, dict):
+                    usage_payload = _provider_response_usage(item)
+                    if usage_payload:
                         usage = usage_payload
+                    response_meta.update(_provider_response_metadata(item, config.compat_mode))
                     deltas, event_final_text = _stream_text_parts(item, config.compat_mode)
                     text_parts.extend(deltas)
                     if event_final_text:
@@ -442,6 +477,7 @@ def _stream_response_payload(
             "last_chunk_at": last_chunk_at,
             "bytes_received": bytes_received,
             "elapsed_ms": int((time.time() - request_started) * 1000),
+            **response_meta,
         }
         text = final_text if final_text is not None else "".join(text_parts)
         if config.compat_mode == "openai_chat":
@@ -969,6 +1005,7 @@ class ConfigurableProtocolClient(ProviderClient):
             provider_meta={
                 "compat_mode": self.config.compat_mode,
                 "base_url": self.config.base_url,
+                **_provider_response_metadata(data, self.config.compat_mode),
                 **transport_meta,
             },
         )

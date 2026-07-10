@@ -452,7 +452,7 @@ def test_translate_chunk_treats_many_missing_rows_as_protocol_failure(monkeypatc
     assert "truncated" not in message
 
 
-def test_adaptive_translation_does_not_split_protocol_completion_failure(monkeypatch, tmp_path) -> None:
+def test_adaptive_translation_splits_when_batch_recovery_remains_incomplete(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
     config.pipeline.translation.batching.mode = "adaptive"
     config.pipeline.translation.batching.min_chunk_lines = 1
@@ -468,26 +468,95 @@ def test_adaptive_translation_does_not_split_protocol_completion_failure(monkeyp
         def __init__(self, _provider: ProviderConfig) -> None:
             pass
 
-        def translate_request(self, _req):
+        def translate_request(self, req):
             from transvortex.app.models import NormalizedResponse
 
+            requested_ids = [int(line.split("]", 1)[0].strip("[")) for line in req.lines]
+            if requested_ids == list(range(1, 31)):
+                return NormalizedResponse(
+                    numbered_lines=[f"[{idx}] ok {idx}" for idx in range(1, 25)],
+                    raw_text="\n".join(f"[{idx}] ok {idx}" for idx in range(1, 25)),
+                )
+            if req.protocol_recovery_hint and requested_ids == list(range(25, 31)):
+                return NormalizedResponse(numbered_lines=[], raw_text="")
             return NormalizedResponse(
-                numbered_lines=[f"[{idx}] ok {idx}" for idx in range(1, 25)],
-                raw_text="\n".join(f"[{idx}] ok {idx}" for idx in range(1, 25)),
+                numbered_lines=[f"[{idx}] ok {idx}" for idx in requested_ids],
+                raw_text="\n".join(f"[{idx}] ok {idx}" for idx in requested_ids),
             )
 
     monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: MissingRowsClient(provider))
 
-    with pytest.raises(RuntimeError, match="translation protocol incomplete"):
-        translate_chunk_adaptive(
-            config,
-            chunk,
-            source_lang="en",
-            target_lang="zh-CN",
-            progress_callback=events.append,
-        )
+    results = translate_chunk_adaptive(
+        config,
+        chunk,
+        source_lang="en",
+        target_lang="zh-CN",
+        progress_callback=events.append,
+    )
 
-    assert not any(event.get("mode") == "adaptive_split" for event in events)
+    assert [item["chunk_id"] for item in results] == ["c00000s0", "c00000s1"]
+    assert any(event.get("mode") == "adaptive_split" for event in events)
+
+
+def test_translate_chunk_recovers_realistic_truncated_tail_in_one_batch(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config.pipeline.translation.repair.enabled = True
+    chunk = Chunk(
+        chunk_id="c00000",
+        segment_ids=list(range(1, 400)),
+        lines=[f"[{idx}] line {idx}" for idx in range(1, 400)],
+    )
+    requests: list[list[int]] = []
+    events: list[dict] = []
+
+    class TruncatedTailClient:
+        def __init__(self, _provider: ProviderConfig) -> None:
+            pass
+
+        def translate_request(self, req):
+            from transvortex.app.models import NormalizedResponse
+
+            requested_ids = [int(line.split("]", 1)[0].strip("[")) for line in req.lines]
+            requests.append(requested_ids)
+            if len(requested_ids) == 399:
+                rows = [f"[{idx}] ok {idx}" for idx in range(1, 321)]
+                rows.append("[321] 重复翻译 assistant analysis")
+                return NormalizedResponse(
+                    numbered_lines=rows,
+                    raw_text="\n".join(rows),
+                    usage={"input_tokens": 4000, "output_tokens": 2000},
+                    provider_meta={
+                        "response_status": "incomplete",
+                        "incomplete_details": {"reason": "max_output_tokens"},
+                    },
+                )
+            rows = [f"[{idx}] recovered {idx}" for idx in requested_ids]
+            return NormalizedResponse(
+                numbered_lines=rows,
+                raw_text="\n".join(rows),
+                usage={"input_tokens": 900, "output_tokens": 500},
+                provider_meta={"response_status": "completed"},
+            )
+
+    monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: TruncatedTailClient(provider))
+
+    result = translate_chunk(
+        config,
+        chunk,
+        source_lang="ja",
+        target_lang="zh-CN",
+        progress_callback=events.append,
+    )
+
+    assert len(requests) == 2
+    assert requests[0] == list(range(1, 400))
+    assert requests[1] == list(range(321, 400))
+    assert len(result["rows"]) == 399
+    assert result["rows"][320] == {"id": 321, "text_tgt": "recovered 321"}
+    assert result["request"]["batch_recovery_requests"] == 1
+    assert result["provider_meta"]["batch_recovered_rows"] == 79
+    assert result["repairs"][0]["mode"] == "batch_recovery"
+    assert any(event.get("mode") == "batch_recovery" for event in events)
 
 
 def test_adaptive_translation_respects_min_chunk_lines(monkeypatch, tmp_path) -> None:

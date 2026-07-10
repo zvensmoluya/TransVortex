@@ -187,6 +187,25 @@ def _has_sentence_shape(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]{3,}\s+[A-Za-z]{3,}\s+[A-Za-z]{3,}", stripped))
 
 
+def _dominant_periodic_repetition(text: str) -> bool:
+    compact = re.sub(r"[\s\W_]+", "", _strip_wrappers(text), flags=re.UNICODE)
+    if len(compact) < 24:
+        return False
+    required_span = max(24, int(len(compact) * 0.6))
+    max_unit = min(12, len(compact) // 6)
+    for unit_len in range(1, max_unit + 1):
+        for start in range(0, len(compact) - unit_len * 6 + 1):
+            unit = compact[start : start + unit_len]
+            cursor = start + unit_len
+            repeats = 1
+            while compact[cursor : cursor + unit_len] == unit:
+                repeats += 1
+                cursor += unit_len
+            if repeats >= 6 and repeats * unit_len >= required_span:
+                return True
+    return False
+
+
 def classify_source_text(value: str | None) -> SourceTextClassification:
     clean_text = normalize_source_text(value)
     if not clean_text:
@@ -233,6 +252,13 @@ def classify_source_text(value: str | None) -> SourceTextClassification:
     if "mixed_sound_effect" in reasons:
         flags.extend(["sound_effect", "suspicious"])
         return SourceTextClassification(action="warn", reasons=reasons, clean_text=clean_text, flags=flags)
+    if _dominant_periodic_repetition(clean_text):
+        return SourceTextClassification(
+            action="warn",
+            reasons=["periodic_repetition"],
+            clean_text=clean_text,
+            flags=["suspicious", "repetition"],
+        )
     if most_count >= 6 and (_visible_len(most_token) * most_count) >= _visible_len(clean_text) * 0.7:
         return SourceTextClassification(
             action="warn",

@@ -21,6 +21,13 @@ REFUSAL_PATTERNS = [
         r"违反(?:政策|规定)",
     ]
 ]
+PROTOCOL_MARKER_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\b(?:assistant|developer|system)\s+(?:analysis|commentary|final)\b",
+        r"<\|(?:assistant|developer|system|analysis|commentary|final)\|>",
+    ]
+]
 
 
 @dataclass
@@ -70,6 +77,10 @@ def strip_numbered_text(line: str) -> tuple[int, str]:
 
 def contains_refusal(text: str) -> bool:
     return any(pattern.search(text) for pattern in REFUSAL_PATTERNS)
+
+
+def contains_protocol_marker(text: str) -> bool:
+    return any(pattern.search(text) for pattern in PROTOCOL_MARKER_PATTERNS)
 
 
 def _context_ids(chunk: Chunk) -> set[int]:
@@ -198,6 +209,17 @@ def validate_translation_response(
                     code="empty_translation",
                     level="ERROR",
                     message=f"empty translation for id: {seg_id}",
+                    segment_id=seg_id,
+                    repairable=True,
+                )
+            )
+            continue
+        if contains_protocol_marker(row.text_tgt):
+            issues.append(
+                TranslationValidationIssue(
+                    code="protocol_marker",
+                    level="ERROR",
+                    message=f"translation contains an internal protocol marker for id: {seg_id}",
                     segment_id=seg_id,
                     repairable=True,
                 )

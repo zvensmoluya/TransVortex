@@ -66,3 +66,15 @@ def test_validation_flags_refusal_only_when_whole_output_has_no_numbered_rows() 
         raw_text="I cannot translate this because it violates policy.",
     )
     assert [issue.code for issue in result.errors] == ["refusal_output"]
+
+
+def test_validation_marks_internal_protocol_marker_for_row_repair() -> None:
+    result = validate_translation_response(
+        chunk=_chunk(),
+        numbered_lines=["[2] 你好 assistant analysis", "[3] 该死"],
+        raw_text="[2] 你好 assistant analysis\n[3] 该死",
+    )
+
+    issue = next(item for item in result.errors if item.code == "protocol_marker")
+    assert issue.segment_id == 2
+    assert issue.repairable is True

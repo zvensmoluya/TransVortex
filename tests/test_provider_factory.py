@@ -1012,3 +1012,49 @@ def test_stream_response_payload_uses_responses_done_text_without_duplicate_delt
     payload, _meta = _stream_response_payload(cfg, "https://example.com/v1/responses", {"model": "m1"}, {}, "POST")
 
     assert payload["output_text"] == "[1] 你好"
+
+
+def test_stream_response_payload_preserves_incomplete_status_and_nested_usage(monkeypatch) -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+    )
+
+    class FakeStream:
+        extensions = {"http_version": b"HTTP/2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            return iter(
+                [
+                    'data: {"type":"response.output_text.delta","delta":"[1] 你"}',
+                    'data: {"type":"response.incomplete","response":{"status":"incomplete",'
+                    '"incomplete_details":{"reason":"max_output_tokens"},"output_text":"[1] 你好",'
+                    '"usage":{"input_tokens":10,"output_tokens":5}}}',
+                ]
+            )
+
+    class FakeClient:
+        def stream(self, method, url, json, headers):
+            return FakeStream()
+
+    monkeypatch.setattr("transvortex.providers.factory._get_provider_client", lambda _config: FakeClient())
+
+    payload, meta = _stream_response_payload(cfg, "https://example.com/v1/responses", {"model": "m1"}, {}, "POST")
+
+    assert payload["output_text"] == "[1] 你好"
+    assert payload["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert meta["response_status"] == "incomplete"
+    assert meta["incomplete_details"] == {"reason": "max_output_tokens"}
