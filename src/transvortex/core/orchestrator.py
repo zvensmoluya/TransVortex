@@ -4,7 +4,7 @@ import importlib.util
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -1380,7 +1380,12 @@ def _translation_route_providers(config: AppConfig) -> list:
     for route in [config.routing.primary] + list(config.routing.fallback):
         provider = config.providers.get(route.provider)
         if provider is not None:
-            out.append(provider)
+            out.append(
+                replace(
+                    provider,
+                    capabilities=provider.capabilities_for_model(route.model),
+                )
+            )
     return out
 
 

@@ -35,6 +35,7 @@ from .models import (
     MemoryMergeConfig,
     MemoryPatchConfig,
     MemoryPresetRef,
+    ModelConfig,
     ModelListConfig,
     PipelineConfig,
     ProviderConfig,
@@ -400,6 +401,57 @@ def _default_model_list_for_mode(compat_mode: str) -> ModelListConfig:
     if compat_mode == "custom_json":
         return ModelListConfig(path_template="", method="GET", response_paths=[])
     raise ValueError(f"Unsupported compat_mode: {compat_mode}")
+
+
+def _default_reasoning_effort_param(compat_mode: str) -> str:
+    if compat_mode == "openai_responses":
+        return "reasoning.effort"
+    if compat_mode == "openai_chat":
+        return "reasoning_effort"
+    return ""
+
+
+def _default_reasoning_efforts(compat_mode: str) -> list[str]:
+    if compat_mode in {"openai_chat", "openai_responses"}:
+        return ["minimal", "low", "medium", "high"]
+    return []
+
+
+def _parse_model_configs(value: Any) -> dict[str, ModelConfig]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, ModelConfig] = {}
+    for raw_name, raw_config in value.items():
+        name = str(raw_name or "").strip()
+        if not name or not isinstance(raw_config, dict):
+            continue
+        reasoning = raw_config.get("reasoning") if isinstance(raw_config.get("reasoning"), dict) else {}
+        parsed[name] = ModelConfig(
+            max_batch_lines=max(0, _to_int(raw_config.get("max_batch_lines", raw_config.get("maxBatchLines")), 0)),
+            max_context_tokens=max(
+                0,
+                _to_int(raw_config.get("max_context_tokens", raw_config.get("maxContextTokens")), 0),
+            ),
+            max_output_tokens=max(
+                0,
+                _to_int(raw_config.get("max_output_tokens", raw_config.get("maxOutputTokens")), 0),
+            ),
+            recommended_output_tokens=max(
+                0,
+                _to_int(
+                    raw_config.get("recommended_output_tokens", raw_config.get("recommendedOutputTokens")),
+                    0,
+                ),
+            ),
+            reasoning_effort=_to_str(
+                raw_config.get(
+                    "reasoning_effort",
+                    raw_config.get("reasoningEffort", reasoning.get("effort")),
+                ),
+                "",
+            ).strip(),
+        )
+    return parsed
 
 
 VERTEX_EXPRESS_DEFAULT_MODELS = [
@@ -1275,14 +1327,29 @@ def load_app_config(
                 0,
             ),
             output_token_param=_to_str(capabilities_raw.get("output_token_param", capabilities_raw.get("outputTokenParam")), ""),
+            reasoning_effort_param=_to_str(
+                capabilities_raw.get("reasoning_effort_param", capabilities_raw.get("reasoningEffortParam")),
+                _default_reasoning_effort_param(compat_mode),
+            ),
+            reasoning_efforts=[
+                str(item).strip()
+                for item in _to_str_list(
+                    capabilities_raw.get("reasoning_efforts", capabilities_raw.get("reasoningEfforts"))
+                )
+                if str(item).strip()
+            ]
+            or _default_reasoning_efforts(compat_mode),
         )
+        models = [str(item).strip() for item in _to_str_list(row.get("models")) if str(item).strip()]
+        if not models:
+            models = _default_models_for_mode(compat_mode)
         cfg = ProviderConfig(
             name=row["name"],
             api_type=api_type,
             base_url=_to_str(row.get("base_url"), _default_base_url_for_mode(compat_mode)).rstrip("/"),
             env_key=row["env_key"],
-            models=[str(item).strip() for item in _to_str_list(row.get("models")) if str(item).strip()]
-            or _default_models_for_mode(compat_mode),
+            models=models,
+            model_configs=_parse_model_configs(row.get("model_configs", row.get("modelConfigs"))),
             credential_id=str(row.get("credential_id", row["name"])),
             credential_root_dir=root_dir,
             compat_mode=compat_mode,

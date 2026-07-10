@@ -22,6 +22,7 @@ from ..app.models import (
     CapabilityConfig,
     EndpointConfig,
     MappingConfig,
+    ModelConfig,
     ModelListConfig,
     NormalizedRequest,
     ProviderConfig,
@@ -59,6 +60,8 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "max_output_tokens": 32768,
             "recommended_output_tokens": 16384,
             "output_token_param": "",
+            "reasoning_effort_param": "reasoning_effort",
+            "reasoning_efforts": ["minimal", "low", "medium", "high"],
         },
     },
     "openai_responses": {
@@ -80,6 +83,8 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
             "max_output_tokens": 65536,
             "recommended_output_tokens": 32768,
             "output_token_param": "",
+            "reasoning_effort_param": "reasoning.effort",
+            "reasoning_efforts": ["minimal", "low", "medium", "high"],
         },
     },
     "openai_completions": {
@@ -445,6 +450,56 @@ def _to_int(value: Any, default: int) -> int:
         return default
 
 
+def _default_reasoning_effort_param(compat_mode: str) -> str:
+    if compat_mode == "openai_responses":
+        return "reasoning.effort"
+    if compat_mode == "openai_chat":
+        return "reasoning_effort"
+    return ""
+
+
+def _default_reasoning_efforts(compat_mode: str) -> list[str]:
+    if compat_mode in {"openai_chat", "openai_responses"}:
+        return ["minimal", "low", "medium", "high"]
+    return []
+
+
+def _model_configs_from_draft(value: Any) -> dict[str, ModelConfig]:
+    parsed: dict[str, ModelConfig] = {}
+    for raw_name, raw_config in _as_dict(value).items():
+        name = str(raw_name or "").strip()
+        config = _as_dict(raw_config)
+        if not name or not config:
+            continue
+        reasoning = _as_dict(config.get("reasoning"))
+        parsed[name] = ModelConfig(
+            max_batch_lines=max(0, _to_int(config.get("max_batch_lines", config.get("maxBatchLines")), 0)),
+            max_context_tokens=max(
+                0,
+                _to_int(config.get("max_context_tokens", config.get("maxContextTokens")), 0),
+            ),
+            max_output_tokens=max(
+                0,
+                _to_int(config.get("max_output_tokens", config.get("maxOutputTokens")), 0),
+            ),
+            recommended_output_tokens=max(
+                0,
+                _to_int(
+                    config.get("recommended_output_tokens", config.get("recommendedOutputTokens")),
+                    0,
+                ),
+            ),
+            reasoning_effort=str(
+                config.get(
+                    "reasoning_effort",
+                    config.get("reasoningEffort", reasoning.get("effort", "")),
+                )
+                or ""
+            ).strip(),
+        )
+    return parsed
+
+
 def providers_file_version(path: Path) -> dict[str, int] | None:
     if not path.exists():
         return None
@@ -524,6 +579,7 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
         base_url=base_url,
         env_key=env_key,
         models=models,
+        model_configs=_model_configs_from_draft(draft.get("model_configs") or draft.get("modelConfigs")),
         credential_id=str(draft.get("credential_id") or draft.get("credentialId") or name),
         auth=AuthConfig(
             type=str(auth_raw.get("type", "bearer")),
@@ -557,6 +613,21 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
                 0,
             ),
             output_token_param=str(capabilities_raw.get("output_token_param", capabilities_raw.get("outputTokenParam", "")) or ""),
+            reasoning_effort_param=str(
+                capabilities_raw.get(
+                    "reasoning_effort_param",
+                    capabilities_raw.get("reasoningEffortParam", _default_reasoning_effort_param(compat_mode)),
+                )
+                or ""
+            ),
+            reasoning_efforts=[
+                str(item).strip()
+                for item in _as_list(
+                    capabilities_raw.get("reasoning_efforts", capabilities_raw.get("reasoningEfforts"))
+                )
+                if str(item).strip()
+            ]
+            or _default_reasoning_efforts(compat_mode),
         ),
         limits=ProviderLimits(
             concurrency=int(limits_raw.get("concurrency", 8)),
@@ -582,6 +653,18 @@ def provider_config_to_yaml_row(config: ProviderConfig) -> dict[str, Any]:
         "capabilities": to_plain(config.capabilities),
         "limits": to_plain(config.limits),
     }
+    model_configs = {
+        name: {
+            key: value
+            for key, value in to_plain(model_config).items()
+            if value not in ("", 0, None, [], {})
+        }
+        for name, model_config in config.model_configs.items()
+        if name in config.models
+    }
+    model_configs = {name: value for name, value in model_configs.items() if value}
+    if model_configs:
+        row["model_configs"] = model_configs
     if config.extra_headers:
         row["extra_headers"] = dict(config.extra_headers)
     if config.model_list.path_template:

@@ -360,6 +360,39 @@ def test_save_provider_config_preserves_output_token_capabilities(tmp_path: Path
     assert capabilities["output_token_param"] == "max_completion_tokens"
 
 
+def test_save_provider_config_preserves_model_specific_runtime_settings(tmp_path: Path) -> None:
+    save_provider_config(
+        root_dir=tmp_path,
+        provider_draft={
+            "name": "responses",
+            "compat_mode": "openai_responses",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["model-a", "model-b"],
+            "model_configs": {
+                "model-a": {
+                    "max_batch_lines": 240,
+                    "max_context_tokens": 400000,
+                    "max_output_tokens": 64000,
+                    "recommended_output_tokens": 16000,
+                    "reasoning_effort": "medium",
+                }
+            },
+        },
+    )
+
+    data = yaml.safe_load((tmp_path / "providers.local.yaml").read_text(encoding="utf-8"))
+    model = data["providers"][0]["model_configs"]["model-a"]
+    assert model == {
+        "max_batch_lines": 240,
+        "max_context_tokens": 400000,
+        "max_output_tokens": 64000,
+        "recommended_output_tokens": 16000,
+        "reasoning_effort": "medium",
+    }
+    assert "model-b" not in data["providers"][0].get("model_configs", {})
+
+
 def test_draft_to_provider_config_preserves_camel_case_output_token_capabilities() -> None:
     provider = draft_to_provider_config(
         {

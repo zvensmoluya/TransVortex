@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,17 @@ class CapabilityConfig:
     max_output_tokens: int = 0
     recommended_output_tokens: int = 0
     output_token_param: str = ""
+    reasoning_effort_param: str = ""
+    reasoning_efforts: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ModelConfig:
+    max_batch_lines: int = 0
+    max_context_tokens: int = 0
+    max_output_tokens: int = 0
+    recommended_output_tokens: int = 0
+    reasoning_effort: str = ""
 
 
 @dataclass
@@ -68,6 +79,7 @@ class ProviderConfig:
     base_url: str
     env_key: str
     models: list[str]
+    model_configs: dict[str, ModelConfig] = field(default_factory=dict)
     credential_id: str = ""
     credential_root_dir: Path | None = None
     compat_mode: str = ""
@@ -78,6 +90,39 @@ class ProviderConfig:
     model_list: ModelListConfig = field(default_factory=ModelListConfig)
     capabilities: CapabilityConfig = field(default_factory=CapabilityConfig)
     limits: ProviderLimits = field(default_factory=ProviderLimits)
+
+    def model_config(self, model: str) -> ModelConfig:
+        return self.model_configs.get(str(model or "").strip(), ModelConfig())
+
+    def capabilities_for_model(self, model: str) -> CapabilityConfig:
+        model_config = self.model_config(model)
+        max_output_tokens = (
+            model_config.max_output_tokens
+            if int(model_config.max_output_tokens or 0) > 0
+            else self.capabilities.max_output_tokens
+        )
+        recommended_output_tokens = (
+            model_config.recommended_output_tokens
+            if int(model_config.recommended_output_tokens or 0) > 0
+            else self.capabilities.recommended_output_tokens
+        )
+        if max_output_tokens > 0 and recommended_output_tokens > max_output_tokens:
+            recommended_output_tokens = max_output_tokens
+        return replace(
+            self.capabilities,
+            max_batch_lines=(
+                model_config.max_batch_lines
+                if int(model_config.max_batch_lines or 0) > 0
+                else self.capabilities.max_batch_lines
+            ),
+            max_context_tokens=(
+                model_config.max_context_tokens
+                if int(model_config.max_context_tokens or 0) > 0
+                else self.capabilities.max_context_tokens
+            ),
+            max_output_tokens=max_output_tokens,
+            recommended_output_tokens=recommended_output_tokens,
+        )
 
 
 @dataclass

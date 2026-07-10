@@ -397,6 +397,7 @@ def config_payload(
                 "credential_source": credential.source,
                 "has_key": credential.found,
                 "models": provider.models,
+                "model_configs": to_plain(provider.model_configs),
                 "auth": to_plain(provider.auth),
                 "endpoint": to_plain(provider.endpoint),
                 "request_mapping": provider.mapping.request,

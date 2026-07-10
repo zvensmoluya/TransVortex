@@ -76,6 +76,14 @@ routing:
 #
 # OpenAI-compatible APIs with vendor extensions:
 #   compat_mode: openai_chat
+#   models: [example-model]
+#   model_configs:
+#     example-model:
+#       max_batch_lines: 240
+#       max_context_tokens: 400000
+#       max_output_tokens: 64000
+#       recommended_output_tokens: 16000
+#       reasoning_effort: low
 #   request_mapping:
 #     style: openai_chat
 #     body_overrides:

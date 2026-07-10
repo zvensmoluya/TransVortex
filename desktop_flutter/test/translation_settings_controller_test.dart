@@ -52,6 +52,9 @@ void main() {
         expect(controller.selectedConnection, 'deepseek');
         expect(controller.draft.name, 'deepseek');
         expect(controller.draft.models, ['deepseek-v4-pro']);
+        expect(controller.selectedModel, 'deepseek-v4-pro');
+        expect(controller.selectedModelConfig?.maxContextTokens, '1000000');
+        expect(controller.selectedModelConfig?.reasoningEffort, 'high');
         expect(controller.profiles.length, 2);
         expect(controller.activeProfileId, 'default');
         expect(
@@ -106,6 +109,50 @@ void main() {
       expect(controller.message, '连接已保存。');
       expect(configChangedCount, 1);
     });
+
+    test('model runtime settings are edited and saved per model', () async {
+      await controller.load();
+      controller.selectConnection('openai');
+
+      expect(controller.selectedModel, 'gpt-4o');
+      expect(controller.selectedModelConfig?.maxContextTokens, '128000');
+      expect(controller.selectedModelConfig?.reasoningEffort, 'low');
+      expect(controller.supportsReasoningEffort, isTrue);
+
+      controller.editModelMaxBatchLines('180');
+      controller.editModelMaxContextTokens('400000');
+      controller.editModelMaxOutputTokens('64000');
+      controller.editModelRecommendedOutputTokens('16000');
+      controller.setModelReasoningEffort('medium');
+      await controller.saveConnection();
+
+      final save = transport.calls.firstWhere(
+        (c) => c.method == 'provider.save',
+      );
+      final draft = save.params['provider_draft'] as Map<String, Object?>;
+      final modelConfigs = draft['model_configs'] as Map<String, Object?>;
+      final model = modelConfigs['gpt-4o'] as Map<String, Object?>;
+      expect(model['max_batch_lines'], 180);
+      expect(model['max_context_tokens'], 400000);
+      expect(model['max_output_tokens'], 64000);
+      expect(model['recommended_output_tokens'], 16000);
+      expect(model['reasoning_effort'], 'medium');
+    });
+
+    test(
+      'saveConnection rejects an output budget above model maximum',
+      () async {
+        await controller.load();
+        controller.selectConnection('openai');
+        controller.editModelMaxOutputTokens('1000');
+        controller.editModelRecommendedOutputTokens('2000');
+
+        await controller.saveConnection();
+
+        expect(controller.error, contains('日常输出预算不能大于最大输出'));
+        expect(callsAfterInitialLoad(), isEmpty);
+      },
+    );
 
     test('setPrimary writes only the routing profiles', () async {
       await controller.load();
@@ -267,6 +314,18 @@ Map<String, Object?> _snapshot() {
           'api_type': 'openai-compatible',
           'credential_id': 'deepseek',
           'env_key': 'DEEPSEEK_API_KEY',
+          'request_mapping': {
+            'style': 'openai_chat',
+            'body_overrides': {'reasoning_effort': 'high'},
+          },
+          'capabilities': {
+            'max_batch_lines': 1000,
+            'max_context_tokens': 1000000,
+            'max_output_tokens': 384000,
+            'recommended_output_tokens': 32768,
+            'reasoning_effort_param': 'reasoning_effort',
+            'reasoning_efforts': ['minimal', 'low', 'medium', 'high'],
+          },
         },
         {
           'name': 'openai',
@@ -277,6 +336,16 @@ Map<String, Object?> _snapshot() {
           'api_type': 'openai-compatible',
           'credential_id': 'openai',
           'env_key': 'OPENAI_API_KEY',
+          'capabilities': {
+            'max_batch_lines': 1000,
+            'max_output_tokens': 32768,
+            'recommended_output_tokens': 16384,
+            'reasoning_effort_param': 'reasoning_effort',
+            'reasoning_efforts': ['minimal', 'low', 'medium', 'high'],
+          },
+          'model_configs': {
+            'gpt-4o': {'max_context_tokens': 128000, 'reasoning_effort': 'low'},
+          },
         },
       ],
       'provider_presets': [

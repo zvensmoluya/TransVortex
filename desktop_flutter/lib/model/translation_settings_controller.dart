@@ -79,6 +79,8 @@ class ConnectionDraft {
   String apiKey = '';
   List<String> models = <String>[];
   String modelInput = '';
+  String? selectedModel;
+  Map<String, ModelRuntimeDraft> modelConfigs = <String, ModelRuntimeDraft>{};
 
   void reset() {
     creating = false;
@@ -89,6 +91,57 @@ class ConnectionDraft {
     apiKey = '';
     models = <String>[];
     modelInput = '';
+    selectedModel = null;
+    modelConfigs = <String, ModelRuntimeDraft>{};
+  }
+}
+
+class ModelRuntimeDraft {
+  ModelRuntimeDraft({
+    this.maxBatchLines = '',
+    this.maxContextTokens = '',
+    this.maxOutputTokens = '',
+    this.recommendedOutputTokens = '',
+    this.reasoningEffort = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  String maxBatchLines;
+  String maxContextTokens;
+  String maxOutputTokens;
+  String recommendedOutputTokens;
+  String reasoningEffort;
+  final Map<String, Object?> raw;
+
+  Map<String, Object?> toPayload() {
+    final payload = <String, Object?>{...raw};
+    void writeNumber(String key, String value) {
+      payload.remove(switch (key) {
+        'max_batch_lines' => 'maxBatchLines',
+        'max_context_tokens' => 'maxContextTokens',
+        'max_output_tokens' => 'maxOutputTokens',
+        _ => 'recommendedOutputTokens',
+      });
+      final parsed = int.tryParse(value.trim()) ?? 0;
+      if (parsed > 0) {
+        payload[key] = parsed;
+      } else {
+        payload.remove(key);
+      }
+    }
+
+    writeNumber('max_batch_lines', maxBatchLines);
+    writeNumber('max_context_tokens', maxContextTokens);
+    writeNumber('max_output_tokens', maxOutputTokens);
+    writeNumber('recommended_output_tokens', recommendedOutputTokens);
+    payload.remove('reasoningEffort');
+    payload.remove('reasoning');
+    if (reasoningEffort.trim().isEmpty) {
+      payload.remove('reasoning_effort');
+    } else {
+      payload['reasoning_effort'] = reasoningEffort.trim();
+    }
+    return payload;
   }
 }
 
@@ -143,6 +196,33 @@ class TranslationSettingsController extends ChangeNotifier {
   List<ProviderOption> get connections => _snapshot?.providers ?? const [];
   String? get selectedConnection => _selectedConnection;
   ConnectionDraft get draft => _draft;
+  String? get selectedModel => _draft.selectedModel;
+  ModelRuntimeDraft? get selectedModelConfig {
+    final model = _draft.selectedModel;
+    return model == null ? null : _draft.modelConfigs[model];
+  }
+
+  List<String> get reasoningEfforts {
+    final capabilities = _currentProviderCapabilities();
+    final configured = _strList(
+      capabilities['reasoning_efforts'] ?? capabilities['reasoningEfforts'],
+    ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+    final current = selectedModelConfig?.reasoningEffort.trim() ?? '';
+    return _normalized([...configured, if (current.isNotEmpty) current]);
+  }
+
+  bool get supportsReasoningEffort {
+    final capabilities = _currentProviderCapabilities();
+    final param =
+        (_str(
+                  capabilities['reasoning_effort_param'] ??
+                      capabilities['reasoningEffortParam'],
+                ) ??
+                '')
+            .trim();
+    return param.isNotEmpty || reasoningEfforts.isNotEmpty;
+  }
+
   bool get creating => _draft.creating;
   bool get hasAnyConnection => connections.isNotEmpty;
 
@@ -329,6 +409,13 @@ class TranslationSettingsController extends ChangeNotifier {
     }
     if (_draft.models.isEmpty) {
       _draft.models = _normalized([...?preset?.models, ...template.models]);
+      final merged = _mergedTemplate();
+      _loadModelRuntimeDrafts(
+        models: _draft.models,
+        capabilities: merged?.capabilities ?? template.capabilities,
+        modelConfigs: merged?.modelConfigs ?? template.modelConfigs,
+        raw: merged?.raw ?? template.raw,
+      );
     }
     _message = null;
     _error = null;
@@ -346,6 +433,13 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.models = _normalized(protocol?.models ?? const []);
     _draft.apiKey = '';
     _draft.modelInput = '';
+    _loadModelRuntimeDrafts(
+      models: _draft.models,
+      capabilities: protocol?.capabilities ?? const <String, Object?>{},
+      modelConfigs:
+          protocol?.modelConfigs ?? const <String, ModelRuntimeOption>{},
+      raw: protocol?.raw ?? const <String, Object?>{},
+    );
     _message = null;
     _error = null;
     _testResult = null;
@@ -358,12 +452,49 @@ class TranslationSettingsController extends ChangeNotifier {
   void editApiKey(String value) => _draft.apiKey = value;
   void editModelInput(String value) => _draft.modelInput = value;
 
+  void selectModel(String model) {
+    if (!_draft.models.contains(model) || _draft.selectedModel == model) return;
+    _draft.selectedModel = model;
+    _ensureModelRuntimeDraft(model);
+    _bumpDraft();
+    notifyListeners();
+  }
+
+  void editModelMaxBatchLines(String value) {
+    final config = selectedModelConfig;
+    if (config != null) config.maxBatchLines = value;
+  }
+
+  void editModelMaxContextTokens(String value) {
+    final config = selectedModelConfig;
+    if (config != null) config.maxContextTokens = value;
+  }
+
+  void editModelMaxOutputTokens(String value) {
+    final config = selectedModelConfig;
+    if (config != null) config.maxOutputTokens = value;
+  }
+
+  void editModelRecommendedOutputTokens(String value) {
+    final config = selectedModelConfig;
+    if (config != null) config.recommendedOutputTokens = value;
+  }
+
+  void setModelReasoningEffort(String value) {
+    final config = selectedModelConfig;
+    if (config == null || config.reasoningEffort == value) return;
+    config.reasoningEffort = value;
+    notifyListeners();
+  }
+
   void addModelFromInput() {
     final model = _draft.modelInput.trim();
     if (model.isEmpty) return;
     if (!_draft.models.contains(model)) {
       _draft.models = [..._draft.models, model];
     }
+    _ensureModelRuntimeDraft(model);
+    _draft.selectedModel = model;
     _draft.modelInput = '';
     _bumpDraft();
     notifyListeners();
@@ -376,6 +507,11 @@ class TranslationSettingsController extends ChangeNotifier {
       return;
     }
     _draft.models = _draft.models.where((m) => m != model).toList();
+    _draft.modelConfigs.remove(model);
+    if (_draft.selectedModel == model) {
+      _draft.selectedModel = _draft.models.isEmpty ? null : _draft.models.first;
+    }
+    _bumpDraft();
     notifyListeners();
   }
 
@@ -393,6 +529,11 @@ class TranslationSettingsController extends ChangeNotifier {
     final missingReferenced = _missingReferencedModels(name, models);
     if (missingReferenced.isNotEmpty) {
       _fail('这个模型正在被常用模型使用，请先修改主模型或备用模型。');
+      return;
+    }
+    final modelConfigError = _validateModelRuntimeDrafts(models);
+    if (modelConfigError != null) {
+      _fail(modelConfigError);
       return;
     }
     _begin(TranslationBusy.savingConnection);
@@ -455,6 +596,10 @@ class TranslationSettingsController extends ChangeNotifier {
       final models = _normalized(_strList(result['models']));
       if (models.isNotEmpty) {
         _draft.models = _normalized([..._draft.models, ...models]);
+        for (final model in _draft.models) {
+          _ensureModelRuntimeDraft(model);
+        }
+        _draft.selectedModel ??= _draft.models.first;
         _bumpDraft();
         final hint = _str(result['hint_zh']);
         _message = hint == null || hint.isEmpty
@@ -701,6 +846,12 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.apiKey = '';
     _draft.models = _normalized(provider.models);
     _draft.modelInput = '';
+    _loadModelRuntimeDrafts(
+      models: _draft.models,
+      capabilities: provider.capabilities,
+      modelConfigs: provider.modelConfigs,
+      raw: provider.raw,
+    );
     _bumpDraft();
   }
 
@@ -711,6 +862,8 @@ class TranslationSettingsController extends ChangeNotifier {
       _draft.models = <String>[];
       _draft.apiKey = '';
       _draft.modelInput = '';
+      _draft.selectedModel = null;
+      _draft.modelConfigs = <String, ModelRuntimeDraft>{};
       return;
     }
     _draft.name = _uniqueProviderName(_providerNameSeed(template));
@@ -718,6 +871,146 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.models = _normalized(template.models);
     _draft.apiKey = '';
     _draft.modelInput = '';
+    _loadModelRuntimeDrafts(
+      models: _draft.models,
+      capabilities: template.capabilities,
+      modelConfigs: template.modelConfigs,
+      raw: template.raw,
+    );
+  }
+
+  void _loadModelRuntimeDrafts({
+    required List<String> models,
+    required Map<String, Object?> capabilities,
+    required Map<String, ModelRuntimeOption> modelConfigs,
+    required Map<String, Object?> raw,
+  }) {
+    final providerReasoning = _providerReasoningEffort(raw);
+    _draft.modelConfigs = {
+      for (final model in models)
+        model: _modelRuntimeDraft(
+          modelConfigs[model],
+          capabilities,
+          providerReasoning,
+        ),
+    };
+    final selected = _draft.selectedModel;
+    _draft.selectedModel = selected != null && models.contains(selected)
+        ? selected
+        : (models.isEmpty ? null : models.first);
+  }
+
+  ModelRuntimeDraft _modelRuntimeDraft(
+    ModelRuntimeOption? model,
+    Map<String, Object?> capabilities,
+    String providerReasoning,
+  ) {
+    String number(int explicit, String snake, String camel) {
+      final inherited =
+          _int(capabilities[snake]) ?? _int(capabilities[camel]) ?? 0;
+      final value = explicit > 0 ? explicit : inherited;
+      return value > 0 ? '$value' : '';
+    }
+
+    final maxOutputTokens = number(
+      model?.maxOutputTokens ?? 0,
+      'max_output_tokens',
+      'maxOutputTokens',
+    );
+    var recommendedOutputTokens = number(
+      model?.recommendedOutputTokens ?? 0,
+      'recommended_output_tokens',
+      'recommendedOutputTokens',
+    );
+    final maxOutput = int.tryParse(maxOutputTokens) ?? 0;
+    final recommended = int.tryParse(recommendedOutputTokens) ?? 0;
+    if (maxOutput > 0 && recommended > maxOutput) {
+      recommendedOutputTokens = '$maxOutput';
+    }
+
+    return ModelRuntimeDraft(
+      maxBatchLines: number(
+        model?.maxBatchLines ?? 0,
+        'max_batch_lines',
+        'maxBatchLines',
+      ),
+      maxContextTokens: number(
+        model?.maxContextTokens ?? 0,
+        'max_context_tokens',
+        'maxContextTokens',
+      ),
+      maxOutputTokens: maxOutputTokens,
+      recommendedOutputTokens: recommendedOutputTokens,
+      reasoningEffort: model?.reasoningEffort.trim().isNotEmpty == true
+          ? model!.reasoningEffort.trim()
+          : providerReasoning,
+      raw: model?.raw ?? const <String, Object?>{},
+    );
+  }
+
+  void _ensureModelRuntimeDraft(String model) {
+    if (_draft.modelConfigs.containsKey(model)) return;
+    _draft.modelConfigs[model] = _modelRuntimeDraft(
+      null,
+      _currentProviderCapabilities(),
+      _providerReasoningEffort(_currentProviderRaw()),
+    );
+  }
+
+  Map<String, Object?> _currentProviderCapabilities() {
+    if (_draft.creating) {
+      return _mergedTemplate()?.capabilities ?? const <String, Object?>{};
+    }
+    return selectedProviderOption.capabilities;
+  }
+
+  Map<String, Object?> _currentProviderRaw() {
+    if (_draft.creating) {
+      return _mergedTemplate()?.raw ?? const <String, Object?>{};
+    }
+    return selectedProviderOption.raw;
+  }
+
+  String _providerReasoningEffort(Map<String, Object?> raw) {
+    final mapping = _map(raw['request_mapping'] ?? raw['requestMapping']);
+    final overrides = _map(
+      mapping['body_overrides'] ?? mapping['bodyOverrides'],
+    );
+    final reasoning = _map(overrides['reasoning']);
+    return (_str(
+              reasoning['effort'] ??
+                  overrides['reasoning_effort'] ??
+                  overrides['reasoningEffort'],
+            ) ??
+            '')
+        .trim();
+  }
+
+  String? _validateModelRuntimeDrafts(List<String> models) {
+    for (final model in models) {
+      final config = _draft.modelConfigs[model];
+      if (config == null) continue;
+      for (final field in <(String, String)>[
+        ('单批字幕行上限', config.maxBatchLines),
+        ('上下文窗口', config.maxContextTokens),
+        ('最大输出', config.maxOutputTokens),
+        ('日常输出预算', config.recommendedOutputTokens),
+      ]) {
+        final raw = field.$2.trim();
+        if (raw.isEmpty) continue;
+        final value = int.tryParse(raw);
+        if (value == null || value < 0) {
+          return '$model 的${field.$1}必须是非负整数';
+        }
+      }
+      final maxOutput = int.tryParse(config.maxOutputTokens.trim()) ?? 0;
+      final recommended =
+          int.tryParse(config.recommendedOutputTokens.trim()) ?? 0;
+      if (maxOutput > 0 && recommended > maxOutput) {
+        return '$model 的日常输出预算不能大于最大输出';
+      }
+    }
+    return null;
   }
 
   String _draftName() => _draft.name.trim();
@@ -777,6 +1070,8 @@ class TranslationSettingsController extends ChangeNotifier {
       compatMode: template.compatMode,
       credentialId: template.credentialId,
       credentialSource: 'missing',
+      capabilities: template.capabilities,
+      modelConfigs: template.modelConfigs,
       raw: template.raw,
     );
   }
@@ -794,6 +1089,11 @@ class TranslationSettingsController extends ChangeNotifier {
           ? _draft.baseUrl.trim()
           : base.baseUrl,
       'models': models,
+      'model_configs': {
+        for (final model in models)
+          if (_draft.modelConfigs[model] case final config?)
+            model: config.toPayload(),
+      },
       'compat_mode': base.compatMode.isNotEmpty
           ? base.compatMode
           : 'openai_chat',

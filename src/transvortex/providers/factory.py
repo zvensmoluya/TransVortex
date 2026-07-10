@@ -711,7 +711,7 @@ def _has_nested_payload_value(payload: dict[str, Any], path: list[str]) -> bool:
     return True
 
 
-def _set_nested_payload_value(payload: dict[str, Any], path: list[str], value: int) -> None:
+def _set_nested_payload_value(payload: dict[str, Any], path: list[str], value: Any) -> None:
     current: dict[str, Any] = payload
     for token in path[:-1]:
         existing = current.get(token)
@@ -757,14 +757,50 @@ def _apply_request_mapping_output_tokens(payload: dict[str, Any], config: Provid
     return payload
 
 
-def _apply_capability_output_tokens(payload: dict[str, Any], config: ProviderConfig, style: str) -> dict[str, Any]:
-    max_output_tokens = int(config.capabilities.max_output_tokens or 0)
+def _apply_capability_output_tokens(
+    payload: dict[str, Any],
+    config: ProviderConfig,
+    style: str,
+    model: str,
+) -> dict[str, Any]:
+    max_output_tokens = int(config.capabilities_for_model(model).max_output_tokens or 0)
     if max_output_tokens <= 0:
         return payload
     path = _output_token_param_path(config, style)
     if not path or _has_nested_payload_value(payload, path):
         return payload
     _set_nested_payload_value(payload, path, max_output_tokens)
+    return payload
+
+
+def _reasoning_effort_param_path(config: ProviderConfig, style: str) -> list[str]:
+    explicit_param = str(config.capabilities.reasoning_effort_param or "").strip()
+    if explicit_param:
+        return [token for token in explicit_param.split(".") if token]
+    if style == "openai_responses":
+        return ["reasoning", "effort"]
+    if style == "openai_chat":
+        return ["reasoning_effort"]
+    return []
+
+
+def _finalize_model_payload(
+    payload: dict[str, Any],
+    config: ProviderConfig,
+    req: NormalizedRequest,
+    style: str,
+    context: dict[str, object],
+) -> dict[str, Any]:
+    payload = _apply_request_mapping(payload, config, context)
+    model_config = config.model_config(req.model)
+    if int(model_config.max_output_tokens or 0) > 0:
+        output_path = _output_token_param_path(config, style)
+        if output_path:
+            _set_nested_payload_value(payload, output_path, int(model_config.max_output_tokens))
+    reasoning_effort = str(model_config.reasoning_effort or "").strip()
+    reasoning_path = _reasoning_effort_param_path(config, style)
+    if reasoning_effort and reasoning_path:
+        _set_nested_payload_value(payload, reasoning_path, reasoning_effort)
     return payload
 
 
@@ -893,8 +929,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
         payload = _apply_request_mapping_output_tokens(payload, config, style)
-        payload = _apply_capability_output_tokens(payload, config, style)
-        return _apply_request_mapping(payload, config, context)
+        payload = _apply_capability_output_tokens(payload, config, style, req.model)
+        return _finalize_model_payload(payload, config, req, style, context)
     if style == "openai_responses":
         input_items: list[dict[str, str]] = []
         if config.capabilities.supports_system_prompt:
@@ -907,8 +943,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if config.capabilities.supports_temperature:
             payload["temperature"] = req.temperature
         payload = _apply_request_mapping_output_tokens(payload, config, style)
-        payload = _apply_capability_output_tokens(payload, config, style)
-        return _apply_request_mapping(payload, config, context)
+        payload = _apply_capability_output_tokens(payload, config, style, req.model)
+        return _finalize_model_payload(payload, config, req, style, context)
     if style == "openai_completions":
         payload = {
             "model": req.model,
@@ -920,8 +956,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if max_tokens is not None:
             payload["max_tokens"] = int(max_tokens)
         payload = _apply_request_mapping_output_tokens(payload, config, style)
-        payload = _apply_capability_output_tokens(payload, config, style)
-        return _apply_request_mapping(payload, config, context)
+        payload = _apply_capability_output_tokens(payload, config, style, req.model)
+        return _finalize_model_payload(payload, config, req, style, context)
     if style == "anthropic_messages":
         payload = {
             "model": req.model,
@@ -935,8 +971,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
             payload["temperature"] = req.temperature
         if config.capabilities.supports_system_prompt:
             payload["system"] = system_prompt
-        payload = _apply_capability_output_tokens(payload, config, style)
-        return _apply_request_mapping(payload, config, context)
+        payload = _apply_capability_output_tokens(payload, config, style, req.model)
+        return _finalize_model_payload(payload, config, req, style, context)
     if style == "gemini_generate_content":
         content = {"parts": [{"text": prompt}]}
         if config.compat_mode == "vertex_express":
@@ -947,8 +983,8 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         if config.capabilities.supports_temperature:
             payload["generationConfig"] = {"temperature": req.temperature}
         payload = _apply_request_mapping_output_tokens(payload, config, style)
-        payload = _apply_capability_output_tokens(payload, config, style)
-        return _apply_request_mapping(payload, config, context)
+        payload = _apply_capability_output_tokens(payload, config, style, req.model)
+        return _finalize_model_payload(payload, config, req, style, context)
     if style == "custom_json":
         template = config.mapping.request.get("body_template")
         if not isinstance(template, dict):
@@ -956,7 +992,7 @@ def _build_payload(config: ProviderConfig, req: NormalizedRequest) -> dict:
         rendered = _render_template_value(template, context)
         if not isinstance(rendered, dict):
             raise RuntimeError("custom_json body_template must render to a JSON object")
-        return _apply_request_mapping(rendered, config, context)
+        return _finalize_model_payload(rendered, config, req, style, context)
     raise RuntimeError(f"Unsupported request style: {style}")
 
 
@@ -966,9 +1002,10 @@ class ConfigurableProtocolClient(ProviderClient):
     timeout: int
 
     def translate_request(self, req: NormalizedRequest) -> NormalizedResponse:
-        if len(req.lines) > self.config.capabilities.max_batch_lines:
+        capabilities = self.config.capabilities_for_model(req.model)
+        if len(req.lines) > capabilities.max_batch_lines:
             raise RuntimeError(
-                f"batch too large: {len(req.lines)} > {self.config.capabilities.max_batch_lines}"
+                f"batch too large: {len(req.lines)} > {capabilities.max_batch_lines}"
             )
         credential = resolve_provider_credential(self.config, root_dir=self.config.credential_root_dir)
         if not credential.found:

@@ -1324,6 +1324,9 @@ void main() {
     expect(find.textContaining('.env'), findsNothing);
     expect(find.text('来源'), findsNothing);
     expect(find.textContaining('中文备注'), findsNothing);
+    expect(find.text('模型能力 · real-model'), findsOneWidget);
+    expect(find.text('上下文窗口（tokens）'), findsOneWidget);
+    expect(find.text('思考档位'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1698,10 +1701,10 @@ void main() {
       await tester.tap(find.text('自定义厂商'));
       await tester.pump(const Duration(milliseconds: 100));
 
+      expect(find.text('OpenAI-compatible Chat'), findsWidgets);
       await tester.ensureVisible(find.text('连接信息'));
       await tester.pump();
       expect(find.text('自定义厂商'), findsWidgets);
-      expect(find.text('OpenAI-compatible Chat'), findsWidgets);
 
       final nameField = find.byWidgetPredicate(
         (widget) =>
@@ -3620,6 +3623,19 @@ DesktopSnapshot _desktopSnapshot({
                 'credential_id': 'RealProvider',
                 'credential_source': 'auth_json',
                 'models': models,
+                'capabilities': {
+                  'max_batch_lines': 1000,
+                  'max_output_tokens': 32768,
+                  'recommended_output_tokens': 16384,
+                  'reasoning_effort_param': 'reasoning_effort',
+                  'reasoning_efforts': ['minimal', 'low', 'medium', 'high'],
+                },
+                'model_configs': {
+                  models.first: {
+                    'max_context_tokens': 128000,
+                    'reasoning_effort': 'medium',
+                  },
+                },
               },
             ]
           : const [],

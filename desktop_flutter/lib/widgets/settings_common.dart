@@ -398,11 +398,15 @@ class Input extends StatelessWidget {
     required this.controller,
     this.obscure = false,
     this.onChanged,
+    this.hintText,
+    this.keyboardType,
   });
   final String label;
   final TextEditingController controller;
   final bool obscure;
   final ValueChanged<String>? onChanged;
+  final String? hintText;
+  final TextInputType? keyboardType;
 
   @override
   Widget build(BuildContext context) {
@@ -414,12 +418,15 @@ class Input extends StatelessWidget {
         TextField(
           controller: controller,
           obscureText: obscure,
+          keyboardType: keyboardType,
           onChanged: onChanged,
           style: T.tBody,
           decoration: InputDecoration(
             isDense: true,
             filled: true,
             fillColor: T.surface,
+            hintText: hintText,
+            hintStyle: T.tCaption,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(T.rMd),
               borderSide: const BorderSide(color: T.line),

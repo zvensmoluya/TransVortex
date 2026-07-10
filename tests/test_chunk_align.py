@@ -8,7 +8,17 @@ from transvortex.core.aligner import (
     validate_segments,
 )
 from transvortex.core.chunking import number_and_chunk_segments, plan_translation_chunks
-from transvortex.app.models import AppConfig, CapabilityConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig, Segment
+from transvortex.core.orchestrator import _translation_route_providers
+from transvortex.app.models import (
+    AppConfig,
+    CapabilityConfig,
+    ModelConfig,
+    PipelineConfig,
+    ProviderConfig,
+    RouteTarget,
+    RoutingConfig,
+    Segment,
+)
 
 
 def _planner_config(
@@ -170,6 +180,24 @@ def test_capacity_planner_can_exceed_conservative_line_limit_when_capacity_is_ex
     segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 1001)]
 
     chunks, warnings = plan_translation_chunks(config, segments, config.providers["p1"])
+
+    assert warnings == []
+    assert [len(chunk.segment_ids) for chunk in chunks] == [900, 100]
+
+
+def test_capacity_planner_uses_selected_model_capacity(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    config.providers["p1"].model_configs["m1"] = ModelConfig(
+        max_context_tokens=128_000,
+        max_output_tokens=32_000,
+    )
+    segments = [Segment(id=i, start=float(i), end=float(i + 1), text_src=f"line {i}.") for i in range(1, 1001)]
+
+    chunks, warnings = plan_translation_chunks(
+        config,
+        segments,
+        _translation_route_providers(config),
+    )
 
     assert warnings == []
     assert [len(chunk.segment_ids) for chunk in chunks] == [900, 100]

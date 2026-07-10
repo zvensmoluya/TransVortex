@@ -94,6 +94,52 @@ routing:
     assert capabilities.output_token_param == "max_completion_tokens"
 
 
+def test_model_specific_capacity_and_reasoning_load_from_yaml(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai-compatible
+    compat_mode: openai_responses
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1, m2]
+    capabilities:
+      max_batch_lines: 1000
+      max_output_tokens: 128000
+      recommended_output_tokens: 32000
+    model_configs:
+      m1:
+        max_batch_lines: 240
+        max_context_tokens: 400000
+        max_output_tokens: 64000
+        recommended_output_tokens: 16000
+        reasoning_effort: low
+      m2:
+        max_output_tokens: 16000
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
+
+    cfg = load_app_config(root_dir=tmp_path)
+    provider = cfg.providers["p1"]
+    model = provider.model_config("m1")
+    capabilities = provider.capabilities_for_model("m1")
+
+    assert model.reasoning_effort == "low"
+    assert capabilities.max_batch_lines == 240
+    assert capabilities.max_context_tokens == 400000
+    assert capabilities.max_output_tokens == 64000
+    assert capabilities.recommended_output_tokens == 16000
+    assert provider.capabilities_for_model("m2").max_context_tokens == 0
+    assert provider.capabilities_for_model("m2").recommended_output_tokens == 16000
+    assert provider.capabilities.reasoning_effort_param == "reasoning.effort"
+    assert provider.capabilities.reasoning_efforts == ["minimal", "low", "medium", "high"]
+
+
 def test_translation_chunking_budget_fields_load_from_yaml(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """

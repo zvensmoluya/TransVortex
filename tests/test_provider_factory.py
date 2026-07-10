@@ -11,6 +11,7 @@ from transvortex.app.models import (
     CapabilityConfig,
     EndpointConfig,
     MappingConfig,
+    ModelConfig,
     NormalizedRequest,
     ProviderConfig,
     ProviderLimits,
@@ -415,6 +416,46 @@ def test_openai_responses_uses_capability_output_tokens() -> None:
     )
     payload = _build_payload(cfg, NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"))
     assert payload["max_output_tokens"] == 65536
+
+
+def test_model_runtime_settings_override_provider_payload_defaults() -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        model_configs={
+            "m1": ModelConfig(
+                max_output_tokens=32000,
+                reasoning_effort="low",
+            )
+        },
+        capabilities=CapabilityConfig(
+            max_output_tokens=65536,
+            reasoning_effort_param="reasoning.effort",
+        ),
+        mapping=MappingConfig(
+            request={
+                "style": "openai_responses",
+                "body_overrides": {
+                    "max_output_tokens": 96000,
+                    "reasoning": {"effort": "high"},
+                },
+            },
+            response={},
+        ),
+        limits=ProviderLimits(),
+    )
+
+    payload = _build_payload(
+        cfg,
+        NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"),
+    )
+
+    assert payload["max_output_tokens"] == 32000
+    assert payload["reasoning"] == {"effort": "low"}
 
 
 def test_openai_chat_output_token_param_can_override_field_name() -> None:

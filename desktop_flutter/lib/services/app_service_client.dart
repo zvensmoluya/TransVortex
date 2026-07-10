@@ -1012,6 +1012,8 @@ class ProviderTemplateOption {
     this.credentialId = '',
     this.protocolTemplateId = '',
     this.models = const <String>[],
+    this.capabilities = const <String, Object?>{},
+    this.modelConfigs = const <String, ModelRuntimeOption>{},
     this.raw = const <String, Object?>{},
   });
 
@@ -1024,6 +1026,8 @@ class ProviderTemplateOption {
   final String credentialId;
   final String protocolTemplateId;
   final List<String> models;
+  final Map<String, Object?> capabilities;
+  final Map<String, ModelRuntimeOption> modelConfigs;
   final Map<String, Object?> raw;
 
   factory ProviderTemplateOption.fromJson(Object? value) {
@@ -1050,6 +1054,10 @@ class ProviderTemplateOption {
           _stringValue(map['protocolTemplateId']) ??
           '',
       models: _stringList(map['models']),
+      capabilities: _stringMap(map['capabilities']),
+      modelConfigs: _modelRuntimeOptions(
+        map['model_configs'] ?? map['modelConfigs'],
+      ),
       raw: map,
     );
   }
@@ -1066,6 +1074,8 @@ class ProviderOption {
     this.compatMode = '',
     this.credentialId = '',
     this.credentialSource = '',
+    this.capabilities = const <String, Object?>{},
+    this.modelConfigs = const <String, ModelRuntimeOption>{},
     this.raw = const <String, Object?>{},
   });
 
@@ -1078,6 +1088,8 @@ class ProviderOption {
   final String compatMode;
   final String credentialId;
   final String credentialSource;
+  final Map<String, Object?> capabilities;
+  final Map<String, ModelRuntimeOption> modelConfigs;
   final Map<String, Object?> raw;
 
   factory ProviderOption.fromJson(Object? value) {
@@ -1103,9 +1115,67 @@ class ProviderOption {
           _stringValue(map['credential_source']) ??
           _stringValue(map['credentialSource']) ??
           '',
+      capabilities: _stringMap(map['capabilities']),
+      modelConfigs: _modelRuntimeOptions(
+        map['model_configs'] ?? map['modelConfigs'],
+      ),
       raw: map,
     );
   }
+}
+
+class ModelRuntimeOption {
+  const ModelRuntimeOption({
+    this.maxBatchLines = 0,
+    this.maxContextTokens = 0,
+    this.maxOutputTokens = 0,
+    this.recommendedOutputTokens = 0,
+    this.reasoningEffort = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  final int maxBatchLines;
+  final int maxContextTokens;
+  final int maxOutputTokens;
+  final int recommendedOutputTokens;
+  final String reasoningEffort;
+  final Map<String, Object?> raw;
+
+  factory ModelRuntimeOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return ModelRuntimeOption(
+      maxBatchLines:
+          _intValue(map['max_batch_lines']) ??
+          _intValue(map['maxBatchLines']) ??
+          0,
+      maxContextTokens:
+          _intValue(map['max_context_tokens']) ??
+          _intValue(map['maxContextTokens']) ??
+          0,
+      maxOutputTokens:
+          _intValue(map['max_output_tokens']) ??
+          _intValue(map['maxOutputTokens']) ??
+          0,
+      recommendedOutputTokens:
+          _intValue(map['recommended_output_tokens']) ??
+          _intValue(map['recommendedOutputTokens']) ??
+          0,
+      reasoningEffort:
+          _stringValue(map['reasoning_effort']) ??
+          _stringValue(map['reasoningEffort']) ??
+          '',
+      raw: map,
+    );
+  }
+}
+
+Map<String, ModelRuntimeOption> _modelRuntimeOptions(Object? value) {
+  final map = _stringMap(value);
+  return {
+    for (final entry in map.entries)
+      if (entry.key.trim().isNotEmpty)
+        entry.key: ModelRuntimeOption.fromJson(entry.value),
+  };
 }
 
 class AsrProviderOption {

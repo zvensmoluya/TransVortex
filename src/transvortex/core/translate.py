@@ -259,7 +259,12 @@ def _route_providers(config: AppConfig) -> list:
     for route in [config.routing.primary] + list(config.routing.fallback):
         provider = config.providers.get(route.provider)
         if provider is not None:
-            providers.append(provider)
+            providers.append(
+                replace(
+                    provider,
+                    capabilities=provider.capabilities_for_model(route.model),
+                )
+            )
     return providers
 
 
@@ -529,11 +534,12 @@ def _recover_rows_in_batches(
     progress_callback: ProgressCallback | None,
 ) -> tuple[TranslationValidationResult, list[dict], list[dict[str, Any]]]:
     provider = config.providers[provider_name]
+    model_capabilities = provider.capabilities_for_model(model)
     max_batch_lines = max(
         1,
         min(
             _MAX_BATCH_RECOVERY_LINES,
-            int(provider.capabilities.max_batch_lines),
+            int(model_capabilities.max_batch_lines),
         ),
     )
     rows = list(validation.rows)
@@ -918,6 +924,8 @@ def translate_chunk(
                 if validation.errors:
                     raise RuntimeError("; ".join(issue.message for issue in validation.errors))
                 provider_meta = dict(response.provider_meta or {})
+                model_config = provider.model_config(route.model)
+                effective_capabilities = provider.capabilities_for_model(route.model)
                 if batch_recovery_artifacts:
                     provider_meta["batch_recovery_requests"] = len(batch_recovery_artifacts)
                     provider_meta["batch_recovered_rows"] = sum(
@@ -959,6 +967,15 @@ def translate_chunk(
                         "protocol_recovered": protocol_recovered,
                         "batch_recovery_requests": len(batch_recovery_artifacts),
                         "batch_recovery_usages": batch_recovery_usages,
+                        "model_config": {
+                            "max_batch_lines": int(effective_capabilities.max_batch_lines or 0),
+                            "max_context_tokens": int(effective_capabilities.max_context_tokens or 0),
+                            "max_output_tokens": int(effective_capabilities.max_output_tokens or 0),
+                            "recommended_output_tokens": int(
+                                effective_capabilities.recommended_output_tokens or 0
+                            ),
+                            "reasoning_effort": str(model_config.reasoning_effort or ""),
+                        },
                         "chunk_meta": dict(request_chunk.meta or {}),
                     },
                     "rows": _rows_to_dicts(validation.rows),

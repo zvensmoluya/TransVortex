@@ -5,6 +5,17 @@ import '../services/app_service_client.dart';
 import '../theme/tokens.dart';
 import 'settings_common.dart';
 
+String _reasoningEffortLabel(String effort) {
+  return switch (effort) {
+    'none' => '关闭',
+    'minimal' => '极低',
+    'low' => '低',
+    'medium' => '中',
+    'high' => '高',
+    _ => effort,
+  };
+}
+
 /// Translation model settings body. Splits into two segments:
 ///  - 连接 (connections): manage provider access and saved model names.
 ///  - 常用模型 (profiles): pick the primary + fallback models for the active
@@ -29,6 +40,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   final _baseUrl = TextEditingController();
   final _apiKey = TextEditingController();
   final _modelInput = TextEditingController();
+  final _maxBatchLines = TextEditingController();
+  final _maxContextTokens = TextEditingController();
+  final _maxOutputTokens = TextEditingController();
+  final _recommendedOutputTokens = TextEditingController();
   final _profileName = TextEditingController();
 
   int _seededDraftRevision = -1;
@@ -49,6 +64,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     _baseUrl.dispose();
     _apiKey.dispose();
     _modelInput.dispose();
+    _maxBatchLines.dispose();
+    _maxContextTokens.dispose();
+    _maxOutputTokens.dispose();
+    _recommendedOutputTokens.dispose();
     _profileName.dispose();
     super.dispose();
   }
@@ -64,6 +83,11 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       _baseUrl.text = c.draft.baseUrl;
       _apiKey.text = c.draft.apiKey;
       _modelInput.text = c.draft.modelInput;
+      final model = c.selectedModelConfig;
+      _maxBatchLines.text = model?.maxBatchLines ?? '';
+      _maxContextTokens.text = model?.maxContextTokens ?? '';
+      _maxOutputTokens.text = model?.maxOutputTokens ?? '';
+      _recommendedOutputTokens.text = model?.recommendedOutputTokens ?? '';
     }
     if (c.activeProfileId != _seededProfileId) {
       _seededProfileId = c.activeProfileId;
@@ -76,6 +100,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     c.editBaseUrl(_baseUrl.text);
     c.editApiKey(_apiKey.text);
     c.editModelInput(_modelInput.text);
+    c.editModelMaxBatchLines(_maxBatchLines.text);
+    c.editModelMaxContextTokens(_maxContextTokens.text);
+    c.editModelMaxOutputTokens(_maxOutputTokens.text);
+    c.editModelRecommendedOutputTokens(_recommendedOutputTokens.text);
   }
 
   Future<void> _saveConnection() async {
@@ -274,6 +302,8 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                 for (final model in c.draft.models)
                   _ModelChip(
                     label: model,
+                    selected: model == c.selectedModel,
+                    onTap: () => c.selectModel(model),
                     onRemove: () => c.removeModel(model),
                   ),
                 InlineTextField(
@@ -291,6 +321,86 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
             if (_modelHelp() != null) ...[
               const SizedBox(height: T.s12),
               Text(_modelHelp()!, style: T.tCaption, maxLines: 2),
+            ],
+            if (c.selectedModelConfig != null) ...[
+              const SizedBox(height: T.s16),
+              const Divider(height: 1, color: T.line),
+              const SizedBox(height: T.s12),
+              Text(
+                '模型能力 · ${c.selectedModel}',
+                style: T.tCaption.copyWith(fontWeight: T.wBold),
+              ),
+              const SizedBox(height: T.s8),
+              Wrap(
+                spacing: T.s12,
+                runSpacing: T.s12,
+                children: [
+                  SizedBox(
+                    width: 220,
+                    child: Input(
+                      label: '单批字幕行上限',
+                      controller: _maxBatchLines,
+                      hintText: '未知',
+                      keyboardType: TextInputType.number,
+                      onChanged: c.editModelMaxBatchLines,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: Input(
+                      label: '上下文窗口（tokens）',
+                      controller: _maxContextTokens,
+                      hintText: '未知',
+                      keyboardType: TextInputType.number,
+                      onChanged: c.editModelMaxContextTokens,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: Input(
+                      label: '最大输出（tokens）',
+                      controller: _maxOutputTokens,
+                      hintText: '未知',
+                      keyboardType: TextInputType.number,
+                      onChanged: c.editModelMaxOutputTokens,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: Input(
+                      label: '日常输出预算（tokens）',
+                      controller: _recommendedOutputTokens,
+                      hintText: '未知',
+                      keyboardType: TextInputType.number,
+                      onChanged: c.editModelRecommendedOutputTokens,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: T.s12),
+              Text('思考档位', style: T.tCaption),
+              const SizedBox(height: T.s4),
+              if (c.supportsReasoningEffort)
+                Wrap(
+                  spacing: T.s8,
+                  runSpacing: T.s8,
+                  children: [
+                    ChoicePill(
+                      label: '沿用连接',
+                      selected: c.selectedModelConfig!.reasoningEffort.isEmpty,
+                      onTap: () => c.setModelReasoningEffort(''),
+                    ),
+                    for (final effort in c.reasoningEfforts)
+                      ChoicePill(
+                        label: _reasoningEffortLabel(effort),
+                        selected:
+                            c.selectedModelConfig!.reasoningEffort == effort,
+                        onTap: () => c.setModelReasoningEffort(effort),
+                      ),
+                  ],
+                )
+              else
+                const Text('当前协议未声明思考档位', style: T.tCaption),
             ],
           ],
         ),
@@ -1120,9 +1230,16 @@ class _EmptyIllustrationPainter extends CustomPainter {
 
 /// A removable model chip in the connection's model list.
 class _ModelChip extends StatelessWidget {
-  const _ModelChip({required this.label, required this.onRemove});
+  const _ModelChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.onRemove,
+  });
 
   final String label;
+  final bool selected;
+  final VoidCallback onTap;
   final VoidCallback onRemove;
 
   @override
@@ -1130,32 +1247,37 @@ class _ModelChip extends StatelessWidget {
     final width = label.length <= 24 ? 180.0 : 280.0;
     return SizedBox(
       width: width,
-      child: Container(
-        padding: const EdgeInsets.only(left: T.s12, right: T.s4),
-        height: 32,
-        decoration: BoxDecoration(
-          color: T.surface,
-          borderRadius: BorderRadius.circular(T.rSm),
-          border: Border.all(color: T.line, width: 1),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: T.tCaption.copyWith(color: T.ink),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.only(left: T.s12, right: T.s4),
+          height: 32,
+          decoration: BoxDecoration(
+            color: selected ? T.accentSoft : T.surface,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: selected ? T.accent : T.line, width: 1),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption.copyWith(
+                    color: selected ? T.accentStrong : T.ink,
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(width: T.s4),
-            IconToolButton(
-              buttonKey: ValueKey('remove-model-$label'),
-              icon: Icons.close_rounded,
-              tooltip: '移除模型',
-              onTap: onRemove,
-            ),
-          ],
+              const SizedBox(width: T.s4),
+              IconToolButton(
+                buttonKey: ValueKey('remove-model-$label'),
+                icon: Icons.close_rounded,
+                tooltip: '移除模型',
+                onTap: onRemove,
+              ),
+            ],
+          ),
         ),
       ),
     );
