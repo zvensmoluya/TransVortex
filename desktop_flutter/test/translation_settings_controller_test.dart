@@ -140,6 +140,51 @@ void main() {
     });
 
     test(
+      'known DeepSeek models expose recommended and conservative profiles',
+      () async {
+        await controller.load();
+        controller.selectConnection('deepseek');
+
+        expect(
+          controller.selectedModelRecommendationLabel,
+          'DeepSeek 推荐 · 240 行',
+        );
+        expect(controller.usesSelectedModelRecommendation, isFalse);
+        expect(controller.reasoningEfforts, ['high', 'max']);
+
+        controller.applySelectedModelRecommendation();
+        expect(controller.usesSelectedModelRecommendation, isTrue);
+
+        controller.applyConservativeBatchLimit();
+        expect(controller.selectedModelConfig?.maxBatchLines, '120');
+        expect(controller.selectedModelConfig?.maxContextTokens, '1000000');
+        expect(controller.usesConservativeBatchLimit, isTrue);
+        expect(controller.usesSelectedModelRecommendation, isFalse);
+
+        controller.applySelectedModelRecommendation();
+        expect(controller.selectedModelConfig?.maxBatchLines, '240');
+        expect(controller.selectedModelConfig?.maxOutputTokens, '384000');
+        expect(
+          controller.selectedModelConfig?.recommendedOutputTokens,
+          '32768',
+        );
+        expect(controller.selectedModelConfig?.reasoningEffort, 'high');
+        expect(controller.usesSelectedModelRecommendation, isTrue);
+
+        await controller.saveConnection();
+        final save = transport.calls.lastWhere(
+          (call) => call.method == 'provider.save',
+        );
+        final draft = save.params['provider_draft'] as Map<String, Object?>;
+        final modelConfigs = draft['model_configs'] as Map<String, Object?>;
+        final model = modelConfigs['deepseek-v4-pro'] as Map<String, Object?>;
+        expect(model['max_batch_lines'], 240);
+        expect(model['max_context_tokens'], 1000000);
+        expect(model['max_output_tokens'], 384000);
+      },
+    );
+
+    test(
       'saveConnection rejects an output budget above model maximum',
       () async {
         await controller.load();
@@ -353,11 +398,29 @@ Map<String, Object?> _snapshot() {
           'id': 'deepseek',
           'label': 'DeepSeek',
           'base_url': 'https://api.deepseek.com',
-          'models': ['deepseek-v4-pro'],
+          'models': ['deepseek-v4-flash', 'deepseek-v4-pro'],
           'compat_mode': 'openai_chat',
           'protocol_template_id': 'openai_chat',
           'env_key': 'DEEPSEEK_API_KEY',
           'credential_id': 'deepseek',
+          'capabilities': {
+            'max_batch_lines': 240,
+            'max_context_tokens': 1000000,
+            'max_output_tokens': 384000,
+            'recommended_output_tokens': 32768,
+            'reasoning_effort_param': 'reasoning_effort',
+            'reasoning_efforts': ['high', 'max'],
+          },
+          'model_configs': {
+            for (final model in ['deepseek-v4-flash', 'deepseek-v4-pro'])
+              model: {
+                'max_batch_lines': 240,
+                'max_context_tokens': 1000000,
+                'max_output_tokens': 384000,
+                'recommended_output_tokens': 32768,
+                'reasoning_effort': 'high',
+              },
+          },
         },
       ],
       'protocol_templates': [

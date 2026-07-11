@@ -96,6 +96,18 @@ def test_provider_templates_include_core_compat_modes() -> None:
     assert presets_by_id["deepseek"]["base_url"] == "https://api.deepseek.com"
     assert presets_by_id["deepseek"]["env_key"] == "DEEPSEEK_API_KEY"
     assert presets_by_id["deepseek"]["compat_mode"] == "openai_chat"
+    assert presets_by_id["deepseek"]["models"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert presets_by_id["deepseek"]["capabilities"]["max_batch_lines"] == 240
+    assert presets_by_id["deepseek"]["capabilities"]["max_context_tokens"] == 1_000_000
+    assert presets_by_id["deepseek"]["capabilities"]["max_output_tokens"] == 384_000
+    assert presets_by_id["deepseek"]["capabilities"]["reasoning_efforts"] == ["high", "max"]
+    assert presets_by_id["deepseek"]["model_configs"]["deepseek-v4-pro"] == {
+        "max_batch_lines": 240,
+        "max_context_tokens": 1_000_000,
+        "max_output_tokens": 384_000,
+        "recommended_output_tokens": 32_768,
+        "reasoning_effort": "high",
+    }
     assert presets_by_id["google_vertex_gemini"]["compat_mode"] == "vertex_express"
 
 

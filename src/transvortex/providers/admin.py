@@ -348,7 +348,7 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.deepseek.com",
         "env_key": "DEEPSEEK_API_KEY",
         "credential_id": "deepseek",
-        "models": ["deepseek-v4-pro"],
+        "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
         "request_mapping": {
             "style": "openai_chat",
             "body_overrides": {
@@ -360,9 +360,21 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
             **PROVIDER_TEMPLATES["openai_chat"]["capabilities"],
             "supports_temperature": False,
             "supports_json_mode": True,
+            "max_batch_lines": 240,
             "max_context_tokens": 1000000,
             "max_output_tokens": 384000,
             "recommended_output_tokens": 32768,
+            "reasoning_efforts": ["high", "max"],
+        },
+        "model_configs": {
+            model: {
+                "max_batch_lines": 240,
+                "max_context_tokens": 1000000,
+                "max_output_tokens": 384000,
+                "recommended_output_tokens": 32768,
+                "reasoning_effort": "high",
+            }
+            for model in ("deepseek-v4-flash", "deepseek-v4-pro")
         },
     },
     "google_ai_studio": {

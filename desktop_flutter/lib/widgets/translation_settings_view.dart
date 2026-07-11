@@ -12,6 +12,7 @@ String _reasoningEffortLabel(String effort) {
     'low' => '低',
     'medium' => '中',
     'high' => '高',
+    'max' => '最高',
     _ => effort,
   };
 }
@@ -331,6 +332,24 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                 style: T.tCaption.copyWith(fontWeight: T.wBold),
               ),
               const SizedBox(height: T.s8),
+              Wrap(
+                spacing: T.s8,
+                runSpacing: T.s8,
+                children: [
+                  ChoicePill(
+                    label: '稳妥分片 · 120 行',
+                    selected: c.usesConservativeBatchLimit,
+                    onTap: c.applyConservativeBatchLimit,
+                  ),
+                  if (c.selectedModelRecommendationLabel case final label?)
+                    ChoicePill(
+                      label: label,
+                      selected: c.usesSelectedModelRecommendation,
+                      onTap: c.applySelectedModelRecommendation,
+                    ),
+                ],
+              ),
+              const SizedBox(height: T.s12),
               Wrap(
                 spacing: T.s12,
                 runSpacing: T.s12,

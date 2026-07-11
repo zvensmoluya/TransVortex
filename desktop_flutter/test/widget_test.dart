@@ -1326,6 +1326,7 @@ void main() {
     expect(find.text('来源'), findsNothing);
     expect(find.textContaining('中文备注'), findsNothing);
     expect(find.text('模型能力 · real-model'), findsOneWidget);
+    expect(find.text('稳妥分片 · 120 行'), findsOneWidget);
     expect(find.text('上下文窗口（tokens）'), findsOneWidget);
     expect(find.text('思考档位'), findsOneWidget);
     expectNoFlutterException();
@@ -1658,7 +1659,19 @@ void main() {
       expect(savedProviderDraft?['credential_id'], 'deepseek');
       expect(savedProviderDraft?['compat_mode'], 'openai_chat');
       expect(savedProviderDraft?['api_type'], 'openai-compatible');
+      final capabilities = savedProviderDraft?['capabilities'] as Map?;
+      expect(capabilities?['max_batch_lines'], 240);
+      expect(capabilities?['max_context_tokens'], 1000000);
+      expect(capabilities?['max_output_tokens'], 384000);
+      expect(capabilities?['reasoning_efforts'], ['high', 'max']);
+      expect(savedProviderDraft?['models'], contains('deepseek-v4-flash'));
       expect(savedProviderDraft?['models'], contains('deepseek-v4-pro'));
+      final modelConfigs = savedProviderDraft?['model_configs'] as Map?;
+      final flashConfig = modelConfigs?['deepseek-v4-flash'] as Map?;
+      expect(flashConfig?['max_batch_lines'], 240);
+      expect(flashConfig?['max_context_tokens'], 1000000);
+      expect(flashConfig?['max_output_tokens'], 384000);
+      expect(flashConfig?['reasoning_effort'], 'high');
       expect(
         (savedProviderDraft?['endpoint'] as Map?)?['path_template'],
         '/chat/completions',
@@ -3515,7 +3528,25 @@ DesktopSnapshot _desktopSnapshot({
           'base_url': 'https://api.deepseek.com',
           'env_key': 'DEEPSEEK_API_KEY',
           'credential_id': 'deepseek',
-          'models': ['deepseek-v4-pro'],
+          'models': ['deepseek-v4-flash', 'deepseek-v4-pro'],
+          'capabilities': {
+            'max_batch_lines': 240,
+            'max_context_tokens': 1000000,
+            'max_output_tokens': 384000,
+            'recommended_output_tokens': 32768,
+            'reasoning_effort_param': 'reasoning_effort',
+            'reasoning_efforts': ['high', 'max'],
+          },
+          'model_configs': {
+            for (final model in ['deepseek-v4-flash', 'deepseek-v4-pro'])
+              model: {
+                'max_batch_lines': 240,
+                'max_context_tokens': 1000000,
+                'max_output_tokens': 384000,
+                'recommended_output_tokens': 32768,
+                'reasoning_effort': 'high',
+              },
+          },
           'auth': {
             'type': 'bearer',
             'header_name': 'Authorization',

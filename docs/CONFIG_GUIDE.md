@@ -120,6 +120,14 @@ routing:
 - 即使写的是 `base_url=/v1` + `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
 - `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
 
+### 3.1 模型能力预设
+
+正规厂商预设可以通过模型级 `model_configs` 同时提供厂商规格和 TransVortex 的稳定分片建议。Flutter 的模型能力区会显示“稳妥分片 · 120 行”；识别到正式厂商和模型时，还会显示对应的厂商推荐选项。数字输入仍可用于高级覆盖。
+
+内置 DeepSeek 预设覆盖 `deepseek-v4-flash` 与 `deepseek-v4-pro`：上下文窗口 1M、最大输出 384K、日常输出预算 32768、思考档位 `high` / `max`。单批 240 行是 TransVortex 面向编号字幕翻译的均衡建议，不是 DeepSeek 的上下文硬限制。新配置不再预设官方公告于 2026-07-24 停用的 `deepseek-chat` / `deepseek-reasoner` 兼容别名。
+
+模型没有可信规格时，容量字段可以保持未知。运行时仍会把单批字幕限制在 120 行，不把未知容量解释成无限；用户仅填写很大的行数、但没有同时提供可信的上下文与输出容量时，也不会绕过这层保护。
+
 ## 4. 翻译策略配置
 
 `pipeline.yaml` 支持 `translation` 块：

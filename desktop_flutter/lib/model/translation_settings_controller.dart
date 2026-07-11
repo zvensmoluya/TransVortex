@@ -202,13 +202,54 @@ class TranslationSettingsController extends ChangeNotifier {
     return model == null ? null : _draft.modelConfigs[model];
   }
 
+  ModelRuntimeOption? get selectedModelRecommendation {
+    final model = selectedModel;
+    final preset = _recommendedPresetForSelectedModel();
+    return model == null ? null : preset?.modelConfigs[model];
+  }
+
+  String? get selectedModelRecommendationLabel {
+    final recommendation = selectedModelRecommendation;
+    final preset = _recommendedPresetForSelectedModel();
+    if (recommendation == null || preset == null) return null;
+    final lines = recommendation.maxBatchLines > 0
+        ? ' · ${recommendation.maxBatchLines} 行'
+        : '';
+    return '${preset.label} 推荐$lines';
+  }
+
+  bool get usesConservativeBatchLimit =>
+      selectedModelConfig?.maxBatchLines.trim() == '120';
+
+  bool get usesSelectedModelRecommendation {
+    final current = selectedModelConfig;
+    final recommended = selectedModelRecommendation;
+    if (current == null || recommended == null) return false;
+    return current.maxBatchLines == _numberOrBlank(recommended.maxBatchLines) &&
+        current.maxContextTokens ==
+            _numberOrBlank(recommended.maxContextTokens) &&
+        current.maxOutputTokens ==
+            _numberOrBlank(recommended.maxOutputTokens) &&
+        current.recommendedOutputTokens ==
+            _numberOrBlank(recommended.recommendedOutputTokens) &&
+        current.reasoningEffort == recommended.reasoningEffort;
+  }
+
   List<String> get reasoningEfforts {
     final capabilities = _currentProviderCapabilities();
     final configured = _strList(
       capabilities['reasoning_efforts'] ?? capabilities['reasoningEfforts'],
     ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+    final recommendedCapabilities =
+        _recommendedPresetForSelectedModel()?.capabilities ??
+        const <String, Object?>{};
+    final recommended = _strList(
+      recommendedCapabilities['reasoning_efforts'] ??
+          recommendedCapabilities['reasoningEfforts'],
+    ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
     final current = selectedModelConfig?.reasoningEffort.trim() ?? '';
-    return _normalized([...configured, if (current.isNotEmpty) current]);
+    final available = recommended.isNotEmpty ? recommended : configured;
+    return _normalized([...available, if (current.isNotEmpty) current]);
   }
 
   bool get supportsReasoningEffort {
@@ -462,28 +503,59 @@ class TranslationSettingsController extends ChangeNotifier {
 
   void editModelMaxBatchLines(String value) {
     final config = selectedModelConfig;
-    if (config != null) config.maxBatchLines = value;
+    if (config == null || config.maxBatchLines == value) return;
+    config.maxBatchLines = value;
+    notifyListeners();
   }
 
   void editModelMaxContextTokens(String value) {
     final config = selectedModelConfig;
-    if (config != null) config.maxContextTokens = value;
+    if (config == null || config.maxContextTokens == value) return;
+    config.maxContextTokens = value;
+    notifyListeners();
   }
 
   void editModelMaxOutputTokens(String value) {
     final config = selectedModelConfig;
-    if (config != null) config.maxOutputTokens = value;
+    if (config == null || config.maxOutputTokens == value) return;
+    config.maxOutputTokens = value;
+    notifyListeners();
   }
 
   void editModelRecommendedOutputTokens(String value) {
     final config = selectedModelConfig;
-    if (config != null) config.recommendedOutputTokens = value;
+    if (config == null || config.recommendedOutputTokens == value) return;
+    config.recommendedOutputTokens = value;
+    notifyListeners();
   }
 
   void setModelReasoningEffort(String value) {
     final config = selectedModelConfig;
     if (config == null || config.reasoningEffort == value) return;
     config.reasoningEffort = value;
+    notifyListeners();
+  }
+
+  void applyConservativeBatchLimit() {
+    final config = selectedModelConfig;
+    if (config == null || config.maxBatchLines == '120') return;
+    config.maxBatchLines = '120';
+    _bumpDraft();
+    notifyListeners();
+  }
+
+  void applySelectedModelRecommendation() {
+    final config = selectedModelConfig;
+    final recommended = selectedModelRecommendation;
+    if (config == null || recommended == null) return;
+    config.maxBatchLines = _numberOrBlank(recommended.maxBatchLines);
+    config.maxContextTokens = _numberOrBlank(recommended.maxContextTokens);
+    config.maxOutputTokens = _numberOrBlank(recommended.maxOutputTokens);
+    config.recommendedOutputTokens = _numberOrBlank(
+      recommended.recommendedOutputTokens,
+    );
+    config.reasoningEffort = recommended.reasoningEffort;
+    _bumpDraft();
     notifyListeners();
   }
 
@@ -1275,6 +1347,22 @@ class TranslationSettingsController extends ChangeNotifier {
   ProviderTemplateOption? _presetOption() =>
       _presetById(_snapshot, _draft.presetId);
 
+  ProviderTemplateOption? _recommendedPresetForSelectedModel() {
+    final snapshot = _snapshot;
+    final model = selectedModel;
+    if (snapshot == null || model == null) return null;
+    final baseUrl = _normalizedBaseUrl(_draft.baseUrl);
+    for (final preset in snapshot.providerPresets) {
+      if (!preset.modelConfigs.containsKey(model)) continue;
+      final matchesPreset = _draft.presetId == preset.id;
+      final matchesConnection = !creating && selectedConnection == preset.id;
+      final matchesBaseUrl =
+          baseUrl.isNotEmpty && baseUrl == _normalizedBaseUrl(preset.baseUrl);
+      if (matchesPreset || matchesConnection || matchesBaseUrl) return preset;
+    }
+    return null;
+  }
+
   ProviderTemplateOption? _protocolOption() {
     final snapshot = _snapshot;
     if (snapshot == null) return null;
@@ -1303,7 +1391,9 @@ class TranslationSettingsController extends ChangeNotifier {
           ? (preset.raw['response_mapping'] ?? protocol.raw['response_mapping'])
           : protocol.raw['response_mapping'],
       'model_list': protocol.raw['model_list'],
-      'capabilities': protocol.raw['capabilities'],
+      'capabilities': sameProtocol
+          ? (preset.raw['capabilities'] ?? protocol.raw['capabilities'])
+          : protocol.raw['capabilities'],
       'protocol_template_id': protocol.id,
     };
     return ProviderTemplateOption.fromJson(raw);
@@ -1515,4 +1605,16 @@ class TranslationSettingsController extends ChangeNotifier {
     if (value is num) return value.toInt();
     return int.tryParse('${value ?? ''}');
   }
+}
+
+String _numberOrBlank(int value) => value > 0 ? '$value' : '';
+
+String _normalizedBaseUrl(String value) {
+  final normalized = value.trim().toLowerCase().replaceFirst(
+    RegExp(r'/+$'),
+    '',
+  );
+  return normalized.endsWith('/v1')
+      ? normalized.substring(0, normalized.length - 3)
+      : normalized;
 }
