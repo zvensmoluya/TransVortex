@@ -22,6 +22,17 @@ from transvortex.providers.admin import (
 from transvortex.providers.factory import _build_payload
 
 
+def _patch_connection_request(monkeypatch, handler) -> None:
+    def wrapped(provider, url, payload, headers, method):
+        data = handler(url, payload, headers, provider.limits.timeout_seconds, method)
+        return data, {
+            "streaming": provider.limits.streaming_enabled,
+            "http_version": "HTTP/2",
+        }
+
+    monkeypatch.setattr("transvortex.providers.admin._send_provider_payload", wrapped)
+
+
 def _write_provider_admin_config(root: Path) -> None:
     (root / "providers.local.yaml").write_text(
         """
@@ -235,7 +246,7 @@ def test_provider_connection_uses_dotenv_fallback(tmp_path: Path, monkeypatch) -
         assert headers["Authorization"] == "Bearer from-dotenv"
         return {"choices": [{"message": {"content": "[1] pong"}}]}
 
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -254,9 +265,10 @@ def test_provider_connection_uses_dotenv_fallback(tmp_path: Path, monkeypatch) -
 def test_provider_connection_maps_response(monkeypatch) -> None:
     def fake_request_json(url, payload, headers, timeout, method="POST"):
         assert payload["messages"][-1]["content"]
+        assert payload["temperature"] == 0.1
         return {"choices": [{"message": {"content": "[1] pong"}}]}
 
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -270,6 +282,12 @@ def test_provider_connection_maps_response(monkeypatch) -> None:
     )
     assert report["status"] == "PASS"
     assert report["checks"][0]["code"] == "provider_connection_ok"
+    features = report["checks"][0]["details"]["request_features"]
+    assert features["transport"] == "streaming"
+    assert features["stream_flag_sent"] is True
+    assert features["http_version"] == "HTTP/2"
+    assert features["temperature"] == {"sent": True, "path": "temperature", "value": 0.1}
+    assert "messages" in features["top_level_fields"]
 
 
 def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> None:
@@ -278,7 +296,7 @@ def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> 
         assert payload["max_output_tokens"] == 128000
         return {"output_text": "[1] pong"}
 
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -293,6 +311,12 @@ def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> 
     )
 
     assert report["status"] == "PASS"
+    features = report["checks"][0]["details"]["request_features"]
+    assert features["output_token_limit"] == {
+        "sent": True,
+        "path": "max_output_tokens",
+        "value": 128000,
+    }
 
 
 def test_draft_can_keep_catalog_budget_while_omitting_output_token_field() -> None:
@@ -329,7 +353,7 @@ def test_provider_connection_retries_transient_upstream_error(monkeypatch) -> No
         return {"choices": [{"message": {"content": "[1] pong"}}]}
 
     monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -352,7 +376,7 @@ def test_provider_connection_reports_upstream_error_hint(monkeypatch) -> None:
         raise HttpTransportError("bad_gateway", "provider upstream returned HTTP 502: Bad Gateway", status_code=502)
 
     monkeypatch.setattr("transvortex.providers.admin.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",
@@ -367,8 +391,44 @@ def test_provider_connection_reports_upstream_error_hint(monkeypatch) -> None:
     )
     assert report["status"] == "FAIL"
     assert report["checks"][0]["code"] == "provider_upstream_error"
-    assert report["checks"][0]["details"] == {"status": 502, "attempts": 2}
+    assert report["checks"][0]["details"]["status"] == 502
+    assert report["checks"][0]["details"]["attempts"] == 2
+    assert report["checks"][0]["details"]["request_features"]["temperature"]["value"] == 0.1
     assert "网关或上游服务" in report["checks"][0]["hint_zh"]
+
+
+def test_provider_connection_surfaces_rejected_parameter_and_actual_attempts(monkeypatch) -> None:
+    def fake_request_json(url, payload, headers, timeout, method="POST"):
+        raise HttpTransportError(
+            "bad_request",
+            'provider upstream returned HTTP 400: {"detail":"Unsupported parameter: temperature"}',
+            status_code=400,
+        )
+
+    _patch_connection_request(monkeypatch, fake_request_json)
+    report = run_provider_connection_test(
+        provider_draft={
+            "name": "openai_like",
+            "compat_mode": "openai_responses",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["model-a"],
+            "limits": {"retry": 3},
+        },
+        model="model-a",
+        api_key="secret",
+    )
+
+    check = report["checks"][0]
+    assert report["status"] == "FAIL"
+    assert check["code"] == "provider_request_rejected"
+    assert "Unsupported parameter: temperature" in check["message"]
+    assert check["details"]["attempts"] == 1
+    assert check["details"]["request_features"]["temperature"] == {
+        "sent": True,
+        "path": "temperature",
+        "value": 0.1,
+    }
 
 
 def test_save_provider_config_preserves_advanced_request_mapping(tmp_path: Path) -> None:
@@ -479,7 +539,7 @@ def test_provider_connection_reports_response_shape_when_mapping_fails(monkeypat
     def fake_request_json(url, payload, headers, timeout, method="POST"):
         return {"unexpected": {"nested": [{"text": "[1] pong"}]}}
 
-    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    _patch_connection_request(monkeypatch, fake_request_json)
     report = run_provider_connection_test(
         provider_draft={
             "name": "openai_like",

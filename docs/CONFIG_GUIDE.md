@@ -122,6 +122,7 @@ routing:
 - `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
 - `max_output_tokens` 和 `recommended_output_tokens` 是规划预算，不等于网关一定接受对应请求字段。`output_token_param` 留空时按协议使用默认字段，填写真实字段名时使用该字段；若网关不允许客户端传输出上限，填写 `none`，系统仍保留预算用于分块规划，但不会发送输出 token 参数。
 - 某个模型不接受 `temperature` 时，将该单模型 provider 的 `supports_temperature` 设为 `false`。如果同一网关下不同模型支持情况不同，应为它们拆分 provider 配置，避免把一种模型的请求能力套给另一种模型。
+- `provider test` 会向所选模型发送一次最小生成请求，可能产生少量用量；它使用正式请求的模型目录、映射、默认参数和可用的流式传输路径，并返回不含 prompt / key 的字段摘要。测试只验证当前实际发送的配置，不主动探测所有可选参数，也不承诺识别被上游隐藏的兼容性问题。
 
 ### 3.1 模型能力预设
 

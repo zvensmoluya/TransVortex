@@ -507,6 +507,18 @@ def _can_stream(config: ProviderConfig) -> bool:
     }
 
 
+def _send_provider_payload(
+    config: ProviderConfig,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    method: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if _can_stream(config):
+        return _stream_response_payload(config, url, payload, headers, method)
+    return _provider_request_json(config, url, payload, headers, method)
+
+
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int, method: str = "POST") -> dict:
     return _request_json(url, payload, headers, timeout, method)
 
@@ -1018,22 +1030,13 @@ class ConfigurableProtocolClient(ProviderClient):
         headers.update(self.config.extra_headers)
         if self.config.compat_mode == "anthropic_messages":
             headers.setdefault("anthropic-version", "2023-06-01")
-        if _can_stream(self.config):
-            data, transport_meta = _stream_response_payload(
-                self.config,
-                url,
-                payload,
-                headers,
-                method=self.config.endpoint.method,
-            )
-        else:
-            data, transport_meta = _provider_request_json(
-                self.config,
-                url,
-                payload,
-                headers,
-                method=self.config.endpoint.method,
-            )
+        data, transport_meta = _send_provider_payload(
+            self.config,
+            url,
+            payload,
+            headers,
+            method=self.config.endpoint.method,
+        )
         text_paths = self.config.mapping.response.get("text_paths", [])
         text = _extract_text_by_paths(data, text_paths)
         if not text:

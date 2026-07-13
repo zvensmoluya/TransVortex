@@ -118,6 +118,33 @@ void main() {
       expect(configChangedCount, 1);
     });
 
+    test(
+      'connection failure keeps the localized hint and upstream error',
+      () async {
+        transport.results['provider.test'] = <String, Object?>{
+          'status': 'FAIL',
+          'checks': [
+            {
+              'hint_zh': 'Provider 拒绝了当前模型请求，请检查请求字段。',
+              'message':
+                  'provider upstream returned HTTP 400: '
+                  '{"detail":"Unsupported parameter: temperature"}',
+            },
+          ],
+        };
+        await controller.load();
+
+        await controller.testConnection();
+
+        expect(controller.testResult?.ok, isFalse);
+        expect(controller.testResult?.detail, contains('Provider 拒绝了当前模型请求'));
+        expect(
+          controller.testResult?.detail,
+          contains('Unsupported parameter: temperature'),
+        );
+      },
+    );
+
     test('model runtime settings are edited and saved per model', () async {
       await controller.load();
       controller.selectConnection('openai');

@@ -1012,10 +1012,14 @@ class TranslationSettingsController extends ChangeNotifier {
           ? const <String, Object?>{}
           : _map(checks.first);
       final ok = status.toUpperCase() == 'PASS' || status.toUpperCase() == 'OK';
+      final hint = _str(first['hint_zh']);
+      final message = _str(first['message']);
+      final detail = !ok && hint != null && message != null && hint != message
+          ? '$hint\n$message'
+          : hint ?? message ?? '模型服务已返回测试结果。';
       _testResult = ConnectionTestResult(
         title: ok ? '测试通过' : '测试完成',
-        detail:
-            _str(first['hint_zh']) ?? _str(first['message']) ?? '模型服务已返回测试结果。',
+        detail: detail,
         ok: ok,
       );
     } on Object catch (error) {

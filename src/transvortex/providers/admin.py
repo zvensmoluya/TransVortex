@@ -33,8 +33,12 @@ from .factory import (
     _build_payload,
     _build_url_and_headers,
     _build_url_and_headers_for_path,
+    _can_stream,
     _extract_text_by_paths,
+    _output_token_param_path,
+    _reasoning_effort_param_path,
     _request_json,
+    _send_provider_payload,
     response_shape_summary,
 )
 from .model_catalog import model_catalog_runtime_config
@@ -1116,6 +1120,15 @@ def _network_error_hint(exc: Exception) -> ProviderCheck:
                 hint_zh="当前接口路径没有响应。若是非标准网关，可以手动填写模型并检查 endpoint。",
                 details={"status": status_code},
             )
+        if status_code in {400, 422}:
+            return ProviderCheck(
+                name="request",
+                status="FAIL",
+                code="provider_request_rejected",
+                message=str(exc),
+                hint_zh="Provider 拒绝了当前模型请求，请根据上游错误检查不支持的请求字段和模型能力配置。",
+                details={"status": status_code},
+            )
         if status_code in {502, 503, 504}:
             return ProviderCheck(
                 name="network",
@@ -1150,6 +1163,61 @@ def _network_error_hint(exc: Exception) -> ProviderCheck:
         hint_zh="无法连接到 provider，请检查网络、代理和 base_url。" if is_retryable_http_error(exc) else "Provider 测试失败，请查看英文错误详情。",
         details={},
     )
+
+
+def _payload_path_value(payload: dict[str, Any], path: list[str]) -> tuple[bool, Any]:
+    if not path:
+        return False, None
+    current: Any = payload
+    for token in path:
+        if not isinstance(current, dict) or token not in current:
+            return False, None
+        current = current[token]
+    return True, current
+
+
+def _request_field_summary(payload: dict[str, Any], path: list[str]) -> dict[str, Any]:
+    sent, value = _payload_path_value(payload, path)
+    summary: dict[str, Any] = {
+        "sent": sent,
+        "path": ".".join(path),
+    }
+    if sent and isinstance(value, (str, int, float, bool)):
+        summary["value"] = value
+    return summary
+
+
+def _connection_request_features(provider: ProviderConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    style = str(provider.mapping.request.get("style") or provider.compat_mode)
+    temperature_path = (
+        ["generationConfig", "temperature"]
+        if style == "gemini_generate_content"
+        else ["temperature"]
+        if style in {"openai_chat", "openai_responses", "openai_completions", "anthropic_messages"}
+        else []
+    )
+    body_overrides = provider.mapping.request.get("body_overrides")
+    streaming = _can_stream(provider)
+    return {
+        "compat_mode": provider.compat_mode,
+        "request_style": style,
+        "method": provider.endpoint.method,
+        "transport": "streaming" if streaming else "non_streaming",
+        "stream_flag_sent": streaming and style in {"openai_chat", "openai_responses"},
+        "top_level_fields": sorted(str(key) for key in payload),
+        "body_override_fields": (
+            sorted(str(key) for key in body_overrides) if isinstance(body_overrides, dict) else []
+        ),
+        "temperature": _request_field_summary(payload, temperature_path),
+        "output_token_limit": _request_field_summary(
+            payload,
+            _output_token_param_path(provider, style),
+        ),
+        "reasoning_effort": _request_field_summary(
+            payload,
+            _reasoning_effort_param_path(provider, style),
+        ),
+    }
 
 
 def fetch_provider_models(
@@ -1244,21 +1312,41 @@ def run_provider_connection_test(
         return {"status": "FAIL", "checks": [asdict(item) for item in checks]}
     attempts = min(max(1, provider.limits.retry), 3)
     last_error: Exception | None = None
+    actual_attempts = 0
+    request_features: dict[str, Any] = {
+        "compat_mode": provider.compat_mode,
+        "request_style": str(provider.mapping.request.get("style") or provider.compat_mode),
+        "method": provider.endpoint.method,
+        "transport": "streaming" if _can_stream(provider) else "non_streaming",
+        "stream_flag_sent": _can_stream(provider)
+        and provider.compat_mode in {"openai_chat", "openai_responses"},
+        "top_level_fields": [],
+        "body_override_fields": [],
+    }
     for attempt in range(attempts):
+        actual_attempts = attempt + 1
         try:
             req = NormalizedRequest(
                 model=model,
                 lines=["[1] ping"],
                 source_lang="en",
                 target_lang="zh-CN",
-                temperature=0,
             )
             payload = _build_payload(provider, req)
+            request_features = _connection_request_features(provider, payload)
             url, headers = _build_url_and_headers(provider, credential.key, model)
             headers.update(provider.extra_headers)
             if provider.compat_mode == "anthropic_messages":
                 headers.setdefault("anthropic-version", "2023-06-01")
-            data = _request_json(url, payload, headers, provider.limits.timeout_seconds, provider.endpoint.method)
+            data, transport_meta = _send_provider_payload(
+                provider,
+                url,
+                payload,
+                headers,
+                provider.endpoint.method,
+            )
+            if transport_meta.get("http_version"):
+                request_features["http_version"] = transport_meta["http_version"]
             text = _extract_text_by_paths(data, provider.mapping.response.get("text_paths", []))
             if text:
                 checks.append(
@@ -1272,6 +1360,7 @@ def run_provider_connection_test(
                             "compat_mode": provider.compat_mode,
                             "credential_source": credential.source,
                             "attempts": attempt + 1,
+                            "request_features": request_features,
                         },
                     )
                 )
@@ -1287,6 +1376,7 @@ def run_provider_connection_test(
                             "text_paths": provider.mapping.response.get("text_paths", []),
                             "response_shape": response_shape_summary(data),
                             "attempts": attempt + 1,
+                            "request_features": request_features,
                         },
                     )
                 )
@@ -1299,7 +1389,11 @@ def run_provider_connection_test(
             time.sleep(min(2**attempt, 2))
     if last_error is not None:
         check = _network_error_hint(last_error)
-        check.details = {**check.details, "attempts": attempts}
+        check.details = {
+            **check.details,
+            "attempts": actual_attempts,
+            "request_features": request_features,
+        }
         checks.append(check)
     status = "FAIL" if any(item.status == "FAIL" for item in checks) else "WARN" if any(item.status == "WARN" for item in checks) else "PASS"
     return {"status": status, "checks": [asdict(item) for item in checks]}
