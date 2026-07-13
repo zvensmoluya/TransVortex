@@ -1801,7 +1801,10 @@ def _output_paths_for_task(
             return output_format, {"vtt": output_file.with_suffix(".vtt")}
         if output_format == "lrc":
             return output_format, {"lrc": output_file.with_suffix(".lrc")}
-        return output_format, {"srt": base.with_suffix(".srt"), "ass": base.with_suffix(".ass")}
+        return output_format, {
+            "srt": base.parent / f"{base.name}.srt",
+            "ass": base.parent / f"{base.name}.ass",
+        }
     base = output_dir / f"{stem}.{task.target_lang}"
     if output_format == "srt":
         return output_format, {"srt": base.parent / f"{base.name}.srt"}

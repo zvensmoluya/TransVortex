@@ -477,6 +477,7 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
         source_lang="en",
         target_lang="zh-CN",
         bilingual=True,
+        output_file=root / "exports" / "demo.review.v2.srt",
         cli_overrides={
             "output_format": "both",
             "translation_style_preset": "localized",
@@ -491,8 +492,8 @@ def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_pat
     assert set(task.output_paths) == {"srt", "ass"}
     assert Path(task.output_paths["srt"]).exists()
     assert Path(task.output_paths["ass"]).exists()
-    assert task.output_paths["srt"].endswith("demo.zh-CN.srt")
-    assert task.output_paths["ass"].endswith("demo.zh-CN.ass")
+    assert task.output_paths["srt"].endswith("demo.review.v2.srt")
+    assert task.output_paths["ass"].endswith("demo.review.v2.ass")
     assert task.output_path == task.output_paths["srt"]
     assert task.settings["output_format"] == "both"
     assert task.settings["translation"]["style_preset"] == "localized"
