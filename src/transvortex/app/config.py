@@ -55,6 +55,7 @@ from .models import (
     TranslationExperimentLoggingConfig,
 )
 from ..prompts import load_prompt
+from ..providers.model_catalog import model_catalog_runtime_config
 from .credentials import read_dotenv_values
 
 
@@ -1343,6 +1344,11 @@ def load_app_config(
         models = [str(item).strip() for item in _to_str_list(row.get("models")) if str(item).strip()]
         if not models:
             models = _default_models_for_mode(compat_mode)
+        catalog_model_configs = {
+            model: ModelConfig(**catalog_config)
+            for model in models
+            if (catalog_config := model_catalog_runtime_config(model))
+        }
         cfg = ProviderConfig(
             name=row["name"],
             api_type=api_type,
@@ -1350,6 +1356,7 @@ def load_app_config(
             env_key=row["env_key"],
             models=models,
             model_configs=_parse_model_configs(row.get("model_configs", row.get("modelConfigs"))),
+            catalog_model_configs=catalog_model_configs,
             credential_id=str(row.get("credential_id", row["name"])),
             credential_root_dir=root_dir,
             compat_mode=compat_mode,

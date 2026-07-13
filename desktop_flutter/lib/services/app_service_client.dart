@@ -767,6 +767,13 @@ class DesktopSnapshot {
         .toList();
   }
 
+  List<ModelCatalogOption> get modelCatalog {
+    return _objectList(config['model_catalog'])
+        .map(ModelCatalogOption.fromJson)
+        .where((entry) => entry.id.isNotEmpty)
+        .toList();
+  }
+
   List<ProviderTemplateOption> get protocolTemplates {
     return _objectList(config['protocol_templates'])
         .map(ProviderTemplateOption.fromJson)
@@ -1166,6 +1173,75 @@ class ModelRuntimeOption {
           '',
       raw: map,
     );
+  }
+}
+
+class ModelCatalogOption {
+  const ModelCatalogOption({
+    required this.id,
+    required this.label,
+    required this.vendor,
+    required this.runtime,
+    this.aliases = const <String>[],
+    this.reasoningEfforts = const <String>[],
+    this.maxInputTokens = 0,
+    this.sourceLabel = '',
+    this.sourceUrl = '',
+    this.verifiedAt = '',
+    this.pricing = const <String, Object?>{},
+    this.raw = const <String, Object?>{},
+  });
+
+  final String id;
+  final String label;
+  final String vendor;
+  final List<String> aliases;
+  final List<String> reasoningEfforts;
+  final int maxInputTokens;
+  final ModelRuntimeOption runtime;
+  final String sourceLabel;
+  final String sourceUrl;
+  final String verifiedAt;
+  final Map<String, Object?> pricing;
+  final Map<String, Object?> raw;
+
+  factory ModelCatalogOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return ModelCatalogOption(
+      id: _stringValue(map['id']) ?? '',
+      label: _stringValue(map['label']) ?? _stringValue(map['id']) ?? '',
+      vendor: _stringValue(map['vendor']) ?? '',
+      aliases: _stringList(map['aliases']),
+      reasoningEfforts: _stringList(
+        map['reasoning_efforts'] ?? map['reasoningEfforts'],
+      ),
+      maxInputTokens:
+          _intValue(map['max_input_tokens']) ??
+          _intValue(map['maxInputTokens']) ??
+          0,
+      runtime: ModelRuntimeOption.fromJson(map['runtime']),
+      sourceLabel:
+          _stringValue(map['source_label']) ??
+          _stringValue(map['sourceLabel']) ??
+          '',
+      sourceUrl:
+          _stringValue(map['source_url']) ??
+          _stringValue(map['sourceUrl']) ??
+          '',
+      verifiedAt:
+          _stringValue(map['verified_at']) ??
+          _stringValue(map['verifiedAt']) ??
+          '',
+      pricing: _stringMap(map['pricing']),
+      raw: map,
+    );
+  }
+
+  bool matches(String modelId) {
+    final normalized = modelId.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return id.toLowerCase() == normalized ||
+        aliases.any((alias) => alias.toLowerCase() == normalized);
   }
 }
 

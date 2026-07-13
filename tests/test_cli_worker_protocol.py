@@ -288,6 +288,7 @@ def test_config_show_json_masks_secret_values(tmp_path: Path, monkeypatch, capsy
     assert payload["routing_profile_next_seq"] == 1
     assert payload["protocol_templates"]
     assert payload["provider_presets"]
+    assert payload["model_catalog"]
     assert payload["custom_adapter_template"]["id"] == "custom_json"
 
 

@@ -1325,10 +1325,59 @@ void main() {
     expect(find.textContaining('.env'), findsNothing);
     expect(find.text('来源'), findsNothing);
     expect(find.textContaining('中文备注'), findsNothing);
-    expect(find.text('模型能力 · real-model'), findsOneWidget);
-    expect(find.text('稳妥分片 · 120 行'), findsOneWidget);
-    expect(find.text('上下文窗口（tokens）'), findsOneWidget);
-    expect(find.text('思考档位'), findsOneWidget);
+    expect(find.text('模型翻译设置 · real-model'), findsOneWidget);
+    expect(find.text('单次请求行数'), findsOneWidget);
+    expect(find.text('推理强度'), findsOneWidget);
+    expect(find.text('模型上下文容量'), findsNothing);
+    expect(find.text('单次常用输出预算'), findsNothing);
+    expect(find.text('自定义模型能力'), findsNothing);
+    expect(find.textContaining('规格来源：'), findsNothing);
+    expect(find.textContaining('渠道以实际账单为准'), findsNothing);
+
+    final batchSelect = find.byKey(const ValueKey('model-batch-lines-select'));
+    expect(batchSelect, findsOneWidget);
+    expect(find.text('自定义单次请求行数'), findsNothing);
+
+    await tester.ensureVisible(batchSelect);
+    await tester.pumpAndSettle();
+    await tester.tap(batchSelect);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义…').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('自定义单次请求行数'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('known gateway model keeps catalog annotations out of settings', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(longModels: true).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('模型翻译设置 · gemini-3.5-flash'), findsOneWidget);
+    expect(find.text('单次请求行数'), findsOneWidget);
+    expect(find.textContaining('规格来源：'), findsNothing);
+    expect(find.textContaining('输入 \$1.50 / 输出 \$9'), findsNothing);
+    expect(find.textContaining('OpenRouter、Zven'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -3643,6 +3692,29 @@ DesktopSnapshot _desktopSnapshot({
           'response_paths': [],
         },
       },
+      'model_catalog': [
+        {
+          'id': 'gemini-3.5-flash',
+          'label': 'Gemini 3.5 Flash',
+          'vendor': 'Google',
+          'aliases': ['models/gemini-3.5-flash', 'google/gemini-3.5-flash'],
+          'source_label': 'Google Gemini 官方模型文档',
+          'source_url':
+              'https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash',
+          'verified_at': '2026-07-13',
+          'runtime': {
+            'max_batch_lines': 240,
+            'max_context_tokens': 1048576,
+            'max_output_tokens': 65536,
+            'recommended_output_tokens': 32768,
+          },
+          'pricing': {
+            'kind': 'official_reference',
+            'input_per_million_usd': 1.5,
+            'output_per_million_usd': 9,
+          },
+        },
+      ],
       'providers': withProviders
           ? [
               {

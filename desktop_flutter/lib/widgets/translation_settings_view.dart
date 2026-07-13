@@ -12,10 +12,27 @@ String _reasoningEffortLabel(String effort) {
     'low' => '低',
     'medium' => '中',
     'high' => '高',
+    'xhigh' => '极高',
     'max' => '最高',
     _ => effort,
   };
 }
+
+const _customCapabilityValue = '__custom__';
+
+class _CapacityChoice {
+  const _CapacityChoice(this.value, this.label);
+
+  final String value;
+  final String label;
+}
+
+const _batchLineChoices = <_CapacityChoice>[
+  _CapacityChoice('120', '120 行 · 小批量'),
+  _CapacityChoice('240', '240 行 · 均衡'),
+  _CapacityChoice('480', '480 行 · 减少请求'),
+  _CapacityChoice('1000', '1,000 行 · 仅限大容量模型'),
+];
 
 /// Translation model settings body. Splits into two segments:
 ///  - 连接 (connections): manage provider access and saved model names.
@@ -42,13 +59,12 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   final _apiKey = TextEditingController();
   final _modelInput = TextEditingController();
   final _maxBatchLines = TextEditingController();
-  final _maxContextTokens = TextEditingController();
-  final _maxOutputTokens = TextEditingController();
-  final _recommendedOutputTokens = TextEditingController();
   final _profileName = TextEditingController();
 
   int _seededDraftRevision = -1;
   String? _seededProfileId;
+  String? _seededRuntimeModel;
+  final Set<String> _customCapabilityFields = <String>{};
 
   TranslationSettingsController get c => widget.controller;
 
@@ -66,9 +82,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     _apiKey.dispose();
     _modelInput.dispose();
     _maxBatchLines.dispose();
-    _maxContextTokens.dispose();
-    _maxOutputTokens.dispose();
-    _recommendedOutputTokens.dispose();
     _profileName.dispose();
     super.dispose();
   }
@@ -86,9 +99,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       _modelInput.text = c.draft.modelInput;
       final model = c.selectedModelConfig;
       _maxBatchLines.text = model?.maxBatchLines ?? '';
-      _maxContextTokens.text = model?.maxContextTokens ?? '';
-      _maxOutputTokens.text = model?.maxOutputTokens ?? '';
-      _recommendedOutputTokens.text = model?.recommendedOutputTokens ?? '';
+      if (_seededRuntimeModel != c.selectedModel) {
+        _seededRuntimeModel = c.selectedModel;
+        _customCapabilityFields.clear();
+      }
     }
     if (c.activeProfileId != _seededProfileId) {
       _seededProfileId = c.activeProfileId;
@@ -102,9 +116,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     c.editApiKey(_apiKey.text);
     c.editModelInput(_modelInput.text);
     c.editModelMaxBatchLines(_maxBatchLines.text);
-    c.editModelMaxContextTokens(_maxContextTokens.text);
-    c.editModelMaxOutputTokens(_maxOutputTokens.text);
-    c.editModelRecommendedOutputTokens(_recommendedOutputTokens.text);
   }
 
   Future<void> _saveConnection() async {
@@ -323,104 +334,7 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
               const SizedBox(height: T.s12),
               Text(_modelHelp()!, style: T.tCaption, maxLines: 2),
             ],
-            if (c.selectedModelConfig != null) ...[
-              const SizedBox(height: T.s16),
-              const Divider(height: 1, color: T.line),
-              const SizedBox(height: T.s12),
-              Text(
-                '模型能力 · ${c.selectedModel}',
-                style: T.tCaption.copyWith(fontWeight: T.wBold),
-              ),
-              const SizedBox(height: T.s8),
-              Wrap(
-                spacing: T.s8,
-                runSpacing: T.s8,
-                children: [
-                  ChoicePill(
-                    label: '稳妥分片 · 120 行',
-                    selected: c.usesConservativeBatchLimit,
-                    onTap: c.applyConservativeBatchLimit,
-                  ),
-                  if (c.selectedModelRecommendationLabel case final label?)
-                    ChoicePill(
-                      label: label,
-                      selected: c.usesSelectedModelRecommendation,
-                      onTap: c.applySelectedModelRecommendation,
-                    ),
-                ],
-              ),
-              const SizedBox(height: T.s12),
-              Wrap(
-                spacing: T.s12,
-                runSpacing: T.s12,
-                children: [
-                  SizedBox(
-                    width: 220,
-                    child: Input(
-                      label: '单批字幕行上限',
-                      controller: _maxBatchLines,
-                      hintText: '未知',
-                      keyboardType: TextInputType.number,
-                      onChanged: c.editModelMaxBatchLines,
-                    ),
-                  ),
-                  SizedBox(
-                    width: 220,
-                    child: Input(
-                      label: '上下文窗口（tokens）',
-                      controller: _maxContextTokens,
-                      hintText: '未知',
-                      keyboardType: TextInputType.number,
-                      onChanged: c.editModelMaxContextTokens,
-                    ),
-                  ),
-                  SizedBox(
-                    width: 220,
-                    child: Input(
-                      label: '最大输出（tokens）',
-                      controller: _maxOutputTokens,
-                      hintText: '未知',
-                      keyboardType: TextInputType.number,
-                      onChanged: c.editModelMaxOutputTokens,
-                    ),
-                  ),
-                  SizedBox(
-                    width: 220,
-                    child: Input(
-                      label: '日常输出预算（tokens）',
-                      controller: _recommendedOutputTokens,
-                      hintText: '未知',
-                      keyboardType: TextInputType.number,
-                      onChanged: c.editModelRecommendedOutputTokens,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: T.s12),
-              Text('思考档位', style: T.tCaption),
-              const SizedBox(height: T.s4),
-              if (c.supportsReasoningEffort)
-                Wrap(
-                  spacing: T.s8,
-                  runSpacing: T.s8,
-                  children: [
-                    ChoicePill(
-                      label: '沿用连接',
-                      selected: c.selectedModelConfig!.reasoningEffort.isEmpty,
-                      onTap: () => c.setModelReasoningEffort(''),
-                    ),
-                    for (final effort in c.reasoningEfforts)
-                      ChoicePill(
-                        label: _reasoningEffortLabel(effort),
-                        selected:
-                            c.selectedModelConfig!.reasoningEffort == effort,
-                        onTap: () => c.setModelReasoningEffort(effort),
-                      ),
-                  ],
-                )
-              else
-                const Text('当前协议未声明思考档位', style: T.tCaption),
-            ],
+            if (c.selectedModelConfig != null) ...[..._modelRuntimeChildren()],
           ],
         ),
       ],
@@ -447,6 +361,127 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   String? _modelHelp() {
     if (c.draft.models.isNotEmpty) return null;
     return '这个连接还没有模型，填写模型名或点“拉取模型”。';
+  }
+
+  List<Widget> _modelRuntimeChildren() {
+    final config = c.selectedModelConfig!;
+    final recommendation = c.selectedModelRecommendation;
+    final usesAutomatic = recommendation != null
+        ? c.usesSelectedModelRecommendation
+        : c.usesConservativeBatchLimit;
+
+    return [
+      const SizedBox(height: T.s16),
+      const Divider(height: 1, color: T.line),
+      const SizedBox(height: T.s12),
+      Text(
+        '模型翻译设置 · ${c.selectedModel}',
+        style: T.tCaption.copyWith(fontWeight: T.wBold),
+      ),
+      const SizedBox(height: T.s8),
+      Wrap(
+        spacing: T.s8,
+        runSpacing: T.s8,
+        children: [
+          ChoicePill(
+            label: '自动（推荐）',
+            selected: usesAutomatic,
+            onTap: recommendation != null
+                ? c.applySelectedModelRecommendation
+                : c.applyConservativeBatchLimit,
+          ),
+          if (recommendation != null)
+            ChoicePill(
+              label: '小批量（120 行）',
+              selected:
+                  c.usesConservativeBatchLimit &&
+                  !c.usesSelectedModelRecommendation,
+              onTap: c.applyConservativeBatchLimit,
+            ),
+        ],
+      ),
+      const SizedBox(height: T.s12),
+      Wrap(
+        spacing: T.s12,
+        runSpacing: T.s12,
+        children: [
+          _CapabilitySelect(
+            selectKey: const ValueKey('model-batch-lines-select'),
+            label: '单次请求行数',
+            value: '${c.selectedModelEffectiveBatchLines}',
+            automaticLabel: '自动（120 行）',
+            options: c.selectedModelCapacityKnown
+                ? _batchLineChoices
+                : const [_CapacityChoice('120', '120 行')],
+            customEditing: _customCapabilityFields.contains('batch'),
+            onChanged: (value) => _selectCapability(
+              field: 'batch',
+              value: value,
+              controller: _maxBatchLines,
+              edit: c.editModelMaxBatchLines,
+            ),
+          ),
+        ],
+      ),
+      if (_customCapabilityFields.isNotEmpty) ...[
+        const SizedBox(height: T.s12),
+        Wrap(
+          spacing: T.s12,
+          runSpacing: T.s12,
+          children: [
+            if (_customCapabilityFields.contains('batch'))
+              SizedBox(
+                width: 220,
+                child: Input(
+                  label: '自定义单次请求行数',
+                  controller: _maxBatchLines,
+                  hintText: '例如 240',
+                  keyboardType: TextInputType.number,
+                  onChanged: c.editModelMaxBatchLines,
+                ),
+              ),
+          ],
+        ),
+      ],
+      const SizedBox(height: T.s12),
+      Text('推理强度', style: T.tCaption),
+      const SizedBox(height: T.s4),
+      if (c.supportsReasoningEffort)
+        Wrap(
+          spacing: T.s8,
+          runSpacing: T.s8,
+          children: [
+            ChoicePill(
+              label: '沿用连接',
+              selected: config.reasoningEffort.isEmpty,
+              onTap: () => c.setModelReasoningEffort(''),
+            ),
+            for (final effort in c.reasoningEfforts)
+              ChoicePill(
+                label: _reasoningEffortLabel(effort),
+                selected: config.reasoningEffort == effort,
+                onTap: () => c.setModelReasoningEffort(effort),
+              ),
+          ],
+        )
+      else
+        const Text('当前协议未声明推理强度', style: T.tCaption),
+    ];
+  }
+
+  void _selectCapability({
+    required String field,
+    required String value,
+    required TextEditingController controller,
+    required ValueChanged<String> edit,
+  }) {
+    if (value == _customCapabilityValue) {
+      setState(() => _customCapabilityFields.add(field));
+      return;
+    }
+    setState(() => _customCapabilityFields.remove(field));
+    controller.text = ModelRuntimeDraft.compactInput(value);
+    edit(controller.text);
   }
 
   // ---- profiles tab --------------------------------------------------------
@@ -648,6 +683,102 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       profile.fallback.isEmpty ? '无备用' : '备用 ${profile.fallback.length} 个',
     ];
     return parts.isEmpty ? '待配置' : parts.join(' · ');
+  }
+}
+
+class _CapabilitySelect extends StatelessWidget {
+  const _CapabilitySelect({
+    required this.selectKey,
+    required this.label,
+    required this.value,
+    required this.automaticLabel,
+    required this.options,
+    required this.customEditing,
+    required this.onChanged,
+  });
+
+  final Key selectKey;
+  final String label;
+  final String value;
+  final String automaticLabel;
+  final List<_CapacityChoice> options;
+  final bool customEditing;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final parsed = ModelRuntimeDraft.parseNumber(value) ?? 0;
+    final matching = options.where(
+      (option) => ModelRuntimeDraft.parseNumber(option.value) == parsed,
+    );
+    final selected = customEditing
+        ? _customCapabilityValue
+        : parsed <= 0
+        ? ''
+        : matching.isNotEmpty
+        ? matching.first.value
+        : '__current__';
+    return SizedBox(
+      width: 220,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: T.tCaption),
+          const SizedBox(height: T.s4),
+          Container(
+            height: 42,
+            padding: const EdgeInsets.symmetric(horizontal: T.s12),
+            decoration: BoxDecoration(
+              color: T.surface,
+              borderRadius: BorderRadius.circular(T.rMd),
+              border: Border.all(color: T.line),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                key: selectKey,
+                value: selected,
+                isExpanded: true,
+                style: T.tBody,
+                icon: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: T.muted,
+                ),
+                items: [
+                  DropdownMenuItem(value: '', child: Text(automaticLabel)),
+                  for (final option in options)
+                    DropdownMenuItem(
+                      value: option.value,
+                      child: Text(
+                        option.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (parsed > 0 && matching.isEmpty)
+                    DropdownMenuItem(
+                      value: '__current__',
+                      child: Text(
+                        '当前：${ModelRuntimeDraft.compactNumber(value)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  const DropdownMenuItem(
+                    value: _customCapabilityValue,
+                    child: Text('自定义…'),
+                  ),
+                ],
+                onChanged: (next) {
+                  if (next == null || next == '__current__') return;
+                  onChanged(next);
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

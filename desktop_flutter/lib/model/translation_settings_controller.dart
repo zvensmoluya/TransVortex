@@ -113,6 +113,51 @@ class ModelRuntimeDraft {
   String reasoningEffort;
   final Map<String, Object?> raw;
 
+  static int? parseNumber(String value) {
+    final normalized = value.trim().replaceAll(',', '').replaceAll('_', '');
+    if (normalized.isEmpty) return null;
+    final match = RegExp(
+      r'^(\d+(?:\.\d+)?)\s*([kKmM]?)$',
+    ).firstMatch(normalized);
+    if (match == null) return null;
+    final amount = double.tryParse(match.group(1)!);
+    if (amount == null || !amount.isFinite || amount < 0) return null;
+    final multiplier = switch (match.group(2)!.toUpperCase()) {
+      'K' => 1000,
+      'M' => 1000000,
+      _ => 1,
+    };
+    final expanded = amount * multiplier;
+    if (expanded > 9007199254740991 || expanded != expanded.roundToDouble()) {
+      return null;
+    }
+    return expanded.toInt();
+  }
+
+  static String compactNumber(String value) {
+    final parsed = parseNumber(value);
+    if (parsed == null || parsed <= 0) return value.trim();
+    if (parsed % 1000000 == 0) return '${parsed ~/ 1000000}M';
+    if (parsed % 1000 == 0) return '${parsed ~/ 1000}K';
+    if (parsed >= 1000000) {
+      return '${_trimDecimal(parsed / 1000000)}M';
+    }
+    if (parsed >= 1000) return '${_trimDecimal(parsed / 1000)}K';
+    return '$parsed';
+  }
+
+  static String compactInput(String value) {
+    final parsed = parseNumber(value);
+    if (parsed == null || parsed <= 0) return value.trim();
+    if (parsed % 1000000 == 0) return '${parsed ~/ 1000000}M';
+    if (parsed % 1000 == 0) return '${parsed ~/ 1000}K';
+    return '$parsed';
+  }
+
+  static String _trimDecimal(double value) {
+    return value.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+  }
+
   Map<String, Object?> toPayload() {
     final payload = <String, Object?>{...raw};
     void writeNumber(String key, String value) {
@@ -122,7 +167,7 @@ class ModelRuntimeDraft {
         'max_output_tokens' => 'maxOutputTokens',
         _ => 'recommendedOutputTokens',
       });
-      final parsed = int.tryParse(value.trim()) ?? 0;
+      final parsed = parseNumber(value) ?? 0;
       if (parsed > 0) {
         payload[key] = parsed;
       } else {
@@ -203,15 +248,35 @@ class TranslationSettingsController extends ChangeNotifier {
   }
 
   ModelRuntimeOption? get selectedModelRecommendation {
+    final catalog = selectedModelCatalog;
+    if (catalog != null) return catalog.runtime;
     final model = selectedModel;
     final preset = _recommendedPresetForSelectedModel();
     return model == null ? null : preset?.modelConfigs[model];
   }
 
+  ModelCatalogOption? get selectedModelCatalog {
+    final snapshot = _snapshot;
+    final model = selectedModel;
+    if (snapshot == null || model == null) return null;
+    for (final entry in snapshot.modelCatalog) {
+      if (entry.matches(model)) return entry;
+    }
+    return null;
+  }
+
   String? get selectedModelRecommendationLabel {
     final recommendation = selectedModelRecommendation;
+    final catalog = selectedModelCatalog;
+    if (recommendation == null) return null;
+    if (catalog != null) {
+      final lines = recommendation.maxBatchLines > 0
+          ? ' · ${recommendation.maxBatchLines} 行'
+          : '';
+      return '${catalog.label} 官方规格$lines';
+    }
     final preset = _recommendedPresetForSelectedModel();
-    if (recommendation == null || preset == null) return null;
+    if (preset == null) return null;
     final lines = recommendation.maxBatchLines > 0
         ? ' · ${recommendation.maxBatchLines} 行'
         : '';
@@ -219,19 +284,95 @@ class TranslationSettingsController extends ChangeNotifier {
   }
 
   bool get usesConservativeBatchLimit =>
-      selectedModelConfig?.maxBatchLines.trim() == '120';
+      selectedModelEffectiveBatchLines == 120;
+
+  int get selectedModelEffectiveBatchLines {
+    final config = selectedModelConfig;
+    if (config == null) return 120;
+    final configured = ModelRuntimeDraft.parseNumber(config.maxBatchLines) ?? 0;
+    final context = ModelRuntimeDraft.parseNumber(config.maxContextTokens) ?? 0;
+    if (context <= 0 && (configured <= 0 || configured > 120)) return 120;
+    return configured > 0 ? configured : 120;
+  }
+
+  bool get selectedModelCapacityKnown =>
+      (ModelRuntimeDraft.parseNumber(
+            selectedModelConfig?.maxContextTokens ?? '',
+          ) ??
+          0) >
+      0;
+
+  String? get selectedModelPresetLabel =>
+      selectedModelCatalog?.label ??
+      _recommendedPresetForSelectedModel()?.label;
+
+  String? get selectedModelSourceSummary {
+    final entry = selectedModelCatalog;
+    if (entry == null) return null;
+    final verified = entry.verifiedAt.isEmpty
+        ? ''
+        : ' · 核对于 ${entry.verifiedAt}';
+    return '${entry.sourceLabel}$verified';
+  }
+
+  String? get selectedModelPriceSummary {
+    final entry = selectedModelCatalog;
+    if (entry == null || entry.pricing.isEmpty) return null;
+    final pricing = entry.pricing;
+    final input = _double(pricing['input_per_million_usd']);
+    final output = _double(pricing['output_per_million_usd']);
+    final threshold = _int(pricing['threshold_input_tokens']) ?? 0;
+    final tierInput = _double(pricing['above_threshold_input_per_million_usd']);
+    final tierOutput = _double(
+      pricing['above_threshold_output_per_million_usd'],
+    );
+    final inputMultiplier = _double(
+      pricing['above_threshold_input_multiplier'],
+    );
+    final outputMultiplier = _double(
+      pricing['above_threshold_output_multiplier'],
+    );
+    final parts = <String>[];
+    if (input != null && output != null) {
+      parts.add(
+        '官方参考：输入 \$${_money(input)} / 输出 \$${_money(output)}（每 1M tokens）',
+      );
+    }
+    if (threshold > 0 && tierInput != null && tierOutput != null) {
+      parts.add(
+        '超过 ${ModelRuntimeDraft.compactNumber('$threshold')} 后为 \$${_money(tierInput)} / \$${_money(tierOutput)}',
+      );
+    } else if (threshold > 0 &&
+        inputMultiplier != null &&
+        outputMultiplier != null) {
+      parts.add(
+        '超过 ${ModelRuntimeDraft.compactNumber('$threshold')} 后整次请求按输入 ${_price(inputMultiplier)}×、输出 ${_price(outputMultiplier)}×',
+      );
+    }
+    final note = (_str(pricing['note']) ?? '').trim();
+    if (parts.isEmpty && note.isNotEmpty) parts.add(note);
+    return parts.isEmpty ? '已收录官方计费页，基础价请以渠道账单为准' : parts.join('；');
+  }
+
+  String? get selectedModelPriceNote {
+    final entry = selectedModelCatalog;
+    if (entry == null || entry.pricing.isEmpty) return null;
+    final note = (_str(entry.pricing['note']) ?? '').trim();
+    return note.isEmpty ? null : note;
+  }
 
   bool get usesSelectedModelRecommendation {
     final current = selectedModelConfig;
     final recommended = selectedModelRecommendation;
     if (current == null || recommended == null) return false;
-    return current.maxBatchLines == _numberOrBlank(recommended.maxBatchLines) &&
-        current.maxContextTokens ==
-            _numberOrBlank(recommended.maxContextTokens) &&
-        current.maxOutputTokens ==
-            _numberOrBlank(recommended.maxOutputTokens) &&
-        current.recommendedOutputTokens ==
-            _numberOrBlank(recommended.recommendedOutputTokens) &&
+    return ModelRuntimeDraft.parseNumber(current.maxBatchLines) ==
+            recommended.maxBatchLines &&
+        ModelRuntimeDraft.parseNumber(current.maxContextTokens) ==
+            recommended.maxContextTokens &&
+        ModelRuntimeDraft.parseNumber(current.maxOutputTokens) ==
+            recommended.maxOutputTokens &&
+        ModelRuntimeDraft.parseNumber(current.recommendedOutputTokens) ==
+            recommended.recommendedOutputTokens &&
         current.reasoningEffort == recommended.reasoningEffort;
   }
 
@@ -248,7 +389,11 @@ class TranslationSettingsController extends ChangeNotifier {
           recommendedCapabilities['reasoningEfforts'],
     ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
     final current = selectedModelConfig?.reasoningEffort.trim() ?? '';
-    final available = recommended.isNotEmpty ? recommended : configured;
+    final catalogRecommended =
+        selectedModelCatalog?.reasoningEfforts ?? const [];
+    final available = catalogRecommended.isNotEmpty
+        ? catalogRecommended
+        : (recommended.isNotEmpty ? recommended : configured);
     return _normalized([...available, if (current.isNotEmpty) current]);
   }
 
@@ -994,8 +1139,9 @@ class TranslationSettingsController extends ChangeNotifier {
       'recommended_output_tokens',
       'recommendedOutputTokens',
     );
-    final maxOutput = int.tryParse(maxOutputTokens) ?? 0;
-    final recommended = int.tryParse(recommendedOutputTokens) ?? 0;
+    final maxOutput = ModelRuntimeDraft.parseNumber(maxOutputTokens) ?? 0;
+    final recommended =
+        ModelRuntimeDraft.parseNumber(recommendedOutputTokens) ?? 0;
     if (maxOutput > 0 && recommended > maxOutput) {
       recommendedOutputTokens = '$maxOutput';
     }
@@ -1070,14 +1216,15 @@ class TranslationSettingsController extends ChangeNotifier {
       ]) {
         final raw = field.$2.trim();
         if (raw.isEmpty) continue;
-        final value = int.tryParse(raw);
+        final value = ModelRuntimeDraft.parseNumber(raw);
         if (value == null || value < 0) {
-          return '$model 的${field.$1}必须是非负整数';
+          return '$model 的${field.$1}必须是非负数，容量可使用 K/M 简写';
         }
       }
-      final maxOutput = int.tryParse(config.maxOutputTokens.trim()) ?? 0;
+      final maxOutput =
+          ModelRuntimeDraft.parseNumber(config.maxOutputTokens) ?? 0;
       final recommended =
-          int.tryParse(config.recommendedOutputTokens.trim()) ?? 0;
+          ModelRuntimeDraft.parseNumber(config.recommendedOutputTokens) ?? 0;
       if (maxOutput > 0 && recommended > maxOutput) {
         return '$model 的日常输出预算不能大于最大输出';
       }
@@ -1605,9 +1752,27 @@ class TranslationSettingsController extends ChangeNotifier {
     if (value is num) return value.toInt();
     return int.tryParse('${value ?? ''}');
   }
+
+  static double? _double(Object? value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('${value ?? ''}');
+  }
 }
 
 String _numberOrBlank(int value) => value > 0 ? '$value' : '';
+
+String _money(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  return value.toStringAsFixed(2);
+}
+
+String _price(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  return value
+      .toStringAsFixed(2)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
+}
 
 String _normalizedBaseUrl(String value) {
   final normalized = value.trim().toLowerCase().replaceFirst(

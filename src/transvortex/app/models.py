@@ -80,6 +80,7 @@ class ProviderConfig:
     env_key: str
     models: list[str]
     model_configs: dict[str, ModelConfig] = field(default_factory=dict)
+    catalog_model_configs: dict[str, ModelConfig] = field(default_factory=dict)
     credential_id: str = ""
     credential_root_dir: Path | None = None
     compat_mode: str = ""
@@ -92,7 +93,23 @@ class ProviderConfig:
     limits: ProviderLimits = field(default_factory=ProviderLimits)
 
     def model_config(self, model: str) -> ModelConfig:
-        return self.model_configs.get(str(model or "").strip(), ModelConfig())
+        model_id = str(model or "").strip()
+        explicit = self.model_configs.get(model_id, ModelConfig())
+        catalog = self.catalog_model_configs.get(model_id, ModelConfig())
+
+        def positive(explicit_value: int, catalog_value: int) -> int:
+            return explicit_value if int(explicit_value or 0) > 0 else catalog_value
+
+        return ModelConfig(
+            max_batch_lines=positive(explicit.max_batch_lines, catalog.max_batch_lines),
+            max_context_tokens=positive(explicit.max_context_tokens, catalog.max_context_tokens),
+            max_output_tokens=positive(explicit.max_output_tokens, catalog.max_output_tokens),
+            recommended_output_tokens=positive(
+                explicit.recommended_output_tokens,
+                catalog.recommended_output_tokens,
+            ),
+            reasoning_effort=(explicit.reasoning_effort or catalog.reasoning_effort).strip(),
+        )
 
     def capabilities_for_model(self, model: str) -> CapabilityConfig:
         model_config = self.model_config(model)

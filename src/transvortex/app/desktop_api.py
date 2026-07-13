@@ -27,6 +27,7 @@ from ..providers.admin import (
     save_provider_config,
     save_provider_routing,
 )
+from ..providers.model_catalog import model_catalog_payload
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
@@ -441,6 +442,7 @@ def config_payload(
         "routing_profile_next_seq": int(getattr(config, "routing_profile_next_seq", 1) or 1),
         "protocol_templates": protocol_templates_payload(),
         "provider_presets": provider_presets_payload(),
+        "model_catalog": model_catalog_payload(),
         "custom_adapter_template": custom_adapter_template_payload(),
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
@@ -541,6 +543,7 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
         "routing_profile_next_seq": 1,
         "protocol_templates": protocol_templates_payload(),
         "provider_presets": provider_presets_payload(),
+        "model_catalog": model_catalog_payload(),
         "custom_adapter_template": custom_adapter_template_payload(),
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),

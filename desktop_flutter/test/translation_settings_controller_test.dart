@@ -120,9 +120,9 @@ void main() {
       expect(controller.supportsReasoningEffort, isTrue);
 
       controller.editModelMaxBatchLines('180');
-      controller.editModelMaxContextTokens('400000');
-      controller.editModelMaxOutputTokens('64000');
-      controller.editModelRecommendedOutputTokens('16000');
+      controller.editModelMaxContextTokens('1M');
+      controller.editModelMaxOutputTokens('64K');
+      controller.editModelRecommendedOutputTokens('16k');
       controller.setModelReasoningEffort('medium');
       await controller.saveConnection();
 
@@ -133,10 +133,28 @@ void main() {
       final modelConfigs = draft['model_configs'] as Map<String, Object?>;
       final model = modelConfigs['gpt-4o'] as Map<String, Object?>;
       expect(model['max_batch_lines'], 180);
-      expect(model['max_context_tokens'], 400000);
+      expect(model['max_context_tokens'], 1000000);
       expect(model['max_output_tokens'], 64000);
       expect(model['recommended_output_tokens'], 16000);
       expect(model['reasoning_effort'], 'medium');
+    });
+
+    test('model capacity notation stays exact in editable fields', () {
+      expect(ModelRuntimeDraft.parseNumber('1M'), 1000000);
+      expect(ModelRuntimeDraft.parseNumber('128K'), 128000);
+      expect(ModelRuntimeDraft.parseNumber('32.768K'), 32768);
+      expect(ModelRuntimeDraft.compactInput('1000000'), '1M');
+      expect(ModelRuntimeDraft.compactInput('32768'), '32768');
+      expect(ModelRuntimeDraft.compactNumber('32768'), '32.8K');
+
+      final payload = ModelRuntimeDraft(
+        maxContextTokens: '1M',
+        maxOutputTokens: '384K',
+        recommendedOutputTokens: '32.768K',
+      ).toPayload();
+      expect(payload['max_context_tokens'], 1000000);
+      expect(payload['max_output_tokens'], 384000);
+      expect(payload['recommended_output_tokens'], 32768);
     });
 
     test(
@@ -147,7 +165,7 @@ void main() {
 
         expect(
           controller.selectedModelRecommendationLabel,
-          'DeepSeek 推荐 · 240 行',
+          'DeepSeek V4 Pro 官方规格 · 240 行',
         );
         expect(controller.usesSelectedModelRecommendation, isFalse);
         expect(controller.reasoningEfforts, ['high', 'max']);
@@ -181,6 +199,40 @@ void main() {
         expect(model['max_batch_lines'], 240);
         expect(model['max_context_tokens'], 1000000);
         expect(model['max_output_tokens'], 384000);
+      },
+    );
+
+    test(
+      'official catalog follows exact model aliases across gateways',
+      () async {
+        await controller.load();
+        controller.selectConnection('openai');
+        controller.selectModel('openai/gpt-5.6-terra');
+
+        expect(controller.selectedModelCatalog?.id, 'gpt-5.6-terra');
+        expect(
+          controller.selectedModelRecommendationLabel,
+          'GPT-5.6 Terra 官方规格 · 240 行',
+        );
+        expect(
+          controller.selectedModelSourceSummary,
+          contains('OpenAI 官方模型文档'),
+        );
+        expect(controller.selectedModelPriceSummary, contains('超过 272K'));
+        expect(controller.selectedModelPriceSummary, contains('输入 2×'));
+        expect(controller.reasoningEfforts, [
+          'none',
+          'low',
+          'medium',
+          'high',
+          'xhigh',
+          'max',
+        ]);
+
+        controller.applySelectedModelRecommendation();
+        expect(controller.selectedModelConfig?.maxContextTokens, '1050000');
+        expect(controller.selectedModelConfig?.maxOutputTokens, '128000');
+        expect(controller.selectedModelConfig?.reasoningEffort, 'low');
       },
     );
 
@@ -374,7 +426,7 @@ Map<String, Object?> _snapshot() {
         },
         {
           'name': 'openai',
-          'models': ['gpt-4o'],
+          'models': ['gpt-4o', 'openai/gpt-5.6-terra'],
           'has_key': true,
           'base_url': 'https://api.openai.com/v1',
           'compat_mode': 'openai_chat',
@@ -391,6 +443,57 @@ Map<String, Object?> _snapshot() {
           'model_configs': {
             'gpt-4o': {'max_context_tokens': 128000, 'reasoning_effort': 'low'},
           },
+        },
+      ],
+      'model_catalog': [
+        {
+          'id': 'gpt-5.6-terra',
+          'label': 'GPT-5.6 Terra',
+          'vendor': 'OpenAI',
+          'aliases': ['openai/gpt-5.6-terra'],
+          'reasoning_efforts': [
+            'none',
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
+          ],
+          'source_label': 'OpenAI 官方模型文档',
+          'source_url':
+              'https://developers.openai.com/api/docs/models/gpt-5.6-terra',
+          'verified_at': '2026-07-13',
+          'runtime': {
+            'max_batch_lines': 240,
+            'max_context_tokens': 1050000,
+            'max_output_tokens': 128000,
+            'recommended_output_tokens': 32768,
+            'reasoning_effort': 'low',
+          },
+          'pricing': {
+            'kind': 'official_reference',
+            'threshold_input_tokens': 272000,
+            'above_threshold_input_multiplier': 2.0,
+            'above_threshold_output_multiplier': 1.5,
+          },
+        },
+        {
+          'id': 'deepseek-v4-pro',
+          'label': 'DeepSeek V4 Pro',
+          'vendor': 'DeepSeek',
+          'aliases': <String>[],
+          'reasoning_efforts': ['high', 'max'],
+          'source_label': 'DeepSeek 官方模型文档',
+          'source_url': 'https://api-docs.deepseek.com/',
+          'verified_at': '2026-07-13',
+          'runtime': {
+            'max_batch_lines': 240,
+            'max_context_tokens': 1000000,
+            'max_output_tokens': 384000,
+            'recommended_output_tokens': 32768,
+            'reasoning_effort': 'high',
+          },
+          'pricing': <String, Object?>{},
         },
       ],
       'provider_presets': [
