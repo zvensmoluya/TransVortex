@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from transvortex.app.config import load_app_config
-from transvortex.app.models import CapabilityConfig, ModelConfig, ProviderConfig
+from transvortex.app.models import CapabilityConfig, ModelConfig, NormalizedRequest, ProviderConfig
+from transvortex.providers.factory import _build_payload
 from transvortex.providers.model_catalog import (
     CATALOG_VERIFIED_AT,
     model_catalog_payload,
@@ -25,6 +26,7 @@ def test_catalog_payload_separates_runtime_recommendation_and_reference_price() 
     terra = entries["gpt-5.6-terra"]
     assert terra["max_context_tokens"] == 1_050_000
     assert terra["runtime"]["max_batch_lines"] == 240
+    assert terra["runtime"]["max_input_tokens"] == 922_000
     assert terra["pricing"]["threshold_input_tokens"] == 272_000
     assert terra["pricing"]["above_threshold_input_multiplier"] == 2.0
     assert terra["reasoning_efforts"] == ["none", "low", "medium", "high", "xhigh", "max"]
@@ -38,13 +40,14 @@ def test_catalog_payload_separates_runtime_recommendation_and_reference_price() 
     assert gemini["pricing"]["above_threshold_output_per_million_usd"] == 15
 
 
-def test_provider_uses_catalog_between_user_override_and_provider_fallback() -> None:
+def test_provider_catalog_fills_unknowns_without_widening_channel_limits() -> None:
     provider = ProviderConfig(
         name="gateway",
         api_type="openai-compatible",
         base_url="https://gateway.example/v1",
         env_key="KEY",
         models=["openai/gpt-5.6-terra"],
+        compat_mode="openai_chat",
         model_configs={
             "openai/gpt-5.6-terra": ModelConfig(max_batch_lines=180),
         },
@@ -55,7 +58,7 @@ def test_provider_uses_catalog_between_user_override_and_provider_fallback() -> 
         },
         capabilities=CapabilityConfig(
             max_batch_lines=1000,
-            max_context_tokens=0,
+            max_context_tokens=64_000,
             max_output_tokens=16_384,
             recommended_output_tokens=8_192,
         ),
@@ -63,9 +66,23 @@ def test_provider_uses_catalog_between_user_override_and_provider_fallback() -> 
 
     resolved = provider.model_config("openai/gpt-5.6-terra")
     assert resolved.max_batch_lines == 180
-    assert resolved.max_context_tokens == 1_050_000
-    assert resolved.max_output_tokens == 128_000
-    assert provider.capabilities_for_model("openai/gpt-5.6-terra").recommended_output_tokens == 32_768
+    assert resolved.max_context_tokens == 64_000
+    assert resolved.max_input_tokens == 64_000
+    assert resolved.max_output_tokens == 16_384
+    assert provider.capabilities_for_model("openai/gpt-5.6-terra").recommended_output_tokens == 8_192
+    payload = _build_payload(
+        provider,
+        NormalizedRequest(
+            model="openai/gpt-5.6-terra",
+            lines=["[1] hello"],
+            source_lang="en",
+            target_lang="zh-CN",
+        ),
+    )
+    assert payload["max_tokens"] == 16_384
+
+    provider.model_configs["openai/gpt-5.6-terra"].max_output_tokens = 64_000
+    assert provider.model_config("openai/gpt-5.6-terra").max_output_tokens == 64_000
 
 
 def test_config_load_attaches_catalog_without_materializing_user_overrides(tmp_path: Path) -> None:
@@ -92,4 +109,6 @@ routing:
 
     assert provider.model_configs["openai/gpt-5.6-terra"].max_batch_lines == 180
     assert provider.model_configs["openai/gpt-5.6-terra"].max_context_tokens == 0
+    assert provider.model_configs["openai/gpt-5.6-terra"].max_input_tokens == 0
     assert provider.model_config("openai/gpt-5.6-terra").max_context_tokens == 1_050_000
+    assert provider.model_config("openai/gpt-5.6-terra").max_input_tokens == 922_000

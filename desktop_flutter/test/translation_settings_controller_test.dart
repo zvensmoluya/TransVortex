@@ -53,8 +53,9 @@ void main() {
         expect(controller.draft.name, 'deepseek');
         expect(controller.draft.models, ['deepseek-v4-pro']);
         expect(controller.selectedModel, 'deepseek-v4-pro');
-        expect(controller.selectedModelConfig?.maxContextTokens, '1000000');
-        expect(controller.selectedModelConfig?.reasoningEffort, 'high');
+        expect(controller.selectedModelConfig?.maxContextTokens, isEmpty);
+        expect(controller.selectedModelEffectiveMaxContextTokens, 1000000);
+        expect(controller.selectedModelConfig?.reasoningEffort, isEmpty);
         expect(controller.profiles.length, 2);
         expect(controller.activeProfileId, 'default');
         expect(
@@ -105,6 +106,13 @@ void main() {
       final draft = save.params['provider_draft'] as Map<String, Object?>;
       expect(draft['name'], 'openai');
       expect(draft['models'], contains('gpt-4o'));
+      final modelConfigs = draft['model_configs'] as Map<String, Object?>;
+      expect(
+        modelConfigs['openai/gpt-5.6-terra'],
+        isEmpty,
+        reason:
+            'inherited catalog and provider values must not become overrides',
+      );
       expect(save.params['api_key'], 'sk-test');
       expect(controller.message, '连接已保存。');
       expect(configChangedCount, 1);
@@ -121,6 +129,7 @@ void main() {
 
       controller.editModelMaxBatchLines('180');
       controller.editModelMaxContextTokens('1M');
+      controller.editModelMaxInputTokens('900K');
       controller.editModelMaxOutputTokens('64K');
       controller.editModelRecommendedOutputTokens('16k');
       controller.setModelReasoningEffort('medium');
@@ -134,6 +143,7 @@ void main() {
       final model = modelConfigs['gpt-4o'] as Map<String, Object?>;
       expect(model['max_batch_lines'], 180);
       expect(model['max_context_tokens'], 1000000);
+      expect(model['max_input_tokens'], 900000);
       expect(model['max_output_tokens'], 64000);
       expect(model['recommended_output_tokens'], 16000);
       expect(model['reasoning_effort'], 'medium');
@@ -149,10 +159,12 @@ void main() {
 
       final payload = ModelRuntimeDraft(
         maxContextTokens: '1M',
+        maxInputTokens: '900K',
         maxOutputTokens: '384K',
         recommendedOutputTokens: '32.768K',
       ).toPayload();
       expect(payload['max_context_tokens'], 1000000);
+      expect(payload['max_input_tokens'], 900000);
       expect(payload['max_output_tokens'], 384000);
       expect(payload['recommended_output_tokens'], 32768);
     });
@@ -231,7 +243,12 @@ void main() {
 
         controller.applySelectedModelRecommendation();
         expect(controller.selectedModelConfig?.maxContextTokens, '1050000');
-        expect(controller.selectedModelConfig?.maxOutputTokens, '128000');
+        expect(controller.selectedModelConfig?.maxInputTokens, '922000');
+        expect(controller.selectedModelConfig?.maxOutputTokens, '32768');
+        expect(
+          controller.selectedModelConfig?.recommendedOutputTokens,
+          '16384',
+        );
         expect(controller.selectedModelConfig?.reasoningEffort, 'low');
       },
     );
@@ -246,10 +263,28 @@ void main() {
 
         await controller.saveConnection();
 
-        expect(controller.error, contains('日常输出预算不能大于最大输出'));
+        expect(controller.error, contains('目标输出预算不能大于最大输出'));
         expect(callsAfterInitialLoad(), isEmpty);
       },
     );
+
+    test('automatic batching clears only the line override', () async {
+      await controller.load();
+      controller.selectConnection('openai');
+      controller.editModelMaxBatchLines('180');
+      controller.editModelMaxContextTokens('256K');
+      controller.editModelMaxInputTokens('224K');
+      controller.editModelMaxOutputTokens('32K');
+      controller.editModelRecommendedOutputTokens('16K');
+
+      controller.useAutomaticBatchLimit();
+
+      expect(controller.selectedModelConfig?.maxBatchLines, isEmpty);
+      expect(controller.selectedModelConfig?.maxContextTokens, '256K');
+      expect(controller.selectedModelConfig?.maxInputTokens, '224K');
+      expect(controller.selectedModelConfig?.maxOutputTokens, '32K');
+      expect(controller.selectedModelConfig?.recommendedOutputTokens, '16K');
+    });
 
     test('setPrimary writes only the routing profiles', () async {
       await controller.load();
@@ -466,6 +501,7 @@ Map<String, Object?> _snapshot() {
           'runtime': {
             'max_batch_lines': 240,
             'max_context_tokens': 1050000,
+            'max_input_tokens': 922000,
             'max_output_tokens': 128000,
             'recommended_output_tokens': 32768,
             'reasoning_effort': 'low',

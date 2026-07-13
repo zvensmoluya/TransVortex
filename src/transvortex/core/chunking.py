@@ -220,17 +220,21 @@ def translation_prompt_overhead_tokens(config: AppConfig) -> int:
 
 
 def _input_budget_tokens(config: AppConfig, providers: list[ProviderConfig]) -> tuple[int, list[str]]:
+    def input_limit(provider: ProviderConfig) -> int:
+        max_input = int(provider.capabilities.max_input_tokens or 0)
+        return max_input if max_input > 0 else int(provider.capabilities.max_context_tokens or 0)
+
     known_limits = [
-        int(provider.capabilities.max_context_tokens)
+        input_limit(provider)
         for provider in providers
-        if int(provider.capabilities.max_context_tokens or 0) > 0
+        if input_limit(provider) > 0
     ]
     warnings: list[str] = []
     if providers and len(known_limits) != len(providers):
         unknown = [
             provider.name
             for provider in providers
-            if int(provider.capabilities.max_context_tokens or 0) <= 0
+            if input_limit(provider) <= 0
         ]
         warnings.append(", ".join(unknown))
         return 0, warnings
@@ -268,7 +272,10 @@ def _unknown_token_capacity_providers(providers: list[ProviderConfig]) -> list[s
     return [
         provider.name
         for provider in providers
-        if int(provider.capabilities.max_context_tokens or 0) <= 0
+        if (
+            int(provider.capabilities.max_input_tokens or 0) <= 0
+            and int(provider.capabilities.max_context_tokens or 0) <= 0
+        )
         or (
             int(provider.capabilities.max_output_tokens or 0) <= 0
             and int(provider.capabilities.recommended_output_tokens or 0) <= 0

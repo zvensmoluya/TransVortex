@@ -59,12 +59,17 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   final _apiKey = TextEditingController();
   final _modelInput = TextEditingController();
   final _maxBatchLines = TextEditingController();
+  final _maxContextTokens = TextEditingController();
+  final _maxInputTokens = TextEditingController();
+  final _maxOutputTokens = TextEditingController();
+  final _targetOutputTokens = TextEditingController();
   final _profileName = TextEditingController();
 
   int _seededDraftRevision = -1;
   String? _seededProfileId;
   String? _seededRuntimeModel;
   final Set<String> _customCapabilityFields = <String>{};
+  bool _advancedCapacityExpanded = false;
 
   TranslationSettingsController get c => widget.controller;
 
@@ -82,6 +87,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     _apiKey.dispose();
     _modelInput.dispose();
     _maxBatchLines.dispose();
+    _maxContextTokens.dispose();
+    _maxInputTokens.dispose();
+    _maxOutputTokens.dispose();
+    _targetOutputTokens.dispose();
     _profileName.dispose();
     super.dispose();
   }
@@ -99,9 +108,14 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       _modelInput.text = c.draft.modelInput;
       final model = c.selectedModelConfig;
       _maxBatchLines.text = model?.maxBatchLines ?? '';
+      _maxContextTokens.text = model?.maxContextTokens ?? '';
+      _maxInputTokens.text = model?.maxInputTokens ?? '';
+      _maxOutputTokens.text = model?.maxOutputTokens ?? '';
+      _targetOutputTokens.text = model?.recommendedOutputTokens ?? '';
       if (_seededRuntimeModel != c.selectedModel) {
         _seededRuntimeModel = c.selectedModel;
         _customCapabilityFields.clear();
+        _advancedCapacityExpanded = false;
       }
     }
     if (c.activeProfileId != _seededProfileId) {
@@ -116,6 +130,10 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     c.editApiKey(_apiKey.text);
     c.editModelInput(_modelInput.text);
     c.editModelMaxBatchLines(_maxBatchLines.text);
+    c.editModelMaxContextTokens(_maxContextTokens.text);
+    c.editModelMaxInputTokens(_maxInputTokens.text);
+    c.editModelMaxOutputTokens(_maxOutputTokens.text);
+    c.editModelRecommendedOutputTokens(_targetOutputTokens.text);
   }
 
   Future<void> _saveConnection() async {
@@ -366,9 +384,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   List<Widget> _modelRuntimeChildren() {
     final config = c.selectedModelConfig!;
     final recommendation = c.selectedModelRecommendation;
-    final usesAutomatic = recommendation != null
-        ? c.usesSelectedModelRecommendation
-        : c.usesConservativeBatchLimit;
 
     return [
       const SizedBox(height: T.s16),
@@ -385,17 +400,14 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
         children: [
           ChoicePill(
             label: '自动（推荐）',
-            selected: usesAutomatic,
-            onTap: recommendation != null
-                ? c.applySelectedModelRecommendation
-                : c.applyConservativeBatchLimit,
+            selected: c.usesAutomaticBatchLimit,
+            onTap: c.useAutomaticBatchLimit,
           ),
-          if (recommendation != null)
+          if (recommendation != null || c.selectedModelCapacityKnown)
             ChoicePill(
               label: '小批量（120 行）',
               selected:
-                  c.usesConservativeBatchLimit &&
-                  !c.usesSelectedModelRecommendation,
+                  c.usesConservativeBatchLimit && !c.usesAutomaticBatchLimit,
               onTap: c.applyConservativeBatchLimit,
             ),
         ],
@@ -407,9 +419,9 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
         children: [
           _CapabilitySelect(
             selectKey: const ValueKey('model-batch-lines-select'),
-            label: '单次请求行数',
-            value: '${c.selectedModelEffectiveBatchLines}',
-            automaticLabel: '自动（120 行）',
+            label: '每批行数上限',
+            value: config.maxBatchLines,
+            automaticLabel: '自动（当前 ${c.selectedModelEffectiveBatchLines} 行）',
             options: c.selectedModelCapacityKnown
                 ? _batchLineChoices
                 : const [_CapacityChoice('120', '120 行')],
@@ -466,8 +478,121 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
         )
       else
         const Text('当前协议未声明推理强度', style: T.tCaption),
+      const SizedBox(height: T.s12),
+      TextButton.icon(
+        key: const ValueKey('model-advanced-capacity-toggle'),
+        onPressed: () => setState(
+          () => _advancedCapacityExpanded = !_advancedCapacityExpanded,
+        ),
+        style: TextButton.styleFrom(
+          padding: EdgeInsets.zero,
+          foregroundColor: T.accentStrong,
+        ),
+        icon: Icon(
+          _advancedCapacityExpanded
+              ? Icons.keyboard_arrow_up_rounded
+              : Icons.keyboard_arrow_down_rounded,
+          size: 18,
+        ),
+        label: Text(_advancedCapacityExpanded ? '收起高级容量设置' : '高级容量设置'),
+      ),
+      if (_advancedCapacityExpanded) ..._advancedCapacityChildren(),
     ];
   }
+
+  List<Widget> _advancedCapacityChildren() {
+    final recommendation = c.selectedModelRecommendation;
+    return [
+      const SizedBox(height: T.s4),
+      const Text(
+        '这些值是运行时安全边界。留空表示继承模型目录或当前连接；连接声明的较低上限不会被目录规格放大。',
+        style: T.tCaption,
+      ),
+      if (c.selectedModelSourceSummary case final source?) ...[
+        const SizedBox(height: T.s8),
+        Text('目录来源：$source', style: T.tCaption),
+      ],
+      const SizedBox(height: T.s12),
+      Wrap(
+        spacing: T.s12,
+        runSpacing: T.s12,
+        children: [
+          SizedBox(
+            width: 220,
+            child: Input(
+              key: const ValueKey('model-max-context-input'),
+              label: '上下文窗口（tokens）',
+              controller: _maxContextTokens,
+              hintText: _inheritedCapacityHint(
+                c.selectedModelEffectiveMaxContextTokens,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: c.editModelMaxContextTokens,
+            ),
+          ),
+          SizedBox(
+            width: 220,
+            child: Input(
+              key: const ValueKey('model-max-input-input'),
+              label: '最大输入（tokens）',
+              controller: _maxInputTokens,
+              hintText: _inheritedCapacityHint(
+                c.selectedModelEffectiveMaxInputTokens,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: c.editModelMaxInputTokens,
+            ),
+          ),
+          SizedBox(
+            width: 220,
+            child: Input(
+              key: const ValueKey('model-max-output-input'),
+              label: '最大输出（tokens）',
+              controller: _maxOutputTokens,
+              hintText: _inheritedCapacityHint(
+                c.selectedModelEffectiveMaxOutputTokens,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: c.editModelMaxOutputTokens,
+            ),
+          ),
+          SizedBox(
+            width: 220,
+            child: Input(
+              key: const ValueKey('model-target-output-input'),
+              label: '目标输出预算（tokens）',
+              controller: _targetOutputTokens,
+              hintText: _inheritedCapacityHint(
+                c.selectedModelEffectiveTargetOutputTokens,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: c.editModelRecommendedOutputTokens,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: T.s12),
+      Wrap(
+        spacing: T.s8,
+        runSpacing: T.s8,
+        children: [
+          if (recommendation != null)
+            ActionButton(
+              label: '应用目录容量',
+              onTap: c.applySelectedModelCapacityRecommendation,
+            ),
+          ActionButton(
+            label: '清除容量覆盖',
+            onTap: c.clearSelectedModelCapacityOverrides,
+          ),
+        ],
+      ),
+    ];
+  }
+
+  String _inheritedCapacityHint(int value) => value > 0
+      ? '继承 ${ModelRuntimeDraft.compactNumber('$value')}'
+      : '未知（留空继承）';
 
   void _selectCapability({
     required String field,

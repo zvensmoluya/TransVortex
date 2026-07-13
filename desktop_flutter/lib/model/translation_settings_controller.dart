@@ -100,6 +100,7 @@ class ModelRuntimeDraft {
   ModelRuntimeDraft({
     this.maxBatchLines = '',
     this.maxContextTokens = '',
+    this.maxInputTokens = '',
     this.maxOutputTokens = '',
     this.recommendedOutputTokens = '',
     this.reasoningEffort = '',
@@ -108,6 +109,7 @@ class ModelRuntimeDraft {
 
   String maxBatchLines;
   String maxContextTokens;
+  String maxInputTokens;
   String maxOutputTokens;
   String recommendedOutputTokens;
   String reasoningEffort;
@@ -164,6 +166,7 @@ class ModelRuntimeDraft {
       payload.remove(switch (key) {
         'max_batch_lines' => 'maxBatchLines',
         'max_context_tokens' => 'maxContextTokens',
+        'max_input_tokens' => 'maxInputTokens',
         'max_output_tokens' => 'maxOutputTokens',
         _ => 'recommendedOutputTokens',
       });
@@ -177,6 +180,7 @@ class ModelRuntimeDraft {
 
     writeNumber('max_batch_lines', maxBatchLines);
     writeNumber('max_context_tokens', maxContextTokens);
+    writeNumber('max_input_tokens', maxInputTokens);
     writeNumber('max_output_tokens', maxOutputTokens);
     writeNumber('recommended_output_tokens', recommendedOutputTokens);
     payload.remove('reasoningEffort');
@@ -286,21 +290,61 @@ class TranslationSettingsController extends ChangeNotifier {
   bool get usesConservativeBatchLimit =>
       selectedModelEffectiveBatchLines == 120;
 
+  bool get usesAutomaticBatchLimit =>
+      (selectedModelConfig?.maxBatchLines.trim() ?? '').isEmpty;
+
   int get selectedModelEffectiveBatchLines {
-    final config = selectedModelConfig;
-    if (config == null) return 120;
-    final configured = ModelRuntimeDraft.parseNumber(config.maxBatchLines) ?? 0;
-    final context = ModelRuntimeDraft.parseNumber(config.maxContextTokens) ?? 0;
-    if (context <= 0 && (configured <= 0 || configured > 120)) return 120;
-    return configured > 0 ? configured : 120;
+    final effective = _effectiveModelLimit(
+      selectedModelConfig?.maxBatchLines ?? '',
+      selectedModelRecommendation?.maxBatchLines ?? 0,
+      'max_batch_lines',
+      'maxBatchLines',
+    );
+    if (!selectedModelCapacityKnown && effective > 120) return 120;
+    return effective > 0 ? effective : 120;
   }
 
   bool get selectedModelCapacityKnown =>
-      (ModelRuntimeDraft.parseNumber(
-            selectedModelConfig?.maxContextTokens ?? '',
-          ) ??
-          0) >
-      0;
+      selectedModelEffectiveMaxInputTokens > 0 ||
+      selectedModelEffectiveMaxContextTokens > 0;
+
+  int get selectedModelEffectiveMaxContextTokens => _effectiveModelLimit(
+    selectedModelConfig?.maxContextTokens ?? '',
+    selectedModelRecommendation?.maxContextTokens ?? 0,
+    'max_context_tokens',
+    'maxContextTokens',
+  );
+
+  int get selectedModelEffectiveMaxInputTokens {
+    final input = _effectiveModelLimit(
+      selectedModelConfig?.maxInputTokens ?? '',
+      selectedModelRecommendation?.maxInputTokens ?? 0,
+      'max_input_tokens',
+      'maxInputTokens',
+    );
+    final context = selectedModelEffectiveMaxContextTokens;
+    if (input > 0 && context > 0 && input > context) return context;
+    return input;
+  }
+
+  int get selectedModelEffectiveMaxOutputTokens => _effectiveModelLimit(
+    selectedModelConfig?.maxOutputTokens ?? '',
+    selectedModelRecommendation?.maxOutputTokens ?? 0,
+    'max_output_tokens',
+    'maxOutputTokens',
+  );
+
+  int get selectedModelEffectiveTargetOutputTokens {
+    final target = _effectiveModelLimit(
+      selectedModelConfig?.recommendedOutputTokens ?? '',
+      selectedModelRecommendation?.recommendedOutputTokens ?? 0,
+      'recommended_output_tokens',
+      'recommendedOutputTokens',
+    );
+    final maximum = selectedModelEffectiveMaxOutputTokens;
+    if (target > 0 && maximum > 0 && target > maximum) return maximum;
+    return target;
+  }
 
   String? get selectedModelPresetLabel =>
       selectedModelCatalog?.label ??
@@ -365,15 +409,65 @@ class TranslationSettingsController extends ChangeNotifier {
     final current = selectedModelConfig;
     final recommended = selectedModelRecommendation;
     if (current == null || recommended == null) return false;
-    return ModelRuntimeDraft.parseNumber(current.maxBatchLines) ==
-            recommended.maxBatchLines &&
-        ModelRuntimeDraft.parseNumber(current.maxContextTokens) ==
-            recommended.maxContextTokens &&
-        ModelRuntimeDraft.parseNumber(current.maxOutputTokens) ==
-            recommended.maxOutputTokens &&
-        ModelRuntimeDraft.parseNumber(current.recommendedOutputTokens) ==
-            recommended.recommendedOutputTokens &&
+    int number(String value) => ModelRuntimeDraft.parseNumber(value) ?? 0;
+    final expectedContext = _inheritedModelLimit(
+      recommended.maxContextTokens,
+      'max_context_tokens',
+      'maxContextTokens',
+    );
+    var expectedInput = _inheritedModelLimit(
+      recommended.maxInputTokens,
+      'max_input_tokens',
+      'maxInputTokens',
+    );
+    final expectedOutput = _inheritedModelLimit(
+      recommended.maxOutputTokens,
+      'max_output_tokens',
+      'maxOutputTokens',
+    );
+    var expectedTarget = _inheritedModelLimit(
+      recommended.recommendedOutputTokens,
+      'recommended_output_tokens',
+      'recommendedOutputTokens',
+    );
+    if (expectedContext > 0 && expectedInput > expectedContext) {
+      expectedInput = expectedContext;
+    }
+    if (expectedOutput > 0 && expectedTarget > expectedOutput) {
+      expectedTarget = expectedOutput;
+    }
+    return number(current.maxBatchLines) ==
+            _inheritedModelLimit(
+              recommended.maxBatchLines,
+              'max_batch_lines',
+              'maxBatchLines',
+            ) &&
+        number(current.maxContextTokens) == expectedContext &&
+        number(current.maxInputTokens) == expectedInput &&
+        number(current.maxOutputTokens) == expectedOutput &&
+        number(current.recommendedOutputTokens) == expectedTarget &&
         current.reasoningEffort == recommended.reasoningEffort;
+  }
+
+  int _effectiveModelLimit(
+    String explicitValue,
+    int catalogValue,
+    String snake,
+    String camel,
+  ) {
+    final explicit = ModelRuntimeDraft.parseNumber(explicitValue) ?? 0;
+    if (explicit > 0) return explicit;
+    return _inheritedModelLimit(catalogValue, snake, camel);
+  }
+
+  int _inheritedModelLimit(int catalogValue, String snake, String camel) {
+    final capabilities = _currentProviderCapabilities();
+    final provider =
+        _int(capabilities[snake]) ?? _int(capabilities[camel]) ?? 0;
+    final known = [catalogValue, provider].where((value) => value > 0);
+    return known.isEmpty
+        ? 0
+        : known.reduce((left, right) => left < right ? left : right);
   }
 
   List<String> get reasoningEfforts {
@@ -598,9 +692,7 @@ class TranslationSettingsController extends ChangeNotifier {
       final merged = _mergedTemplate();
       _loadModelRuntimeDrafts(
         models: _draft.models,
-        capabilities: merged?.capabilities ?? template.capabilities,
         modelConfigs: merged?.modelConfigs ?? template.modelConfigs,
-        raw: merged?.raw ?? template.raw,
       );
     }
     _message = null;
@@ -621,10 +713,8 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.modelInput = '';
     _loadModelRuntimeDrafts(
       models: _draft.models,
-      capabilities: protocol?.capabilities ?? const <String, Object?>{},
       modelConfigs:
           protocol?.modelConfigs ?? const <String, ModelRuntimeOption>{},
-      raw: protocol?.raw ?? const <String, Object?>{},
     );
     _message = null;
     _error = null;
@@ -660,6 +750,13 @@ class TranslationSettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void editModelMaxInputTokens(String value) {
+    final config = selectedModelConfig;
+    if (config == null || config.maxInputTokens == value) return;
+    config.maxInputTokens = value;
+    notifyListeners();
+  }
+
   void editModelMaxOutputTokens(String value) {
     final config = selectedModelConfig;
     if (config == null || config.maxOutputTokens == value) return;
@@ -689,17 +786,79 @@ class TranslationSettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void useAutomaticBatchLimit() {
+    final config = selectedModelConfig;
+    if (config == null || config.maxBatchLines.trim().isEmpty) return;
+    config.maxBatchLines = '';
+    _bumpDraft();
+    notifyListeners();
+  }
+
   void applySelectedModelRecommendation() {
     final config = selectedModelConfig;
     final recommended = selectedModelRecommendation;
     if (config == null || recommended == null) return;
-    config.maxBatchLines = _numberOrBlank(recommended.maxBatchLines);
-    config.maxContextTokens = _numberOrBlank(recommended.maxContextTokens);
-    config.maxOutputTokens = _numberOrBlank(recommended.maxOutputTokens);
-    config.recommendedOutputTokens = _numberOrBlank(
-      recommended.recommendedOutputTokens,
+    config.maxBatchLines = _numberOrBlank(
+      _inheritedModelLimit(
+        recommended.maxBatchLines,
+        'max_batch_lines',
+        'maxBatchLines',
+      ),
     );
+    _applyInheritedCapacity(config, recommended);
     config.reasoningEffort = recommended.reasoningEffort;
+    _bumpDraft();
+    notifyListeners();
+  }
+
+  void applySelectedModelCapacityRecommendation() {
+    final config = selectedModelConfig;
+    final recommended = selectedModelRecommendation;
+    if (config == null || recommended == null) return;
+    _applyInheritedCapacity(config, recommended);
+    _bumpDraft();
+    notifyListeners();
+  }
+
+  void _applyInheritedCapacity(
+    ModelRuntimeDraft config,
+    ModelRuntimeOption recommended,
+  ) {
+    final maxContext = _inheritedModelLimit(
+      recommended.maxContextTokens,
+      'max_context_tokens',
+      'maxContextTokens',
+    );
+    var maxInput = _inheritedModelLimit(
+      recommended.maxInputTokens,
+      'max_input_tokens',
+      'maxInputTokens',
+    );
+    final maxOutput = _inheritedModelLimit(
+      recommended.maxOutputTokens,
+      'max_output_tokens',
+      'maxOutputTokens',
+    );
+    var targetOutput = _inheritedModelLimit(
+      recommended.recommendedOutputTokens,
+      'recommended_output_tokens',
+      'recommendedOutputTokens',
+    );
+    if (maxContext > 0 && maxInput > maxContext) maxInput = maxContext;
+    if (maxOutput > 0 && targetOutput > maxOutput) targetOutput = maxOutput;
+    config.maxContextTokens = _numberOrBlank(maxContext);
+    config.maxInputTokens = _numberOrBlank(maxInput);
+    config.maxOutputTokens = _numberOrBlank(maxOutput);
+    config.recommendedOutputTokens = _numberOrBlank(targetOutput);
+  }
+
+  void clearSelectedModelCapacityOverrides() {
+    final config = selectedModelConfig;
+    if (config == null) return;
+    config.maxContextTokens = '';
+    config.maxInputTokens = '';
+    config.maxOutputTokens = '';
+    config.recommendedOutputTokens = '';
     _bumpDraft();
     notifyListeners();
   }
@@ -1065,9 +1224,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.modelInput = '';
     _loadModelRuntimeDrafts(
       models: _draft.models,
-      capabilities: provider.capabilities,
       modelConfigs: provider.modelConfigs,
-      raw: provider.raw,
     );
     _bumpDraft();
   }
@@ -1090,26 +1247,17 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.modelInput = '';
     _loadModelRuntimeDrafts(
       models: _draft.models,
-      capabilities: template.capabilities,
       modelConfigs: template.modelConfigs,
-      raw: template.raw,
     );
   }
 
   void _loadModelRuntimeDrafts({
     required List<String> models,
-    required Map<String, Object?> capabilities,
     required Map<String, ModelRuntimeOption> modelConfigs,
-    required Map<String, Object?> raw,
   }) {
-    final providerReasoning = _providerReasoningEffort(raw);
     _draft.modelConfigs = {
       for (final model in models)
-        model: _modelRuntimeDraft(
-          modelConfigs[model],
-          capabilities,
-          providerReasoning,
-        ),
+        model: _modelRuntimeDraft(modelConfigs[model]),
     };
     final selected = _draft.selectedModel;
     _draft.selectedModel = selected != null && models.contains(selected)
@@ -1117,28 +1265,11 @@ class TranslationSettingsController extends ChangeNotifier {
         : (models.isEmpty ? null : models.first);
   }
 
-  ModelRuntimeDraft _modelRuntimeDraft(
-    ModelRuntimeOption? model,
-    Map<String, Object?> capabilities,
-    String providerReasoning,
-  ) {
-    String number(int explicit, String snake, String camel) {
-      final inherited =
-          _int(capabilities[snake]) ?? _int(capabilities[camel]) ?? 0;
-      final value = explicit > 0 ? explicit : inherited;
-      return value > 0 ? '$value' : '';
-    }
+  ModelRuntimeDraft _modelRuntimeDraft(ModelRuntimeOption? model) {
+    String number(int explicit) => explicit > 0 ? '$explicit' : '';
 
-    final maxOutputTokens = number(
-      model?.maxOutputTokens ?? 0,
-      'max_output_tokens',
-      'maxOutputTokens',
-    );
-    var recommendedOutputTokens = number(
-      model?.recommendedOutputTokens ?? 0,
-      'recommended_output_tokens',
-      'recommendedOutputTokens',
-    );
+    final maxOutputTokens = number(model?.maxOutputTokens ?? 0);
+    var recommendedOutputTokens = number(model?.recommendedOutputTokens ?? 0);
     final maxOutput = ModelRuntimeDraft.parseNumber(maxOutputTokens) ?? 0;
     final recommended =
         ModelRuntimeDraft.parseNumber(recommendedOutputTokens) ?? 0;
@@ -1147,32 +1278,19 @@ class TranslationSettingsController extends ChangeNotifier {
     }
 
     return ModelRuntimeDraft(
-      maxBatchLines: number(
-        model?.maxBatchLines ?? 0,
-        'max_batch_lines',
-        'maxBatchLines',
-      ),
-      maxContextTokens: number(
-        model?.maxContextTokens ?? 0,
-        'max_context_tokens',
-        'maxContextTokens',
-      ),
+      maxBatchLines: number(model?.maxBatchLines ?? 0),
+      maxContextTokens: number(model?.maxContextTokens ?? 0),
+      maxInputTokens: number(model?.maxInputTokens ?? 0),
       maxOutputTokens: maxOutputTokens,
       recommendedOutputTokens: recommendedOutputTokens,
-      reasoningEffort: model?.reasoningEffort.trim().isNotEmpty == true
-          ? model!.reasoningEffort.trim()
-          : providerReasoning,
+      reasoningEffort: model?.reasoningEffort.trim() ?? '',
       raw: model?.raw ?? const <String, Object?>{},
     );
   }
 
   void _ensureModelRuntimeDraft(String model) {
     if (_draft.modelConfigs.containsKey(model)) return;
-    _draft.modelConfigs[model] = _modelRuntimeDraft(
-      null,
-      _currentProviderCapabilities(),
-      _providerReasoningEffort(_currentProviderRaw()),
-    );
+    _draft.modelConfigs[model] = _modelRuntimeDraft(null);
   }
 
   Map<String, Object?> _currentProviderCapabilities() {
@@ -1182,28 +1300,6 @@ class TranslationSettingsController extends ChangeNotifier {
     return selectedProviderOption.capabilities;
   }
 
-  Map<String, Object?> _currentProviderRaw() {
-    if (_draft.creating) {
-      return _mergedTemplate()?.raw ?? const <String, Object?>{};
-    }
-    return selectedProviderOption.raw;
-  }
-
-  String _providerReasoningEffort(Map<String, Object?> raw) {
-    final mapping = _map(raw['request_mapping'] ?? raw['requestMapping']);
-    final overrides = _map(
-      mapping['body_overrides'] ?? mapping['bodyOverrides'],
-    );
-    final reasoning = _map(overrides['reasoning']);
-    return (_str(
-              reasoning['effort'] ??
-                  overrides['reasoning_effort'] ??
-                  overrides['reasoningEffort'],
-            ) ??
-            '')
-        .trim();
-  }
-
   String? _validateModelRuntimeDrafts(List<String> models) {
     for (final model in models) {
       final config = _draft.modelConfigs[model];
@@ -1211,8 +1307,9 @@ class TranslationSettingsController extends ChangeNotifier {
       for (final field in <(String, String)>[
         ('单批字幕行上限', config.maxBatchLines),
         ('上下文窗口', config.maxContextTokens),
+        ('最大输入', config.maxInputTokens),
         ('最大输出', config.maxOutputTokens),
-        ('日常输出预算', config.recommendedOutputTokens),
+        ('目标输出预算', config.recommendedOutputTokens),
       ]) {
         final raw = field.$2.trim();
         if (raw.isEmpty) continue;
@@ -1221,12 +1318,19 @@ class TranslationSettingsController extends ChangeNotifier {
           return '$model 的${field.$1}必须是非负数，容量可使用 K/M 简写';
         }
       }
+      final maxContext =
+          ModelRuntimeDraft.parseNumber(config.maxContextTokens) ?? 0;
+      final maxInput =
+          ModelRuntimeDraft.parseNumber(config.maxInputTokens) ?? 0;
+      if (maxContext > 0 && maxInput > maxContext) {
+        return '$model 的最大输入不能大于上下文窗口';
+      }
       final maxOutput =
           ModelRuntimeDraft.parseNumber(config.maxOutputTokens) ?? 0;
       final recommended =
           ModelRuntimeDraft.parseNumber(config.recommendedOutputTokens) ?? 0;
       if (maxOutput > 0 && recommended > maxOutput) {
-        return '$model 的日常输出预算不能大于最大输出';
+        return '$model 的目标输出预算不能大于最大输出';
       }
     }
     return null;

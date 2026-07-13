@@ -270,12 +270,16 @@ def _route_providers(config: AppConfig) -> list:
 
 def _max_input_tokens_for_routes(config: AppConfig) -> int:
     providers = _route_providers(config)
-    if providers and any(int(provider.capabilities.max_context_tokens or 0) <= 0 for provider in providers):
+    def input_limit(provider: Any) -> int:
+        max_input = int(provider.capabilities.max_input_tokens or 0)
+        return max_input if max_input > 0 else int(provider.capabilities.max_context_tokens or 0)
+
+    if providers and any(input_limit(provider) <= 0 for provider in providers):
         return 0
     limits = [
-        int(provider.capabilities.max_context_tokens)
+        input_limit(provider)
         for provider in providers
-        if int(provider.capabilities.max_context_tokens or 0) > 0
+        if input_limit(provider) > 0
     ]
     if not limits:
         return 0
@@ -974,6 +978,7 @@ def translate_chunk(
                         "model_config": {
                             "max_batch_lines": int(effective_capabilities.max_batch_lines or 0),
                             "max_context_tokens": int(effective_capabilities.max_context_tokens or 0),
+                            "max_input_tokens": int(effective_capabilities.max_input_tokens or 0),
                             "max_output_tokens": int(effective_capabilities.max_output_tokens or 0),
                             "recommended_output_tokens": int(
                                 effective_capabilities.recommended_output_tokens or 0

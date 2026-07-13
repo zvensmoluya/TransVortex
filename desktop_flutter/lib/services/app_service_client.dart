@@ -1153,6 +1153,7 @@ class ModelRuntimeOption {
   const ModelRuntimeOption({
     this.maxBatchLines = 0,
     this.maxContextTokens = 0,
+    this.maxInputTokens = 0,
     this.maxOutputTokens = 0,
     this.recommendedOutputTokens = 0,
     this.reasoningEffort = '',
@@ -1161,6 +1162,7 @@ class ModelRuntimeOption {
 
   final int maxBatchLines;
   final int maxContextTokens;
+  final int maxInputTokens;
   final int maxOutputTokens;
   final int recommendedOutputTokens;
   final String reasoningEffort;
@@ -1176,6 +1178,10 @@ class ModelRuntimeOption {
       maxContextTokens:
           _intValue(map['max_context_tokens']) ??
           _intValue(map['maxContextTokens']) ??
+          0,
+      maxInputTokens:
+          _intValue(map['max_input_tokens']) ??
+          _intValue(map['maxInputTokens']) ??
           0,
       maxOutputTokens:
           _intValue(map['max_output_tokens']) ??

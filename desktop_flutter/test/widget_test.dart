@@ -1326,11 +1326,13 @@ void main() {
     expect(find.text('来源'), findsNothing);
     expect(find.textContaining('中文备注'), findsNothing);
     expect(find.text('模型翻译设置 · real-model'), findsOneWidget);
-    expect(find.text('单次请求行数'), findsOneWidget);
+    expect(find.text('每批行数上限'), findsOneWidget);
     expect(find.text('推理强度'), findsOneWidget);
-    expect(find.text('模型上下文容量'), findsNothing);
-    expect(find.text('单次常用输出预算'), findsNothing);
-    expect(find.text('自定义模型能力'), findsNothing);
+    expect(find.text('高级容量设置'), findsOneWidget);
+    expect(find.text('上下文窗口（tokens）'), findsNothing);
+    expect(find.text('最大输入（tokens）'), findsNothing);
+    expect(find.text('最大输出（tokens）'), findsNothing);
+    expect(find.text('目标输出预算（tokens）'), findsNothing);
     expect(find.textContaining('规格来源：'), findsNothing);
     expect(find.textContaining('渠道以实际账单为准'), findsNothing);
 
@@ -1346,6 +1348,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('自定义单次请求行数'), findsOneWidget);
+
+    final advancedToggle = find.byKey(
+      const ValueKey('model-advanced-capacity-toggle'),
+    );
+    await tester.ensureVisible(advancedToggle);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -120));
+    await tester.pumpAndSettle();
+    await tester.tap(advancedToggle);
+    await tester.pumpAndSettle();
+
+    expect(find.text('上下文窗口（tokens）'), findsOneWidget);
+    expect(find.text('最大输入（tokens）'), findsOneWidget);
+    expect(find.text('最大输出（tokens）'), findsOneWidget);
+    expect(find.text('目标输出预算（tokens）'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1374,7 +1390,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('模型翻译设置 · gemini-3.5-flash'), findsOneWidget);
-    expect(find.text('单次请求行数'), findsOneWidget);
+    expect(find.text('每批行数上限'), findsOneWidget);
     expect(find.textContaining('规格来源：'), findsNothing);
     expect(find.textContaining('输入 \$1.50 / 输出 \$9'), findsNothing);
     expect(find.textContaining('OpenRouter、Zven'), findsNothing);

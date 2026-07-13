@@ -490,6 +490,10 @@ def _model_configs_from_draft(value: Any) -> dict[str, ModelConfig]:
                 0,
                 _to_int(config.get("max_context_tokens", config.get("maxContextTokens")), 0),
             ),
+            max_input_tokens=max(
+                0,
+                _to_int(config.get("max_input_tokens", config.get("maxInputTokens")), 0),
+            ),
             max_output_tokens=max(
                 0,
                 _to_int(config.get("max_output_tokens", config.get("maxOutputTokens")), 0),
@@ -619,6 +623,10 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
             supports_json_mode=bool(capabilities_raw.get("supports_json_mode", capabilities_raw.get("supportsJsonMode", False))),
             max_batch_lines=_to_int(capabilities_raw.get("max_batch_lines", capabilities_raw.get("maxBatchLines")), 50),
             max_context_tokens=_to_int(capabilities_raw.get("max_context_tokens", capabilities_raw.get("maxContextTokens")), 0),
+            max_input_tokens=_to_int(
+                capabilities_raw.get("max_input_tokens", capabilities_raw.get("maxInputTokens")),
+                0,
+            ),
             max_output_tokens=_to_int(capabilities_raw.get("max_output_tokens", capabilities_raw.get("maxOutputTokens")), 0),
             recommended_output_tokens=_to_int(
                 capabilities_raw.get("recommended_output_tokens", capabilities_raw.get("recommendedOutputTokens")),

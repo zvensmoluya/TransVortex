@@ -29,6 +29,7 @@ def _planner_config(
     recommended_output_tokens: int = 0,
     max_output_tokens: int = 0,
     max_context_tokens: int = 0,
+    max_input_tokens: int = 0,
 ) -> AppConfig:
     provider = ProviderConfig(
         name="p1",
@@ -39,6 +40,7 @@ def _planner_config(
         capabilities=CapabilityConfig(
             max_batch_lines=max_batch_lines,
             max_context_tokens=max_context_tokens,
+            max_input_tokens=max_input_tokens,
             recommended_output_tokens=recommended_output_tokens,
             max_output_tokens=max_output_tokens,
         ),
@@ -283,7 +285,11 @@ def test_capacity_planner_disables_input_budget_when_route_context_unknown(tmp_p
 
 
 def test_capacity_planner_trims_context_to_input_budget(tmp_path) -> None:
-    config = _planner_config(tmp_path, max_context_tokens=180)
+    config = _planner_config(
+        tmp_path,
+        max_context_tokens=1000,
+        max_input_tokens=180,
+    )
     config.pipeline.memory.enabled = False
     config.pipeline.translation.style_prompt = ""
     config.pipeline.translation.system_prompt = ""
@@ -302,6 +308,7 @@ def test_capacity_planner_trims_context_to_input_budget(tmp_path) -> None:
     chunks, _warnings = plan_translation_chunks(config, segments, config.providers["p1"])
 
     middle = chunks[2]
+    assert middle.meta["max_input_tokens"] == 180
     assert middle.lines == ["[5] target", "[6] 上下文上下文上下文上下文上下文上下文上下文上下文"]
     assert len(middle.context_before) < 4 or len(middle.context_after) < 3
     assert middle.meta["dropped_context_before_lines"] + middle.meta["dropped_context_after_lines"] > 0

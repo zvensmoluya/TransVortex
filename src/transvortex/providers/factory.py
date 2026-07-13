@@ -792,11 +792,12 @@ def _finalize_model_payload(
     context: dict[str, object],
 ) -> dict[str, Any]:
     payload = _apply_request_mapping(payload, config, context)
-    model_config = config.model_config(req.model)
-    if int(model_config.max_output_tokens or 0) > 0:
+    explicit_model_config = config.model_configs.get(str(req.model or "").strip())
+    if explicit_model_config is not None and int(explicit_model_config.max_output_tokens or 0) > 0:
         output_path = _output_token_param_path(config, style)
         if output_path:
-            _set_nested_payload_value(payload, output_path, int(model_config.max_output_tokens))
+            _set_nested_payload_value(payload, output_path, int(explicit_model_config.max_output_tokens))
+    model_config = config.model_config(req.model)
     reasoning_effort = str(model_config.reasoning_effort or "").strip()
     reasoning_path = _reasoning_effort_param_path(config, style)
     if reasoning_effort and reasoning_path:

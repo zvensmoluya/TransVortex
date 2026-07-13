@@ -75,6 +75,7 @@ providers:
     capabilities:
       max_batch_lines: 500
       max_context_tokens: 300000
+      max_input_tokens: 250000
       max_output_tokens: 65536
       recommended_output_tokens: 32768
       output_token_param: max_completion_tokens
@@ -89,6 +90,7 @@ routing:
     capabilities = cfg.providers["p1"].capabilities
     assert capabilities.max_batch_lines == 500
     assert capabilities.max_context_tokens == 300000
+    assert capabilities.max_input_tokens == 250000
     assert capabilities.max_output_tokens == 65536
     assert capabilities.recommended_output_tokens == 32768
     assert capabilities.output_token_param == "max_completion_tokens"
@@ -112,6 +114,7 @@ providers:
       m1:
         max_batch_lines: 240
         max_context_tokens: 400000
+        max_input_tokens: 360000
         max_output_tokens: 64000
         recommended_output_tokens: 16000
         reasoning_effort: low
@@ -132,6 +135,7 @@ routing:
     assert model.reasoning_effort == "low"
     assert capabilities.max_batch_lines == 240
     assert capabilities.max_context_tokens == 400000
+    assert capabilities.max_input_tokens == 360000
     assert capabilities.max_output_tokens == 64000
     assert capabilities.recommended_output_tokens == 16000
     assert provider.capabilities_for_model("m2").max_context_tokens == 0

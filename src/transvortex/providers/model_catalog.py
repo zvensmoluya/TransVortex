@@ -32,6 +32,7 @@ class ModelCatalogEntry:
         row["runtime"] = {
             "max_batch_lines": self.max_batch_lines,
             "max_context_tokens": self.max_context_tokens,
+            "max_input_tokens": self.max_input_tokens,
             "max_output_tokens": self.max_output_tokens,
             "recommended_output_tokens": self.recommended_output_tokens,
             "reasoning_effort": self.reasoning_effort,
@@ -385,6 +386,7 @@ def model_catalog_runtime_config(model_id: str) -> dict[str, Any]:
     return {
         "max_batch_lines": entry.max_batch_lines,
         "max_context_tokens": entry.max_context_tokens,
+        "max_input_tokens": entry.max_input_tokens,
         "max_output_tokens": entry.max_output_tokens,
         "recommended_output_tokens": entry.recommended_output_tokens,
         "reasoning_effort": entry.reasoning_effort,

@@ -93,6 +93,7 @@ providers:
       supports_json_mode: false
       max_batch_lines: 1000
       max_context_tokens: 0
+      max_input_tokens: 0
       max_output_tokens: 32768
       recommended_output_tokens: 16384
       output_token_param: ""
@@ -122,15 +123,17 @@ routing:
 
 ### 3.1 模型能力预设
 
-正规厂商预设可以通过模型级 `model_configs` 同时提供厂商规格和 TransVortex 的稳定分片建议。Flutter 只暴露直接影响翻译请求的单次请求行数和模型原生推理档位；已知厂商模型可应用“自动（推荐）”或切换到“小批量（120 行）”。上下文窗口、最大输入、最大输出和内部输出规划继续参与运行时容量保护，但不作为普通用户的前端配置项。
+正规厂商预设可以通过模型级 `model_configs` 同时提供厂商规格和 TransVortex 的稳定分片建议。Flutter 默认暴露每批行数上限和模型原生推理档位；已知厂商模型可使用“自动（推荐）”或切换到“小批量（120 行）”。“高级容量设置”允许为自定义模型覆盖上下文窗口、最大输入、最大输出和目标输出预算，留空表示继续继承目录或连接配置。
 
-应用还内置一份经过核对的全局模型目录，首批覆盖 OpenAI、Anthropic、Google Gemini 和 DeepSeek 的主流文本模型。目录按精确模型 ID 或显式别名匹配，与连接名称和 Base URL 无关：例如自定义网关中的 `openai/gpt-5.6-terra` 可以继承 GPT-5.6 Terra 的官方容量和翻译建议，但 `gpt-5.6-terra:extended`、`my-gpt-5.6-terra-proxy` 这类未核对变体不会被猜测匹配。每个字段的优先级是：用户为该模型保存的覆盖值 > 已核对目录值 > 连接级通用能力 > 未知容量的保守兜底。
+应用还内置一份经过核对的全局模型目录，首批覆盖 OpenAI、Anthropic、Google Gemini 和 DeepSeek 的主流文本模型。目录按精确模型 ID 或显式别名匹配，与连接名称和 Base URL 无关：例如自定义网关中的 `openai/gpt-5.6-terra` 可以继承 GPT-5.6 Terra 的官方容量和翻译建议，但 `gpt-5.6-terra:extended`、`my-gpt-5.6-terra-proxy` 这类未核对变体不会被猜测匹配。模型级用户覆盖具有最高优先级；没有模型级覆盖时，目录规格与连接级渠道限制都视为上限，取两者中较低的已知值。目录只能补齐未知能力，不能把代理商或自定义网关声明的限制放大。
 
 目录同时保存资料来源、核对日期和可确认的官方标准计费参考。这些资料不参与账单计算，也不在连接设置中堆叠说明文字；OpenRouter、Zven、云平台、代理商和促销套餐仍以实际渠道账单为准。目录属于随版本发布的静态参考，预览模型和临时推广价需要在后续版本重新核对。
 
-内置 DeepSeek 预设覆盖 `deepseek-v4-flash` 与 `deepseek-v4-pro`：上下文窗口 1M、最大输出 384K、日常输出预算 32768、思考档位 `high` / `max`。单批 240 行是 TransVortex 面向编号字幕翻译的均衡建议，不是 DeepSeek 的上下文硬限制。新配置不再预设官方公告于 2026-07-24 停用的 `deepseek-chat` / `deepseek-reasoner` 兼容别名。
+内置 DeepSeek 预设覆盖 `deepseek-v4-flash` 与 `deepseek-v4-pro`：上下文窗口 1M、最大输出 384K、目标输出预算 32768、思考档位 `high` / `max`。单批 240 行是 TransVortex 面向编号字幕翻译的均衡建议，不是 DeepSeek 的上下文硬限制。新配置不再预设官方公告于 2026-07-24 停用的 `deepseek-chat` / `deepseek-reasoner` 兼容别名。
 
-模型没有可信规格时，容量字段可以保持未知。运行时仍会把单批字幕限制在 120 行，不把未知容量解释成无限；用户仅填写很大的行数、但没有同时提供可信的上下文与输出容量时，也不会绕过这层保护。
+模型没有可信规格时，容量字段可以保持未知。运行时优先使用独立的 `max_input_tokens` 规划输入；没有该值时才按上下文窗口和安全比例估算。输入与输出容量仍未知时，运行时会把单批字幕限制在 120 行，不把未知容量解释成无限；用户仅填写很大的行数、但没有同时提供可信容量时，也不会绕过这层保护。
+
+现有配置键 `recommended_output_tokens` 在产品界面中称为“目标输出预算”：它是容量规划使用的软目标，不是模型或渠道的最大输出能力；硬上限仍由 `max_output_tokens` 表达。
 
 ## 4. 翻译策略配置
 

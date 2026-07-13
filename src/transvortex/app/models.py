@@ -28,6 +28,7 @@ class CapabilityConfig:
     supports_json_mode: bool = False
     max_batch_lines: int = 200
     max_context_tokens: int = 0
+    max_input_tokens: int = 0
     max_output_tokens: int = 0
     recommended_output_tokens: int = 0
     output_token_param: str = ""
@@ -39,6 +40,7 @@ class CapabilityConfig:
 class ModelConfig:
     max_batch_lines: int = 0
     max_context_tokens: int = 0
+    max_input_tokens: int = 0
     max_output_tokens: int = 0
     recommended_output_tokens: int = 0
     reasoning_effort: str = ""
@@ -97,19 +99,57 @@ class ProviderConfig:
         explicit = self.model_configs.get(model_id, ModelConfig())
         catalog = self.catalog_model_configs.get(model_id, ModelConfig())
 
-        def positive(explicit_value: int, catalog_value: int) -> int:
-            return explicit_value if int(explicit_value or 0) > 0 else catalog_value
+        def effective_limit(explicit_value: int, catalog_value: int, provider_value: int) -> int:
+            """Resolve a model limit without letting catalog data widen a channel cap.
 
-        return ModelConfig(
-            max_batch_lines=positive(explicit.max_batch_lines, catalog.max_batch_lines),
-            max_context_tokens=positive(explicit.max_context_tokens, catalog.max_context_tokens),
-            max_output_tokens=positive(explicit.max_output_tokens, catalog.max_output_tokens),
-            recommended_output_tokens=positive(
+            A model-level user value is an explicit deployment override. Otherwise
+            catalog and provider values are both limits, so the lower known value
+            wins. Zero means unknown rather than unlimited.
+            """
+
+            if int(explicit_value or 0) > 0:
+                return int(explicit_value)
+            known = [
+                int(value)
+                for value in (catalog_value, provider_value)
+                if int(value or 0) > 0
+            ]
+            return min(known) if known else 0
+
+        resolved = ModelConfig(
+            max_batch_lines=effective_limit(
+                explicit.max_batch_lines,
+                catalog.max_batch_lines,
+                self.capabilities.max_batch_lines,
+            ),
+            max_context_tokens=effective_limit(
+                explicit.max_context_tokens,
+                catalog.max_context_tokens,
+                self.capabilities.max_context_tokens,
+            ),
+            max_input_tokens=effective_limit(
+                explicit.max_input_tokens,
+                catalog.max_input_tokens,
+                self.capabilities.max_input_tokens,
+            ),
+            max_output_tokens=effective_limit(
+                explicit.max_output_tokens,
+                catalog.max_output_tokens,
+                self.capabilities.max_output_tokens,
+            ),
+            recommended_output_tokens=effective_limit(
                 explicit.recommended_output_tokens,
                 catalog.recommended_output_tokens,
+                self.capabilities.recommended_output_tokens,
             ),
             reasoning_effort=(explicit.reasoning_effort or catalog.reasoning_effort).strip(),
         )
+        if (
+            int(resolved.max_context_tokens or 0) > 0
+            and int(resolved.max_input_tokens or 0) > int(resolved.max_context_tokens)
+        ):
+            resolved = replace(resolved, max_input_tokens=resolved.max_context_tokens)
+        return resolved
 
     def capabilities_for_model(self, model: str) -> CapabilityConfig:
         model_config = self.model_config(model)
@@ -136,6 +176,11 @@ class ProviderConfig:
                 model_config.max_context_tokens
                 if int(model_config.max_context_tokens or 0) > 0
                 else self.capabilities.max_context_tokens
+            ),
+            max_input_tokens=(
+                model_config.max_input_tokens
+                if int(model_config.max_input_tokens or 0) > 0
+                else self.capabilities.max_input_tokens
             ),
             max_output_tokens=max_output_tokens,
             recommended_output_tokens=recommended_output_tokens,
