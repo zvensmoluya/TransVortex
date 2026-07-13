@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from transvortex.app.models import NormalizedRequest
 from transvortex.http import HttpTransportError
 from transvortex.providers.admin import (
     custom_adapter_template_payload,
@@ -18,6 +19,7 @@ from transvortex.providers.admin import (
     run_provider_connection_test,
     save_provider_config,
 )
+from transvortex.providers.factory import _build_payload
 
 
 def _write_provider_admin_config(root: Path) -> None:
@@ -268,6 +270,52 @@ def test_provider_connection_maps_response(monkeypatch) -> None:
     )
     assert report["status"] == "PASS"
     assert report["checks"][0]["code"] == "provider_connection_ok"
+
+
+def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> None:
+    def fake_request_json(url, payload, headers, timeout, method="POST"):
+        assert payload["model"] == "gpt-5.6-terra"
+        assert payload["max_output_tokens"] == 128000
+        return {"output_text": "[1] pong"}
+
+    monkeypatch.setattr("transvortex.providers.admin._request_json", fake_request_json)
+    report = run_provider_connection_test(
+        provider_draft={
+            "name": "openai_like",
+            "compat_mode": "openai_responses",
+            "base_url": "https://example.com/v1",
+            "env_key": "KEY",
+            "models": ["gpt-5.6-terra"],
+            "capabilities": {"max_output_tokens": 0},
+        },
+        model="gpt-5.6-terra",
+        api_key="secret",
+    )
+
+    assert report["status"] == "PASS"
+
+
+def test_draft_can_keep_catalog_budget_while_omitting_output_token_field() -> None:
+    provider = draft_to_provider_config(
+        {
+            "name": "openai_like",
+            "compat_mode": "openai_responses",
+            "models": ["gpt-5.6-terra"],
+            "capabilities": {"output_token_param": "none"},
+        }
+    )
+
+    assert provider.model_config("gpt-5.6-terra").max_output_tokens == 128000
+    payload = _build_payload(
+        provider,
+        NormalizedRequest(
+            model="gpt-5.6-terra",
+            lines=["[1] ping"],
+            source_lang="en",
+            target_lang="zh-CN",
+        ),
+    )
+    assert "max_output_tokens" not in payload
 
 
 def test_provider_connection_retries_transient_upstream_error(monkeypatch) -> None:

@@ -724,6 +724,8 @@ def _set_nested_payload_value(payload: dict[str, Any], path: list[str], value: A
 
 def _output_token_param_path(config: ProviderConfig, style: str) -> list[str]:
     explicit_param = str(config.capabilities.output_token_param or "").strip()
+    if explicit_param.lower() in {"none", "omit", "disabled"}:
+        return []
     if explicit_param:
         return [token for token in explicit_param.split(".") if token]
     if style == "openai_responses":

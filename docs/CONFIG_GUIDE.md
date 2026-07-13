@@ -120,6 +120,8 @@ routing:
 说明：
 - 即使写的是 `base_url=/v1` + `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
 - `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
+- `max_output_tokens` 和 `recommended_output_tokens` 是规划预算，不等于网关一定接受对应请求字段。`output_token_param` 留空时按协议使用默认字段，填写真实字段名时使用该字段；若网关不允许客户端传输出上限，填写 `none`，系统仍保留预算用于分块规划，但不会发送输出 token 参数。
+- 某个模型不接受 `temperature` 时，将该单模型 provider 的 `supports_temperature` 设为 `false`。如果同一网关下不同模型支持情况不同，应为它们拆分 provider 配置，避免把一种模型的请求能力套给另一种模型。
 
 ### 3.1 模型能力预设
 

@@ -37,6 +37,7 @@ from .factory import (
     _request_json,
     response_shape_summary,
 )
+from .model_catalog import model_catalog_runtime_config
 from ..utils import to_plain
 
 
@@ -596,6 +597,11 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
         env_key=env_key,
         models=models,
         model_configs=_model_configs_from_draft(draft.get("model_configs") or draft.get("modelConfigs")),
+        catalog_model_configs={
+            model: ModelConfig(**catalog_config)
+            for model in models
+            if (catalog_config := model_catalog_runtime_config(model))
+        },
         credential_id=str(draft.get("credential_id") or draft.get("credentialId") or name),
         auth=AuthConfig(
             type=str(auth_raw.get("type", "bearer")),

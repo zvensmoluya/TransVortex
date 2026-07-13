@@ -475,6 +475,28 @@ def test_openai_chat_output_token_param_can_override_field_name() -> None:
     assert "max_tokens" not in payload
 
 
+def test_output_token_param_none_keeps_capacity_without_sending_request_field() -> None:
+    cfg = ProviderConfig(
+        name="responses",
+        api_type="openai-compatible",
+        compat_mode="openai_responses",
+        base_url="https://example.com/v1",
+        env_key="KEY",
+        models=["m1"],
+        capabilities=CapabilityConfig(max_output_tokens=32768, output_token_param="none"),
+        mapping=MappingConfig(request={"style": "openai_responses"}, response={}),
+        limits=ProviderLimits(),
+    )
+
+    payload = _build_payload(
+        cfg,
+        NormalizedRequest(model="m1", lines=["[1] hello"], source_lang="en", target_lang="zh-CN"),
+    )
+
+    assert cfg.capabilities_for_model("m1").max_output_tokens == 32768
+    assert "max_output_tokens" not in payload
+
+
 def test_openai_completions_payload_and_mapping() -> None:
     cfg = ProviderConfig(
         name="completions",

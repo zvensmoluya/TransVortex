@@ -402,13 +402,21 @@ translation:
         "raw_text": "[1] 你好",
         "raw_text_chars": 6,
         "usage": {"input_tokens": 10, "output_tokens": 20},
-        "provider_meta": {"elapsed_ms": 123, "bytes_received": 456, "streaming": True},
+        "provider_meta": {
+            "elapsed_ms": 123,
+            "bytes_received": 456,
+            "streaming": True,
+            "batch_recovery_requests": 1,
+            "batch_recovered_rows": 4,
+        },
         "request": {
             "line_count": 1,
             "context_before_lines": 2,
             "context_after_lines": 3,
             "memory_entries": 0,
             "memory_prompt_chars": 0,
+            "protocol_recovered": True,
+            "batch_recovery_requests": 1,
             "chunk_meta": {"estimated_input_tokens": 30},
         },
         "validation": {"chunk_id": "c00000", "issues": []},
@@ -426,6 +434,9 @@ translation:
     assert metrics[0]["raw_text_path"] == "translate\\raw\\c00000.raw.txt" or metrics[0]["raw_text_path"] == "translate/raw/c00000.raw.txt"
     assert metrics[0]["usage"]["output_tokens"] == 20
     assert metrics[0]["provider_meta"]["elapsed_ms"] == 123
+    assert metrics[0]["provider_meta"]["batch_recovered_rows"] == 4
+    assert metrics[0]["protocol_recovered"] is True
+    assert metrics[0]["batch_recovery_requests"] == 1
 
 
 def test_pipeline_can_export_srt_and_ass_and_freeze_translation_settings(tmp_path: Path, monkeypatch) -> None:
