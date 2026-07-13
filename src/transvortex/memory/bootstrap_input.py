@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.models import Segment
-from ..core.source_cleaner import classify_source_text
+from ..core.source_cleaner import classify_source_text, source_text_for_model
 from ..utils import write_json
 
 
@@ -117,7 +117,7 @@ def _text_density(text: str, duration_seconds: float) -> float:
 def _recurring_terms(segments: list[Segment]) -> set[str]:
     counter: Counter[str] = Counter()
     for segment in segments:
-        for match in _WORD_RE.findall(str(segment.text_src or "")):
+        for match in _WORD_RE.findall(source_text_for_model(segment)):
             word = match.strip("'").lower()
             if word and word not in _GENERIC_RECURRING_WORDS:
                 counter[word] += 1
@@ -132,6 +132,7 @@ def build_bootstrap_input_view(segments: list[Segment]) -> BootstrapInputView:
     previous_end: float | None = None
     for segment in segments:
         raw = _normalize_text(segment.text_src)
+        model_text = _normalize_text(source_text_for_model(segment))
         duration = max(0.0, float(segment.end) - float(segment.start))
         gap_before = None if previous_end is None else max(0.0, float(segment.start) - previous_end)
         previous_end = float(segment.end)
@@ -139,6 +140,9 @@ def build_bootstrap_input_view(segments: list[Segment]) -> BootstrapInputView:
         is_sound_effect = "sound_effect" in source_classification.flags and source_classification.action == "drop"
         clean = _clean_text(raw, is_sound_effect=is_sound_effect)
         flags: list[str] = []
+        if model_text != raw:
+            clean = model_text
+            flags.append("periodic_repetition_compacted")
         if gap_before is not None and gap_before >= 2.0:
             flags.append("scene_gap")
         if is_sound_effect:
@@ -212,7 +216,8 @@ def render_bootstrap_input_text(view: BootstrapInputView) -> str:
             except (TypeError, ValueError):
                 parts.append(f"conf={line.confidence}")
         parts.append("flags=" + ",".join(line.flags))
-        rendered.append(f"[{' | '.join(parts)}]\nraw: {line.raw}\nclean: {line.clean}")
+        rendered_raw = line.clean if "periodic_repetition_compacted" in line.flags else line.raw
+        rendered.append(f"[{' | '.join(parts)}]\nraw: {rendered_raw}\nclean: {line.clean}")
     return "\n\n".join(rendered)
 
 

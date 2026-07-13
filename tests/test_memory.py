@@ -5,6 +5,7 @@ from pathlib import Path
 from transvortex.app.models import Chunk, MemoryInjectConfig, Segment
 from transvortex.app.models import AppConfig, PipelineConfig, ProviderConfig, RouteTarget, RoutingConfig
 from transvortex.core.translate import _memory_prompt_entry_count, iter_translate_all_chunks
+from transvortex.core.source_cleaner import clean_source_segments
 from transvortex.memory.checker import check_consistency
 from transvortex.memory.injector import build_memory_prompt
 from transvortex.memory.json_utils import json_object_from_model_text
@@ -1148,6 +1149,22 @@ def test_memory_bootstrap_input_view_soft_cleans_noise_and_keeps_evidence() -> N
     assert {"sound_effect", "noise", "low_info"}.issubset(set(view.lines[4].flags))
     assert "raw: [music]" in rendered
     assert "clean: " in rendered
+
+
+def test_memory_bootstrap_renders_compacted_periodic_source_to_model() -> None:
+    original = "コシ" * 48
+    segment = clean_source_segments(
+        [Segment(id=1, start=0.0, end=20.0, text_src=original, meta={"source": "asr"})]
+    ).segments[0]
+
+    view = build_bootstrap_input_view([segment])
+    rendered = render_bootstrap_input_text(view)
+
+    assert view.lines[0].raw == original
+    assert view.lines[0].clean == "コシコシコシコシ…"
+    assert "periodic_repetition_compacted" in view.lines[0].flags
+    assert original not in rendered
+    assert "raw: コシコシコシコシ…" in rendered
 
 
 def test_memory_bootstrap_resume_skips_existing_artifact(tmp_path: Path, monkeypatch) -> None:

@@ -206,6 +206,50 @@ def _dominant_periodic_repetition(text: str) -> bool:
     return False
 
 
+def compact_periodic_repetition(text: str, *, visible_repeats: int = 4) -> str | None:
+    """Build a bounded model/display form while preserving the source text."""
+    clean_text = normalize_source_text(text)
+    body = _strip_wrappers(clean_text)
+    if len(body) < 24:
+        return None
+    required_span = max(24, int(len(body) * 0.6))
+    best: tuple[int, int, str, int] | None = None
+    max_unit = min(12, len(body) // 6)
+    for unit_len in range(1, max_unit + 1):
+        for start in range(0, len(body) - unit_len * 6 + 1):
+            unit = body[start : start + unit_len]
+            cursor = start + unit_len
+            repeats = 1
+            while body[cursor : cursor + unit_len] == unit:
+                repeats += 1
+                cursor += unit_len
+            span = repeats * unit_len
+            if repeats < 6 or span < required_span:
+                continue
+            candidate = (start, cursor, unit, repeats)
+            if best is None or span > (best[1] - best[0]):
+                best = candidate
+    if best is None:
+        return None
+    start, end, unit, repeats = best
+    bounded_count = min(max(2, int(visible_repeats)), repeats)
+    suffix = body[end:]
+    if suffix and len(suffix) < len(unit) and unit.startswith(suffix):
+        suffix = ""
+    compacted = f"{body[:start]}{unit * bounded_count}…{suffix}"
+    return compacted if compacted != body else None
+
+
+def source_text_for_model(segment: Segment) -> str:
+    meta = segment.meta if isinstance(segment.meta, dict) else {}
+    return str(meta.get("source_text_for_model") or segment.text_src or "")
+
+
+def source_text_for_display(segment: Segment) -> str:
+    meta = segment.meta if isinstance(segment.meta, dict) else {}
+    return str(meta.get("source_text_for_display") or segment.text_src or "")
+
+
 def classify_source_text(value: str | None) -> SourceTextClassification:
     clean_text = normalize_source_text(value)
     if not clean_text:
@@ -312,6 +356,16 @@ def clean_source_segments(
         if classification.action == "warn":
             existing = list(meta.get("source_cleaning_warnings") or [])
             meta["source_cleaning_warnings"] = list(dict.fromkeys([*existing, *classification.reasons]))
+            if "periodic_repetition" in classification.reasons:
+                compacted = compact_periodic_repetition(classification.clean_text)
+                if compacted:
+                    meta["source_text_for_model"] = compacted
+                    meta["source_text_for_display"] = compacted
+                    meta["source_text_compaction"] = {
+                        "reason": "periodic_repetition",
+                        "original_length": len(classification.clean_text),
+                        "compacted_length": len(compacted),
+                    }
             warnings.append(_report_row(segment, classification))
         output.append(replace(segment, text_src=classification.clean_text, meta=meta))
 

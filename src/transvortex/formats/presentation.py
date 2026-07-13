@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, Literal
 
 from ..app.models import AssStyleConfig, Segment
+from ..core.source_cleaner import source_text_for_display
 from ..core.subtitle_quality import (
     clean_subtitle_text,
     subtitle_line_break_issues,
@@ -271,12 +272,11 @@ def build_render_plan(
         if bilingual and clean_subtitle_text(segment.text_src):
             source = _block(
                 "source",
-                _single_line_text(segment.text_src),
+                source_text_for_display(segment),
                 max_width=max(8, int(resolved.source_max_width or resolved.target_max_width or 42)),
                 hard_max_width=max(8, int(resolved.hard_max_width or 56)),
                 max_lines=max(1, int(resolved.max_source_lines or 2)),
                 prefer_single_line=bool(resolved.prefer_single_line),
-                wrap=False,
             )
         cues.append(
             SubtitleCueLayout(
@@ -530,11 +530,16 @@ def plain_srt_lines(
     prefer_single_line = False
     if resolved:
         target_width = max(8, int(resolved.target_max_width or max_line_width))
+        source_width = max(8, int(resolved.source_max_width or max_line_width))
         hard_width = max(8, int(resolved.hard_max_width or max_line_width))
         prefer_single_line = bool(resolved.prefer_single_line)
         source_first = resolved.bilingual_order == "source_target"
-    source_text = _single_line_text(segment.text_src)
-    source_lines = [source_text] if source_text else []
+    source_lines = wrap_subtitle_text(
+        source_text_for_display(segment),
+        max_line_width=source_width,
+        hard_max_line_width=hard_width,
+        prefer_single_line=prefer_single_line,
+    )
     target_lines = wrap_subtitle_text(
         segment.text_tgt or segment.text_src,
         max_line_width=target_width,

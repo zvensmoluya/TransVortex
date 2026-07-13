@@ -1561,6 +1561,62 @@ def test_default_memory_uses_large_capacity_chunk(tmp_path: Path, monkeypatch) -
     assert any(event["message"] == "Memory bootstrap ready" for event in events)
 
 
+def test_segments_translate_rebuilds_compacted_model_view_from_saved_asr_source(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    _write_config(root)
+    input_file = root / "segments.jsonl"
+    input_file.write_text(
+        json.dumps(
+            {
+                "id": 7,
+                "start": 0,
+                "end": 20,
+                "text_src": "コシ" * 48,
+                "meta": {"source": "asr", "source_cleaning_warnings": ["periodic_repetition"]},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PROVIDER_KEY", "key")
+    monkeypatch.setattr("transvortex.core.orchestrator.probe_provider", lambda **_kwargs: {"checks": []})
+    observed_lines: list[str] = []
+
+    def fake_translate_all_chunks(_config, chunks, source_lang: str, target_lang: str, **_kwargs):
+        observed_lines.extend(line for chunk in chunks for line in chunk.lines)
+        return [
+            {
+                "chunk_id": chunk.chunk_id,
+                "provider": "p1",
+                "model": "m1",
+                "compat_mode": "openai_chat",
+                "base_url": "https://example.com/v1",
+                "rows": [{"id": seg_id, "text_tgt": "ok"} for seg_id in chunk.segment_ids],
+                "errors": [],
+            }
+            for chunk in chunks
+        ]
+
+    monkeypatch.setattr("transvortex.core.orchestrator.translate_all_chunks", fake_translate_all_chunks)
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="zh-CN",
+        input_type="segments_translate",
+        cli_overrides={"memory_enabled": False},
+    )
+
+    store = TaskStore(root / "artifacts")
+    saved = json.loads((store.task_dir(task_id) / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8"))
+    assert saved["id"] == 7
+    assert saved["text_src"] == "コシ" * 48
+    assert saved["meta"]["source_text_for_model"] == "コシコシコシコシ…"
+    assert observed_lines == ["[7] コシコシコシコシ…"]
+
+
 def test_resume_backfills_missing_translation_validation_without_retranslation(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path
     _write_config(root)

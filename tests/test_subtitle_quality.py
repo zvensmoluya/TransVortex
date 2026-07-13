@@ -137,7 +137,7 @@ def test_export_srt_style_prefers_single_line_when_within_hard_width(tmp_path: P
     assert cue_lines == [target]
 
 
-def test_export_srt_style_orders_bilingual_lines_and_keeps_source_single_line(tmp_path: Path) -> None:
+def test_export_srt_style_orders_bilingual_lines_and_wraps_source_at_hard_width(tmp_path: Path) -> None:
     out_file = tmp_path / "bilingual.srt"
     source = "これはとても長い原文字幕なので普通に折り返すと二行になってしまいます"
 
@@ -154,7 +154,10 @@ def test_export_srt_style_orders_bilingual_lines_and_keeps_source_single_line(tm
     )
 
     cue_lines = out_file.read_text(encoding="utf-8").splitlines()[2:]
-    assert cue_lines == ["放松下来", source]
+    assert cue_lines[0] == "放松下来"
+    assert len(cue_lines[1:]) > 1
+    assert all(subtitle_line_width(line) <= 16 for line in cue_lines[1:])
+    assert "".join(cue_lines[1:]) == source
 
 
 def test_export_ass_writes_styles_bilingual_order_and_chinese_path(tmp_path: Path) -> None:
@@ -245,7 +248,7 @@ def test_ass_presentation_plan_wraps_long_bilingual_text_without_changing_segmen
     assert segment.text_tgt == "这是一条用于正式观看的中文字幕，它需要自动换行并保持双语层级清楚。"
 
 
-def test_ass_presentation_keeps_source_single_line_in_bilingual_mode() -> None:
+def test_ass_presentation_wraps_source_at_hard_width_in_bilingual_mode() -> None:
     source = "これはとても長い原文字幕なので普通に折り返すと二行になってしまいます"
     plan = build_render_plan(
         [Segment(id=1, start=0.0, end=3.0, text_src=source, text_tgt="放松下来")],
@@ -256,8 +259,9 @@ def test_ass_presentation_keeps_source_single_line_in_bilingual_mode() -> None:
 
     cue = plan.cues[0]
     assert cue.source is not None
-    assert cue.source.lines == [source]
-    assert cue.source.max_line_width > 16
+    assert len(cue.source.lines) > 1
+    assert all(subtitle_line_width(line) <= 16 for line in cue.source.lines)
+    assert "".join(cue.source.lines) == source
 
 
 def test_ass_presentation_never_clamps_text_content() -> None:

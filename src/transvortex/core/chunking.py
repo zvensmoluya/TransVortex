@@ -6,6 +6,7 @@ from typing import Any
 
 from ..app.models import AppConfig, Chunk, ProviderConfig, Segment
 from ..memory.plan import translates_with_memory
+from .source_cleaner import source_text_for_model
 
 
 LINE_TOKEN_OVERHEAD = 4
@@ -15,7 +16,7 @@ UNKNOWN_CAPACITY_MAX_LINES = 120
 
 
 def _numbered_line(seg: Segment) -> str:
-    return f"[{seg.id}] {seg.text_src}"
+    return f"[{seg.id}] {source_text_for_model(seg)}"
 
 
 def estimate_text_tokens(text: str) -> int:
@@ -73,7 +74,10 @@ def _is_asr_uncertain(seg: Segment) -> bool:
 
 def _has_source_cleaning_warning(seg: Segment) -> bool:
     meta = seg.meta if isinstance(seg.meta, dict) else {}
-    return bool(meta.get("source_cleaning_warnings"))
+    warnings = list(meta.get("source_cleaning_warnings") or [])
+    if meta.get("source_text_for_model"):
+        warnings = [item for item in warnings if item != "periodic_repetition"]
+    return bool(warnings)
 
 
 def _uncertain_ids(segments: list[Segment]) -> list[int]:

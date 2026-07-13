@@ -292,6 +292,7 @@ asr_providers:
 - `asr.preprocessing.cloud_trim_silence` 只默认作用于 cloud ASR，使用 ffmpeg 分析真实静音并裁剪上传音频，返回时间轴会加回裁剪 offset；它不会识别背景音乐或环境声中的“无人声”。
 - `asr.execution.cloud_concurrency` 控制 cloud ASR 并发上传，默认 8；遇到 timeout、429 或 5xx 时调度层会降并发，单片失败后会尝试细分成更小片重跑，仍失败才失败任务。
 - ASR 行进入 `source/segments.normalized.jsonl` 前会过滤确定性垃圾，例如纯音乐符号、替换字符乱码、长时间重复 hallucination；raw response 和 `source/asr/quality/*.json` 会保留诊断信息。
+- 连续周期回环不会覆盖 `text_src`：原始识别文本继续作为审计证据保存在 source artifact 中，清洗器只在 segment meta 写入有界的模型/展示视图。分片、术语初始化和最终双语排版使用该视图，避免把数百字机械重复送入模型或铺满画面。
 - ASR 边界风险检测会在 source cleaning 之后运行，标记过长段、多句揉在一起、文本密度过高、重叠或缺失 segment 时间戳等问题；风险写入 `meta.asr_risk` 并汇总到 `quality/asr_boundary_quality.json`。该检测默认不阻断任务、不自动重听，只让后续字幕优化和 reflow 对高风险 ASR 段更保守。
 - `asr_providers[].request` 按协议生效。OpenAI transcription 支持 `prompt`、`temperature`、`timestamp_granularities`、`include` 和受限 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。FunASR 官方 OpenAI-compatible server 对齐 `file`、`model`、`language` 和 `response_format`，`funasr_openai` 不发送 `prompt`、`temperature`、`timestamp_granularities`、`include` 或扩展字段。
 - `asr_providers[].http2` 默认 `true`，表示云端 ASR 优先使用统一 `httpx` 传输层的 HTTP/2；客户端或服务端不可用时会按实际能力降级，并在 ASR meta 中记录实际协议。
@@ -299,6 +300,7 @@ asr_providers:
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。
 - `asr.provider` 选择 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。
 - ASR、SRT、内嵌字幕和外部 segments 都会归一化为 `source/segments.normalized.jsonl`，翻译层只读取统一 `Segment`。
+- `source/segments.normalized.jsonl` 随任务保留，可直接交给 `transvortex translate --segments ...`。桌面端“重新翻译”会在提交时复制该文件到新任务并记录 `settings.provenance.derived_from_task_id` 与 `source_sha256`；它不依赖数据库，也不重新运行 ASR。`resume` 仍只用于继续原任务。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
 - CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-beam-size`、`--asr-temperature`、`--asr-condition-on-previous-text`、`--asr-hotwords`、`--asr-prompt-profile`、`--asr-prompt-text`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds`、`--asr-max-upload-mb`、`--asr-audio-track`、`--asr-cloud-concurrency` 覆盖。
 

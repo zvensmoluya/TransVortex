@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from transvortex.app.models import Segment
-from transvortex.core.source_cleaner import classify_source_text, clean_source_segments
+from transvortex.core.source_cleaner import (
+    classify_source_text,
+    clean_source_segments,
+    compact_periodic_repetition,
+    source_text_for_display,
+    source_text_for_model,
+)
 
 
 def test_classify_source_text_drops_cjk_sound_effect_lines() -> None:
@@ -28,6 +34,13 @@ def test_classify_source_text_warns_delimiter_free_periodic_repetition() -> None
     assert result.flags == ["suspicious", "repetition"]
 
 
+def test_compact_periodic_repetition_preserves_prefix_and_bounds_repeated_run() -> None:
+    assert compact_periodic_repetition("コシ" * 48) == "コシコシコシコシ…"
+    assert compact_periodic_repetition("コシ" * 48 + "コ") == "コシコシコシコシ…"
+    assert compact_periodic_repetition("いつだよ、" + "いち" * 50) == "いつだよ、いちいちいちいち…"
+    assert compact_periodic_repetition("これは普通の台詞です。") is None
+
+
 def test_clean_source_segments_only_drops_asr_by_default() -> None:
     segments = [
         Segment(id=1, start=0.0, end=1.0, text_src="耳かき音", meta={"source": "asr"}),
@@ -52,5 +65,14 @@ def test_clean_source_segments_preserves_but_marks_periodic_asr_text() -> None:
     result = clean_source_segments(segments)
 
     assert len(result.segments) == 1
-    assert result.segments[0].meta["source_cleaning_warnings"] == ["periodic_repetition"]
+    segment = result.segments[0]
+    assert segment.text_src == "コシ" * 48
+    assert segment.meta["source_cleaning_warnings"] == ["periodic_repetition"]
+    assert source_text_for_model(segment) == "コシコシコシコシ…"
+    assert source_text_for_display(segment) == "コシコシコシコシ…"
+    assert segment.meta["source_text_compaction"] == {
+        "reason": "periodic_repetition",
+        "original_length": 96,
+        "compacted_length": 9,
+    }
     assert result.report["warning_segments"] == 1

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..app.models import AppConfig, Chunk, NormalizedRequest, Segment
+from ..core.source_cleaner import source_text_for_model
 from ..providers import build_provider_client, classify_error
 from ..utils import read_json, write_json
 from .bootstrap_input import build_bootstrap_input_view, render_bootstrap_input_text, write_bootstrap_input_artifacts
@@ -28,7 +29,7 @@ def _notify_progress(progress_callback: ProgressCallback | None, **payload: Any)
 
 
 def _numbered_source_lines(segments: list[Segment]) -> list[str]:
-    return [f"[{segment.id}] {segment.text_src}" for segment in segments]
+    return [f"[{segment.id}] {source_text_for_model(segment)}" for segment in segments]
 
 
 def _write_bootstrap_input(memory_dir: Path, segments: list[Segment]) -> str:
@@ -115,7 +116,7 @@ def _classify_prompt(
 
 
 def _bootstrap_evidence(segments: list[Segment]) -> MemoryEvidence:
-    return MemoryEvidence(source_by_id={int(segment.id): str(segment.text_src or "") for segment in segments})
+    return MemoryEvidence(source_by_id={int(segment.id): source_text_for_model(segment) for segment in segments})
 
 
 def _extract_candidates(

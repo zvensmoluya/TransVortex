@@ -9,6 +9,7 @@ from transvortex.core.aligner import (
 )
 from transvortex.core.chunking import number_and_chunk_segments, plan_translation_chunks
 from transvortex.core.orchestrator import _translation_route_providers
+from transvortex.core.source_cleaner import clean_source_segments
 from transvortex.app.models import (
     AppConfig,
     CapabilityConfig,
@@ -150,6 +151,23 @@ def test_capacity_planner_isolates_source_cleaning_warning_segment(tmp_path) -> 
     assert [chunk.segment_ids for chunk in chunks] == [[1, 2], [3], [4, 5]]
     assert chunks[1].meta["cut_reason"] == "source_warning_isolation"
     assert chunks[1].asr_uncertain_ids == [3]
+
+
+def test_capacity_planner_keeps_compacted_periodic_asr_line_in_normal_batch(tmp_path) -> None:
+    config = _planner_config(tmp_path)
+    cleaned = clean_source_segments(
+        [
+            Segment(id=1, start=0.0, end=1.0, text_src="before", meta={"source": "asr"}),
+            Segment(id=2, start=1.0, end=20.0, text_src="コシ" * 48, meta={"source": "asr"}),
+            Segment(id=3, start=20.0, end=21.0, text_src="after", meta={"source": "asr"}),
+        ]
+    ).segments
+
+    chunks, _warnings = plan_translation_chunks(config, cleaned, config.providers["p1"])
+
+    assert [chunk.segment_ids for chunk in chunks] == [[1, 2, 3]]
+    assert chunks[0].lines == ["[1] before", "[2] コシコシコシコシ…", "[3] after"]
+    assert chunks[0].asr_uncertain_ids == [2]
 
 
 def test_capacity_planner_keeps_short_input_in_single_chunk(tmp_path) -> None:

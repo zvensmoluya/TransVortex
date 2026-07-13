@@ -1434,8 +1434,9 @@ def _clean_asr_source_segments(
     store: TaskStore | None = None,
     task_id: str = "",
     stage: str = "ASR",
+    renumber: bool = True,
 ) -> list[Segment]:
-    result = clean_source_segments(segments, only_asr=True, renumber=True)
+    result = clean_source_segments(segments, only_asr=True, renumber=renumber)
     paths["quality"].mkdir(parents=True, exist_ok=True)
     report_path = paths["quality"] / "source_cleaning.json"
     write_json(report_path, result.report)
@@ -1989,6 +1990,14 @@ def _execute_task(
                 all_segments = _load_segments_from_input(Path(task.input_file))
                 if not all_segments:
                     raise RuntimeError("No subtitle segments parsed from input")
+                all_segments = _clean_asr_source_segments(
+                    paths=paths,
+                    segments=all_segments,
+                    store=store,
+                    task_id=task_id,
+                    stage="INGEST",
+                    renumber=False,
+                )
                 source_jsonl = persist_source_segments(paths, all_segments)
                 checkpoint["ingest_done"] = True
                 checkpoint["status"] = "INGEST"
