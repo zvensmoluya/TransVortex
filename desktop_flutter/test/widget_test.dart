@@ -3196,6 +3196,14 @@ void main() {
           'message': '任务已重新排队。',
         };
       }
+      if (method == 'runtime.retranslate') {
+        return {
+          'ok': true,
+          'task_id': 'tvx_processing_derived_123456',
+          'status': 'QUEUED',
+          'message': '新的翻译任务已排队。',
+        };
+      }
       if (method == 'runtime.cancel') {
         runningStatus = 'CANCEL_REQUESTED';
         return _task(
@@ -3288,6 +3296,17 @@ void main() {
     expect(find.text('创建 2026-07-06 08:00:00'), findsOneWidget);
     expect(find.text('更新 2026-07-06 09:30:00'), findsOneWidget);
     expect(find.text('运行记录 已结束'), findsOneWidget);
+    expect(find.text('重新翻译'), findsOneWidget);
+    await tester.tap(find.text('重新翻译'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('重新翻译当前识别稿'), findsOneWidget);
+    expect(find.textContaining('不会重新运行语音识别'), findsOneWidget);
+    await tester.tap(find.text('创建翻译任务'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(paramsByMethod['runtime.retranslate'], {
+      'task_id': 'tvx_processing_done_123456',
+    });
     expect(find.text('阶段'), findsOneWidget);
     expect(find.text('加载更多事件'), findsOneWidget);
     await tester.tap(find.text('加载更多事件'));

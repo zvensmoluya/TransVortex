@@ -460,6 +460,24 @@ class AppServiceClient {
     );
   }
 
+  Future<TaskSubmissionResult> retranslate(
+    String taskId, {
+    String? provider,
+    String? model,
+    Map<String, Object?>? routing,
+    Map<String, Object?>? overrides,
+  }) async {
+    return TaskSubmissionResult.fromJson(
+      await _transport.call('runtime.retranslate', {
+        'task_id': taskId,
+        'provider': ?provider,
+        'model': ?model,
+        'routing': ?routing,
+        'overrides': ?overrides,
+      }),
+    );
+  }
+
   Future<TaskSummary> cancel(String taskId, {bool force = false}) async {
     return TaskSummary.fromJson(
       await _transport.call('runtime.cancel', {

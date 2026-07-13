@@ -11,6 +11,7 @@ from transvortex.app.desktop_api import DesktopApi, task_payload
 from transvortex.app.models import TaskRecord
 from transvortex.app_service import LocalServicePump, handle_line, serve
 from transvortex.artifacts.runtime import TaskRuntime
+from transvortex.artifacts.task_store import TaskStore
 from transvortex.cli import main as cli_main
 from transvortex.utils import write_json
 
@@ -83,6 +84,7 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert info["result"]["service"] == "transvortex.app_service"
     assert info["result"]["protocol_version"] == 1
     assert "runtime_pump" in info["result"]["capabilities"]
+    assert "derived_translation" in info["result"]["capabilities"]
     assert health["result"]["status"] == "healthy"
     assert health["result"]["pump"]["running"] is True
     assert set(health["result"]["runtime"]) == {"active"}
@@ -514,6 +516,59 @@ def test_app_service_submit_notifies_pump_allow_callback(tmp_path: Path) -> None
     submitted = handle_line(service, _request("runtime.submitRun", {"request": request}), root_dir=tmp_path)
 
     assert allowed == [submitted["result"]["task_id"]]
+
+
+def test_app_service_retranslate_copies_saved_source_and_records_provenance(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    store = TaskStore(tmp_path / "artifacts")
+    parent = TaskRecord(
+        task_id="tvx_parent",
+        input_file=str(tmp_path / "movie.mp4"),
+        source_lang="ja",
+        target_lang="zh-CN",
+        bilingual=True,
+        status="DONE",
+        created_at="2026-07-11T00:00:00+00:00",
+        updated_at="2026-07-11T00:10:00+00:00",
+        settings={"input_type": "video_asr_translate"},
+    )
+    store.save_task(parent)
+    source = store.task_dir(parent.task_id) / "source" / "segments.normalized.jsonl"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('{"id":1,"start":0,"end":1,"text_src":"こんにちは"}\n', encoding="utf-8")
+    allowed: list[str] = []
+    service = DesktopApi(root_dir=tmp_path, task_ready_callback=allowed.append)
+
+    response = handle_line(
+        service,
+        _request(
+            "runtime.retranslate",
+            {
+                "task_id": parent.task_id,
+                "provider": "p1",
+                "model": "m1",
+                "overrides": {"memory_bootstrap_enabled": False},
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    child_id = response["result"]["task_id"]
+    child = store.load_task(child_id)
+    copied_source = Path(child.input_file)
+    assert response["result"]["status"] == "QUEUED"
+    assert child_id != parent.task_id
+    assert copied_source.parent == store.task_dir(child_id) / "inputs"
+    assert copied_source.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+    assert child.settings["input_type"] == "segments_translate"
+    assert child.settings["provenance"]["derived_from_task_id"] == parent.task_id
+    assert len(child.settings["provenance"]["source_sha256"]) == 64
+    runtime_request = json.loads((store.task_dir(child_id) / "runtime_request.json").read_text(encoding="utf-8"))
+    assert runtime_request["request"]["input"] == str(copied_source)
+    assert runtime_request["request"]["overrides"]["memory_bootstrap_enabled"] is False
+    assert allowed == [child_id]
+    source.unlink()
+    assert copied_source.exists()
 
 
 def test_local_service_pump_does_not_reconcile_twice(tmp_path: Path, monkeypatch) -> None:

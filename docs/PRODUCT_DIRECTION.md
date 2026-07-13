@@ -175,6 +175,8 @@ translate/validation.jsonl
 translate/repairs.jsonl
 ```
 
+完成任务可从 `source/segments.normalized.jsonl` 派生新的翻译任务。派生任务应复制小型 source artifact、记录父任务与内容哈希，并拥有独立的翻译配置和输出；更换翻译模型、术语或风格不应再次运行 ASR。`resume` 只继续原任务，不承担重译语义。
+
 ### Translation Memory（未来增强）
 
 输入 source segments 和已有译文，维护可复用的术语、人名、角色称谓和风格规则。

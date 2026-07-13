@@ -52,6 +52,7 @@ SERVICE_CAPABILITIES = [
     "desktop_snapshot",
     "runtime",
     "runtime_pump",
+    "derived_translation",
     "provider_admin",
     "asr_provider_admin",
     "result_workspace",
@@ -101,6 +102,7 @@ class DesktopApi:
             "runtime.reconcile": self.runtime_reconcile,
             "runtime.submitRun": self.runtime_submit_run,
             "runtime.submitResume": self.runtime_submit_resume,
+            "runtime.retranslate": self.runtime_retranslate,
             "runtime.acquireNext": self.runtime_acquire_next,
             "runtime.releaseActive": self.runtime_release_active,
             "runtime.cancel": self.runtime_cancel,
@@ -224,6 +226,28 @@ class DesktopApi:
     def runtime_submit_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         request = resume_request_from_payload(_request_param(params))
         payload = self._runtime().submit_resume(root_dir=self.root_dir, request=request, providers_file=self.providers_file)
+        self._notify_task_ready(str(payload.get("task_id") or ""))
+        return payload
+
+    def runtime_retranslate(self, params: dict[str, Any]) -> dict[str, Any]:
+        routing = params.get("routing")
+        overrides = params.get("overrides")
+        if routing is not None and not isinstance(routing, dict):
+            raise DesktopApiError("invalid_request", "routing must be an object")
+        if overrides is not None and not isinstance(overrides, dict):
+            raise DesktopApiError("invalid_request", "overrides must be an object")
+        payload = self._runtime().submit_retranslate(
+            root_dir=self.root_dir,
+            parent_task_id=_required_text(params, "task_id", "taskId"),
+            target_lang=_optional_text(params, "target_lang", "targetLang"),
+            bilingual=_optional_bool(params, "bilingual"),
+            output=_optional_text(params, "output") or "",
+            provider=_optional_text(params, "provider") or "",
+            model=_optional_text(params, "model") or "",
+            routing=routing,
+            overrides=overrides,
+            providers_file=self.providers_file,
+        )
         self._notify_task_ready(str(payload.get("task_id") or ""))
         return payload
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
+import shutil
 import signal
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -111,6 +113,83 @@ class TaskRuntime:
         self.save_runtime_request(request.task_id, "resume", resume_request_to_payload(request))
         task = self.store.load_task(request.task_id)
         return self._submit_payload(task, artifacts_dir)
+
+    def submit_retranslate(
+        self,
+        *,
+        root_dir: Path,
+        parent_task_id: str,
+        target_lang: str | None = None,
+        bilingual: bool | None = None,
+        output: str = "",
+        provider: str = "",
+        model: str = "",
+        routing: dict[str, Any] | None = None,
+        overrides: dict[str, Any] | None = None,
+        providers_file: Path | None = None,
+    ) -> dict[str, Any]:
+        parent = self.store.load_task(parent_task_id)
+        source = self.store.task_dir(parent_task_id) / "source" / "segments.normalized.jsonl"
+        if not source.is_file() or source.stat().st_size <= 0:
+            raise FileNotFoundError(f"Reusable source segments not found for task: {parent_task_id}")
+        request = RunRequest(
+            input=str(source),
+            input_type="segments_translate",
+            source_lang=parent.source_lang,
+            target_lang=str(target_lang or parent.target_lang),
+            bilingual=parent.bilingual if bilingual is None else bool(bilingual),
+            output=str(output or ""),
+            provider=str(provider or ""),
+            model=str(model or ""),
+            routing=dict(routing or {}),
+            overrides=dict(overrides or {}),
+        )
+        task_id, artifacts_dir = create_pipeline_task(
+            root_dir=root_dir,
+            input_file=source,
+            source_lang=request.source_lang,
+            target_lang=request.target_lang,
+            bilingual=request.bilingual,
+            providers_file=providers_file,
+            cli_overrides=request.overrides,
+            provider_name=request.provider or None,
+            model=request.model or None,
+            routing=request.routing or None,
+            input_type="segments_translate",
+            status="INIT",
+        )
+        try:
+            copied_source = self.store.task_dir(task_id) / "inputs" / "source.normalized.jsonl"
+            copied_source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, copied_source)
+            source_sha256 = hashlib.sha256(copied_source.read_bytes()).hexdigest()
+            task = self.store.load_task(task_id)
+            task.input_file = str(copied_source)
+            task.settings["provenance"] = {
+                "kind": "retranslate",
+                "derived_from_task_id": parent_task_id,
+                "source_artifact": "source/segments.normalized.jsonl",
+                "source_sha256": source_sha256,
+            }
+            self.store.save_task(task)
+        except Exception as exc:
+            self.store.update_task_status(task_id, "FAILED", error=str(exc))
+            raise
+        request = replace(request, input=str(copied_source))
+        self.save_runtime_request(task_id, "run", run_request_to_payload(request))
+        self.store.update_task_status(task_id, "QUEUED")
+        self.store.append_event(
+            task_id,
+            "derived_task_created",
+            stage="QUEUED",
+            message="Translation task created from saved source segments",
+            details={
+                "derived_from_task_id": parent_task_id,
+                "source_sha256": source_sha256,
+                "input_type": "segments_translate",
+            },
+        )
+        return self._submit_payload(self.store.load_task(task_id), artifacts_dir)
 
     def acquire_next(
         self,

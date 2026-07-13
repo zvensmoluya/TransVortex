@@ -101,6 +101,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingEvents = false;
   bool _loadingMoreEvents = false;
   bool _resuming = false;
+  String? _retranslatingTaskId;
   String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
   String? _editingTaskId;
@@ -450,6 +451,52 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
   }
 
+  Future<void> _retranslateTask(TaskSummary task) async {
+    if (!task.isDone || _retranslatingTaskId != null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重新翻译当前识别稿'),
+        content: const Text('将使用已保存的识别稿和当前翻译设置创建新任务，不会重新运行语音识别。该操作会调用翻译模型。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pop(true),
+            icon: const Icon(Icons.translate, size: 16),
+            label: const Text('创建翻译任务'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _retranslatingTaskId = task.taskId;
+      _message = '正在从已有识别稿创建翻译任务…';
+      _error = null;
+    });
+    try {
+      final result = await _client.retranslate(task.taskId);
+      if (!mounted) return;
+      _selectedTaskId = result.taskId;
+      await _loadTasks();
+      if (!mounted) return;
+      setState(() {
+        _message = result.message.isNotEmpty ? result.message : '新的翻译任务已排队。';
+        _retranslatingTaskId = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = '创建翻译任务失败：${_friendlyTaskProcessingError(error)}';
+        _message = null;
+        _retranslatingTaskId = null;
+      });
+    }
+  }
+
   Future<void> _cancelTask(TaskSummary task) async {
     if (!task.canCancel || _cancellingTaskId != null) return;
     setState(() {
@@ -781,6 +828,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   loadingMoreEvents: _loadingMoreEvents,
                   eventsHasMore: selectedEventsPage?.hasMore == true,
                   resuming: _resuming,
+                  retranslatingTaskId: _retranslatingTaskId,
                   cancellingTaskId: _cancellingTaskId,
                   checkingOutputDirectory: _checkingOutputDirectory,
                   onRefresh: _loadTasks,
@@ -795,6 +843,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => setState(() => _editingTaskId = null),
                   onResume: (task) => unawaited(_resumeTask(task)),
+                  onRetranslate: (task) => unawaited(_retranslateTask(task)),
                   onCancel: (task) => unawaited(_cancelTask(task)),
                   onOpenTaskDirectory: (task) =>
                       unawaited(_openTaskDirectory(task)),
@@ -841,6 +890,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.loadingMoreEvents,
     required this.eventsHasMore,
     required this.resuming,
+    required this.retranslatingTaskId,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
@@ -852,6 +902,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
+    required this.onRetranslate,
     required this.onCancel,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
@@ -876,6 +927,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final bool loadingMoreEvents;
   final bool eventsHasMore;
   final bool resuming;
+  final String? retranslatingTaskId;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
@@ -887,6 +939,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
+  final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
@@ -928,6 +981,7 @@ class _TaskProcessingBody extends StatelessWidget {
             loadingMoreEvents: loadingMoreEvents,
             eventsHasMore: eventsHasMore,
             resuming: resuming,
+            retranslatingTaskId: retranslatingTaskId,
             cancellingTaskId: cancellingTaskId,
             checkingOutputDirectory: checkingOutputDirectory,
             onLoadMoreEvents: onLoadMoreEvents,
@@ -935,6 +989,7 @@ class _TaskProcessingBody extends StatelessWidget {
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResume: onResume,
+            onRetranslate: onRetranslate,
             onCancel: onCancel,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
@@ -1341,6 +1396,7 @@ class _TaskPreview extends StatelessWidget {
     required this.loadingMoreEvents,
     required this.eventsHasMore,
     required this.resuming,
+    required this.retranslatingTaskId,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onLoadMoreEvents,
@@ -1348,6 +1404,7 @@ class _TaskPreview extends StatelessWidget {
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResume,
+    required this.onRetranslate,
     required this.onCancel,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
@@ -1367,6 +1424,7 @@ class _TaskPreview extends StatelessWidget {
   final bool loadingMoreEvents;
   final bool eventsHasMore;
   final bool resuming;
+  final String? retranslatingTaskId;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback? onLoadMoreEvents;
@@ -1374,6 +1432,7 @@ class _TaskPreview extends StatelessWidget {
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<TaskSummary> onResume;
+  final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
@@ -1417,6 +1476,7 @@ class _TaskPreview extends StatelessWidget {
     }
     final outputDir = _outputDirectoryFor(task);
     final cancelling = cancellingTaskId == task.taskId;
+    final retranslating = retranslatingTaskId == task.taskId;
     final eventSearchQuery = eventSearchController.text.trim();
     final visibleEvents = events
         .where(
@@ -1452,6 +1512,13 @@ class _TaskPreview extends StatelessWidget {
                 label: '编辑字幕',
                 strong: true,
                 onTap: () => onOpenResult(task),
+              ),
+            if (task.isDone)
+              _TaskActionButton(
+                label: retranslating ? '创建中' : '重新翻译',
+                onTap: retranslatingTaskId == null
+                    ? () => onRetranslate(task)
+                    : null,
               ),
             if (task.canResume)
               _TaskActionButton(

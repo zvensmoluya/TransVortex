@@ -505,6 +505,39 @@ void main() {
     },
   );
 
+  test(
+    'AppServiceClient creates a translation task from saved source',
+    () async {
+      final transport = _RecordingTransport({
+        'runtime.retranslate': {
+          'ok': true,
+          'task_id': 'tvx_child',
+          'status': 'QUEUED',
+          'task_dir': r'D:\artifacts\tvx_child',
+          'terminal': false,
+          'message': 'Task queued.',
+        },
+      });
+      final client = AppServiceClient(transport);
+
+      final result = await client.retranslate(
+        'tvx_parent',
+        provider: 'p2',
+        model: 'm2',
+        overrides: {'memory_bootstrap_enabled': false},
+      );
+
+      expect(result.taskId, 'tvx_child');
+      expect(transport.calls.single.method, 'runtime.retranslate');
+      expect(transport.calls.single.params, {
+        'task_id': 'tvx_parent',
+        'provider': 'p2',
+        'model': 'm2',
+        'overrides': {'memory_bootstrap_enabled': false},
+      });
+    },
+  );
+
   test('LocalServiceSupervisor talks to real app service process', () async {
     final serviceRoot = await Directory.systemTemp.createTemp(
       'transvortex_service_smoke_',
