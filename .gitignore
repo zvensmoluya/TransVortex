@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 src/*.egg-info/
 /artifacts/
+/build/
+/dist/
 .venv/
 .transvortex-desktop/
 providers.local.yaml

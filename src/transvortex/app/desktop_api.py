@@ -31,7 +31,16 @@ from ..providers.model_catalog import model_catalog_payload
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
-from .asr_admin import pipeline_file_version, save_asr_provider_config
+from .asr_admin import draft_to_asr_provider_config, pipeline_file_version, save_asr_provider_config
+from .asr_operations import AsrOperationError, AsrOperationManager
+from .asr_runtime import (
+    asr_provider_readiness,
+    asr_runtime_snapshot,
+    discover_python_environments,
+    probe_python_environment,
+    save_external_environment,
+)
+from .asr_testing import run_asr_connection_test
 from .config import _read_yaml, load_app_config, resolve_providers_file
 from .credentials import (
     auth_file_path,
@@ -43,6 +52,7 @@ from .credentials import (
 )
 from .desktop_requests import normalize_input_type, resume_request_from_payload, run_request_from_payload
 from .doctor import doctor_report
+from .media_inspect import inspect_media_source
 
 
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
@@ -55,6 +65,9 @@ SERVICE_CAPABILITIES = [
     "derived_translation",
     "provider_admin",
     "asr_provider_admin",
+    "asr_component_manager",
+    "asr_environment_probe",
+    "media_inspection",
     "result_workspace",
     "event_cursor",
 ]
@@ -83,6 +96,7 @@ class DesktopApi:
         self._pump_status = pump_status
         self._task_ready_callback = task_ready_callback
         self._shutdown_callback = shutdown_callback
+        self._asr_operation_manager = AsrOperationManager(root_dir=root_dir)
         self.shutdown_requested = False
 
     def dispatch(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -115,6 +129,16 @@ class DesktopApi:
             "provider.test": self.provider_test,
             "provider.routing.save": self.provider_routing_save,
             "asr.provider.save": self.asr_provider_save,
+            "asr.status": self.asr_status,
+            "asr.provider.test": self.asr_provider_test,
+            "asr.component.install": self.asr_component_install,
+            "asr.component.remove": self.asr_component_remove,
+            "asr.operation.get": self.asr_operation_get,
+            "asr.operation.cancel": self.asr_operation_cancel,
+            "asr.hardware.probe": self.asr_hardware_probe,
+            "asr.environment.discover": self.asr_environment_discover,
+            "asr.environment.probe": self.asr_environment_probe,
+            "media.inspect": self.media_inspect,
             "prompt.asr.save": self.prompt_asr_save,
             "prompt.asr.delete": self.prompt_asr_delete,
             "result.open": self.result_open,
@@ -159,6 +183,7 @@ class DesktopApi:
 
     def service_shutdown(self, _params: dict[str, Any]) -> dict[str, Any]:
         self.shutdown_requested = True
+        self._asr_operation_manager.cancel_all()
         if self._shutdown_callback is not None:
             self._shutdown_callback()
         return {"ok": True, "shutdown": "requested"}
@@ -335,6 +360,108 @@ class DesktopApi:
             expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
         )
 
+    def asr_status(self, _params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        provider = config.asr_providers[config.pipeline.asr_provider]
+        return {
+            "provider": provider.name,
+            "kind": provider.kind,
+            "protocol": provider.protocol,
+            "model": provider.model,
+            "readiness": asr_provider_readiness(provider, root_dir=self.root_dir),
+        }
+
+    def asr_provider_test(self, params: dict[str, Any]) -> dict[str, Any]:
+        draft = _optional_dict(params, "provider_draft", "providerDraft")
+        if draft is not None:
+            provider = draft_to_asr_provider_config(draft)
+        else:
+            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+            provider_name = _optional_text(params, "provider", "provider_name", "providerName")
+            provider_name = provider_name or config.pipeline.asr_provider
+            provider = config.asr_providers.get(provider_name)
+            if provider is None:
+                raise DesktopApiError("asr_provider_not_found", f"ASR provider not found: {provider_name}")
+        return run_asr_connection_test(
+            provider,
+            root_dir=self.root_dir,
+            source_lang=_optional_text(params, "source_lang", "sourceLang") or "en",
+        )
+
+    def asr_component_install(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._asr_operation_manager.start_install(
+                _required_text(params, "kind"),
+                _optional_text(params, "item_id", "itemId", "id") or "",
+            )
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_component_remove(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._asr_operation_manager.remove(
+                _required_text(params, "kind"),
+                _optional_text(params, "item_id", "itemId", "id") or "",
+            )
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_operation_get(self, params: dict[str, Any]) -> dict[str, Any]:
+        operation_id = _optional_text(params, "operation_id", "operationId", "id")
+        try:
+            if operation_id:
+                return self._asr_operation_manager.operation(operation_id)
+            return {"operations": self._asr_operation_manager.operations()}
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_operation_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._asr_operation_manager.cancel(
+                _required_text(params, "operation_id", "operationId", "id")
+            )
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_hardware_probe(self, _params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._asr_operation_manager.probe_hardware()
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_environment_discover(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return {"environments": discover_python_environments()}
+
+    def asr_environment_probe(self, params: dict[str, Any]) -> dict[str, Any]:
+        executable = Path(_required_text(params, "python_executable", "pythonExecutable"))
+        raw_model_path = _optional_text(params, "model_path", "modelPath")
+        model_id = _optional_text(params, "model_id", "modelId") or ""
+        probe = probe_python_environment(
+            executable,
+            model_id=model_id,
+            model_path=Path(raw_model_path) if raw_model_path else None,
+            device=_optional_text(params, "device") or "auto",
+            compute_type=_optional_text(params, "compute_type", "computeType") or "auto",
+            timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
+        )
+        environment = None
+        should_save = _optional_bool(params, "save") is not False
+        if probe.get("ok") is True and should_save:
+            environment = save_external_environment(
+                root_dir=self.root_dir,
+                python_executable=executable,
+                probe=probe,
+            )
+        return {"probe": probe, "environment": environment}
+
+    def media_inspect(self, params: dict[str, Any]) -> dict[str, Any]:
+        return inspect_media_source(
+            Path(_required_text(params, "input", "input_file", "inputFile", "path")),
+            source_lang=_optional_text(params, "source_lang", "sourceLang") or "auto",
+            source_mode=_optional_text(params, "source_mode", "sourceMode") or "auto",
+            subtitle_track=_optional_text(params, "subtitle_track", "subtitleTrack") or "auto",
+        )
+
     def prompt_asr_save(self, params: dict[str, Any]) -> dict[str, Any]:
         return save_asr_prompt_profile(root_dir=self.root_dir, profile=_dict_param(params, "profile"))
 
@@ -451,6 +578,7 @@ def config_payload(
             **to_plain(provider),
             "credential_source": credential_source,
             "has_key": has_key,
+            "readiness": asr_provider_readiness(provider, root_dir=root),
         }
     return {
         "root_dir": str(root),
@@ -471,6 +599,7 @@ def config_payload(
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
         "asr_providers": asr_providers,
+        "asr_local": asr_runtime_snapshot(root),
         "config_error": error,
     }
 
@@ -548,6 +677,14 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
             **row,
             "credential_source": credential_source,
             "has_key": has_key,
+            "readiness": {
+                "state": "unavailable",
+                "code": "config_invalid",
+                "can_run": False,
+                "primary_action": "repair_config",
+                "checked_at": "",
+                "details": {},
+            },
         }
 
     return {
@@ -572,6 +709,7 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
         "asr_providers": asr_providers,
+        "asr_local": asr_runtime_snapshot(root),
         "config_error": error,
     }
 

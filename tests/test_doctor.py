@@ -155,6 +155,34 @@ asr_providers:
     assert statuses["asr_env_key"] == "PASS"
 
 
+def test_doctor_reports_managed_whisper_readiness(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  provider: managed_whisper
+asr_providers:
+  - name: managed_whisper
+    kind: local_worker
+    protocol: faster_whisper
+    model: large-v3
+    runtime: {source: managed, id: managed:faster-whisper}
+    local: {device: auto, compute_type: auto}
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    report = doctor_report(root_dir=tmp_path)
+    check = next(item for item in report["checks"] if item["name"] == "faster_whisper")
+
+    assert check["status"] == "WARN"
+    assert check["code"] == "runtime_unpublished"
+    assert check["details"]["kind"] == "local_worker"
+
+
 def test_doctor_reports_config_load_failure(tmp_path: Path) -> None:
     (tmp_path / "pipeline.yaml").write_text("{}", encoding="utf-8")
     (tmp_path / "providers.yaml").write_text("providers:\n  - name: broken\n", encoding="utf-8")

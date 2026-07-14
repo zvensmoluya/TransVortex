@@ -625,6 +625,95 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> asrProviderTest({
+    String? provider,
+    Map<String, Object?>? providerDraft,
+    String sourceLang = 'en',
+  }) {
+    return call('asr.provider.test', {
+      'provider': ?provider,
+      'provider_draft': ?providerDraft,
+      'source_lang': sourceLang,
+    }).then(_stringMap);
+  }
+
+  Future<AsrOperationStatus> asrComponentInstall(
+    String kind, {
+    String? itemId,
+  }) async {
+    return AsrOperationStatus.fromJson(
+      await call('asr.component.install', {'kind': kind, 'item_id': ?itemId}),
+    );
+  }
+
+  Future<Map<String, Object?>> asrComponentRemove(
+    String kind, {
+    String? itemId,
+  }) {
+    return call('asr.component.remove', {
+      'kind': kind,
+      'item_id': ?itemId,
+    }).then(_stringMap);
+  }
+
+  Future<AsrOperationStatus> asrOperation(String operationId) async {
+    return AsrOperationStatus.fromJson(
+      await call('asr.operation.get', {'operation_id': operationId}),
+    );
+  }
+
+  Future<AsrOperationStatus> asrOperationCancel(String operationId) async {
+    return AsrOperationStatus.fromJson(
+      await call('asr.operation.cancel', {'operation_id': operationId}),
+    );
+  }
+
+  Future<Map<String, Object?>> probeAsrHardware() {
+    return call('asr.hardware.probe').then(_stringMap);
+  }
+
+  Future<List<PythonEnvironmentOption>> discoverAsrEnvironments() async {
+    final payload = _stringMap(await call('asr.environment.discover'));
+    return _objectList(payload['environments'])
+        .map(PythonEnvironmentOption.fromJson)
+        .where((item) => item.pythonExecutable.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<Map<String, Object?>> probeAsrEnvironment({
+    required String pythonExecutable,
+    String? modelId,
+    String? modelPath,
+    String device = 'auto',
+    String computeType = 'auto',
+    bool save = true,
+  }) {
+    return call('asr.environment.probe', {
+      'python_executable': pythonExecutable,
+      'model_id': ?modelId,
+      'model_path': ?modelPath,
+      'device': device,
+      'compute_type': computeType,
+      'save': save,
+    }, const Duration(minutes: 3)).then(_stringMap);
+  }
+
+  Future<MediaInspection> inspectMedia({
+    required String input,
+    String sourceLang = 'auto',
+    String sourceMode = 'auto',
+    String subtitleTrack = 'auto',
+  }) async {
+    return MediaInspection.fromJson(
+      await call('media.inspect', {
+        'input': input,
+        'source_lang': sourceLang,
+        'source_mode': sourceMode,
+        'subtitle_track': subtitleTrack,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
   Future<Map<String, Object?>> resultOpen(String taskId) async {
     return _stringMap(
       await _transport.call('result.open', {'task_id': taskId}),
@@ -842,6 +931,42 @@ class DesktopSnapshot {
       ..sort((a, b) => a.name.compareTo(b.name));
   }
 
+  Map<String, Object?> get asrLocal => _stringMap(config['asr_local']);
+
+  List<AsrComponentOption> get asrModels {
+    return _objectList(asrLocal['models'])
+        .map((item) => AsrComponentOption.fromJson(item, kind: 'model'))
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  AsrComponentOption? get asrRuntime {
+    final raw = _stringMap(asrLocal['runtime']);
+    if (raw.isEmpty) return null;
+    return AsrComponentOption.fromJson(raw, kind: 'runtime');
+  }
+
+  List<AsrComponentOption> get asrAccelerators {
+    return _objectList(asrLocal['accelerators'])
+        .map((item) => AsrComponentOption.fromJson(item, kind: 'accelerator'))
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<AsrOperationStatus> get asrOperations {
+    return _objectList(asrLocal['operations'])
+        .map(AsrOperationStatus.fromJson)
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<PythonEnvironmentOption> get asrEnvironments {
+    return _objectList(asrLocal['environments'])
+        .map(PythonEnvironmentOption.fromJson)
+        .where((item) => item.pythonExecutable.isNotEmpty)
+        .toList(growable: false);
+  }
+
   Map<String, Object?>? get providersFileVersion {
     final version = _stringMap(config['providers_file_version']);
     return version.isEmpty ? null : version;
@@ -969,12 +1094,18 @@ class ConfigReadiness {
     required this.translationLabel,
     required this.asrConfigured,
     required this.asrLabel,
+    this.asrState = 'unavailable',
+    this.asrCode = 'unknown',
+    this.asrAction = '',
   });
 
   final bool translationConfigured;
   final String translationLabel;
   final bool asrConfigured;
   final String asrLabel;
+  final String asrState;
+  final String asrCode;
+  final String asrAction;
 
   factory ConfigReadiness.fromConfig(Map<String, Object?> config) {
     final providers = _objectList(
@@ -1003,12 +1134,19 @@ class ConfigReadiness {
     final asrLabel = asrOption == null || asrOption.name.isEmpty
         ? selectedAsrName ?? '需配置'
         : asrOption.displayLabel;
+    final asrReadiness = AsrReadiness.fromJson(
+      selectedAsr['readiness'],
+      legacyCanRun: selectedAsr['has_key'] == true,
+    );
 
     return ConfigReadiness(
       translationConfigured: selectedProvider['has_key'] == true,
       translationLabel: translationLabel,
-      asrConfigured: selectedAsr['has_key'] == true,
+      asrConfigured: asrReadiness.canRun,
       asrLabel: asrLabel,
+      asrState: asrReadiness.state,
+      asrCode: asrReadiness.code,
+      asrAction: asrReadiness.primaryAction,
     );
   }
 }
@@ -1317,6 +1455,7 @@ class AsrProviderOption {
     this.hasKey = false,
     this.credentialId = '',
     this.credentialSource = '',
+    this.readiness = const AsrReadiness(),
     this.raw = const <String, Object?>{},
   });
 
@@ -1330,6 +1469,7 @@ class AsrProviderOption {
   final bool hasKey;
   final String credentialId;
   final String credentialSource;
+  final AsrReadiness readiness;
   final Map<String, Object?> raw;
 
   factory AsrProviderOption.fromJson(Object? value, {String? id}) {
@@ -1358,29 +1498,37 @@ class AsrProviderOption {
           _stringValue(map['credential_source']) ??
           _stringValue(map['credentialSource']) ??
           '',
+      readiness: AsrReadiness.fromJson(
+        map['readiness'],
+        legacyCanRun: map['has_key'] == true || map['hasKey'] == true,
+      ),
       raw: map,
     );
   }
 
   String get displayLabel {
     return switch (kind) {
-      'local_inprocess' => '本机',
+      'local_worker' || 'local_inprocess' => '本机 Whisper',
       'local_server' => protocol == 'funasr_openai' ? 'FunASR' : '本地服务',
       'remote' => '云端',
       _ => displayName.isNotEmpty ? displayName : name,
     };
   }
 
+  bool get canRun => readiness.canRun;
+
   static String _inferKind(String name) {
     final lower = name.toLowerCase();
-    if (_looksLikeFasterWhisper(lower)) return 'local_inprocess';
+    if (_looksLikeFasterWhisper(lower)) return 'local_worker';
     if (lower.contains('funasr')) return 'local_server';
     return 'remote';
   }
 
   static String _inferProtocol(String kind, String name) {
     final lower = name.toLowerCase();
-    if (kind == 'local_inprocess' || _looksLikeFasterWhisper(lower)) {
+    if (kind == 'local_worker' ||
+        kind == 'local_inprocess' ||
+        _looksLikeFasterWhisper(lower)) {
       return 'faster_whisper';
     }
     if (kind == 'local_server' || lower.contains('funasr')) {
@@ -1394,6 +1542,246 @@ class AsrProviderOption {
         lower.contains('faster_whisper') ||
         lower.contains('faster-whisper');
   }
+}
+
+class AsrReadiness {
+  const AsrReadiness({
+    this.state = 'unavailable',
+    this.code = 'unknown',
+    this.canRun = false,
+    this.primaryAction = '',
+    this.checkedAt = '',
+    this.details = const <String, Object?>{},
+  });
+
+  final String state;
+  final String code;
+  final bool canRun;
+  final String primaryAction;
+  final String checkedAt;
+  final Map<String, Object?> details;
+
+  factory AsrReadiness.fromJson(Object? value, {bool legacyCanRun = false}) {
+    final map = _stringMap(value);
+    if (map.isEmpty) {
+      return AsrReadiness(
+        state: legacyCanRun ? 'ready' : 'unavailable',
+        code: legacyCanRun ? 'legacy_ready' : 'unknown',
+        canRun: legacyCanRun,
+      );
+    }
+    return AsrReadiness(
+      state: _stringValue(map['state']) ?? 'unavailable',
+      code: _stringValue(map['code']) ?? 'unknown',
+      canRun: map['can_run'] == true || map['canRun'] == true,
+      primaryAction:
+          _stringValue(map['primary_action']) ??
+          _stringValue(map['primaryAction']) ??
+          '',
+      checkedAt:
+          _stringValue(map['checked_at']) ??
+          _stringValue(map['checkedAt']) ??
+          '',
+      details: _stringMap(map['details']),
+    );
+  }
+
+  String get statusLabel {
+    return switch (state) {
+      'ready' => '可用',
+      'checking' => '处理中',
+      'needs_action' => _asrReadinessCodeLabel(code),
+      _ => _asrReadinessCodeLabel(code),
+    };
+  }
+}
+
+class AsrComponentOption {
+  const AsrComponentOption({
+    required this.id,
+    required this.kind,
+    this.displayName = '',
+    this.version = '',
+    this.revision = '',
+    this.installed = false,
+    this.published = true,
+    this.size = 0,
+    this.path = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  final String id;
+  final String kind;
+  final String displayName;
+  final String version;
+  final String revision;
+  final bool installed;
+  final bool published;
+  final int size;
+  final String path;
+  final Map<String, Object?> raw;
+
+  factory AsrComponentOption.fromJson(Object? value, {required String kind}) {
+    final map = _stringMap(value);
+    final artifact = _stringMap(map['artifact']);
+    return AsrComponentOption(
+      id: _stringValue(map['id']) ?? '',
+      kind: kind,
+      displayName:
+          _stringValue(map['display_name']) ??
+          _stringValue(map['displayName']) ??
+          _stringValue(map['id']) ??
+          '',
+      version: _stringValue(map['version']) ?? '',
+      revision: _stringValue(map['revision']) ?? '',
+      installed: map['installed'] == true,
+      published: artifact.isEmpty || artifact['published'] == true,
+      size: _intValue(map['size']) ?? _intValue(artifact['size']) ?? 0,
+      path: _stringValue(map['path']) ?? '',
+      raw: map,
+    );
+  }
+}
+
+class AsrOperationStatus {
+  const AsrOperationStatus({
+    required this.id,
+    required this.kind,
+    required this.itemId,
+    required this.state,
+    this.bytesDone = 0,
+    this.bytesTotal = 0,
+    this.currentFile = '',
+    this.errorCode = '',
+    this.message = '',
+  });
+
+  final String id;
+  final String kind;
+  final String itemId;
+  final String state;
+  final int bytesDone;
+  final int bytesTotal;
+  final String currentFile;
+  final String errorCode;
+  final String message;
+
+  factory AsrOperationStatus.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AsrOperationStatus(
+      id: _stringValue(map['id']) ?? '',
+      kind: _stringValue(map['kind']) ?? '',
+      itemId: _stringValue(map['item_id']) ?? _stringValue(map['itemId']) ?? '',
+      state: _stringValue(map['state']) ?? 'unknown',
+      bytesDone:
+          _intValue(map['bytes_done']) ?? _intValue(map['bytesDone']) ?? 0,
+      bytesTotal:
+          _intValue(map['bytes_total']) ?? _intValue(map['bytesTotal']) ?? 0,
+      currentFile:
+          _stringValue(map['current_file']) ??
+          _stringValue(map['currentFile']) ??
+          '',
+      errorCode:
+          _stringValue(map['error_code']) ??
+          _stringValue(map['errorCode']) ??
+          '',
+      message: _stringValue(map['message']) ?? '',
+    );
+  }
+
+  bool get active => const {'queued', 'running', 'cancelling'}.contains(state);
+  double? get progress => bytesTotal <= 0
+      ? null
+      : (bytesDone / bytesTotal).clamp(0.0, 1.0).toDouble();
+}
+
+class PythonEnvironmentOption {
+  const PythonEnvironmentOption({
+    required this.id,
+    required this.pythonExecutable,
+    this.source = '',
+    this.probe = const <String, Object?>{},
+    this.modelPaths = const <String, Object?>{},
+  });
+
+  final String id;
+  final String pythonExecutable;
+  final String source;
+  final Map<String, Object?> probe;
+  final Map<String, Object?> modelPaths;
+
+  factory PythonEnvironmentOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return PythonEnvironmentOption(
+      id: _stringValue(map['id']) ?? '',
+      pythonExecutable:
+          _stringValue(map['python_executable']) ??
+          _stringValue(map['pythonExecutable']) ??
+          '',
+      source: _stringValue(map['source']) ?? '',
+      probe: _stringMap(map['probe']),
+      modelPaths: _stringMap(map['model_paths']),
+    );
+  }
+}
+
+class MediaInspection {
+  const MediaInspection({
+    required this.kind,
+    required this.sourceMode,
+    required this.needsAsr,
+    this.available = true,
+    this.code = 'ready',
+    this.subtitleStreams = const <Object?>[],
+    this.selectedSubtitleStream = const <String, Object?>{},
+  });
+
+  final String kind;
+  final String sourceMode;
+  final bool needsAsr;
+  final bool available;
+  final String code;
+  final List<Object?> subtitleStreams;
+  final Map<String, Object?> selectedSubtitleStream;
+
+  factory MediaInspection.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return MediaInspection(
+      kind: _stringValue(map['kind']) ?? '',
+      sourceMode:
+          _stringValue(map['source_mode']) ??
+          _stringValue(map['sourceMode']) ??
+          '',
+      needsAsr: map['needs_asr'] == true || map['needsAsr'] == true,
+      available: map['available'] != false,
+      code: _stringValue(map['code']) ?? 'ready',
+      subtitleStreams: _objectList(map['subtitle_streams']),
+      selectedSubtitleStream: _stringMap(map['selected_subtitle_stream']),
+    );
+  }
+}
+
+String _asrReadinessCodeLabel(String code) {
+  return switch (code) {
+    'runtime_missing' => '组件未安装',
+    'runtime_unpublished' => '组件尚未发布',
+    'runtime_installing' => '正在安装组件',
+    'model_missing' => '模型未安装',
+    'model_installing' => '正在下载模型',
+    'device_unavailable' => '加速组件不可用',
+    'hardware_untested' => '需要检查 NVIDIA 硬件',
+    'hardware_incompatible' => 'NVIDIA 硬件不兼容',
+    'compute_type_incompatible' => '计算精度不兼容',
+    'accelerator_installing' => '正在安装加速组件',
+    'environment_missing' => '需要选择 Python 环境',
+    'environment_unavailable' => 'Python 环境不可用',
+    'environment_protocol_incompatible' => 'Python 环境协议不兼容',
+    'connection_untested' => '需要测试连接',
+    'service_unreachable' => '服务连接失败',
+    'credential_missing' => '需要配置密钥',
+    'config_invalid' => '配置无效',
+    _ => code == 'ready' ? '可用' : '不可用',
+  };
 }
 
 String? _routeProviderName(Object? primary) {

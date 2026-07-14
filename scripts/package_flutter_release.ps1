@@ -124,7 +124,10 @@ function Assert-PortablePackageNoSecrets {
         throw "Portable package contains forbidden local/secret files: $($matches -join ', ')"
     }
 
-    $forbiddenRootPaths = @(".venv", "artifacts", "output", "tmp", "DemoTest")
+    $forbiddenRootPaths = @(
+        ".venv", "artifacts", "output", "tmp", "DemoTest",
+        "Components", "Models", "Downloads"
+    )
     $rootMatches = @(
         $forbiddenRootPaths |
             ForEach-Object { Join-Path $PackageRoot $_ } |
@@ -133,6 +136,27 @@ function Assert-PortablePackageNoSecrets {
     )
     if ($rootMatches.Count -gt 0) {
         throw "Portable package contains forbidden repo-local root paths: $($rootMatches -join ', ')"
+    }
+
+    $forbiddenAsrRuntimeFiles = @(
+        Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force -File |
+            Where-Object {
+                $_.Name -eq "model.bin" -or
+                $_.Name -like "cublas*.dll" -or
+                $_.Name -like "cudnn*.dll" -or
+                $_.Name -like "ctranslate2*.pyd" -or
+                $_.Name -like "torch*.dll"
+            } |
+            ForEach-Object { $_.FullName }
+    )
+    $forbiddenAsrRuntimeDirectories = @(
+        Get-ChildItem -LiteralPath $PackageRoot -Recurse -Force -Directory |
+            Where-Object { $_.Name -in @("faster_whisper", "ctranslate2", "nvidia", "torch") } |
+            ForEach-Object { $_.FullName }
+    )
+    $forbiddenAsrPayloads = @($forbiddenAsrRuntimeFiles) + @($forbiddenAsrRuntimeDirectories)
+    if ($forbiddenAsrPayloads.Count -gt 0) {
+        throw "Portable package contains managed ASR runtime/model payloads: $($forbiddenAsrPayloads -join ', ')"
     }
 }
 
@@ -185,7 +209,8 @@ function Invoke-PortableServiceCheck {
         $requests = @(
             [ordered]@{ jsonrpc = "2.0"; id = 1; method = "service.info"; params = @{} },
             [ordered]@{ jsonrpc = "2.0"; id = 2; method = "service.health"; params = @{} },
-            [ordered]@{ jsonrpc = "2.0"; id = 3; method = "service.shutdown"; params = @{} }
+            [ordered]@{ jsonrpc = "2.0"; id = 3; method = "asr.status"; params = @{} },
+            [ordered]@{ jsonrpc = "2.0"; id = 4; method = "service.shutdown"; params = @{} }
         )
         foreach ($request in $requests) {
             $process.StandardInput.WriteLine(($request | ConvertTo-Json -Compress -Depth 5))
@@ -213,13 +238,14 @@ function Invoke-PortableServiceCheck {
 
     $info = $responses | Where-Object { $_.id -eq 1 } | Select-Object -First 1
     $health = $responses | Where-Object { $_.id -eq 2 } | Select-Object -First 1
-    $shutdown = $responses | Where-Object { $_.id -eq 3 } | Select-Object -First 1
+    $asrStatus = $responses | Where-Object { $_.id -eq 3 } | Select-Object -First 1
+    $shutdown = $responses | Where-Object { $_.id -eq 4 } | Select-Object -First 1
     $errors = @(
         $responses |
             Where-Object { ($_.PSObject.Properties.Name -contains "error") -and $null -ne $_.error } |
             ForEach-Object { $_.error }
     )
-    if ($responses.Count -ne 3 -or $errors.Count -gt 0) {
+    if ($responses.Count -ne 4 -or $errors.Count -gt 0) {
         throw "Portable Local Service RPC check failed. Responses=$($responses.Count) Errors=$($errors.Count) Stdout=$stdoutText Stderr=$stderrText"
     }
     if ($info.result.service -ne "transvortex.app_service") {
@@ -230,6 +256,13 @@ function Invoke-PortableServiceCheck {
     }
     if (-not [bool]$shutdown.result.ok) {
         throw "service.shutdown did not return ok=true."
+    }
+    $selectedAsr = [string]$asrStatus.result.provider
+    if ($asrStatus.result.kind -ne "local_worker") {
+        throw "Portable default ASR must use local_worker, got: $($asrStatus.result.kind)"
+    }
+    if ([bool]$asrStatus.result.readiness.can_run) {
+        throw "Portable package reported local Whisper ready without a managed component."
     }
 
     return [ordered]@{
@@ -244,6 +277,9 @@ function Invoke-PortableServiceCheck {
         health_status = [string]$health.result.status
         pump_enabled = [bool]$health.result.pump.enabled
         shutdown_ok = [bool]$shutdown.result.ok
+        asr_provider = $selectedAsr
+        asr_kind = [string]$asrStatus.result.kind
+        asr_readiness = [string]$asrStatus.result.readiness.code
         exit_code = $process.ExitCode
         stderr = $stderrText.Trim()
     }
@@ -272,6 +308,10 @@ This portable package includes the Flutter release bundle and the Python source
 tree required by the current Local Service launcher. It does not include a
 Python runtime, FFmpeg, model files, API keys, auth.json, .env files, or local
 provider configuration.
+
+Local Whisper is represented as an optional managed component. Runtime,
+model, and NVIDIA packages are downloaded only after an explicit user action
+and are stored under the user-level TransVortex data directory.
 
 Credentials are resolved from the user-level TransVortex credential store
 (~\.transvortex\auth.json) or environment variables. The bundled providers.yaml
@@ -431,6 +471,9 @@ $requiredPaths = @(
     "data\flutter_assets\FontManifest.json",
     "src\transvortex\app_service.py",
     "src\transvortex\app\desktop_api.py",
+    "src\transvortex\app\asr_operations.py",
+    "src\transvortex\core\whisper_host.py",
+    "src\transvortex\resources\asr_components.json",
     "prompts\translation\system.v1.md",
     "pipeline.yaml",
     "providers.yaml",
@@ -494,6 +537,10 @@ $report = [ordered]@{
     providers_yaml_source = "providers.example.yaml"
     python_runtime_included = $false
     ffmpeg_included = $false
+    local_asr_runtime_included = $false
+    local_asr_models_included = $false
+    local_asr_accelerator_included = $false
+    local_asr_catalog = "src\transvortex\resources\asr_components.json"
     excluded_local_secret_files = @(".env", ".imagegen.env", ".env.imagegen", "providers.local.yaml", "auth.json")
     required_paths = $requiredPaths
     local_service_check = $serviceReport

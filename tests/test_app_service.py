@@ -222,6 +222,109 @@ def test_app_service_desktop_snapshot_contains_control_plane_payloads(tmp_path: 
     assert response["result"]["config"]["pipeline_file_version"]
 
 
+def test_app_service_default_local_whisper_is_not_ready_without_component(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+
+    config = handle_line(service, _request("config.get"), root_dir=tmp_path)["result"]
+    selected = config["pipeline"]["asr_provider"]
+    provider = config["asr_providers"][selected]
+
+    assert provider["kind"] == "local_worker"
+    assert provider["has_key"] is True
+    assert provider["readiness"]["can_run"] is False
+    assert provider["readiness"]["state"] == "needs_action"
+    assert provider["readiness"]["code"] == "runtime_unpublished"
+
+    status = handle_line(service, _request("asr.status"), root_dir=tmp_path)["result"]
+    assert status["provider"] == selected
+    assert status["kind"] == "local_worker"
+    assert status["readiness"]["can_run"] is False
+
+
+def test_app_service_rejects_unpublished_managed_runtime_install(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request("asr.component.install", {"kind": "runtime"}),
+        root_dir=tmp_path,
+    )
+
+    assert response["error"]["code"] == "component_unpublished"
+
+
+def test_app_service_media_inspection_gates_only_audio_asr_without_ffprobe(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+
+    subtitle = handle_line(
+        service,
+        _request("media.inspect", {"input": str(tmp_path / "source.srt")}),
+        root_dir=tmp_path,
+    )["result"]
+    audio = handle_line(
+        service,
+        _request("media.inspect", {"input": str(tmp_path / "source.wav")}),
+        root_dir=tmp_path,
+    )["result"]
+
+    assert subtitle["source_mode"] == "subtitle_file"
+    assert subtitle["needs_asr"] is False
+    assert audio["source_mode"] == "asr"
+    assert audio["needs_asr"] is True
+
+
+def test_app_service_exposes_registered_asr_environments(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    monkeypatch.setattr(
+        "transvortex.app.desktop_api.discover_python_environments",
+        lambda: [{"id": "external:test", "python_executable": r"C:\Python\python.exe", "source": "path"}],
+    )
+
+    response = handle_line(service, _request("asr.environment.discover"), root_dir=tmp_path)
+
+    assert response["result"]["environments"][0]["id"] == "external:test"
+
+
+def test_app_service_runs_asr_provider_test_for_saved_provider(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  provider: funasr
+asr_providers:
+  - name: funasr
+    kind: local_server
+    protocol: funasr_openai
+    model: sensevoice
+    base_url: http://127.0.0.1:8899
+    auth: {type: none}
+        """.strip(),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_test(provider, *, root_dir, source_lang):  # noqa: ANN001
+        captured.update(provider=provider, root_dir=root_dir, source_lang=source_lang)
+        return {"ok": True, "code": "ready"}
+
+    monkeypatch.setattr("transvortex.app.desktop_api.run_asr_connection_test", fake_test)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request("asr.provider.test", {"provider": "funasr", "source_lang": "ja"}),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["ok"] is True
+    assert captured["provider"].protocol == "funasr_openai"
+    assert captured["source_lang"] == "ja"
+
+
 def test_app_service_desktop_snapshot_preserves_translation_when_asr_config_invalid(
     tmp_path: Path,
     monkeypatch,

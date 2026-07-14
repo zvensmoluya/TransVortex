@@ -2,11 +2,11 @@
 
 TransVortex 是一个面向本地视频字幕生成的 CLI-first 流水线，支持：
 - 流式/分块处理，不需要一次把整片视频装入内存
-- 本地 faster-whisper 或云端 OpenAI Whisper ASR
+- 受管本机 faster-whisper、FunASR 服务或云端 ASR
 - 可配置的翻译 provider / model / base URL
 - 强模型优先的全片 memory bootstrap 与 capacity-aware 大 chunk 翻译
 - 可恢复任务与稳定工件目录
-- 可选的 Tauri 桌面工作台
+- Windows Flutter 桌面应用
 
 ## 项目定位
 
@@ -16,7 +16,7 @@ TransVortex 目标是成为一个可被脚本和 agent 调用的无界面核心�
 
 1. 安装依赖
    - `python -m pip install -e .`
-   - 如需本地 ASR：`python -m pip install -e .[asr]`
+   - CLI / 开发实验如需进程内本地 ASR：`python -m pip install -e .[asr]`
 2. 确保 `ffmpeg` 和 `ffprobe` 在 `PATH` 中。
 3. 准备 provider 配置和凭据。
    - 推荐把真实配置放在 `providers.local.yaml`（已加入 `.gitignore`）。
@@ -61,6 +61,8 @@ flutter run -d windows
 - 任务结束后进入任务处理窗审看、编辑或重新导出
 
 Flutter 正常启动把任务资料固定保存在 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可重建的音频处理文件进入同级 `Cache` 并在任务成功后清理。用户通过任务处理窗打开任务目录、结果目录或重新导出，不直接管理内部存储根。仓库 `artifacts/` 继续作为显式仓库 CLI 的开发 / 实验工作区，不会自动进入正式桌面任务历史。
+
+桌面端默认选择“本机 Whisper”，但基础包不携带运行组件、模型或 CUDA。用户在语音识别设置中安装隔离组件和所选模型，或明确选择已有的 faster-whisper / CTranslate2 Python 环境。组件、模型和断点下载分别保存在 `%LOCALAPPDATA%\TransVortex\Components`、`Models` 和 `Downloads\ASR`。详细边界及发布流程见 `docs/LOCAL_ASR_COMPONENTS.md`。
 
 ## 云端 ASR 示例
 
@@ -188,6 +190,7 @@ python -m transvortex.cli --root . export --segments samples\subtitle_delivery\s
 - `docs/PRODUCT_DIRECTION.md`：长期产品方向
 - `docs/ARCHITECTURE.md`：代码结构与边界
 - `docs/KNOWN_ISSUES_AND_VALIDATION.md`：低优先级待验证问题和优化观察
+- `docs/LOCAL_ASR_COMPONENTS.md`：本机 Whisper 组件、下载安全与发布流程
 
 <details>
 <summary>English summary (secondary)</summary>
@@ -195,9 +198,9 @@ python -m transvortex.cli --root . export --segments samples\subtitle_delivery\s
 TransVortex is a CLI-first subtitle pipeline for local videos.
 
 - Streamed/chunked processing
-- Local faster-whisper or cloud OpenAI Whisper ASR
+- Managed local faster-whisper, FunASR service, or cloud ASR
 - Configurable translation providers and resumable tasks
-- Optional Tauri desktop workbench
+- Windows Flutter desktop application
 
 Key commands:
 

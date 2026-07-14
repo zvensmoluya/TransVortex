@@ -42,7 +42,7 @@ void main() {
       expect(controller.view.translationLabel, 'real-model');
       expect(controller.view.translationDetail, contains('默认模型'));
       expect(controller.view.translationDetail, contains('备用 fallback-model'));
-      expect(controller.view.asrLabel, '本机 · large-v3');
+      expect(controller.view.asrLabel, '本机 Whisper · large-v3');
       expect(controller.view.sourceLang, 'auto');
       expect(controller.view.targetLang, 'zh-CN');
     },
@@ -83,6 +83,63 @@ void main() {
     await controller.submitRun();
 
     expect(handle.transport.calls, contains('runtime.submitRun'));
+  });
+
+  test(
+    'controller inspects video and skips ASR when an embedded subtitle is selected',
+    () async {
+      final handle = _FakeHandle(
+        _desktopSnapshot(asrHasKey: false),
+        mediaInspection: const {
+          'kind': 'video',
+          'source_mode': 'embedded_subtitle',
+          'needs_asr': false,
+          'available': true,
+          'code': 'ready',
+          'subtitle_streams': [
+            {'index': 2, 'supported': true, 'language': 'ja'},
+          ],
+          'selected_subtitle_stream': {
+            'index': 2,
+            'supported': true,
+            'language': 'ja',
+          },
+        },
+      );
+      final controller = MainWindowController(
+        service: _readyController(handle: handle),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\movie.mkv');
+
+      await controller.submitRun();
+
+      expect(controller.view.requiresAsr, isFalse);
+      final request =
+          handle.transport.lastParams['runtime.submitRun']!['request']
+              as Map<String, Object?>;
+      final overrides = request['overrides'] as Map<String, Object?>;
+      expect(overrides['source_mode'], 'embedded_subtitle');
+      expect(overrides['subtitle_track'], '2');
+      expect(overrides.containsKey('asr_provider'), isFalse);
+      expect(overrides.containsKey('asr_model'), isFalse);
+    },
+  );
+
+  test('controller always requires ASR for audio input', () async {
+    final handle = _FakeHandle(_desktopSnapshot(asrHasKey: false));
+    final controller = MainWindowController(
+      service: _readyController(handle: handle),
+    );
+    await controller.startService();
+    controller.pickSource(r'D:\voice.wav');
+
+    await controller.submitRun();
+
+    expect(controller.view.requiresAsr, isTrue);
+    expect(controller.view.state, MainState.blocked);
+    expect(handle.transport.calls, isNot(contains('media.inspect')));
+    expect(handle.transport.calls, isNot(contains('runtime.submitRun')));
   });
 
   test(
@@ -654,6 +711,7 @@ void main() {
       await controller.startService();
 
       controller.pickSource(r'D:\movie.mp4');
+      await Future<void>.delayed(Duration.zero);
 
       expect(controller.view.state, MainState.blocked);
       expect(controller.view.requiresAsr, isTrue);
@@ -678,6 +736,7 @@ void main() {
       await controller.startService();
 
       controller.pickSource(r'D:\movie.mp4');
+      await Future<void>.delayed(Duration.zero);
 
       expect(controller.view.state, MainState.blocked);
       expect(controller.view.statusLine, contains('需要先配置识别'));
@@ -1187,6 +1246,7 @@ class _FakeHandle implements LocalServiceHandle {
     DesktopSnapshot? snapshotAfterReexport,
     Map<String, Object?>? taskEvents,
     Map<String, Object?>? resultOpen,
+    Map<String, Object?>? mediaInspection,
     RpcRemoteException? resultReexportError,
   }) : transport = _FakeTransport(
          {
@@ -1210,6 +1270,17 @@ class _FakeHandle implements LocalServiceHandle {
              'terminal': false,
              'message': 'Task created',
            },
+           'media.inspect':
+               mediaInspection ??
+               {
+                 'kind': 'video',
+                 'source_mode': 'asr',
+                 'needs_asr': true,
+                 'available': true,
+                 'code': 'ready',
+                 'subtitle_streams': [],
+                 'selected_subtitle_stream': null,
+               },
            'runtime.submitResume': {
              'ok': true,
              'task_id': 'tvx_controller_FAILED',

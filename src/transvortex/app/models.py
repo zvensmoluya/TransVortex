@@ -261,13 +261,19 @@ class AsrExecutionConfig:
 @dataclass
 class AsrLocalConfig:
     model_size: str = "large-v3"
-    device: str = "cuda"
-    compute_type: str = "int8_float16"
+    device: str = "auto"
+    compute_type: str = "auto"
     max_initial_timestamp: float = 30.0
     beam_size: int = 5
     temperature: float = 0.0
     condition_on_previous_text: bool = False
     hotwords: str = ""
+
+
+@dataclass
+class AsrRuntimeConfig:
+    source: str = "inprocess"  # inprocess | managed | external
+    id: str = ""
 
 
 @dataclass
@@ -319,13 +325,14 @@ class AsrPromptConfig:
 @dataclass
 class AsrProviderConfig:
     name: str
-    kind: str = "remote"  # local_inprocess | local_server | remote
+    kind: str = "remote"  # local_inprocess | local_worker | local_server | remote
     protocol: str = "openai_transcriptions"
     base_url: str = "https://api.openai.com"
     endpoint: str = "/v1/audio/transcriptions"
     model: str = "whisper-1"
     auth: AsrAuthConfig = field(default_factory=AsrAuthConfig)
     local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
+    runtime: AsrRuntimeConfig = field(default_factory=AsrRuntimeConfig)
     execution: AsrExecutionConfig = field(default_factory=AsrExecutionConfig)
     chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
     preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())

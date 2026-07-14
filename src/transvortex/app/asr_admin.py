@@ -18,6 +18,11 @@ ASR_PROVIDER_DEFAULTS = {
         "protocol": "faster_whisper",
         "model": "large-v3",
     },
+    "local_worker": {
+        "name": "faster_whisper_local",
+        "protocol": "faster_whisper",
+        "model": "large-v3",
+    },
     "local_server": {
         "name": "funasr_sensevoice_local",
         "protocol": "funasr_openai",
@@ -152,7 +157,7 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
     else:
         row["auth"] = {"type": "none"}
 
-    if kind == "local_inprocess":
+    if kind in {"local_inprocess", "local_worker"}:
         local = dict(_as_dict(draft.get("local")))
         local["model_size"] = _text(local, "model_size", "modelSize", default=model)
         device = _text(draft, "device", default=_text(local, "device"))
@@ -162,6 +167,20 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
         if compute_type:
             local["compute_type"] = compute_type
         row["local"] = local
+    if kind == "local_worker":
+        runtime = dict(_as_dict(draft.get("runtime")))
+        runtime_source = _text(runtime, "source", default="managed")
+        runtime["source"] = runtime_source
+        runtime_id = _text(
+            runtime,
+            "id",
+            default="managed:faster-whisper" if runtime_source == "managed" else "",
+        )
+        if runtime_id:
+            runtime["id"] = runtime_id
+        else:
+            runtime.pop("id", None)
+        row["runtime"] = runtime
 
     for key in ("execution", "chunking", "preprocessing", "request"):
         value = draft.get(key)
@@ -179,7 +198,7 @@ def draft_to_asr_provider_config(draft: dict[str, Any]) -> AsrProviderConfig:
 
 def asr_provider_to_yaml_row(config: AsrProviderConfig) -> dict[str, Any]:
     row = to_plain(config)
-    if config.kind == "local_inprocess":
+    if config.kind in {"local_inprocess", "local_worker"}:
         row.pop("base_url", None)
         row.pop("endpoint", None)
     return row

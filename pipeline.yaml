@@ -133,12 +133,15 @@ asr:
     max_chars: 800
 asr_providers:
   - name: faster_whisper_large_v3
-    kind: local_inprocess
+    kind: local_worker
     protocol: faster_whisper
     model: large-v3
+    runtime:
+      source: managed
+      id: managed:faster-whisper
     local:
-      device: cuda
-      compute_type: int8_float16
+      device: auto
+      compute_type: auto
       max_initial_timestamp: 30.0
       beam_size: 5
       temperature: 0.0

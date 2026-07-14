@@ -19,6 +19,7 @@ from .models import (
     AsrPromptProfile,
     AsrProviderConfig,
     AsrProviderRequestConfig,
+    AsrRuntimeConfig,
     AsrSilenceChunkingConfig,
     AsrTrimSilenceConfig,
     AsrUncertaintyHintsConfig,
@@ -544,9 +545,10 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
     return RoutingConfig(primary=active.primary, fallback=list(active.fallback)), profiles, active_profile, next_profile_seq
 
 
-ASR_PROVIDER_KINDS = {"local_inprocess", "local_server", "remote"}
+ASR_PROVIDER_KINDS = {"local_inprocess", "local_worker", "local_server", "remote"}
 ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions", "funasr_openai"}
 ASR_AUTH_TYPES = {"none", "bearer"}
+ASR_RUNTIME_SOURCES = {"inprocess", "managed", "external"}
 LEGACY_ASR_FIELDS = {
     "mode",
     "local",
@@ -633,14 +635,28 @@ def _parse_asr_local(raw: Any, *, model: str) -> AsrLocalConfig:
     local_raw = raw if isinstance(raw, dict) else {}
     return AsrLocalConfig(
         model_size=_to_str(local_raw.get("model_size"), model),
-        device=_to_str(local_raw.get("device"), "cuda"),
-        compute_type=_to_str(local_raw.get("compute_type"), "int8_float16"),
+        device=_to_str(local_raw.get("device"), "auto"),
+        compute_type=_to_str(local_raw.get("compute_type"), "auto"),
         max_initial_timestamp=_to_float(local_raw.get("max_initial_timestamp"), 30.0),
         beam_size=_to_int(local_raw.get("beam_size"), 5),
         temperature=_to_float(local_raw.get("temperature"), 0.0),
         condition_on_previous_text=_to_bool(local_raw.get("condition_on_previous_text"), False),
         hotwords=_to_str(local_raw.get("hotwords"), ""),
     )
+
+
+def _parse_asr_runtime(raw: Any, *, kind: str) -> AsrRuntimeConfig:
+    runtime_raw = raw if isinstance(raw, dict) else {}
+    default_source = "managed" if kind == "local_worker" else "inprocess"
+    source = _to_str(runtime_raw.get("source"), default_source).strip().lower()
+    if source not in ASR_RUNTIME_SOURCES:
+        raise ValueError(f"Unsupported ASR runtime.source: {source}")
+    if kind == "local_inprocess" and source != "inprocess":
+        raise ValueError("ASR provider kind local_inprocess requires runtime.source inprocess")
+    if kind == "local_worker" and source not in {"managed", "external"}:
+        raise ValueError("ASR provider kind local_worker requires runtime.source managed or external")
+    runtime_id = _to_str(runtime_raw.get("id"), "managed:faster-whisper" if source == "managed" else "")
+    return AsrRuntimeConfig(source=source, id=runtime_id)
 
 
 def _parse_asr_chunking(raw: Any, *, default: AsrChunkingConfig) -> AsrChunkingConfig:
@@ -739,12 +755,12 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         raise ValueError(f"Unsupported ASR provider kind: {kind}")
     protocol = _to_str(
         row.get("protocol"),
-        "faster_whisper" if kind == "local_inprocess" else "openai_transcriptions",
+        "faster_whisper" if kind in {"local_inprocess", "local_worker"} else "openai_transcriptions",
     ).strip().lower()
     if protocol not in ASR_PROVIDER_PROTOCOLS:
         raise ValueError(f"Unsupported ASR protocol: {protocol}")
-    if kind == "local_inprocess" and protocol != "faster_whisper":
-        raise ValueError("ASR provider kind local_inprocess requires protocol faster_whisper")
+    if kind in {"local_inprocess", "local_worker"} and protocol != "faster_whisper":
+        raise ValueError(f"ASR provider kind {kind} requires protocol faster_whisper")
     if kind in {"local_server", "remote"} and protocol not in {"openai_transcriptions", "funasr_openai"}:
         raise ValueError(f"ASR provider kind {kind} requires protocol openai_transcriptions or funasr_openai")
     if protocol == "funasr_openai" and kind != "local_server":
@@ -764,6 +780,7 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         model=model,
         auth=_parse_asr_auth(row.get("auth"), kind=kind),
         local=_parse_asr_local(row.get("local"), model=model),
+        runtime=_parse_asr_runtime(row.get("runtime"), kind=kind),
         execution=_parse_asr_execution(row.get("execution"), default=default_execution),
         chunking=_parse_asr_chunking(row.get("chunking"), default=default_chunking),
         preprocessing=_parse_asr_preprocessing(row.get("preprocessing"), default=default_preprocessing),
@@ -855,9 +872,10 @@ def load_app_config(
         default_provider = _parse_asr_provider(
             {
                 "name": "faster_whisper_large_v3",
-                "kind": "local_inprocess",
+                "kind": "local_worker",
                 "protocol": "faster_whisper",
                 "model": "large-v3",
+                "runtime": {"source": "managed", "id": "managed:faster-whisper"},
             }
         )
         asr_providers[default_provider.name] = default_provider

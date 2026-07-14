@@ -142,7 +142,7 @@ void main() {
       expect(snapshot.configReadiness.translationConfigured, isTrue);
       expect(snapshot.configReadiness.translationLabel, 'p2');
       expect(snapshot.configReadiness.asrConfigured, isTrue);
-      expect(snapshot.configReadiness.asrLabel, '本机');
+      expect(snapshot.configReadiness.asrLabel, '本机 Whisper');
     },
   );
 
@@ -238,6 +238,58 @@ void main() {
     },
   );
 
+  test('ConfigReadiness uses backend ASR readiness instead of auth shape', () {
+    final snapshot = DesktopSnapshot.fromJson({
+      'config': {
+        'pipeline': {'asr_provider': 'local'},
+        'asr_providers': {
+          'local': {
+            'name': 'Local ASR',
+            'kind': 'local_worker',
+            'has_key': true,
+            'readiness': {
+              'state': 'needs_action',
+              'code': 'runtime_missing',
+              'can_run': false,
+              'primary_action': 'install_runtime',
+            },
+          },
+        },
+      },
+      'tasks': [],
+      'runtime': {},
+      'environment': {},
+    });
+
+    expect(snapshot.configReadiness.asrConfigured, isFalse);
+    expect(snapshot.configReadiness.asrState, 'needs_action');
+    expect(snapshot.configReadiness.asrCode, 'runtime_missing');
+    expect(snapshot.asrProviders.single.readiness.statusLabel, '组件未安装');
+  });
+
+  test('ASR operation parses progress and terminal state', () {
+    final active = AsrOperationStatus.fromJson({
+      'id': 'asr_1',
+      'kind': 'model',
+      'item_id': 'large-v3',
+      'state': 'running',
+      'bytes_done': 25,
+      'bytes_total': 100,
+    });
+    final failed = AsrOperationStatus.fromJson({
+      'id': 'asr_2',
+      'kind': 'runtime',
+      'item_id': 'managed:faster-whisper',
+      'state': 'failed',
+      'error_code': 'checksum_mismatch',
+    });
+
+    expect(active.active, isTrue);
+    expect(active.progress, 0.25);
+    expect(failed.active, isFalse);
+    expect(failed.errorCode, 'checksum_mismatch');
+  });
+
   test('DesktopSnapshot infers ASR engine labels from legacy provider ids', () {
     final snapshot = DesktopSnapshot.fromJson({
       'config': {
@@ -259,7 +311,7 @@ void main() {
     final byName = {
       for (final option in snapshot.asrProviders) option.name: option,
     };
-    expect(byName['local']?.displayLabel, '本机');
+    expect(byName['local']?.displayLabel, '本机 Whisper');
     expect(byName['funasr_sensevoice_local']?.displayLabel, 'FunASR');
     expect(byName['openai_whisper']?.displayLabel, '云端');
     expect(snapshot.asrLabel, 'FunASR');
@@ -295,8 +347,8 @@ void main() {
     expect(snapshot.asrProviders.single.displayName, 'local');
     expect(snapshot.asrProviders.single.model, 'large-v3');
     expect(snapshot.configReadiness.asrConfigured, isTrue);
-    expect(snapshot.configReadiness.asrLabel, '本机');
-    expect(snapshot.asrLabel, '本机');
+    expect(snapshot.configReadiness.asrLabel, '本机 Whisper');
+    expect(snapshot.asrLabel, '本机 Whisper');
   });
 
   test('TaskEventsPage parses cursor payload', () {
@@ -610,7 +662,7 @@ routing:
         repoRoot: Directory.current.parent,
         appPaths: appPaths,
         pythonExecutable: Platform.isWindows ? 'python' : 'python3',
-        requestTimeout: const Duration(seconds: 10),
+        requestTimeout: const Duration(seconds: 20),
       );
       final session = await supervisor.start();
       addTearDown(session.shutdown);

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
-from transvortex.app.models import AsrExecutionConfig, AsrLocalConfig, AsrProviderConfig
+from transvortex.app.models import (
+    AsrExecutionConfig,
+    AsrLocalConfig,
+    AsrProviderConfig,
+    AsrRuntimeConfig,
+)
 from transvortex.core.asr import (
     AsrEngine,
     OpenAITranscriptionsAsrClient,
@@ -12,6 +19,7 @@ from transvortex.core.asr import (
     _build_cloud_asr_url,
     _normalize_whisper_language,
     _prepare_local_cuda_runtime,
+    _resolve_worker_device,
 )
 from transvortex.http import HttpTransportError
 
@@ -608,6 +616,158 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
             "meta": {"source": "asr", "provider": "faster_whisper_test", "protocol": "faster_whisper"},
         }
     ]
+
+
+def test_local_worker_uses_one_jsonl_host_and_loads_model_once(tmp_path, monkeypatch) -> None:
+    host = tmp_path / "fake_whisper_host.py"
+    log = tmp_path / "methods.log"
+    model = tmp_path / "model"
+    model.mkdir()
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    host.write_text(
+        """
+import json
+import os
+import sys
+
+for raw in sys.stdin:
+    request = json.loads(raw)
+    method = request['method']
+    with open(os.environ['FAKE_WHISPER_LOG'], 'a', encoding='utf-8') as output:
+        output.write(method + '\\n')
+    if method == 'runtime.info':
+        result = {'protocol_version': 1}
+    elif method == 'model.load':
+        result = {'loaded': True, 'device': 'cpu', 'compute_type': 'int8'}
+    elif method == 'transcribe':
+        params = request['params']
+        offset = params['segment_start_offset']
+        result = {
+            'rows': [{'start': offset + 1, 'end': offset + 2, 'text': 'hello', 'meta': {}}],
+            'device': 'cpu',
+            'compute_type': 'int8',
+        }
+    elif method == 'shutdown':
+        print(json.dumps({'id': request['id'], 'result': {'ok': True}}), flush=True)
+        break
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FAKE_WHISPER_LOG", str(log))
+    monkeypatch.setattr("transvortex.core.asr.whisper_host_script", lambda: host)
+    monkeypatch.setattr(
+        "transvortex.core.asr.resolve_whisper_runtime",
+        lambda *_args, **_kwargs: {
+            "python_executable": __import__("sys").executable,
+            "model_path": str(model),
+            "accelerator_root": "",
+            "runtime_source": "managed",
+        },
+    )
+    provider = AsrProviderConfig(
+        name="managed_whisper",
+        kind="local_worker",
+        protocol="faster_whisper",
+        model="small",
+        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        local=AsrLocalConfig(device="cpu", compute_type="int8"),
+    )
+    engine = AsrEngine(asr_provider=provider, source_lang="en", root_dir=tmp_path)
+
+    first = engine.transcribe_segment(audio, 0)
+    second = engine.transcribe_segment(audio, 10)
+    process = engine._adapter._process
+    engine.close()
+
+    assert first[0]["start"] == 1
+    assert second[0]["start"] == 11
+    assert process is not None and process.poll() is not None
+    methods = log.read_text(encoding="utf-8").splitlines()
+    assert methods.count("runtime.info") == 1
+    assert methods.count("model.load") == 1
+    assert methods.count("transcribe") == 2
+    assert methods[-1] == "shutdown"
+
+
+def test_local_worker_reports_host_crash_without_waiting_full_timeout(tmp_path, monkeypatch) -> None:
+    host = tmp_path / "crashing_host.py"
+    model = tmp_path / "model"
+    model.mkdir()
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    host.write_text(
+        """
+import json
+import sys
+
+for raw in sys.stdin:
+    request = json.loads(raw)
+    if request['method'] == 'runtime.info':
+        result = {'protocol_version': 1}
+    elif request['method'] == 'model.load':
+        result = {'loaded': True}
+    else:
+        raise SystemExit(23)
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("transvortex.core.asr.whisper_host_script", lambda: host)
+    monkeypatch.setattr(
+        "transvortex.core.asr.resolve_whisper_runtime",
+        lambda *_args, **_kwargs: {
+            "python_executable": __import__("sys").executable,
+            "model_path": str(model),
+            "accelerator_root": "",
+            "runtime_source": "managed",
+        },
+    )
+    provider = AsrProviderConfig(
+        name="managed_whisper",
+        kind="local_worker",
+        protocol="faster_whisper",
+        model="small",
+        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        execution=AsrExecutionConfig(timeout_seconds=30),
+        local=AsrLocalConfig(device="cpu", compute_type="int8"),
+    )
+    engine = AsrEngine(asr_provider=provider, root_dir=tmp_path)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="whisper_host_exited"):
+        engine.transcribe_segment(audio, 0)
+    elapsed = time.monotonic() - started
+    engine.close()
+
+    assert elapsed < 3
+
+
+@pytest.mark.parametrize(
+    ("configured_device", "accelerator_root", "cuda_available", "expected"),
+    [
+        ("auto", "", False, "cpu"),
+        ("auto", r"D:\\Components\\accelerator", False, "cuda"),
+        ("auto", "", True, "cuda"),
+        ("cpu", r"D:\\Components\\accelerator", True, "cpu"),
+        ("cuda", "", False, "cuda"),
+    ],
+)
+def test_local_worker_resolves_auto_device_only_from_verified_runtime(
+    configured_device: str,
+    accelerator_root: str,
+    cuda_available: bool,
+    expected: str,
+) -> None:
+    assert (
+        _resolve_worker_device(
+            configured_device,
+            accelerator_root=accelerator_root,
+            cuda_available=cuda_available,
+        )
+        == expected
+    )
 
 
 def test_prepare_local_cuda_runtime_registers_nvidia_wheel_dirs(tmp_path, monkeypatch) -> None:

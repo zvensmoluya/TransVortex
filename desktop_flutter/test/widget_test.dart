@@ -2447,10 +2447,14 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
+    Map<String, Object?>? savedAsrDraft;
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
       if (method == 'asr.provider.save') {
+        savedAsrDraft = Map<String, Object?>.from(
+          params['provider_draft'] as Map,
+        );
         return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
@@ -2471,6 +2475,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(calls, contains('asr.provider.save'));
+    expect(savedAsrDraft?['kind'], 'local_worker');
+    expect((savedAsrDraft?['runtime'] as Map?)?['source'], 'managed');
     expect(find.textContaining('识别默认已保存'), findsOneWidget);
     expectNoFlutterException();
   });
@@ -2501,8 +2507,7 @@ void main() {
 
     expect(find.textContaining('当前识别：'), findsOneWidget);
     expect(find.textContaining('large-v3'), findsWidgets);
-    final fields = tester.widgetList<TextField>(find.byType(TextField));
-    expect(fields.map((field) => field.controller?.text), contains('large-v3'));
+    expect(find.text('Whisper Large v3'), findsWidgets);
     expectNoFlutterException();
   });
 
@@ -2534,6 +2539,69 @@ void main() {
     expect(find.text('保存后会出现在这里'), findsOneWidget);
     expect(find.text('保存识别默认'), findsOneWidget);
     expect(find.textContaining('method_not_found'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings window renders managed component progress', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(920, 680));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          asrLocal: const {
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': false,
+              'artifact': {'published': false, 'size': 0},
+            },
+            'models': [
+              {
+                'id': 'large-v3',
+                'display_name': 'Whisper Large v3',
+                'installed': false,
+                'size': 100,
+              },
+            ],
+            'accelerators': [],
+            'environments': [],
+            'operations': [
+              {
+                'id': 'asr_progress',
+                'kind': 'model',
+                'item_id': 'large-v3',
+                'state': 'running',
+                'bytes_done': 25,
+                'bytes_total': 100,
+                'current_file': 'model.bin',
+              },
+            ],
+          },
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Whisper 运行组件'), findsOneWidget);
+    expect(find.text('尚未发布'), findsOneWidget);
+    expect(find.textContaining('large-v3 · 25%'), findsOneWidget);
+    expect(find.text('model.bin'), findsOneWidget);
+    expect(find.text('取消'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -3519,6 +3587,7 @@ DesktopSnapshot _desktopSnapshot({
   bool localModelSizeOnly = false,
   bool withProviders = true,
   bool withAsrProviders = true,
+  bool managedAsr = false,
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
   bool withRoutingFallback = false,
@@ -3526,6 +3595,7 @@ DesktopSnapshot _desktopSnapshot({
   List<Map<String, Object?>> tasks = const [],
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
+  Map<String, Object?> asrLocal = const {},
 }) {
   final models = longModels
       ? [
@@ -3780,14 +3850,27 @@ DesktopSnapshot _desktopSnapshot({
           ? {
               'local': {
                 'name': 'Local ASR',
-                'kind': 'local_inprocess',
+                'kind': managedAsr ? 'local_worker' : 'local_inprocess',
                 'protocol': 'faster_whisper',
                 if (!localModelSizeOnly) 'model': 'large-v3',
                 if (localModelSizeOnly) 'local': {'model_size': 'large-v3'},
                 'has_key': true,
+                if (managedAsr)
+                  'runtime': {
+                    'source': 'managed',
+                    'id': 'managed:faster-whisper',
+                  },
+                if (managedAsr)
+                  'readiness': {
+                    'state': 'checking',
+                    'code': 'model_installing',
+                    'can_run': false,
+                    'primary_action': 'cancel_install',
+                  },
               },
             }
           : const {},
+      if (asrLocal.isNotEmpty) 'asr_local': asrLocal,
     },
     'tasks': tasks,
     'runtime': runtime,
@@ -3884,6 +3967,15 @@ class _FakeHandle implements LocalServiceHandle {
              if (health.error != null) 'error': health.error,
            },
            'desktop.snapshot': snapshot.raw,
+           'media.inspect': {
+             'kind': 'video',
+             'source_mode': 'asr',
+             'needs_asr': true,
+             'available': true,
+             'code': 'ready',
+             'subtitle_streams': [],
+             'selected_subtitle_stream': null,
+           },
          }),
        );
 

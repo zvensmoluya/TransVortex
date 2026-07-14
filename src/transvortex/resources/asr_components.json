@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "id": "managed:faster-whisper",
+    "version": "1.0.0",
+    "platform": "windows-x64",
+    "protocol_version": 1,
+    "python_version": "3.13.14",
+    "faster_whisper_version": "1.2.1",
+    "ctranslate2_version": "4.8.1",
+    "artifact": {
+      "published": false,
+      "release_tag": "asr-components-v1.0.0",
+      "asset_name": "transvortex-faster-whisper-runtime-1.0.0-windows-x64.zip",
+      "url": "https://github.com/zvensmoluya/TransVortex/releases/download/asr-components-v1.0.0/transvortex-faster-whisper-runtime-1.0.0-windows-x64.zip",
+      "size": 0,
+      "sha256": ""
+    }
+  },
+  "accelerators": [
+    {
+      "id": "nvidia-cuda12",
+      "version": "12.4",
+      "platform": "windows-x64",
+      "packages": {
+        "nvidia-cuda-runtime-cu12": "12.4.127",
+        "nvidia-cuda-nvrtc-cu12": "12.4.127",
+        "nvidia-cublas-cu12": "12.4.5.8",
+        "nvidia-cudnn-cu12": "9.1.0.70"
+      },
+      "artifact": {
+        "published": false,
+        "release_tag": "asr-components-v1.0.0",
+        "asset_name": "transvortex-nvidia-cuda12-12.4-windows-x64.zip",
+        "url": "https://github.com/zvensmoluya/TransVortex/releases/download/asr-components-v1.0.0/transvortex-nvidia-cuda12-12.4-windows-x64.zip",
+        "size": 0,
+        "sha256": ""
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "small",
+      "display_name": "Whisper Small",
+      "repository": "Systran/faster-whisper-small",
+      "revision": "536b0662742c02347bc0e980a01041f333bce120",
+      "files": [
+        {"path": "config.json", "size": 2370, "sha256": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828"},
+        {"path": "model.bin", "size": 483546902, "sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"},
+        {"path": "tokenizer.json", "size": 2203239, "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"},
+        {"path": "vocabulary.txt", "size": 459861, "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"}
+      ]
+    },
+    {
+      "id": "medium",
+      "display_name": "Whisper Medium",
+      "repository": "Systran/faster-whisper-medium",
+      "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f",
+      "files": [
+        {"path": "config.json", "size": 2257, "sha256": "3622a2ddc41ec0e0fd4e68c13c6830f03b90c38d89aaad184de02c8c642cf807"},
+        {"path": "model.bin", "size": 1527906378, "sha256": "9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae"},
+        {"path": "tokenizer.json", "size": 2203239, "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"},
+        {"path": "vocabulary.txt", "size": 459861, "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"}
+      ]
+    },
+    {
+      "id": "large-v3",
+      "display_name": "Whisper Large v3",
+      "repository": "Systran/faster-whisper-large-v3",
+      "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+      "files": [
+        {"path": "config.json", "size": 2394, "sha256": "a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9"},
+        {"path": "model.bin", "size": 3087284237, "sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"},
+        {"path": "preprocessor_config.json", "size": 340, "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"},
+        {"path": "tokenizer.json", "size": 2480617, "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca"},
+        {"path": "vocabulary.json", "size": 1068114, "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"}
+      ]
+    }
+  ]
+}

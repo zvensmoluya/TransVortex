@@ -14,6 +14,7 @@ from ..artifacts.task_cache import cleanup_task_cache, task_cache_dir
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
+from ..app.asr_runtime import asr_provider_readiness
 from ..app.credentials import resolve_credential
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from .media import (
@@ -318,6 +319,15 @@ def _asr_uses_previous_text(config: AppConfig) -> bool:
     return bool(prompt.enabled and prompt.include_previous_text)
 
 
+def _asr_runs_concurrently(config: AppConfig) -> bool:
+    provider = _active_asr_provider(config)
+    return (
+        provider.kind != "local_worker"
+        and provider.execution.concurrency > 1
+        and not _asr_uses_previous_text(config)
+    )
+
+
 def _previous_asr_text_from_completed(items: list[dict], paths: dict[str, Path]) -> str:
     if not items:
         return ""
@@ -490,16 +500,21 @@ def _retry_asr_manifest_item_with_subsegments(
         child_item = dict(child)
         child_item["segment_index"] = child_idx
         child_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
-        child_result = _process_asr_manifest_item(
-            item=child_item,
-            asr=child_asr,
-            paths=retry_artifact_paths,
-            config=config,
-            task=task,
-            root_dir=root_dir,
-            allow_split_retry=False,
-            previous_text=child_previous_text,
-        )
+        try:
+            child_result = _process_asr_manifest_item(
+                item=child_item,
+                asr=child_asr,
+                paths=retry_artifact_paths,
+                config=config,
+                task=task,
+                root_dir=root_dir,
+                allow_split_retry=False,
+                previous_text=child_previous_text,
+            )
+        finally:
+            close_child_asr = getattr(child_asr, "close", None)
+            if callable(close_child_asr):
+                close_child_asr()
         child_rows_path = _asr_artifact_paths(retry_artifact_paths, int(child_item["segment_index"]))["rows"]
         if child_rows_path.exists():
             child_rows = read_json(child_rows_path)
@@ -678,14 +693,19 @@ def _run_asr_segments_concurrent(
         with ThreadPoolExecutor(max_workers=current_limit) as executor:
             def submit_item(manifest_item: dict):
                 worker_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
-                return _process_asr_manifest_item(
-                    item=manifest_item,
-                    asr=worker_asr,
-                    paths=paths,
-                    config=config,
-                    task=task,
-                    root_dir=root_dir,
-                )
+                try:
+                    return _process_asr_manifest_item(
+                        item=manifest_item,
+                        asr=worker_asr,
+                        paths=paths,
+                        config=config,
+                        task=task,
+                        root_dir=root_dir,
+                    )
+                finally:
+                    close_worker_asr = getattr(worker_asr, "close", None)
+                    if callable(close_worker_asr):
+                        close_worker_asr()
 
             futures = {
                 executor.submit(submit_item, item): item
@@ -1134,6 +1154,10 @@ def _preflight(
                 raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
             if importlib.util.find_spec("faster_whisper") is None:
                 raise RuntimeError("faster-whisper is required for ASR. Install with: pip install -e .[asr]")
+        elif asr_provider.kind == "local_worker":
+            readiness = asr_provider_readiness(asr_provider, root_dir=root_dir)
+            if readiness.get("can_run") is not True:
+                raise RuntimeError(f"ASR provider is not ready: {readiness.get('code', 'unavailable')}")
         elif asr_provider.kind in {"local_server", "remote"}:
             if asr_provider.protocol not in {"openai_transcriptions", "funasr_openai"}:
                 raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
@@ -2171,49 +2195,53 @@ def _execute_task(
                 _check_cancel(store, task_id)
                 _emit_stage(store, task_id, "ASR", "Transcribing audio segments")
                 asr = _build_asr_engine(config, task=task, root_dir=root_dir)
-                asr_done = set(checkpoint.get("asr_done_segments", []))
-                checkpoint["asr_total_segments"] = len(segments_manifest)
-                checkpoint["asr_done_count"] = len(asr_done)
-                checkpoint["status"] = "ASR"
-                store.save_checkpoint(task_id, checkpoint)
-                segment_files = []
-                pending_asr_items = []
-                for item in segments_manifest:
-                    idx = int(item["segment_index"])
-                    artifact_paths = _asr_artifact_paths(paths, idx)
-                    segment_files.append((idx, artifact_paths["rows"]))
-                    if idx in asr_done and _is_valid_json_list(artifact_paths["rows"]):
-                        continue
-                    pending_asr_items.append(item)
-                asr_provider = _active_asr_provider(config)
-                if asr_provider.execution.concurrency > 1 and not _asr_uses_previous_text(config):
-                    _run_asr_segments_concurrent(
-                        items=pending_asr_items,
-                        asr=asr,
-                        paths=paths,
-                        config=config,
-                        store=store,
-                        task_id=task_id,
-                        checkpoint=checkpoint,
-                        asr_done=asr_done,
-                        total_segments=len(segments_manifest),
-                        task=task,
-                        root_dir=root_dir,
-                    )
-                else:
-                    _run_asr_segments_serial(
-                        items=pending_asr_items,
-                        asr=asr,
-                        paths=paths,
-                        config=config,
-                        store=store,
-                        task_id=task_id,
-                        checkpoint=checkpoint,
-                        asr_done=asr_done,
-                        total_segments=len(segments_manifest),
-                        task=task,
-                        root_dir=root_dir,
-                    )
+                try:
+                    asr_done = set(checkpoint.get("asr_done_segments", []))
+                    checkpoint["asr_total_segments"] = len(segments_manifest)
+                    checkpoint["asr_done_count"] = len(asr_done)
+                    checkpoint["status"] = "ASR"
+                    store.save_checkpoint(task_id, checkpoint)
+                    segment_files = []
+                    pending_asr_items = []
+                    for item in segments_manifest:
+                        idx = int(item["segment_index"])
+                        artifact_paths = _asr_artifact_paths(paths, idx)
+                        segment_files.append((idx, artifact_paths["rows"]))
+                        if idx in asr_done and _is_valid_json_list(artifact_paths["rows"]):
+                            continue
+                        pending_asr_items.append(item)
+                    if _asr_runs_concurrently(config):
+                        _run_asr_segments_concurrent(
+                            items=pending_asr_items,
+                            asr=asr,
+                            paths=paths,
+                            config=config,
+                            store=store,
+                            task_id=task_id,
+                            checkpoint=checkpoint,
+                            asr_done=asr_done,
+                            total_segments=len(segments_manifest),
+                            task=task,
+                            root_dir=root_dir,
+                        )
+                    else:
+                        _run_asr_segments_serial(
+                            items=pending_asr_items,
+                            asr=asr,
+                            paths=paths,
+                            config=config,
+                            store=store,
+                            task_id=task_id,
+                            checkpoint=checkpoint,
+                            asr_done=asr_done,
+                            total_segments=len(segments_manifest),
+                            task=task,
+                            root_dir=root_dir,
+                        )
+                finally:
+                    close_asr = getattr(asr, "close", None)
+                    if callable(close_asr):
+                        close_asr()
 
                 all_segments = []
                 next_id = 1

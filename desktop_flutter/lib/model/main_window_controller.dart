@@ -194,6 +194,7 @@ class MainWindowViewModel {
     required this.failure,
     required this.homeTaskReminder,
     required this.submitting,
+    this.sourceNeedsAsr,
     this.runProgress,
     this.completionNotice,
   });
@@ -223,11 +224,12 @@ class MainWindowViewModel {
   final MainFailureView? failure;
   final HomeTaskReminder? homeTaskReminder;
   final bool submitting;
+  final bool? sourceNeedsAsr;
   final MainRunProgress? runProgress;
   final String? completionNotice;
 
   bool get hasSource => source != null;
-  bool get requiresAsr => source?.kind != SourceKind.subtitle;
+  bool get requiresAsr => sourceNeedsAsr ?? source?.kind != SourceKind.subtitle;
 }
 
 class MainWindowController extends ChangeNotifier {
@@ -266,6 +268,9 @@ class MainWindowController extends ChangeNotifier {
   List<Map<String, Object?>> _recentEvents = const [];
   TranslationRuntimeChoice? _selectedTranslation;
   TaskOption? _selectedAsr;
+  MediaInspection? _sourceInspection;
+  String? _sourceInspectionLanguage;
+  int _sourceInspectionGeneration = 0;
   final Set<String> _dismissedHomeTaskReminderIds = <String>{};
 
   late MainWindowViewModel _view;
@@ -298,6 +303,21 @@ class MainWindowController extends ChangeNotifier {
       kind: kind,
       unsupportedReason: unsupported,
     );
+    _sourceInspectionGeneration += 1;
+    _sourceInspection = switch (kind) {
+      SourceKind.subtitle => const MediaInspection(
+        kind: 'subtitle',
+        sourceMode: 'subtitle_file',
+        needsAsr: false,
+      ),
+      SourceKind.audio => const MediaInspection(
+        kind: 'audio',
+        sourceMode: 'asr',
+        needsAsr: true,
+      ),
+      SourceKind.video => null,
+    };
+    _sourceInspectionLanguage = kind == SourceKind.video ? null : _sourceLang;
     _outputDirectory = null;
     _taskId = null;
     _statusText = null;
@@ -319,12 +339,18 @@ class MainWindowController extends ChangeNotifier {
     _recentEvents = const [];
     _eventCursor = 0;
     _publish();
+    if (kind == SourceKind.video && service.client != null) {
+      unawaited(_inspectCurrentVideo(showFailure: false));
+    }
   }
 
   void removeSource() {
     _taskPoll?.cancel();
     _taskPoll = null;
     _source = null;
+    _sourceInspectionGeneration += 1;
+    _sourceInspection = null;
+    _sourceInspectionLanguage = null;
     _outputDirectory = null;
     _taskId = null;
     _statusText = null;
@@ -350,6 +376,14 @@ class MainWindowController extends ChangeNotifier {
   void setSourceLang(String value) {
     final normalized = value.trim();
     _sourceLang = normalized.isEmpty ? 'auto' : normalized;
+    if (_source?.kind == SourceKind.video) {
+      _sourceInspectionGeneration += 1;
+      _sourceInspection = null;
+      _sourceInspectionLanguage = null;
+      if (service.client != null) {
+        unawaited(_inspectCurrentVideo(showFailure: false));
+      }
+    }
     _publish();
   }
 
@@ -419,6 +453,10 @@ class MainWindowController extends ChangeNotifier {
     if (readiness != null && !readiness.translationConfigured) {
       _failure = null;
       _publish();
+      return;
+    }
+    if (source.kind == SourceKind.video &&
+        !await _inspectCurrentVideo(showFailure: true)) {
       return;
     }
     if (readiness != null && _requiresAsr && !readiness.asrConfigured) {
@@ -730,12 +768,18 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
-    final requiresAsr = _requiresAsr;
+    final requiresAsr = _requestRequiresAsr;
     final outputDirectory = _effectiveOutputDirectory(source);
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
       ..._memoryGenerationOverrides(),
+      if (source.kind == SourceKind.video && _sourceInspection != null)
+        'source_mode': _sourceInspection!.sourceMode,
+      if (source.kind == SourceKind.video &&
+          _sourceInspection?.selectedSubtitleStream['index'] != null)
+        'subtitle_track':
+            '${_sourceInspection!.selectedSubtitleStream['index']}',
       if (requiresAsr && asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
       if (requiresAsr && asr.model != null && asr.model!.isNotEmpty)
@@ -771,7 +815,7 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationChoice(snapshot);
     final asr = _effectiveAsrOption(snapshot);
-    final requiresAsr = _requiresAsr;
+    final requiresAsr = _requestRequiresAsr;
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
@@ -935,6 +979,7 @@ class MainWindowController extends ChangeNotifier {
           ? _homeTaskReminder(snapshot)
           : null,
       submitting: _submitting,
+      sourceNeedsAsr: _source == null ? null : _requiresAsr,
       runProgress: _runProgress,
       completionNotice: _completionNotice,
     );
@@ -998,20 +1043,91 @@ class MainWindowController extends ChangeNotifier {
     return MainState.ready;
   }
 
-  bool get _requiresAsr => _source?.kind != SourceKind.subtitle;
+  bool get _requiresAsr {
+    return switch (_source?.kind) {
+      null || SourceKind.subtitle => false,
+      SourceKind.audio => true,
+      SourceKind.video => _sourceInspection?.needsAsr ?? false,
+    };
+  }
+
+  bool get _requestRequiresAsr {
+    return switch (_source?.kind) {
+      null || SourceKind.subtitle => false,
+      SourceKind.audio => true,
+      SourceKind.video => _sourceInspection?.needsAsr ?? true,
+    };
+  }
+
+  Future<bool> _inspectCurrentVideo({required bool showFailure}) async {
+    final source = _source;
+    if (source == null || source.kind != SourceKind.video) return true;
+    if (_sourceInspection != null && _sourceInspectionLanguage == _sourceLang) {
+      return _sourceInspection!.available;
+    }
+    final generation = _sourceInspectionGeneration;
+    try {
+      await service.start();
+      final client = service.client;
+      if (client == null) throw StateError('本地服务未连接');
+      final inspection = await client.inspectMedia(
+        input: source.path,
+        sourceLang: _sourceLang,
+      );
+      if (_source?.path != source.path ||
+          generation != _sourceInspectionGeneration) {
+        return false;
+      }
+      _sourceInspection = inspection;
+      _sourceInspectionLanguage = _sourceLang;
+      if (!inspection.available && showFailure) {
+        _failure = const MainFailureView(
+          reason: '没有找到可用的内嵌字幕轨，请改用语音识别或重新选择片源。',
+          actionLabel: '重新选择片源',
+          target: MainRecoveryTarget.pickSource,
+        );
+      } else if (inspection.available &&
+          _failure?.target == MainRecoveryTarget.pickSource) {
+        _failure = null;
+      }
+      _publish();
+      return inspection.available;
+    } on Object catch (error) {
+      if (_source?.path != source.path ||
+          generation != _sourceInspectionGeneration) {
+        return false;
+      }
+      if (showFailure) {
+        _failure = MainFailureView(
+          reason: '无法检查视频字幕轨：${_userFacingFailureReason('$error')}',
+          actionLabel: '重试',
+          target: MainRecoveryTarget.retry,
+        );
+        _publish();
+      }
+      return false;
+    }
+  }
 
   String _statusLine(MainState state) {
     final translationConfigured = _effectiveTranslationChoice(
       service.snapshot.desktopSnapshot,
     ).configured;
-    final base = switch (state) {
-      MainState.empty => '等待片源',
-      MainState.ready => '就绪 · 可开始',
-      MainState.blocked => !translationConfigured ? '需要先配置翻译' : '需要先配置识别',
-      MainState.running => '制作中',
-      MainState.completed => '已完成',
-      MainState.failed => '制作失败',
-    };
+    final inspectingVideo =
+        _source?.kind == SourceKind.video &&
+        _sourceInspection == null &&
+        !_running &&
+        _failure == null;
+    final base = inspectingVideo
+        ? '正在检查字幕轨'
+        : switch (state) {
+            MainState.empty => '等待片源',
+            MainState.ready => '就绪 · 可开始',
+            MainState.blocked => !translationConfigured ? '需要先配置翻译' : '需要先配置识别',
+            MainState.running => '制作中',
+            MainState.completed => '已完成',
+            MainState.failed => '制作失败',
+          };
     return switch (service.snapshot.status) {
       LocalServiceConnectionStatus.starting => '服务启动中 · $base',
       LocalServiceConnectionStatus.ready => '服务已连接 · $base',
@@ -1176,7 +1292,7 @@ class MainWindowController extends ChangeNotifier {
   List<TaskOption> _asrOptions(DesktopSnapshot? snapshot) {
     if (snapshot == null) return const [];
     return snapshot.asrProviders
-        .where((provider) => provider.hasKey)
+        .where((provider) => provider.canRun)
         .map(
           (provider) => TaskOption(
             label: _asrDisplayLabel(snapshot, provider.name, provider.model),

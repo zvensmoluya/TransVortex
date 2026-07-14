@@ -6,6 +6,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from transvortex.core.orchestrator import (
+    _asr_runs_concurrently,
     _checkpoint_status_payload,
     _translation_progress_callback,
     _write_translation_experiment_artifacts,
@@ -83,6 +84,23 @@ def test_checkpoint_status_exposes_structured_asr_progress(tmp_path: Path) -> No
     assert payload["progress"] == 0.325
     assert payload["progress_detail"]["asr_done_count"] == 3
     assert payload["progress_detail"]["asr_total_segments"] == 10
+
+
+def test_local_worker_keeps_one_shared_asr_process_when_concurrency_is_higher(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    pipeline_path = tmp_path / "pipeline.yaml"
+    text = pipeline_path.read_text(encoding="utf-8")
+    text = text.replace("kind: local_inprocess", "kind: local_worker")
+    text = text.replace(
+        "    local:\n      device: cpu",
+        "    execution:\n      concurrency: 4\n    local:\n      device: cpu",
+    )
+    pipeline_path.write_text(text, encoding="utf-8")
+
+    config = load_app_config(root_dir=tmp_path)
+
+    assert config.asr_providers["faster_whisper_test"].execution.concurrency == 4
+    assert _asr_runs_concurrently(config) is False
 
 
 def test_memory_provider_progress_keeps_memory_checkpoint_stage(tmp_path: Path) -> None:
@@ -1105,8 +1123,11 @@ chunking:
         return out
 
     class FakeCloudAsrEngine:
+        created = 0
+        closed = 0
+
         def __init__(self, **_kwargs) -> None:
-            pass
+            type(self).created += 1
 
         def transcribe_segment_result(self, audio_path: Path, segment_start_offset: float):
             idx = int(audio_path.stem.rsplit("_", 1)[-1])
@@ -1125,6 +1146,9 @@ chunking:
                     "raw_response": {"segments": []},
                 },
             )()
+
+        def close(self) -> None:
+            type(self).closed += 1
 
     monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
     monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
@@ -1148,6 +1172,8 @@ chunking:
     assert [row["text_src"] for row in source_rows] == ["line 0", "line 1"]
     checkpoint = json.loads((task_dir / "checkpoint.json").read_text(encoding="utf-8"))
     assert checkpoint["asr_done_segments"] == [0, 1]
+    assert FakeCloudAsrEngine.created >= 3
+    assert FakeCloudAsrEngine.closed == FakeCloudAsrEngine.created
 
 
 def test_cloud_asr_retryable_failure_splits_segment_from_original_timeline(tmp_path: Path, monkeypatch) -> None:

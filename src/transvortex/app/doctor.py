@@ -12,6 +12,7 @@ import httpx
 
 from .config import load_app_config, resolve_providers_file
 from .credentials import resolve_credential
+from .asr_runtime import asr_provider_readiness
 from ..providers.probe import probe_provider
 
 FASTER_WHISPER_MIN_VERSION = "1.0.2"
@@ -351,6 +352,31 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     details={"provider": asr_provider.name, "kind": asr_provider.kind},
                 )
             )
+    elif asr_provider is not None and asr_provider.kind == "local_worker":
+        readiness = asr_provider_readiness(asr_provider, root_dir=root_dir)
+        state = str(readiness.get("state") or "unavailable")
+        code = str(readiness.get("code") or "asr_unavailable")
+        status = "PASS" if state == "ready" else "WARN" if state in {"needs_action", "checking"} else "FAIL"
+        hint_by_code = {
+            "runtime_missing": "请在语音识别设置中安装本机 Whisper 运行组件。",
+            "runtime_unpublished": "本机 Whisper 运行组件尚未发布。",
+            "model_missing": "请在语音识别设置中下载所选 Whisper 模型。",
+            "device_unavailable": "请安装 NVIDIA 加速包，或把运算设备改为 CPU。",
+            "hardware_untested": "请在语音识别设置中检查 NVIDIA 硬件。",
+            "hardware_incompatible": "NVIDIA 硬件或驱动不兼容，请改用 CPU。",
+            "environment_missing": "请选择已有的 faster-whisper Python 环境。",
+            "environment_unavailable": "已选 Python 环境不可用，请重新选择并验证。",
+        }
+        checks.append(
+            _check(
+                "faster_whisper",
+                status,
+                code,
+                f"Managed faster-whisper readiness: {state}/{code}",
+                "本机 Whisper 已可用。" if state == "ready" else hint_by_code.get(code, "请在语音识别设置中处理本机 Whisper 状态。"),
+                details={"provider": asr_provider.name, "kind": asr_provider.kind, "readiness": readiness},
+            )
+        )
     elif asr_provider is not None:
         checks.append(
             _check(

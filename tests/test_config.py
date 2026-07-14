@@ -11,6 +11,7 @@ from transvortex.app.config import (
     apply_route_overrides,
     load_app_config,
 )
+from transvortex.app.asr_admin import draft_to_asr_provider_config
 from transvortex.memory.plan import resolve_memory_plan
 
 
@@ -38,6 +39,22 @@ default_concurrency: 8
     monkeypatch.setenv("TVX_CHUNK_SECONDS", "45")
     cfg = load_app_config(root_dir=tmp_path, cli_overrides={"chunk_seconds": 30})
     assert cfg.pipeline.chunk_seconds == 30
+
+
+def test_external_whisper_draft_does_not_inherit_managed_runtime_id() -> None:
+    provider = draft_to_asr_provider_config(
+        {
+            "name": "external_whisper",
+            "kind": "local_worker",
+            "protocol": "faster_whisper",
+            "model": "small",
+            "runtime": {"source": "external"},
+            "local": {"device": "cpu", "compute_type": "auto"},
+        }
+    )
+
+    assert provider.runtime.source == "external"
+    assert provider.runtime.id == ""
 
 
 def test_artifacts_directory_environment_overrides_workspace_yaml(
@@ -2004,11 +2021,13 @@ routing:
 
     provider = cfg.asr_providers[cfg.pipeline.asr_provider]
     assert provider.name == "faster_whisper_large_v3"
-    assert provider.kind == "local_inprocess"
+    assert provider.kind == "local_worker"
     assert provider.protocol == "faster_whisper"
+    assert provider.runtime.source == "managed"
+    assert provider.runtime.id == "managed:faster-whisper"
     assert provider.local.model_size == "large-v3"
-    assert provider.local.device == "cuda"
-    assert provider.local.compute_type == "int8_float16"
+    assert provider.local.device == "auto"
+    assert provider.local.compute_type == "auto"
     assert provider.local.max_initial_timestamp == 30.0
     assert provider.local.beam_size == 5
     assert provider.local.temperature == 0.0

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import posixpath
+import queue
 import site
+import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 import wave
 from dataclasses import dataclass, field
@@ -12,6 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from ..app.credentials import resolve_credential
+from ..app.asr_runtime import (
+    WHISPER_HOST_PROTOCOL_VERSION,
+    resolve_whisper_runtime,
+    whisper_host_script,
+)
 from ..app.models import AsrProviderConfig
 from ..http import DEFAULT_JSON_HEADERS, merge_default_headers, request_json_with_retry
 from ..utils import write_json
@@ -60,7 +70,7 @@ class AsrEngine:
         self.source_lang = source_lang
         self.prompt = prompt
         self.root_dir = root_dir
-        self._adapter = build_asr_client(asr_provider)
+        self._adapter = build_asr_client(asr_provider, root_dir=root_dir)
 
     def transcribe_segment(self, audio_path: Path, segment_start_offset: float) -> list[dict]:
         return self.transcribe_segment_result(audio_path, segment_start_offset).rows
@@ -79,6 +89,11 @@ class AsrEngine:
             prompt=self.prompt if prompt is None else prompt,
             root_dir=self.root_dir,
         )
+
+    def close(self) -> None:
+        close = getattr(self._adapter, "close", None)
+        if callable(close):
+            close()
 
 
 class FasterWhisperAsrAdapter:
@@ -144,6 +159,310 @@ class FasterWhisperAsrAdapter:
                 }
             )
         return AsrTranscriptionResult(rows=rows)
+
+
+class FasterWhisperProcessAsrAdapter:
+    def __init__(self, config: AsrProviderConfig, *, root_dir: Path | None) -> None:
+        if root_dir is None:
+            raise RuntimeError("root_dir is required for local Whisper worker ASR")
+        self.config = config
+        self.root_dir = Path(root_dir)
+        self._process: subprocess.Popen[str] | None = None
+        self._responses: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._stderr_lines: list[str] = []
+        self._request_lock = threading.Lock()
+        self._next_id = 1
+        self._runtime: dict[str, Any] = {}
+        self._model_info: dict[str, Any] = {}
+        self._job: _WindowsKillJob | None = None
+
+    def transcribe_segment(
+        self,
+        audio_path: Path,
+        segment_start_offset: float,
+        *,
+        prompt: str = "",
+        source_lang: str | None = None,
+        root_dir: Path | None = None,
+    ) -> AsrTranscriptionResult:
+        del root_dir
+        self._ensure_process()
+        local = self.config.local
+        result = self._request(
+            "transcribe",
+            {
+                "audio_path": str(Path(audio_path).resolve()),
+                "segment_start_offset": float(segment_start_offset),
+                "source_lang": source_lang or "",
+                "prompt": prompt,
+                "options": {
+                    "beam_size": max(int(local.beam_size), 1),
+                    "temperature": float(local.temperature),
+                    "condition_on_previous_text": bool(local.condition_on_previous_text),
+                    "max_initial_timestamp": max(float(local.max_initial_timestamp), 0.0),
+                    "hotwords": str(local.hotwords or ""),
+                },
+            },
+        )
+        rows = list(result.get("rows") or [])
+        for row in rows:
+            meta = row.setdefault("meta", {})
+            meta["provider"] = self.config.name
+            meta["protocol"] = "faster_whisper"
+            meta["runtime_source"] = self.config.runtime.source
+        transport_meta = {
+            "transport": "stdio_jsonl",
+            "runtime_source": self.config.runtime.source,
+            "device": result.get("device"),
+            "compute_type": result.get("compute_type"),
+        }
+        return AsrTranscriptionResult(rows=rows, transport_meta=transport_meta)
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is not None and process.poll() is None:
+            try:
+                self._request_for_process(process, "shutdown", {}, timeout=3.0)
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        if self._job is not None:
+            self._job.close()
+            self._job = None
+
+    def _ensure_process(self) -> None:
+        if self._process is not None and self._process.poll() is None:
+            return
+        runtime = resolve_whisper_runtime(self.config, root_dir=self.root_dir)
+        command = [
+            str(runtime["python_executable"]),
+            "-u",
+            str(whisper_host_script()),
+        ]
+        accelerator_root = str(runtime.get("accelerator_root") or "")
+        if accelerator_root:
+            command.extend(["--accelerator-root", accelerator_root])
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            creationflags=creationflags,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+        )
+        self._process = process
+        if os.name == "nt":
+            self._job = _WindowsKillJob(process)
+        threading.Thread(target=self._read_stdout, args=(process,), daemon=True).start()
+        threading.Thread(target=self._read_stderr, args=(process,), daemon=True).start()
+        try:
+            self._runtime = self._request("runtime.info", {})
+            if int(self._runtime.get("protocol_version", 0)) != WHISPER_HOST_PROTOCOL_VERSION:
+                raise RuntimeError("whisper_host_protocol_mismatch")
+            self._model_info = self._request(
+                "model.load",
+                {
+                    "model_path": str(runtime["model_path"]),
+                    "device": _resolve_worker_device(
+                        self.config.local.device,
+                        accelerator_root=accelerator_root,
+                        cuda_available=runtime.get("cuda_available") is True,
+                    ),
+                    "compute_type": self.config.local.compute_type,
+                },
+                timeout=max(float(self.config.execution.timeout_seconds), 30.0),
+            )
+        except Exception:
+            self.close()
+            raise
+
+    def _request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        process = self._process
+        if process is None:
+            raise RuntimeError("whisper_host_not_started")
+        return self._request_for_process(process, method, params, timeout=timeout)
+
+    def _request_for_process(
+        self,
+        process: subprocess.Popen[str],
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        with self._request_lock:
+            if process.poll() is not None:
+                raise RuntimeError(self._process_exit_message(process))
+            request_id = self._next_id
+            self._next_id += 1
+            assert process.stdin is not None
+            process.stdin.write(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "protocol_version": WHISPER_HOST_PROTOCOL_VERSION,
+                        "method": method,
+                        "params": params,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            process.stdin.flush()
+            effective_timeout = timeout or max(float(self.config.execution.timeout_seconds), 30.0)
+            deadline = time.monotonic() + effective_timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"whisper_host_timeout:{method}")
+                try:
+                    response = self._responses.get(timeout=min(remaining, 0.25))
+                except queue.Empty:
+                    if process.poll() is not None:
+                        raise RuntimeError(self._process_exit_message(process))
+                    continue
+                if response.get("id") != request_id:
+                    continue
+                error = response.get("error")
+                if isinstance(error, dict):
+                    raise RuntimeError(f"{error.get('code', 'whisper_host_error')}:{error.get('message', '')}")
+                result = response.get("result")
+                return result if isinstance(result, dict) else {}
+
+    def _read_stdout(self, process: subprocess.Popen[str]) -> None:
+        assert process.stdout is not None
+        for raw in process.stdout:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(payload, dict):
+                self._responses.put(payload)
+
+    def _read_stderr(self, process: subprocess.Popen[str]) -> None:
+        assert process.stderr is not None
+        for raw in process.stderr:
+            self._stderr_lines.append(raw.rstrip())
+            if len(self._stderr_lines) > 40:
+                self._stderr_lines.pop(0)
+
+    def _process_exit_message(self, process: subprocess.Popen[str]) -> str:
+        detail = self._stderr_lines[-1] if self._stderr_lines else ""
+        return f"whisper_host_exited:{process.returncode}:{detail}"
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def _resolve_worker_device(
+    configured_device: str,
+    *,
+    accelerator_root: str,
+    cuda_available: bool,
+) -> str:
+    if configured_device != "auto":
+        return configured_device
+    return "cuda" if accelerator_root or cuda_available else "cpu"
+
+
+class _WindowsKillJob:
+    def __init__(self, process: subprocess.Popen[str]) -> None:
+        self.handle: Any | None = None
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class BasicLimitInformation(ctypes.Structure):
+                _fields_ = [
+                    ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                    ("PerJobUserTimeLimit", ctypes.c_longlong),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD),
+                ]
+
+            class IoCounters(ctypes.Structure):
+                _fields_ = [
+                    ("ReadOperationCount", ctypes.c_ulonglong),
+                    ("WriteOperationCount", ctypes.c_ulonglong),
+                    ("OtherOperationCount", ctypes.c_ulonglong),
+                    ("ReadTransferCount", ctypes.c_ulonglong),
+                    ("WriteTransferCount", ctypes.c_ulonglong),
+                    ("OtherTransferCount", ctypes.c_ulonglong),
+                ]
+
+            class ExtendedLimitInformation(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", BasicLimitInformation),
+                    ("IoInfo", IoCounters),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+            kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+            kernel32.SetInformationJobObject.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+            ]
+            kernel32.SetInformationJobObject.restype = wintypes.BOOL
+            kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+            kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.CreateJobObjectW(None, None)
+            if not handle:
+                return
+            info = ExtendedLimitInformation()
+            info.BasicLimitInformation.LimitFlags = 0x00002000
+            if not kernel32.SetInformationJobObject(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                kernel32.CloseHandle(handle)
+                return
+            process_handle = wintypes.HANDLE(int(getattr(process, "_handle")))
+            if not kernel32.AssignProcessToJobObject(handle, process_handle):
+                kernel32.CloseHandle(handle)
+                return
+            self.handle = handle
+        except Exception:
+            self.handle = None
+
+    def close(self) -> None:
+        if self.handle is None:
+            return
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32.CloseHandle(self.handle)
+        self.handle = None
 
 
 class OpenAITranscriptionsAsrClient:
@@ -368,11 +687,15 @@ class FunASROpenAIAsrClient(OpenAITranscriptionsAsrClient):
 
 def build_asr_client(
     config: AsrProviderConfig | None,
-) -> FasterWhisperAsrAdapter | OpenAITranscriptionsAsrClient | FunASROpenAIAsrClient:
+    *,
+    root_dir: Path | None = None,
+) -> FasterWhisperAsrAdapter | FasterWhisperProcessAsrAdapter | OpenAITranscriptionsAsrClient | FunASROpenAIAsrClient:
     if config is None:
         raise RuntimeError("Missing ASR provider config")
     if config.kind == "local_inprocess" and config.protocol == "faster_whisper":
         return FasterWhisperAsrAdapter(config)
+    if config.kind == "local_worker" and config.protocol == "faster_whisper":
+        return FasterWhisperProcessAsrAdapter(config, root_dir=root_dir)
     if config.kind in {"local_server", "remote"} and config.protocol == "openai_transcriptions":
         return OpenAITranscriptionsAsrClient(config)
     if config.kind == "local_server" and config.protocol == "funasr_openai":
