@@ -59,6 +59,7 @@ from ..providers.model_catalog import model_catalog_runtime_config
 from .credentials import read_dotenv_values
 
 
+ARTIFACTS_DIR_ENV = "TRANSVORTEX_ARTIFACTS_DIR"
 MEMORY_INJECT_INTENSITIES = {"low", "auto", "high", "max"}
 MEMORY_PATCH_MODES = {"serial"}
 LEGACY_MEMORY_INJECT_FIELDS = {
@@ -825,7 +826,10 @@ def load_app_config(
     dotenv_values = read_dotenv_values(root_dir)
     prompts_raw = pip_yaml.get("prompts") or {}
 
-    artifacts_dir = Path(pip_yaml.get("artifacts_dir", "artifacts"))
+    artifacts_value = os.getenv(ARTIFACTS_DIR_ENV, "").strip() or pip_yaml.get(
+        "artifacts_dir", "artifacts"
+    )
+    artifacts_dir = Path(str(artifacts_value or "artifacts")).expanduser()
     asr_raw = pip_yaml.get("asr") or {}
     if not isinstance(asr_raw, dict):
         asr_raw = {}

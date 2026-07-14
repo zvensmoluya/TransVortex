@@ -49,19 +49,18 @@ TransVortex 目标是成为一个可被脚本和 agent 调用的无界面核心�
 桌面端是 Windows 日常使用的推荐入口。
 
 ```powershell
-cd desktop
-npm install
-npm run typecheck
-npm run build
-npm run tauri dev
+cd desktop_flutter
+flutter pub get
+flutter run -d windows
 ```
 
 在应用里：
-- 先检查 Environment
-- 需要时保存 provider key
-- 选择视频，配置 Provider、ASR、Translation 和 Output
-- 输出格式可选 `srt`、`ass` 或 `both`
-- 任务结束后可从 History 打开 SRT/ASS
+- 从主菜单准备翻译模型和语音识别方案
+- 需要时设置用户级凭据
+- 选择视频、音频或 SRT，设置语言、翻译模型和输出形式
+- 任务结束后进入任务处理窗审看、编辑或重新导出
+
+Flutter 正常启动默认把任务资料保存在 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可在主菜单选择其他任务资料库。仓库 `artifacts/` 继续作为显式仓库 CLI 的开发 / 实验工作区，不会自动进入正式桌面任务历史。
 
 ## 云端 ASR 示例
 

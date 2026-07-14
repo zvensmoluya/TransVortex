@@ -445,6 +445,41 @@ def test_app_service_subprocess_no_pump_health(tmp_path: Path) -> None:
     assert lines[1]["result"]["shutdown"] == "requested"
 
 
+def test_app_service_subprocess_uses_explicit_artifacts_directory(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    desktop_tasks = tmp_path / "desktop-workspace" / "Tasks"
+    request = (
+        _request("config.get")
+        + "\n"
+        + _request("service.shutdown", request_id=2)
+        + "\n"
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "transvortex.app_service",
+            "--root",
+            str(tmp_path),
+            "--artifacts-dir",
+            str(desktop_tasks),
+            "--no-pump",
+        ],
+        input=request,
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=10,
+        check=True,
+    )
+
+    lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    assert Path(lines[0]["result"]["artifacts_dir"]) == desktop_tasks
+    assert desktop_tasks.is_dir()
+    assert lines[1]["result"]["shutdown"] == "requested"
+
+
 def test_local_service_pump_launches_queued_worker(tmp_path: Path) -> None:
     _write_config(tmp_path)
     launched = []

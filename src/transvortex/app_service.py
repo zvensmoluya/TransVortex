@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 import time
@@ -9,7 +10,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .app.config import load_app_config
+from .app.config import ARTIFACTS_DIR_ENV, load_app_config
 from .app.desktop_api import DesktopApi, DesktopApiError
 from .artifacts.runtime import DEFAULT_CANCEL_GRACE_SECONDS, TaskRuntime
 from .artifacts.task_store import TaskStore
@@ -24,10 +25,19 @@ PUMP_INTERVAL_SECONDS = 1.0
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="transvortex.app_service")
     parser.add_argument("--root", default=".", help="Project root")
+    parser.add_argument(
+        "--artifacts-dir",
+        default=None,
+        help="Optional task artifacts directory override",
+    )
     parser.add_argument("--providers-file", default=None, help="Optional providers config file path")
     parser.add_argument("--no-pump", action="store_true", help="Disable the local service queue pump")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
+    if args.artifacts_dir:
+        artifacts_dir = Path(args.artifacts_dir).expanduser().resolve()
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        os.environ[ARTIFACTS_DIR_ENV] = str(artifacts_dir)
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
     pump = LocalServicePump(root_dir=root, providers_file=providers_file, explicit_queue_only=True)
     service = DesktopApi(

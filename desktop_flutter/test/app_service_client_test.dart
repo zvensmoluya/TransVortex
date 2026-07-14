@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transvortex_desktop_flutter/model/task_labels.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
+import 'package:transvortex_desktop_flutter/services/desktop_app_paths.dart';
 import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 
@@ -598,12 +599,56 @@ routing:
   });
 
   test(
+    'LocalServiceSupervisor applies product workspace to real app service',
+    () async {
+      final desktopHome = await Directory.systemTemp.createTemp(
+        'transvortex_product_home_',
+      );
+      final selectedWorkspace = await Directory.systemTemp.createTemp(
+        'transvortex_product_workspace_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
+      addTearDown(() => _deleteDirectoryWithRetries(selectedWorkspace));
+      final appPaths = _desktopPaths(desktopHome);
+      final settings = DesktopWorkspaceSettings(
+        paths: appPaths,
+        environment: const {},
+      );
+      await settings.saveWorkspaceRoot(selectedWorkspace.path);
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: Directory.current.parent,
+        appPaths: appPaths,
+        workspaceSettings: settings,
+        pythonExecutable: Platform.isWindows ? 'python' : 'python3',
+        requestTimeout: const Duration(seconds: 10),
+      );
+      final session = await supervisor.start();
+      addTearDown(session.shutdown);
+
+      final snapshot = await session.client.desktopSnapshot();
+      final expectedConfig = appPaths.configRoot.resolveSymbolicLinksSync();
+      final expectedTasks = appPaths
+          .tasksRoot(selectedWorkspace)
+          .resolveSymbolicLinksSync();
+
+      expect(snapshot.config['root_dir'], expectedConfig);
+      expect(snapshot.config['artifacts_dir'], expectedTasks);
+      expect(Directory(expectedTasks).existsSync(), isTrue);
+      expect('$expectedConfig'.contains('.transvortex-desktop'), isFalse);
+    },
+  );
+
+  test(
     'LocalServiceSupervisor uses an isolated desktop runtime root',
     () async {
       final repoRoot = await Directory.systemTemp.createTemp(
         'transvortex_repo_root_',
       );
+      final desktopHome = await Directory.systemTemp.createTemp(
+        'transvortex_desktop_home_',
+      );
       addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+      addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
       await Directory(
         '${repoRoot.path}${Platform.pathSeparator}src'
         '${Platform.pathSeparator}transvortex',
@@ -630,8 +675,19 @@ routing:
       List<String>? arguments;
       String? capturedWorkingDirectory;
       Map<String, String>? capturedEnvironment;
+      final appPaths = _desktopPaths(desktopHome);
+      final workspaceSettings = DesktopWorkspaceSettings(
+        paths: appPaths,
+        environment: const {},
+      );
+      final selectedWorkspace = Directory(
+        '${desktopHome.path}${Platform.pathSeparator}Selected Workspace',
+      );
+      await workspaceSettings.saveWorkspaceRoot(selectedWorkspace.path);
       final supervisor = LocalServiceSupervisor(
         repoRoot: repoRoot,
+        appPaths: appPaths,
+        workspaceSettings: workspaceSettings,
         pythonExecutable: 'python-test',
         processStarter:
             (
@@ -650,18 +706,16 @@ routing:
 
       await supervisor.start();
 
-      final runtimeRoot = Directory(
-        '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
-      );
-      final runtimeArtifacts = Directory(
-        '${runtimeRoot.path}${Platform.pathSeparator}artifacts',
-      );
+      final runtimeRoot = appPaths.configRoot;
+      final runtimeArtifacts = appPaths.tasksRoot(selectedWorkspace);
       expect(executable, 'python-test');
       expect(arguments, [
         '-m',
         'transvortex.app_service',
         '--root',
         runtimeRoot.path,
+        '--artifacts-dir',
+        runtimeArtifacts.path,
       ]);
       expect(capturedWorkingDirectory, repoRoot.path);
       expect(capturedEnvironment?['PYTHONIOENCODING'], 'utf-8');
@@ -678,7 +732,13 @@ routing:
         ).readAsStringSync(encoding: utf8),
         'providers: []\n',
       );
-      expect(runtimeArtifacts.existsSync(), isFalse);
+      expect(runtimeArtifacts.existsSync(), isTrue);
+      expect(
+        Directory(
+          '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
+        ).existsSync(),
+        isFalse,
+      );
     },
   );
 
@@ -688,7 +748,11 @@ routing:
       final repoRoot = await Directory.systemTemp.createTemp(
         'transvortex_repo_root_',
       );
+      final desktopHome = await Directory.systemTemp.createTemp(
+        'transvortex_desktop_home_',
+      );
       addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+      addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
       File(
         '${repoRoot.path}${Platform.pathSeparator}pipeline.yaml',
       ).writeAsStringSync('artifacts_dir: repo-artifacts\n', encoding: utf8);
@@ -696,9 +760,8 @@ routing:
         '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
       ).writeAsStringSync('providers: [fresh]\n', encoding: utf8);
 
-      final runtimeRoot = Directory(
-        '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
-      );
+      final appPaths = _desktopPaths(desktopHome);
+      final runtimeRoot = appPaths.configRoot;
       await runtimeRoot.create(recursive: true);
       File(
         '${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml',
@@ -709,6 +772,11 @@ routing:
 
       final supervisor = LocalServiceSupervisor(
         repoRoot: repoRoot,
+        appPaths: appPaths,
+        workspaceSettings: DesktopWorkspaceSettings(
+          paths: appPaths,
+          environment: const {},
+        ),
         pythonExecutable: 'python-test',
         processStarter:
             (
@@ -742,7 +810,11 @@ routing:
     final repoRoot = await Directory.systemTemp.createTemp(
       'transvortex_repo_root_',
     );
+    final desktopHome = await Directory.systemTemp.createTemp(
+      'transvortex_desktop_home_',
+    );
     addTearDown(() => _deleteDirectoryWithRetries(repoRoot));
+    addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
     File(
       '${repoRoot.path}${Platform.pathSeparator}pipeline.yaml',
     ).writeAsStringSync('artifacts_dir: repo-artifacts\n', encoding: utf8);
@@ -750,9 +822,8 @@ routing:
       '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
     ).writeAsStringSync('providers: [fresh]\n', encoding: utf8);
 
-    final runtimeRoot = Directory(
-      '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
-    );
+    final appPaths = _desktopPaths(desktopHome);
+    final runtimeRoot = appPaths.configRoot;
     await runtimeRoot.create(recursive: true);
     File(
       '${runtimeRoot.path}${Platform.pathSeparator}providers.yaml',
@@ -763,6 +834,11 @@ routing:
 
     final supervisor = LocalServiceSupervisor(
       repoRoot: repoRoot,
+      appPaths: appPaths,
+      workspaceSettings: DesktopWorkspaceSettings(
+        paths: appPaths,
+        environment: const {},
+      ),
       pythonExecutable: 'python-test',
       processStarter:
           (
@@ -1627,6 +1703,19 @@ Future<void> _deleteDirectoryWithRetries(Directory directory) async {
   if (lastError != null) {
     Error.throwWithStackTrace(lastError, lastStackTrace ?? StackTrace.current);
   }
+}
+
+DesktopAppPaths _desktopPaths(Directory appDataRoot) {
+  return DesktopAppPaths(
+    appDataRoot: appDataRoot,
+    configRoot: Directory('${appDataRoot.path}${Platform.pathSeparator}Config'),
+    defaultWorkspaceRoot: Directory(
+      '${appDataRoot.path}${Platform.pathSeparator}Workspace',
+    ),
+    settingsFile: File(
+      '${appDataRoot.path}${Platform.pathSeparator}desktop-settings.json',
+    ),
+  );
 }
 
 class _FakeProcess implements Process {

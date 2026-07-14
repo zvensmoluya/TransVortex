@@ -428,7 +428,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 #### 发布阻塞项
 
-1. **安装目录与用户数据尚未分离。** `LocalServiceSupervisor` 当前在发现到的仓库或包根下创建 `.transvortex-desktop`，其中保存 `pipeline.yaml`、`providers.local.yaml`、artifact 和任务历史；portable 安装脚本使用 `-Force` 时会删除整个安装目录再复制，因此不能安全充当升级器。
+1. **任务资料已与安装目录分离，但完整 AppPaths 尚未完成。** Flutter 正常启动现在把配置副本放到 `%LOCALAPPDATA%\TransVortex\Config`，把任务写入默认或用户选择的资料库 `Tasks/`，并通过 Local Service 显式覆盖传给 worker；仓库 `artifacts/` 和旧 `.transvortex-desktop` 不自动迁移。portable `-Force` 不再触及新的任务资料库，但 cache / logs / temp 尚未拆分，用户主动搬迁已有正式任务也尚未实现。
 2. **干净机器没有受控运行时。** Flutter 仍调用系统 `python`，通过仓库式 `src/transvortex/app_service.py` 和 `PYTHONPATH` 启动服务；portable 包不包含 Python runtime、Python 依赖或 FFmpeg。开发机上的 Local Service check 只能证明当前机器环境可用，不能证明新机器首启可用。
 3. **缺少版本化初始化与迁移。** 当前初始化主要是“目录不存在则创建、配置不存在则复制”。已有 `pipeline.yaml` 不会随默认配置演进，也没有安装状态文件、配置 schema migration、迁移前备份和失败回滚。`providers_file_version` / `pipeline_file_version` 只是并发写保护，不是数据格式版本。
 4. **安装资源与运行资源没有统一根。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到包根，但正常 App 把 Local Service 的 `--root` 指向 `.transvortex-desktop`，且只复制 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，不能据此认为包内资源已经进入正式运行路径。
@@ -444,7 +444,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 #### Release Foundation 建议顺序
 
-1. **统一 AppPaths。** 明确只读 `install_root`，以及独立的 `data_root`、`config_root`、`logs_root`、`cache_root` 和临时目录；保留 `TRANSVORTEX_HOME` 作为开发/测试覆盖，并为现有 `.transvortex-desktop` 提供一次性、可回滚迁移。
+1. **继续收口 AppPaths。** 已明确 Flutter 的用户级 `config_root` 和可配置任务资料库，并保留 `TRANSVORTEX_HOME` / 显式 service root 作为开发测试覆盖；下一步拆分 logs / cache / temp，并实现正式用户主动更改资料库时的受控搬迁。开发阶段仓库 `artifacts/` 与旧 `.transvortex-desktop` 明确保留为实验数据，不进入正式迁移范围。
 2. **固定 Local Service 交付。** 选择内置 Python runtime + 已安装 wheel，或冻结成受控 sidecar；Flutter 使用明确可执行文件路径，不再依赖系统 `python`、仓库发现和 `PYTHONPATH`。FFmpeg 与本地 ASR 的基础/可选组件边界一并确定。
 3. **建立版本化 initializer。** 首次运行创建目录和默认配置；升级时按 schema 执行幂等迁移、备份和回滚；启动服务后校验 protocol、capability 与 App/backend 版本组合。
 4. **收口 Supervisor。** 同一 App 会话只允许一个 Local Service 宿主，页面只依赖 `AppServiceClient`；补持久日志、服务重启、运行中 Worker 的退出策略，并把 smoke 驱动移出产品 widget。

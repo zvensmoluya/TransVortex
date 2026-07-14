@@ -16,6 +16,7 @@ import 'model/task_labels.dart';
 import 'model/window_state.dart';
 import 'painters/source_object_painter.dart';
 import 'services/app_service_client.dart';
+import 'services/desktop_app_paths.dart';
 import 'services/directory_probe.dart';
 import 'services/current_window_controls.dart';
 import 'services/local_service_controller.dart';
@@ -113,6 +114,8 @@ class TransVortexApp extends StatelessWidget {
     this.taskNotificationService,
     this.pathOpener,
     this.directoryProbe,
+    this.workspaceSettings,
+    this.workspaceDirectoryPicker,
     this.smoke,
   });
 
@@ -124,6 +127,8 @@ class TransVortexApp extends StatelessWidget {
   final TaskNotificationService? taskNotificationService;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
+  final WorkspaceSettingsStore? workspaceSettings;
+  final WorkspaceDirectoryPicker? workspaceDirectoryPicker;
   final AppSmokeArgs? smoke;
 
   @override
@@ -167,6 +172,9 @@ class TransVortexApp extends StatelessWidget {
           bridge: appBridge,
           localServiceController: localServiceController,
           taskNotificationService: taskNotificationService,
+          directoryProbe: directoryProbe,
+          workspaceSettings: workspaceSettings,
+          workspaceDirectoryPicker: workspaceDirectoryPicker,
           smoke: smoke,
         ),
         AppWindowType.taskProcessing => TaskProcessingWindow(
@@ -197,6 +205,9 @@ class MainScreen extends StatefulWidget {
     required this.bridge,
     this.localServiceController,
     this.taskNotificationService,
+    this.directoryProbe,
+    this.workspaceSettings,
+    this.workspaceDirectoryPicker,
     this.smoke,
   });
 
@@ -204,6 +215,9 @@ class MainScreen extends StatefulWidget {
   final WindowStateBridge bridge;
   final LocalServiceController? localServiceController;
   final TaskNotificationService? taskNotificationService;
+  final DirectoryWriteProbe? directoryProbe;
+  final WorkspaceSettingsStore? workspaceSettings;
+  final WorkspaceDirectoryPicker? workspaceDirectoryPicker;
   final AppSmokeArgs? smoke;
 
   @override
@@ -214,6 +228,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late final LocalServiceController _service;
   late final bool _ownsService;
   late final MainWindowController _controller;
+  late final DirectoryWriteProbe _directoryProbe;
+  late final WorkspaceSettingsStore _workspaceSettings;
   SmokeWindowsNotificationSink? _smokeNotificationSink;
   late final TaskNotificationObserver _notificationObserver;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'main-smoke-render');
@@ -234,6 +250,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
+    _workspaceSettings = widget.workspaceSettings ?? DesktopWorkspaceSettings();
     _service =
         widget.localServiceController ??
         LocalServiceController(supervisor: _localServiceSupervisor());
@@ -310,7 +328,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   LocalServiceSupervisor _localServiceSupervisor() {
     final serviceRoot = widget.smoke?.serviceRoot;
     if (serviceRoot == null || serviceRoot.isEmpty) {
-      return LocalServiceSupervisor();
+      return LocalServiceSupervisor(workspaceSettings: _workspaceSettings);
     }
     return LocalServiceSupervisor(serviceRoot: Directory(serviceRoot));
   }
@@ -1280,6 +1298,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _menuItem('translation', '翻译模型设置'),
         _menuItem('asr', '语音识别设置'),
         _menuItem('history', '任务处理'),
+        const PopupMenuDivider(),
+        _menuItem('workspace', '任务资料库位置'),
       ],
     );
     switch (selected) {
@@ -1292,13 +1312,86 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case 'history':
         _openToolWindow(AppWindowType.taskProcessing);
         break;
+      case 'workspace':
+        await _changeWorkspaceRoot();
+        break;
     }
   }
 
   PopupMenuItem<String> _menuItem(String value, String label) {
     return PopupMenuItem<String>(
+      key: ValueKey('main-menu-$value'),
       value: value,
       child: Text(label, style: T.tBody),
+    );
+  }
+
+  Future<void> _changeWorkspaceRoot() async {
+    if (_controller.view.state == MainState.running) {
+      await _showWorkspaceDialog('任务正在制作', '停止或等待当前任务完成后再更改任务资料库。');
+      return;
+    }
+    final tasks = _service.snapshot.desktopSnapshot?.tasks ?? const [];
+    if (tasks.isNotEmpty) {
+      await _showWorkspaceDialog(
+        '当前资料库已有任务',
+        '移动正式任务资料将在后续版本提供。当前不会隐藏、移动或删除已有任务。',
+      );
+      return;
+    }
+    Directory current;
+    try {
+      current = await _workspaceSettings.loadWorkspaceRoot();
+    } on Object {
+      current = DesktopAppPaths.system().defaultWorkspaceRoot;
+    }
+    final picker = widget.workspaceDirectoryPicker;
+    final selected = picker != null
+        ? await picker(current.path)
+        : await FilePicker.platform.getDirectoryPath(
+            dialogTitle: '选择任务资料库位置',
+            initialDirectory: current.path,
+          );
+    if (!mounted || selected == null || selected.trim().isEmpty) return;
+    final repoRoot = LocalServiceSupervisor.findRepoRoot();
+    if (repoRoot != null && pathIsInsideDirectory(selected, repoRoot.path)) {
+      await _showWorkspaceDialog('不能使用这个目录', '任务资料库不能放在程序或仓库目录中。请选择独立目录。');
+      return;
+    }
+    final probe = await _directoryProbe.checkWritable(selected);
+    if (!mounted) return;
+    if (!probe.ok) {
+      await _showWorkspaceDialog('目录不可用', probe.message);
+      return;
+    }
+    try {
+      await _workspaceSettings.saveWorkspaceRoot(selected);
+      await _service.restart();
+      await _controller.refreshSnapshot();
+    } on Object catch (error) {
+      if (!mounted) return;
+      await _showWorkspaceDialog('任务资料库切换失败', '$error');
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(content: Text('任务资料库已切换')));
+  }
+
+  Future<void> _showWorkspaceDialog(String title, String message) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
     );
   }
 

@@ -12,6 +12,7 @@ import 'package:transvortex_desktop_flutter/model/startup_args.dart';
 import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 import 'package:transvortex_desktop_flutter/services/current_window_controls.dart';
+import 'package:transvortex_desktop_flutter/services/desktop_app_paths.dart';
 import 'package:transvortex_desktop_flutter/services/directory_probe.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
 import 'package:transvortex_desktop_flutter/services/path_opener.dart';
@@ -318,7 +319,40 @@ void main() {
     expect(find.text('翻译模型设置'), findsOneWidget);
     expect(find.text('语音识别设置'), findsOneWidget);
     expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('任务资料库位置'), findsOneWidget);
     expect(find.text('诊断'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('main menu switches an empty task workspace', (tester) async {
+    final current = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}tvx-widget-current',
+    );
+    final selected = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}tvx-widget-selected',
+    );
+    final settings = _RecordingWorkspaceSettings(current);
+    final probe = _RecordingDirectoryProbe(
+      const DirectoryProbeResult(ok: true, message: '目录可写'),
+    );
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _readyController(),
+        directoryProbe: probe,
+        workspaceSettings: settings,
+        workspaceDirectoryPicker: (_) async => selected.path,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('main-menu-button')));
+    await tester.pump(const Duration(milliseconds: 400));
+    activatePopupMenuItem(tester, const ValueKey('main-menu-workspace'));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(settings.savedPaths, [selected.path]);
+    expect(probe.checkedPaths, [selected.path]);
+    expect(find.text('任务资料库已切换'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -3483,10 +3517,7 @@ Future<void> pickSourceAndStart(WidgetTester tester) async {
 }
 
 void activatePopupMenuItem(WidgetTester tester, Key key) {
-  final state = tester.state<PopupMenuItemState<Object, PopupMenuItem<Object>>>(
-    find.byKey(key),
-  );
-  // ignore: invalid_use_of_protected_member
+  final dynamic state = tester.state(find.byKey(key));
   state.handleTap();
 }
 
@@ -4000,5 +4031,21 @@ class _RecordingDirectoryProbe extends DirectoryWriteProbe {
   Future<DirectoryProbeResult> checkWritable(String path) async {
     checkedPaths.add(path);
     return result;
+  }
+}
+
+class _RecordingWorkspaceSettings implements WorkspaceSettingsStore {
+  _RecordingWorkspaceSettings(this.current);
+
+  Directory current;
+  final savedPaths = <String>[];
+
+  @override
+  Future<Directory> loadWorkspaceRoot() async => current;
+
+  @override
+  Future<void> saveWorkspaceRoot(String path) async {
+    savedPaths.add(path);
+    current = Directory(path);
   }
 }

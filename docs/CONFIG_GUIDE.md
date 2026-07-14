@@ -15,6 +15,17 @@
 3. `<root>/providers.yaml`
 4. `<root>/providers.example.yaml`
 
+### 桌面端任务资料库
+
+仓库 CLI 与正式 Flutter 桌面端使用不同的数据位置：
+
+- 显式以仓库作为 `--root` 运行 CLI 时，继续使用 `pipeline.yaml` 的 `artifacts_dir`，默认写入仓库 `artifacts/`。这是开发、实验和 Agent 可复现工作区。
+- Flutter 正常启动时，配置副本默认放在 `%LOCALAPPDATA%\TransVortex\Config`，任务资料库默认放在 `%LOCALAPPDATA%\TransVortex\Workspace`，实际任务位于其中的 `Tasks/`。
+- 主窗口菜单的“任务资料库位置”允许在首个正式任务创建前选择其他本地目录。已有任务时不会静默切换或隐藏历史；开发期仓库 `artifacts/` 和旧 `.transvortex-desktop` 不会被正式模式自动导入。
+- 最终字幕仍写入用户选择的输出目录，不以隐藏任务资料库替代交付目录。
+
+桌面设置保存在 `%LOCALAPPDATA%\TransVortex\desktop-settings.json`。开发和自动化可使用 `TRANSVORTEX_HOME` 覆盖桌面数据根，或用 `TRANSVORTEX_WORKSPACE_ROOT` 只读固定任务资料库。Local Service 的 `--artifacts-dir` 与内部环境变量 `TRANSVORTEX_ARTIFACTS_DIR` 用于把同一任务目录传给 Python worker，不是普通用户设置。
+
 ## 2. 凭据与 API Key
 
 长期默认凭据文件是用户目录下的 `auth.json`：

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../model/task_labels.dart';
+import 'desktop_app_paths.dart';
 
 abstract class AppServiceTransport {
   Future<Object?> call(
@@ -239,6 +240,8 @@ class LocalServiceSupervisor {
   LocalServiceSupervisor({
     this.repoRoot,
     this.serviceRoot,
+    this.appPaths,
+    this.workspaceSettings,
     ProcessStarter? processStarter,
     this.pythonExecutable = 'python',
     this.requestTimeout = const Duration(seconds: 8),
@@ -246,6 +249,8 @@ class LocalServiceSupervisor {
 
   final Directory? repoRoot;
   final Directory? serviceRoot;
+  final DesktopAppPaths? appPaths;
+  final WorkspaceSettingsStore? workspaceSettings;
   final ProcessStarter _processStarter;
   final String pythonExecutable;
   final Duration requestTimeout;
@@ -255,10 +260,38 @@ class LocalServiceSupervisor {
     if (root == null) {
       throw LocalServiceLaunchException('找不到本地服务所需的仓库根目录');
     }
-    final runtimeRoot = serviceRoot ?? await _prepareDesktopRuntimeRoot(root);
+    final paths = appPaths ?? DesktopAppPaths.system();
+    final explicitServiceRoot = serviceRoot;
+    final runtimeRoot = explicitServiceRoot ?? paths.configRoot;
+    Directory? taskArtifactsRoot;
+    if (explicitServiceRoot == null) {
+      final settings =
+          workspaceSettings ?? DesktopWorkspaceSettings(paths: paths);
+      final selectedWorkspace = await settings.loadWorkspaceRoot();
+      if (pathIsInsideDirectory(selectedWorkspace.path, root.path)) {
+        throw LocalServiceLaunchException('任务资料库不能放在程序或仓库目录中');
+      }
+      taskArtifactsRoot = paths.tasksRoot(selectedWorkspace);
+    }
+    if (explicitServiceRoot == null) {
+      await _prepareDesktopRuntimeRoot(root, runtimeRoot);
+    }
+    if (taskArtifactsRoot != null) {
+      await taskArtifactsRoot.create(recursive: true);
+    }
+    final arguments = <String>[
+      '-m',
+      'transvortex.app_service',
+      '--root',
+      runtimeRoot.path,
+      if (taskArtifactsRoot != null) ...[
+        '--artifacts-dir',
+        taskArtifactsRoot.path,
+      ],
+    ];
     final process = await _processStarter(
       pythonExecutable,
-      ['-m', 'transvortex.app_service', '--root', runtimeRoot.path],
+      arguments,
       workingDirectory: root.path,
       environment: {
         'PYTHONIOENCODING': 'utf-8',
@@ -282,10 +315,8 @@ class LocalServiceSupervisor {
 
   static Future<Directory> _prepareDesktopRuntimeRoot(
     Directory repoRoot,
+    Directory runtimeRoot,
   ) async {
-    final runtimeRoot = Directory(
-      '${repoRoot.path}${Platform.pathSeparator}.transvortex-desktop',
-    );
     if (!runtimeRoot.existsSync()) {
       await runtimeRoot.create(recursive: true);
     }

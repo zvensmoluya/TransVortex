@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from transvortex.app.config import apply_route_overrides, load_app_config
+from transvortex.app.config import (
+    ARTIFACTS_DIR_ENV,
+    apply_route_overrides,
+    load_app_config,
+)
 from transvortex.memory.plan import resolve_memory_plan
 
 
@@ -33,6 +37,19 @@ default_concurrency: 8
     monkeypatch.setenv("TVX_CHUNK_SECONDS", "45")
     cfg = load_app_config(root_dir=tmp_path, cli_overrides={"chunk_seconds": 30})
     assert cfg.pipeline.chunk_seconds == 30
+
+
+def test_artifacts_directory_environment_overrides_workspace_yaml(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text("artifacts_dir: artifacts\n", encoding="utf-8")
+    desktop_tasks = tmp_path / "desktop-workspace" / "Tasks"
+    monkeypatch.setenv(ARTIFACTS_DIR_ENV, str(desktop_tasks))
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.artifacts_dir == desktop_tasks
 
 
 def test_long_context_translation_defaults(tmp_path: Path) -> None:
