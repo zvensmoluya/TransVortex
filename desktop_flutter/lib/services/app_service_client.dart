@@ -242,7 +242,7 @@ class LocalServiceSupervisor {
     this.serviceRoot,
     this.appPaths,
     ProcessStarter? processStarter,
-    this.pythonExecutable = 'python',
+    this.pythonExecutable,
     this.requestTimeout = const Duration(seconds: 8),
   }) : _processStarter = processStarter ?? _defaultProcessStarter;
 
@@ -250,14 +250,30 @@ class LocalServiceSupervisor {
   final Directory? serviceRoot;
   final DesktopAppPaths? appPaths;
   final ProcessStarter _processStarter;
-  final String pythonExecutable;
+  final String? pythonExecutable;
   final Duration requestTimeout;
 
   Future<LocalServiceSession> start() async {
-    final root = repoRoot ?? findRepoRoot();
+    final root = repoRoot ?? findAppRoot();
     if (root == null) {
-      throw LocalServiceLaunchException('找不到本地服务所需的仓库根目录');
+      throw LocalServiceLaunchException('找不到本地服务所需的应用资源目录');
     }
+    final explicitPython = pythonExecutable?.trim() ?? '';
+    final bundledPython = _bundledPython(root);
+    final hasBundledRuntime = _hasBundledRuntimeManifest(root);
+    if (explicitPython.isEmpty &&
+        hasBundledRuntime &&
+        !bundledPython.existsSync()) {
+      throw LocalServiceLaunchException(
+        '应用内置的 Python runtime 不完整：缺少 ${bundledPython.path}',
+      );
+    }
+    final useBundledRuntime = explicitPython.isEmpty && hasBundledRuntime;
+    final servicePython = explicitPython.isNotEmpty
+        ? explicitPython
+        : useBundledRuntime
+        ? bundledPython.path
+        : 'python';
     final paths = appPaths ?? DesktopAppPaths.system();
     final explicitServiceRoot = serviceRoot;
     final runtimeRoot = explicitServiceRoot ?? paths.configRoot;
@@ -286,13 +302,17 @@ class LocalServiceSupervisor {
       if (taskCacheRoot != null) ...['--cache-dir', taskCacheRoot.path],
     ];
     final process = await _processStarter(
-      pythonExecutable,
+      servicePython,
       arguments,
       workingDirectory: root.path,
       environment: {
         'PYTHONIOENCODING': 'utf-8',
         'PYTHONUTF8': '1',
-        'PYTHONPATH': _pythonPath(root),
+        if (useBundledRuntime) ...{
+          'PYTHONPATH': '',
+          'PYTHONNOUSERSITE': '1',
+        } else
+          'PYTHONPATH': _pythonPath(root),
       },
     );
     final transport = JsonRpcTransport(
@@ -366,26 +386,63 @@ class LocalServiceSupervisor {
     }
   }
 
-  static Directory? findRepoRoot() {
+  static Directory? findAppRoot() {
     final candidates = <Directory>[
-      Directory.current,
       File(Platform.resolvedExecutable).parent,
+      Directory.current,
     ];
     for (final start in candidates) {
       var cursor = start;
       while (true) {
-        final marker = File(
-          '${cursor.path}${Platform.pathSeparator}src'
-          '${Platform.pathSeparator}transvortex'
-          '${Platform.pathSeparator}app_service.py',
-        );
-        if (marker.existsSync()) return cursor;
+        if (_hasBundledRuntimeManifest(cursor) ||
+            _hasDevelopmentService(cursor)) {
+          return cursor;
+        }
         final parent = cursor.parent;
         if (parent.path == cursor.path) break;
         cursor = parent;
       }
     }
     return null;
+  }
+
+  static Directory? findRepoRoot() {
+    for (final start in <Directory>[
+      Directory.current,
+      File(Platform.resolvedExecutable).parent,
+    ]) {
+      var cursor = start;
+      while (true) {
+        if (_hasDevelopmentService(cursor)) return cursor;
+        final parent = cursor.parent;
+        if (parent.path == cursor.path) break;
+        cursor = parent;
+      }
+    }
+    return null;
+  }
+
+  static bool _hasBundledRuntimeManifest(Directory root) {
+    return File(
+      '${root.path}${Platform.pathSeparator}runtime'
+      '${Platform.pathSeparator}app_runtime.json',
+    ).existsSync();
+  }
+
+  static bool _hasDevelopmentService(Directory root) {
+    return File(
+      '${root.path}${Platform.pathSeparator}src'
+      '${Platform.pathSeparator}transvortex'
+      '${Platform.pathSeparator}app_service.py',
+    ).existsSync();
+  }
+
+  static File _bundledPython(Directory root) {
+    return File(
+      '${root.path}${Platform.pathSeparator}runtime'
+      '${Platform.pathSeparator}python'
+      '${Platform.pathSeparator}python.exe',
+    );
   }
 
   static String _pythonPath(Directory root) {

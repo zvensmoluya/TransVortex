@@ -2,7 +2,9 @@ param(
     [string]$ExePath = "",
     [string]$OutputRoot = "",
     [string]$PackageName = "",
+    [string]$AppRuntimeRoot = "",
     [switch]$Build,
+    [switch]$BuildAppRuntime,
     [switch]$Force,
     [switch]$NoZip,
     [switch]$LaunchCheck,
@@ -126,7 +128,7 @@ function Assert-PortablePackageNoSecrets {
 
     $forbiddenRootPaths = @(
         ".venv", "artifacts", "output", "tmp", "DemoTest",
-        "Components", "Models", "Downloads"
+        "Components", "Models", "Downloads", "src", "pyproject.toml"
     )
     $rootMatches = @(
         $forbiddenRootPaths |
@@ -167,13 +169,19 @@ function Invoke-PortableServiceCheck {
         [int]$TimeoutSeconds = 15
     )
 
-    $pythonPath = Join-Path $PackageRoot "src"
-    if (-not (Test-Path -LiteralPath (Join-Path $pythonPath "transvortex\app_service.py"))) {
-        throw "Portable package service source not found under $pythonPath"
+    $runtimeRoot = Join-Path $PackageRoot "runtime"
+    $runtimeManifestPath = Join-Path $runtimeRoot "app_runtime.json"
+    $pythonPath = Join-Path $runtimeRoot "python\python.exe"
+    if (-not (Test-Path -LiteralPath $runtimeManifestPath)) {
+        throw "Portable package app runtime manifest not found: $runtimeManifestPath"
     }
+    if (-not (Test-Path -LiteralPath $pythonPath)) {
+        throw "Portable package app runtime Python not found: $pythonPath"
+    }
+    $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Encoding utf8 -Raw | ConvertFrom-Json
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = "python"
+    $psi.FileName = $pythonPath
     $psi.WorkingDirectory = $PackageRoot
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
@@ -187,12 +195,8 @@ function Invoke-PortableServiceCheck {
     $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
     $psi.Environment["PYTHONIOENCODING"] = "utf-8"
     $psi.Environment["PYTHONUTF8"] = "1"
-    $existingPythonPath = if ($psi.Environment.ContainsKey("PYTHONPATH")) { $psi.Environment["PYTHONPATH"] } else { "" }
-    $psi.Environment["PYTHONPATH"] = if ([string]::IsNullOrWhiteSpace($existingPythonPath)) {
-        $pythonPath
-    } else {
-        "$pythonPath;$PackageRoot;$existingPythonPath"
-    }
+    $psi.Environment["PYTHONPATH"] = ""
+    $psi.Environment["PYTHONNOUSERSITE"] = "1"
     $escapedPackageRoot = $PackageRoot.Replace('"', '\"')
     $psi.Arguments = "-m transvortex.app_service --root `"$escapedPackageRoot`" --no-pump"
 
@@ -206,14 +210,13 @@ function Invoke-PortableServiceCheck {
         if (-not $process.Start()) {
             throw "Could not start python Local Service process."
         }
-        $requests = @(
-            [ordered]@{ jsonrpc = "2.0"; id = 1; method = "service.info"; params = @{} },
-            [ordered]@{ jsonrpc = "2.0"; id = 2; method = "service.health"; params = @{} },
-            [ordered]@{ jsonrpc = "2.0"; id = 3; method = "asr.status"; params = @{} },
-            [ordered]@{ jsonrpc = "2.0"; id = 4; method = "service.shutdown"; params = @{} }
-        )
-        foreach ($request in $requests) {
-            $process.StandardInput.WriteLine(($request | ConvertTo-Json -Compress -Depth 5))
+        foreach ($line in @(
+            '{"jsonrpc":"2.0","id":1,"method":"service.info","params":{}}',
+            '{"jsonrpc":"2.0","id":2,"method":"service.health","params":{}}',
+            '{"jsonrpc":"2.0","id":3,"method":"asr.status","params":{}}',
+            '{"jsonrpc":"2.0","id":4,"method":"service.shutdown","params":{}}'
+        )) {
+            $process.StandardInput.WriteLine($line)
         }
         $process.StandardInput.Close()
 
@@ -254,6 +257,12 @@ function Invoke-PortableServiceCheck {
     if ($health.result.service -ne "transvortex.app_service") {
         throw "Unexpected service.health service: $($health.result.service)"
     }
+    if ([string]$info.result.app_version -ne [string]$runtimeManifest.version) {
+        throw "App runtime version mismatch. Manifest=$($runtimeManifest.version) Service=$($info.result.app_version)"
+    }
+    if ([int]$info.result.protocol_version -ne [int]$runtimeManifest.protocol_version) {
+        throw "App runtime protocol mismatch. Manifest=$($runtimeManifest.protocol_version) Service=$($info.result.protocol_version)"
+    }
     if (-not [bool]$shutdown.result.ok) {
         throw "service.shutdown did not return ok=true."
     }
@@ -270,7 +279,10 @@ function Invoke-PortableServiceCheck {
         started_at = $startedAt.ToString("o")
         ended_at = (Get-Date).ToString("o")
         working_directory = $PackageRoot
-        pythonpath_prefix = $pythonPath
+        python_executable = $pythonPath
+        pythonpath_empty = $true
+        runtime_version = [string]$runtimeManifest.version
+        runtime_python_version = [string]$runtimeManifest.python_version
         response_count = $responses.Count
         service = [string]$info.result.service
         protocol_version = $info.result.protocol_version
@@ -304,10 +316,10 @@ Optional start-menu identity shortcut:
 Optional user-level install:
   powershell -ExecutionPolicy Bypass -File .\Install-TransVortex.ps1
 
-This portable package includes the Flutter release bundle and the Python source
-tree required by the current Local Service launcher. It does not include a
-Python runtime, FFmpeg, model files, API keys, auth.json, .env files, or local
-provider configuration.
+This portable package includes the Flutter release bundle and a fixed embedded
+Python runtime for the TransVortex Local Service. It does not depend on a system
+Python installation. It does not include FFmpeg, model files, API keys,
+auth.json, .env files, or local provider configuration.
 
 Local Whisper is represented as an optional managed component. Runtime,
 model, and NVIDIA packages are downloaded only after an explicit user action
@@ -404,6 +416,33 @@ exit $LASTEXITCODE
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $desktopFlutterRoot = Join-Path $repoRoot "desktop_flutter"
+$appRuntimeBuildScript = Join-Path $PSScriptRoot "build_app_runtime.ps1"
+if ([string]::IsNullOrWhiteSpace($AppRuntimeRoot)) {
+    $AppRuntimeRoot = Join-Path $repoRoot "dist\app-runtime\windows-x64"
+}
+if ($BuildAppRuntime -or $Build) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $appRuntimeBuildScript -OutputRoot $AppRuntimeRoot -Force
+    if ($LASTEXITCODE -ne 0) {
+        throw "App runtime build failed with exit code $LASTEXITCODE"
+    }
+}
+if (-not (Test-Path -LiteralPath $AppRuntimeRoot)) {
+    throw "App runtime not found: $AppRuntimeRoot. Build it with scripts\build_app_runtime.ps1."
+}
+$resolvedAppRuntimeRoot = (Resolve-Path -LiteralPath $AppRuntimeRoot).Path
+$requiredRuntimePaths = @(
+    "app_runtime.json",
+    "python\python.exe",
+    "python\Lib\site-packages\transvortex\app_service.py",
+    "python\Lib\site-packages\transvortex\resources\asr_components.json"
+)
+$missingRuntimePaths = @(
+    $requiredRuntimePaths |
+        Where-Object { -not (Test-Path -LiteralPath (Join-Path $resolvedAppRuntimeRoot $_)) }
+)
+if ($missingRuntimePaths.Count -gt 0) {
+    throw "App runtime is incomplete under $resolvedAppRuntimeRoot. Missing: $($missingRuntimePaths -join ', '). Build it with scripts\build_app_runtime.ps1."
+}
 if ($Build) {
     Push-Location $desktopFlutterRoot
     try {
@@ -446,12 +485,11 @@ New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 Get-ChildItem -LiteralPath $releaseRoot -Force | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $packageRoot -Recurse -Force
 }
-Copy-RequiredDirectory -Source (Join-Path $repoRoot "src") -Destination (Join-Path $packageRoot "src")
+Copy-RequiredDirectory -Source $resolvedAppRuntimeRoot -Destination (Join-Path $packageRoot "runtime")
 Copy-RequiredDirectory -Source (Join-Path $repoRoot "prompts") -Destination (Join-Path $packageRoot "prompts")
 if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
     Copy-RequiredDirectory -Source (Join-Path $repoRoot "memory\presets") -Destination (Join-Path $packageRoot "memory\presets")
 }
-Copy-RequiredFile -Source (Join-Path $repoRoot "pyproject.toml") -Destination (Join-Path $packageRoot "pyproject.toml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "pipeline.yaml") -Destination (Join-Path $packageRoot "pipeline.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.example.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
@@ -469,15 +507,16 @@ $requiredPaths = @(
     "flutter_windows.dll",
     "flutter_local_notifications_windows.dll",
     "data\flutter_assets\FontManifest.json",
-    "src\transvortex\app_service.py",
-    "src\transvortex\app\desktop_api.py",
-    "src\transvortex\app\asr_operations.py",
-    "src\transvortex\core\whisper_host.py",
-    "src\transvortex\resources\asr_components.json",
+    "runtime\app_runtime.json",
+    "runtime\python\python.exe",
+    "runtime\python\Lib\site-packages\transvortex\app_service.py",
+    "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
+    "runtime\python\Lib\site-packages\transvortex\app\asr_operations.py",
+    "runtime\python\Lib\site-packages\transvortex\core\whisper_host.py",
+    "runtime\python\Lib\site-packages\transvortex\resources\asr_components.json",
     "prompts\translation\system.v1.md",
     "pipeline.yaml",
     "providers.yaml",
-    "pyproject.toml",
     "Install-TransVortex.ps1",
     "Install-StartMenuShortcut.ps1"
 )
@@ -535,12 +574,15 @@ $report = [ordered]@{
     file_count = $files.Count
     total_bytes = [int64]$totalBytes
     providers_yaml_source = "providers.example.yaml"
-    python_runtime_included = $false
+    python_runtime_included = $true
+    python_runtime_root = "runtime"
+    python_runtime_manifest = "runtime\app_runtime.json"
+    python_runtime_source = $resolvedAppRuntimeRoot
     ffmpeg_included = $false
     local_asr_runtime_included = $false
     local_asr_models_included = $false
     local_asr_accelerator_included = $false
-    local_asr_catalog = "src\transvortex\resources\asr_components.json"
+    local_asr_catalog = "runtime\python\Lib\site-packages\transvortex\resources\asr_components.json"
     excluded_local_secret_files = @(".env", ".imagegen.env", ".env.imagegen", "providers.local.yaml", "auth.json")
     required_paths = $requiredPaths
     local_service_check = $serviceReport

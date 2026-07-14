@@ -310,7 +310,7 @@
 
 - Flutter 正常启动已不再把任务资料写到仓库或安装根：用户级配置副本进入 `%LOCALAPPDATA%\TransVortex\Config`，任务固定进入 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，ffmpeg / ASR 可重建音频进入同级 `Cache`。成功任务会清理对应 Cache，失败或取消时保留以支持恢复；主窗口不提供内部存储根选择。显式 `serviceRoot` 的 smoke / 测试和仓库 `--root` CLI 继续使用隔离工作区，开发数据不自动迁移。后续仍需补 logs / temp 和正式安装器升级验收。
 
-- 系统通知已接 Windows Toast 路径和点击聚焦回调；release smoke 已覆盖任务状态转移触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；portable 包脚本可验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为验收（§7）。
+- 系统通知已接 Windows Toast 路径和点击聚焦回调；release smoke 已覆盖任务状态转移触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；portable 包脚本可验证 release bundle + 固定主 Python runtime、空 `PYTHONPATH` 下的包内 Local Service RPC、用户级脚本安装和包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为验收（§7）。
 - 已打包真实多档字重字体：`desktop_flutter/assets/fonts/NotoSansSC-VF.ttf`，release 构建的 `FontManifest.json` 可验证 `TransVortexNotoSansSC` 注册。
 - 主窗口「生成术语建议」开关已写入 `allowSystemSuggestions`、`memory_bootstrap_enabled`、`memory_patch_enabled`；打开生成时补 `memory_enabled=true`，并用 `memory_patch_window_chunks=3` 把逐分片术语更新合并为每 3 片一次，关闭生成时不写 `memory_enabled=false`；后续仍需结合术语维护窗口校准“生成→回流使用”的完整产品语义。
 - 主窗口制作中已接 worker checkpoint 的结构化阶段数据：字幕纸带按九段生产轨迹显示当前阶段和阶段内进度，语音识别显示分窗计数，翻译显示分片计数，术语初始化和批量补回 / 自动拆分 / 格式校正 / 单行修复显示为当前动作；事件游标不前进时不得重复消费旧事件，阶段切换、取消和继续任务会清理上一阶段动作。完成态会区分字幕质量残留与交付格式提醒。该能力仍需结合真实外部模型任务做一次可见窗口人工复验。

@@ -124,7 +124,7 @@ Python 后端已经是一套相对成熟、但按 agent 用途打磨的能力，
 - Dart 侧通过 `AppServiceClient` 调用 `desktop.snapshot`、`runtime.submitRun`、`tasks.events`、`runtime.cancel`、`result.*` 等真实 RPC。
 - release smoke 已覆盖启动 Local Service、读取配置摘要、提交任务到真实 worker、等待 `DONE`、校验输出文件和重新导出。
 
-因此它不再是“临时探针式验证”。当前本机已补真实外部翻译服务 / 语音识别证据、系统通知横幅人工确认、AppUserModelID 开始菜单快捷方式自动创建 / 校验，以及 portable release 包内 Local Service RPC 检查、用户级脚本安装检查和包目录启动检查。portable 包会把 Flutter release bundle 与 `src/`、`prompts/`、`pipeline.yaml` 和由 `providers.example.yaml` 复制出的 `providers.yaml` 放在同一包根，因为 Dart 侧 Local Service supervisor 会从当前目录和 exe 目录向上查找 `src/transvortex/app_service.py`；打包脚本会从包根启动 `python -m transvortex.app_service --no-pump` 验证 `service.info` / `service.health` / `service.shutdown`，包根 `Install-TransVortex.ps1` 或仓库脚本 `scripts\install_flutter_portable_release.ps1` 可把 portable 包复制到用户级安装目录、创建 AUMID 快捷方式并在安装目录复跑 Local Service RPC。仍未完成的系统级证明是通过 `scripts\accept_flutter_release_manual.ps1` 完成完整真实可见 release 窗口人工端到端，以及正式 MSIX / installer 分发包下的新机器安装验收。
+因此它不再是“临时探针式验证”。当前本机已补真实外部翻译服务 / 语音识别证据、系统通知横幅人工确认、AppUserModelID 开始菜单快捷方式自动创建 / 校验，以及 portable release 包内 Local Service RPC 检查、用户级脚本安装检查和包目录启动检查。portable 包会把 Flutter release bundle、固定 Embedded Python 主 runtime、`prompts/`、`pipeline.yaml` 和由 `providers.example.yaml` 复制出的 `providers.yaml` 放在同一包根；Dart 侧 Local Service supervisor 在安装态直接定位 `runtime/python/python.exe`，不再依赖包内 `src/`、系统 `python` 或 `PYTHONPATH`。打包脚本会用固定 runtime 验证 `service.info` / `service.health` / `asr.status` / `service.shutdown` 及版本清单，包根 `Install-TransVortex.ps1` 或仓库脚本 `scripts\install_flutter_portable_release.ps1` 可把 portable 包复制到用户级安装目录、创建 AUMID 快捷方式并在安装目录复跑 Local Service RPC。仍未完成的系统级证明是通过 `scripts\accept_flutter_release_manual.ps1` 完成完整真实可见 release 窗口人工端到端，以及正式 MSIX / installer 分发包下的新机器安装验收。
 
 ### 6.3 Flutter 多窗口
 
@@ -414,38 +414,38 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 需要明确：
 
-- Python runtime 如何随包分发，或如何检测并引导安装。
-- `transvortex` Python 包如何定位。
+- 主 Python runtime 已按固定 Embedded Python 随包分发，后续需继续明确升级与完整性校验策略。
+- `transvortex` 已以 wheel 安装到主 runtime，开发态继续使用仓库 `src/`。
 - FFmpeg 如何提供或检测。
 - artifact、日志、配置、凭据目录如何定位。
 - Windows 托盘、正式安装包、通知中心和分发路径如何建立；当前 AppUserModelID 开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 建立并校验，portable 包可由 `scripts\package_flutter_release.ps1` 生成，并验证包内 Local Service RPC、用户级脚本安装与可选窗口启动，但它不等于正式安装器。
 
 这些问题不属于“UI 细节”，而是 App Host / Local Service 架构的一部分。
 
-### 12.1 当前实现审计（2026-07-10）
+### 12.1 当前实现审计（2026-07-14）
 
-当前 Python core、artifact/runtime、JSON-RPC typed client 和跨进程锁已经具备继续演进的基础。发布前的主要问题不在字幕业务核心，而集中在 App Host、Local Service 启动、运行资源定位、用户数据初始化和安装升级这一圈。现有 portable 路径可以证明 release bundle 在开发机上能够启动，但仍是仓库式运行模型，不等于已安装 App 的运行模型。
+当前 Python core、artifact/runtime、JSON-RPC typed client 和跨进程锁已经具备继续演进的基础。主 Local Service 也已有固定 Embedded Python + 已安装 wheel 的交付形态，portable 包和复制后的用户级目录均能在空 `PYTHONPATH` 下启动包内服务。发布前的主要问题不在字幕业务核心，而集中在 FFmpeg、运行资源初始化、版本迁移、Supervisor 收口和正式安装升级这一圈。
 
 #### 发布阻塞项
 
 1. **任务资料与 Cache 已和安装目录分离，但完整 AppPaths 尚未完成。** Flutter 正常启动把配置副本放到 `%LOCALAPPDATA%\TransVortex\Config`，把任务固定写入 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，把可重建音频写入同级 `Cache`，并通过 Local Service 显式传给 worker；成功任务清理 Cache，失败或取消时保留以支持恢复。仓库 `artifacts/` 和旧 `.transvortex-desktop` 不自动迁移，普通用户不选择内部存储根。logs / temp 尚未拆分。
-2. **干净机器没有受控运行时。** Flutter 仍调用系统 `python`，通过仓库式 `src/transvortex/app_service.py` 和 `PYTHONPATH` 启动服务；portable 包不包含 Python runtime、Python 依赖或 FFmpeg。开发机上的 Local Service check 只能证明当前机器环境可用，不能证明新机器首启可用。
+2. **干净机器完整媒体链路仍未闭环。** portable 包现在包含固定 Python 3.13.14 主 runtime、TransVortex wheel 和锁定依赖，Flutter 安装态直接启动包内 `python.exe`，包内及复制安装目录的 Local Service 检查均已通过；但基础包仍不包含 FFmpeg，也尚未在干净 Windows 虚拟机上完成正式安装、首启和媒体任务验收。
 3. **缺少版本化初始化与迁移。** 当前初始化主要是“目录不存在则创建、配置不存在则复制”。已有 `pipeline.yaml` 不会随默认配置演进，也没有安装状态文件、配置 schema migration、迁移前备份和失败回滚。`providers_file_version` / `pipeline_file_version` 只是并发写保护，不是数据格式版本。
-4. **安装资源与运行资源没有统一根。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到包根，但正常 App 把 Local Service 的 `--root` 指向 `.transvortex-desktop`，且只复制 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，不能据此认为包内资源已经进入正式运行路径。
+4. **安装资源与运行资源没有完整统一。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到只读包根，但正常 App 把 Local Service 的 `--root` 指向 `%LOCALAPPDATA%\TransVortex\Config`，目前只初始化 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，仍需明确版本化资源初始化与用户覆盖策略。
 5. **前后端兼容没有真正握手。** `service.info` 已返回 `protocol_version` 和 `app_version`，Dart 侧目前只解析，不校验可接受版本；Python `0.1.0` 与 Flutter `1.0.0+1` 的版本口径也尚未统一。
 
 #### 仍属过渡胶水的实现
 
 - 设置窗口在主窗口 bridge 不可用时会自行启动 Local Service，和“同一 App 会话只有一个后端宿主”的目标边界不一致。跨进程 runtime lock 能避免重复 acquire worker，但不能替代清楚的服务所有权与退出策略。
 - release smoke 的参数解析、伪造状态、自动编辑/恢复/取消和报告写入仍编译在产品 widget 中。它们对当前验收有价值，后续应收敛到独立 automation driver 或受构建开关约束的测试入口。
-- portable 包直接复制整棵 Python `src/` 并由 PowerShell 重复实现 Python 进程启动、环境注入和 JSON-RPC 健康检查。这是有效的开发验证胶水，不应成为正式安装形态。
+- portable 包已经改为复制固定主 runtime，不再携带整棵 Python `src/`；但 runtime 构建、目录复制和 JSON-RPC 健康检查仍由 PowerShell 组合，尚未进入带升级、回滚和签名的正式安装流水线。
 - Flutter/Local Service 缺少持久化启动日志和崩溃日志；服务启动前的 Python/依赖错误只能退化成连接失败，无法依赖尚未启动的 `doctor` 完成首次运行引导。
 - 当前安装脚本没有运行进程保护、staging/原子替换、回滚、卸载注册、代码签名或完整性清单。用户级 `auth.json` 已与安装目录分开，但 Windows ACL 或 Credential Manager 的长期安全边界仍需明确。
 
 #### Release Foundation 建议顺序
 
 1. **继续收口 AppPaths。** 已明确 Flutter 固定的用户级 `config_root`、任务根和 Cache 根，并保留 `TRANSVORTEX_HOME` / 显式 service root 作为开发测试覆盖；下一步拆分 logs / temp，补 Cache 清理失败的可观测性。开发阶段仓库 `artifacts/` 与旧 `.transvortex-desktop` 明确保留为实验数据，不进入正式迁移范围。
-2. **固定 Local Service 交付。** 选择内置 Python runtime + 已安装 wheel，或冻结成受控 sidecar；Flutter 使用明确可执行文件路径，不再依赖系统 `python`、仓库发现和 `PYTHONPATH`。FFmpeg 与本地 ASR 的基础/可选组件边界一并确定。
+2. **固定 Local Service 交付（基础已完成）。** 当前采用内置 Embedded Python + 已安装 wheel，Flutter 安装态使用明确可执行文件路径，不再依赖系统 `python`、仓库发现和 `PYTHONPATH`；下一步补 FFmpeg 固定分发、干净机器首启证据及 runtime 升级完整性策略。本机 ASR 已明确为按需组件。
 3. **建立版本化 initializer。** 首次运行创建目录和默认配置；升级时按 schema 执行幂等迁移、备份和回滚；启动服务后校验 protocol、capability 与 App/backend 版本组合。
 4. **收口 Supervisor。** 同一 App 会话只允许一个 Local Service 宿主，页面只依赖 `AppServiceClient`；补持久日志、服务重启、运行中 Worker 的退出策略，并把 smoke 驱动移出产品 widget。
 5. **建立正式安装流水线。** 使用 staging 和安全升级保留用户数据，补卸载、快捷方式/AUMID、签名、hash manifest、干净 Windows 环境首启和已安装目录端到端验收。
@@ -561,7 +561,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 ### Phase 5：打包与发布验证
 
 - 验证 release 构建能定位 Python runtime、资源、配置和 artifact。
-- 建立 Windows 安装包、托盘和分发路径通知中心验收；当前 raw release exe 的 AUMID 开始菜单快捷方式已有脚本化建立 / 校验入口，portable 包脚本已能验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动。
+- 建立 Windows 安装包、托盘和分发路径通知中心验收；当前 raw release exe 的 AUMID 开始菜单快捷方式已有脚本化建立 / 校验入口，portable 包脚本已能验证 release bundle + 固定主 Python runtime、空 `PYTHONPATH` 下的包内 Local Service RPC、用户级脚本安装和包目录启动。
 - 验证新机器安装后首启、配置、运行、关闭窗口继续任务、退出策略。
 
 ## 15. 验收标准
@@ -611,7 +611,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - App Host / Supervisor 最终放在主 Flutter engine、Windows native runner，还是独立 supervisor 进程（见 13）。
 - 通信是否在未来升级为 named pipe / local socket / localhost HTTP（仅当需要窗口全关后仍运行或多客户端并发时再评估）。
 - 任务并发模型：当前 `active.json` 强制单活动 Worker、任务串行；是否支持多 Worker 并发是后续产品决策。
-- release 包是否内置 Python runtime、FFmpeg，以及如何管理体积和升级；当前 portable 包明确不内置二者，只验证文件布局、包内 Local Service RPC、用户级脚本安装和启动链路。
+- release 包当前内置固定主 Python runtime，但不内置 FFmpeg；仍需确定 FFmpeg 来源、体积管理、主 runtime 升级与正式安装包完整性策略。
 - macOS / Linux 是否作为早期目标，还是 Windows 优先。
 
 ## 17. 当前建议

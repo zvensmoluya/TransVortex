@@ -838,6 +838,102 @@ routing:
     },
   );
 
+  test(
+    'LocalServiceSupervisor uses bundled app runtime without PYTHONPATH',
+    () async {
+      final appRoot = await Directory.systemTemp.createTemp(
+        'transvortex_bundled_app_',
+      );
+      final desktopHome = await Directory.systemTemp.createTemp(
+        'transvortex_bundled_home_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(appRoot));
+      addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
+      final runtimeRoot = Directory(
+        '${appRoot.path}${Platform.pathSeparator}runtime',
+      );
+      final runtimePython = File(
+        '${runtimeRoot.path}${Platform.pathSeparator}python'
+        '${Platform.pathSeparator}python.exe',
+      );
+      await runtimePython.parent.create(recursive: true);
+      await runtimePython.writeAsBytes(const []);
+      await File(
+        '${runtimeRoot.path}${Platform.pathSeparator}app_runtime.json',
+      ).writeAsString('{"schema_version":1}', encoding: utf8);
+      await File(
+        '${appRoot.path}${Platform.pathSeparator}pipeline.yaml',
+      ).writeAsString('artifacts_dir: artifacts\n', encoding: utf8);
+      await File(
+        '${appRoot.path}${Platform.pathSeparator}providers.yaml',
+      ).writeAsString('providers: []\n', encoding: utf8);
+
+      String? executable;
+      List<String>? capturedArguments;
+      String? capturedWorkingDirectory;
+      Map<String, String>? capturedEnvironment;
+      final supervisor = LocalServiceSupervisor(
+        repoRoot: appRoot,
+        appPaths: _desktopPaths(desktopHome),
+        processStarter:
+            (
+              String startedExecutable,
+              List<String> startedArguments, {
+              String? workingDirectory,
+              Map<String, String>? environment,
+            }) async {
+              executable = startedExecutable;
+              capturedArguments = List<String>.from(startedArguments);
+              capturedWorkingDirectory = workingDirectory;
+              capturedEnvironment = environment;
+              return _FakeProcess();
+            },
+      );
+
+      await supervisor.start();
+
+      expect(executable, runtimePython.path);
+      expect(capturedArguments?.take(2), ['-m', 'transvortex.app_service']);
+      expect(capturedWorkingDirectory, appRoot.path);
+      expect(capturedEnvironment?['PYTHONPATH'], '');
+      expect(capturedEnvironment?['PYTHONNOUSERSITE'], '1');
+      expect(
+        Directory('${appRoot.path}${Platform.pathSeparator}src').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'LocalServiceSupervisor does not fall back from a broken runtime',
+    () async {
+      final appRoot = await Directory.systemTemp.createTemp(
+        'transvortex_broken_runtime_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(appRoot));
+      final runtimeRoot = Directory(
+        '${appRoot.path}${Platform.pathSeparator}runtime',
+      );
+      await runtimeRoot.create(recursive: true);
+      await File(
+        '${runtimeRoot.path}${Platform.pathSeparator}app_runtime.json',
+      ).writeAsString('{"schema_version":1}', encoding: utf8);
+
+      final supervisor = LocalServiceSupervisor(repoRoot: appRoot);
+
+      await expectLater(
+        supervisor.start(),
+        throwsA(
+          isA<LocalServiceLaunchException>().having(
+            (error) => error.message,
+            'message',
+            contains('runtime 不完整'),
+          ),
+        ),
+      );
+    },
+  );
+
   test('LocalServiceSupervisor preserves local provider overrides', () async {
     final repoRoot = await Directory.systemTemp.createTemp(
       'transvortex_repo_root_',

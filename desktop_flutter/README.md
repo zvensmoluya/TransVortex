@@ -52,9 +52,10 @@ temporary validation path:
 - Python Local Service startup through JSON-RPC line-based stdin/stdout.
 - Real task submission, cancellation, resume, result open, segment edit, and re-export.
 - Windows Toast notification wiring, AUMID shortcut identity, and release bundle contents.
-- Portable package layout: `TransVortex.exe` can find `src/transvortex/app_service.py`
-  from the package root, and package-root Local Service RPC responds to
-  `service.info`, `service.health`, and `service.shutdown`.
+- Portable package layout: `TransVortex.exe` can find the fixed
+  `runtime/python/python.exe`, and package-root Local Service RPC responds to
+  `service.info`, `service.health`, `asr.status`, and `service.shutdown` without
+  using a system Python or `PYTHONPATH`.
 - Portable user-level install check: the packaged `Install-TransVortex.ps1` can
   copy the package to an install directory, create the AUMID shortcut, and rerun
   Local Service RPC from the installed layout. This is not a formal installer.
@@ -66,6 +67,7 @@ flutter test
 flutter build windows
 .\scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity
 .\scripts\smoke_flutter_release_matrix.ps1 -SkipCompletedTask
+.\scripts\build_app_runtime.ps1 -Force
 .\scripts\package_flutter_release.ps1 -OutputRoot "$env:TEMP\transvortex-release" -PackageName TransVortex-portable-test -Force -LaunchCheck
 .\scripts\install_flutter_portable_release.ps1 -SourceRoot "$env:TEMP\transvortex-release\TransVortex-portable-test" -InstallRoot "$env:TEMP\transvortex-installed" -ShortcutPath "$env:TEMP\TransVortex.lnk" -Force
 .\scripts\accept_flutter_release_manual.ps1 -LaunchCheck

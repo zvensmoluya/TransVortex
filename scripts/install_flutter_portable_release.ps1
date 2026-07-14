@@ -65,11 +65,12 @@ function Assert-RequiredPackagePaths {
         "flutter_windows.dll",
         "flutter_local_notifications_windows.dll",
         "data\flutter_assets\FontManifest.json",
-        "src\transvortex\app_service.py",
-        "src\transvortex\app\desktop_api.py",
+        "runtime\app_runtime.json",
+        "runtime\python\python.exe",
+        "runtime\python\Lib\site-packages\transvortex\app_service.py",
+        "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
         "pipeline.yaml",
-        "providers.yaml",
-        "pyproject.toml"
+        "providers.yaml"
     )
     $missing = @(
         $requiredPaths | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Root $_)) }
@@ -146,9 +147,12 @@ function Invoke-InstalledServiceCheck {
         [int]$TimeoutSeconds = 15
     )
 
-    $pythonPath = Join-Path $Root "src"
+    $runtimeRoot = Join-Path $Root "runtime"
+    $runtimeManifestPath = Join-Path $runtimeRoot "app_runtime.json"
+    $pythonPath = Join-Path $runtimeRoot "python\python.exe"
+    $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Encoding utf8 -Raw | ConvertFrom-Json
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = "python"
+    $psi.FileName = $pythonPath
     $psi.WorkingDirectory = $Root
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
@@ -162,12 +166,8 @@ function Invoke-InstalledServiceCheck {
     $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
     $psi.Environment["PYTHONIOENCODING"] = "utf-8"
     $psi.Environment["PYTHONUTF8"] = "1"
-    $existingPythonPath = if ($psi.Environment.ContainsKey("PYTHONPATH")) { $psi.Environment["PYTHONPATH"] } else { "" }
-    $psi.Environment["PYTHONPATH"] = if ([string]::IsNullOrWhiteSpace($existingPythonPath)) {
-        $pythonPath
-    } else {
-        "$pythonPath;$Root;$existingPythonPath"
-    }
+    $psi.Environment["PYTHONPATH"] = ""
+    $psi.Environment["PYTHONNOUSERSITE"] = "1"
     $escapedRoot = $Root.Replace('"', '\"')
     $psi.Arguments = "-m transvortex.app_service --root `"$escapedRoot`" --no-pump"
 
@@ -222,6 +222,12 @@ function Invoke-InstalledServiceCheck {
     if ($health.result.service -ne "transvortex.app_service") {
         throw "Unexpected service.health service: $($health.result.service)"
     }
+    if ([string]$info.result.app_version -ne [string]$runtimeManifest.version) {
+        throw "App runtime version mismatch. Manifest=$($runtimeManifest.version) Service=$($info.result.app_version)"
+    }
+    if ([int]$info.result.protocol_version -ne [int]$runtimeManifest.protocol_version) {
+        throw "App runtime protocol mismatch. Manifest=$($runtimeManifest.protocol_version) Service=$($info.result.protocol_version)"
+    }
     if (-not [bool]$shutdown.result.ok) {
         throw "service.shutdown did not return ok=true."
     }
@@ -232,6 +238,10 @@ function Invoke-InstalledServiceCheck {
         ended_at = (Get-Date).ToString("o")
         service = [string]$info.result.service
         protocol_version = $info.result.protocol_version
+        python_executable = $pythonPath
+        pythonpath_empty = $true
+        runtime_version = [string]$runtimeManifest.version
+        runtime_python_version = [string]$runtimeManifest.python_version
         health_status = [string]$health.result.status
         shutdown_ok = [bool]$shutdown.result.ok
         exit_code = $process.ExitCode
@@ -312,7 +322,8 @@ $report = [ordered]@{
     total_bytes = [int64]$totalBytes
     service_check = $serviceReport
     shortcut_check = $shortcutReport
-    python_runtime_included = $false
+    python_runtime_included = $true
+    python_runtime_manifest = "runtime\app_runtime.json"
     ffmpeg_included = $false
     verify_only = [bool]$VerifyOnly
     manual_acceptance_required = @(

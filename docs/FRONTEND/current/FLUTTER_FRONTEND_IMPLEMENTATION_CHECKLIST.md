@@ -84,7 +84,7 @@
 - 结果审看完整编辑器、跨任务批量筛查和高级导出复核。
 - 术语管理完整页。
 - 诊断结果到修复动作的完整页。
-- 正式 MSIX / installer 打包分发和分发路径下的通知中心最终行为验收；当前已有 portable 包脚本可验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和可选窗口启动，但它不内置 Python runtime / FFmpeg，也不是正式安装器；系统通知真实横幅已由人工确认出现，Windows 通知设置 key 已由 release smoke 校验，AppUserModelID 用户级开始菜单快捷方式可由脚本创建并校验。
+- 正式 MSIX / installer 打包分发和分发路径下的通知中心最终行为验收；当前 portable 包已包含固定主 Python runtime，可验证包内 Local Service RPC、用户级脚本安装和可选窗口启动，但仍不内置 FFmpeg，也不是正式安装器；系统通知真实横幅已由人工确认出现，Windows 通知设置 key 已由 release smoke 校验，AppUserModelID 用户级开始菜单快捷方式可由脚本创建并校验。
 - 高级打包 / 托盘。
 
 ---
@@ -336,7 +336,7 @@ MVP 先控制在两层：
 - `powershell -ExecutionPolicy Bypass -File scripts\smoke_flutter_release.ps1 -WindowType taskProcessing -TaskProcessingScenario browse|edit|failure|resume|cancel -ScreenshotPath <png>` 可启动 release 任务处理窗；`browse` 校验读取并选中 DONE 任务片，`edit` 在右侧内嵌结果编辑器保存片段译文、选择 ASS / 单语重新导出并确认导出字幕包含编辑文本，`failure` 停在失败任务并导出失败 / 中断线索截图，`resume` 选中失败任务并触发真实 `runtime.submitResume` 重新排队，`cancel` 选中运行中任务并触发真实 `runtime.cancel` 到 `CANCEL_REQUESTED`；传入截图路径时同时导出 Flutter 渲染树截图并检查 Flutter overflow 警告条
 - `powershell -ExecutionPolicy Bypass -File scripts\smoke_flutter_release.ps1 -CheckNotifications` 可在主流程任务从运行态进入完成态时，通过主窗口通知 observer 执行一次真实 Windows toast 插件初始化 / show 调用，并校验 AUMID / GUID registry 注册
 - `powershell -ExecutionPolicy Bypass -File scripts\install_flutter_desktop_shortcut.ps1` 可为当前用户创建 / 校验开始菜单 `TransVortex.lnk`，写入与通知一致的 `TransVortex.Desktop` AUMID；`scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity` 会同时校验通知 AUMID、Windows 通知设置 key 和快捷方式 AUMID 一致，成功后 `manual_acceptance_required` 仍会保留真实可见窗口完整人工端到端和正式 MSIX/MSI/NSIS/Inno 安装器验收，避免把自动 smoke 误读成完整完成。
-- `powershell -ExecutionPolicy Bypass -File scripts\package_flutter_release.ps1 -OutputRoot <dir> -LaunchCheck` 可生成 portable release 包，默认从包根启动 `python -m transvortex.app_service --no-pump` 验证 `service.info` / `service.health` / `service.shutdown`，并在 `-LaunchCheck` 时从包目录启动 `TransVortex.exe` 验证 release 窗口；manifest 明确 `installer=false`、`python_runtime_included=false`、`ffmpeg_included=false`、`frontend_design_mvp_complete=false` 和 `local_service_check.ok=true`，避免把 portable 包误认成正式安装器。
+- `powershell -ExecutionPolicy Bypass -File scripts\build_app_runtime.ps1 -Force` 构建固定主 runtime；`powershell -ExecutionPolicy Bypass -File scripts\package_flutter_release.ps1 -OutputRoot <dir> -LaunchCheck` 生成 portable release 包，默认从包根启动 `runtime\python\python.exe -m transvortex.app_service --no-pump`，在空 `PYTHONPATH` 下验证 `service.info` / `service.health` / `asr.status` / `service.shutdown` 及 runtime 版本，并在 `-LaunchCheck` 时从包目录启动 `TransVortex.exe`；manifest 明确 `installer=false`、`python_runtime_included=true`、`ffmpeg_included=false`、`frontend_design_mvp_complete=false` 和 `local_service_check.ok=true`，避免把 portable 包误认成正式安装器。
 - `powershell -ExecutionPolicy Bypass -File scripts\install_flutter_portable_release.ps1 -SourceRoot <portable-package> -InstallRoot <dir> -ShortcutPath <lnk> -Force` 可把 portable 包复制到用户级安装目录，创建 / 校验指向安装目录 `TransVortex.exe` 的 AUMID 快捷方式，并在安装目录复跑 Local Service RPC；包根 `Install-TransVortex.ps1` 是同一能力的解压后入口。报告会写入 `installer=false`、`formal_installer=false`，不能替代正式 MSIX/MSI/NSIS/Inno 验收。
 - `powershell -ExecutionPolicy Bypass -File scripts\accept_flutter_release_manual.ps1 -LaunchCheck` 可只验证真实 release 窗口能启动并写出初始窗口截图，不算人工端到端通过；本机已通过该 launch-check，报告写入 `ok=true`、`launch_visible_ok=true`、`manual_visible_e2e_ok=false`。`powershell -ExecutionPolicy Bypass -File scripts\accept_flutter_release_manual.ps1 -InputPath <video>` 可启动真实 release 窗口，按“可见 release 窗口、人工选择片源、人工开始、观察运行、完成、打开结果、打开结果审看”七个检查点记录人工确认、窗口截图和 `manual_release_acceptance.json`。该脚本完整通过时只能证明真实可见窗口人工端到端已完成，仍需与自动 smoke、外部服务、通知和 AUMID 证据合并后再判断整体完成。
 - `powershell -ExecutionPolicy Bypass -File scripts\smoke_flutter_release.ps1 -CheckDesktopComposite` 可额外用 ffmpeg `ddagrab` 抓 Windows 桌面合成层窗口区域，作为真实可见窗口诊断；抓取前会前置 release 窗口，并用浅色工作区采样校验避免误抓背后的桌面内容；`smoke_flutter_release_matrix.ps1` 当前矩阵覆盖 17 个 release case，本机已通过 17 case 的 Flutter 渲染树截图、桌面合成层截图和两类 overflow 采样，17/17 个 case 写出有效桌面合成层截图，其中 `taskProcessing_failure` summary 记录 `smoke_detail_resumable`、`TRANSLATE`、可重试和可继续线索。该项仍只证明窗口区域被桌面合成层捕获，不替代人工完整操作验收。
@@ -344,7 +344,7 @@ MVP 先控制在两层：
 
 ### 自动证据与人工边界
 
-自动 smoke、截图矩阵、portable 包检查和用户级脚本安装检查可以证明“链路接通、渲染非空、没有 Flutter overflow 警告条、release 包目录能定位 Python 源码、包内 Local Service 能响应基础 RPC、安装目录快捷方式身份正确”，也可以在本机校验 AppUserModelID 用户级开始菜单快捷方式；但不能替代人工直接观察真实 release 窗口，也不能替代每个用户环境里的外部凭据、语音识别依赖、Python runtime / FFmpeg 安装和正式分发包验收。下面每条若已被自动化覆盖，应继续保留对应命令；若依赖用户环境或外部凭据，必须标明仍需在对应环境复跑。
+自动 smoke、截图矩阵、portable 包检查和用户级脚本安装检查可以证明“链路接通、渲染非空、没有 Flutter overflow 警告条、release 包目录能定位固定主 runtime、包内 Local Service 在空 `PYTHONPATH` 下能响应基础 RPC、安装目录快捷方式身份正确”，也可以在本机校验 AppUserModelID 用户级开始菜单快捷方式；但不能替代人工直接观察真实 release 窗口，也不能替代每个用户环境里的外部凭据、语音识别依赖、FFmpeg 和正式分发包验收。下面每条若已被自动化覆盖，应继续保留对应命令；若依赖用户环境或外部凭据，必须标明仍需在对应环境复跑。
 
 - 主窗口能启动 Local Service。
 - 主窗口能读取真实配置摘要。
@@ -361,7 +361,7 @@ MVP 先控制在两层：
 - 语音识别设置窗至少能反映当前引擎和基础配置状态。
 - 语音识别设置窗在无已保存方案时显示本机识别草稿和保存入口。
 - 完成态能打开结果。
-- 真实可见 release 窗口端到端完成前，只能宣称“Flutter MVP 接线成立”，不得宣称“前端设计 MVP 完成”；人工验收脚本 `-LaunchCheck` 已确认本机 release 窗口可启动并可写初始截图，但完整 G1 仍需人工操作通过；系统通知横幅已由人工确认出现，Windows 通知设置 key 和 AppUserModelID 用户级开始菜单快捷方式已由 release smoke 校验，portable 包内 Local Service RPC、用户级脚本安装和包目录启动检查已通过，真实外部翻译 / 语音识别已在本机跑通，但其他用户环境仍需用同一脚本复跑；正式 MSIX / installer 分发包、内置 Python runtime 和 FFmpeg 分发仍属后续打包工作。
+- 真实可见 release 窗口端到端完成前，只能宣称“Flutter MVP 接线成立”，不得宣称“前端设计 MVP 完成”；人工验收脚本 `-LaunchCheck` 已确认本机 release 窗口可启动并可写初始截图，但完整 G1 仍需人工操作通过；系统通知横幅已由人工确认出现，Windows 通知设置 key 和 AppUserModelID 用户级开始菜单快捷方式已由 release smoke 校验，固定主 Python runtime、portable 包内 Local Service RPC、用户级脚本安装和包目录启动检查已通过，真实外部翻译 / 语音识别已在本机跑通，但其他用户环境仍需复跑；正式 MSIX / installer 分发包和 FFmpeg 分发仍属后续打包工作。
 
 ---
 
@@ -377,7 +377,7 @@ MVP 先控制在两层：
 6. UI 已从早期验证基座收束：主窗口 controller、六态主体、两个设置工具窗、正式窗口状态命名已经进入活跃构建。
 7. 部分 G1/G6/G3/G4 证据已补：release 主窗口菜单能打开翻译 / 语音识别设置窗、诊断工具窗和任务处理窗并读取服务数据；release exe 隔离 smoke 已覆盖主窗口 controller 提交 `video_asr_translate`、临时本地 OpenAI-compatible 翻译服务翻译、真实 worker 到 `DONE`、SRT / ASS 输出、翻译文本校验、完成态 `result.open` 打开结果沿用原输出目录、`result.reexport` 事件和重新导出沿用原输出目录；带 `-ScreenshotPath` 的 release smoke 已覆盖 Flutter 渲染树截图、非空像素检查和 Flutter overflow 警告条检查；`smoke_flutter_release_matrix.ps1` 已把 release 主流程完成态、完成态通知检查、主窗口六态、4 个非主窗口基础 case、`taskProcessing` 编辑 / 失败线索 / 恢复 / 取消四个追加 case 和长模型名设置窗固化为单命令，并在 summary 中记录任务处理窗选中、编辑保存、重新导出、失败线索、失败恢复、运行中取消、结果目录可写性、通知 show 调用和 registry 结果；`taskProcessing` release smoke 已覆盖浏览 DONE 任务片、结果目录可写性、内嵌结果编辑保存、ASS / 单语重新导出、失败线索停留态、失败任务继续重新排队和运行中任务取消请求；旧 `resultReview` / `taskHistory` / `taskDetail` 独立窗口和 release smoke case 已移除；主窗口运行态 / 失败态长文本已有 widget 防溢出回归；无配置阻塞、翻译服务测试失败内容、诊断窗读取 doctor 报告和任务上下文摘要、诊断窗队列 / 中断任务线索定位、诊断窗最近任务结果目录检查、任务处理窗读取真实 `tasks.list`、任务片列状态筛选和搜索、任务失败 / 中断线索、任务事件 cursor 加载、任务事件搜索、内嵌结果审看 / 编辑工作台读取真实 `result.open` payload、按全部 / 有问题 / 空译文 / 已修改筛查片段、按源文 / 译文 / 问题提示搜索片段、还原单个已修改片段、放弃全部未保存修改、保存片段编辑、导出复核摘要、选择导出格式 / 单双语和重新导出、任务目录 / 结果目录打开、任务详情预览、创建 / 更新时间、运行记录、可用操作摘要、继续任务和取消任务动作已有自动化覆盖；取消、继续任务和结果文件缺失转重新导出修复态已有 controller / widget 防回归覆盖；Dart 侧已有真实 Python Local Service 子进程 submit/cancel/events smoke，内嵌字幕 `video_asr` 已覆盖真实 worker 完成到 `DONE`，慢语音识别已覆盖真实 worker 取消到 `CANCELLED`；Windows Toast 通知已接入并确认 release 包含 `flutter_local_notifications_windows.dll`，`-CheckNotifications` release smoke 已覆盖完成态状态转移经通知 observer 触发 native 初始化 / show 调用 / AUMID registry 注册，点击回调、前台抑制、同片源多任务通知重置和通知 payload 不泄露本地路径已有单测覆盖。
    - `taskProcessing -TaskProcessingScenario edit` release smoke 当前使用空译文片段触发后端 `result.open` 的真实问题计数，内嵌结果编辑器应显示问题数和“译文为空”提示。
-8. 待验收：运行 `scripts\accept_flutter_release_manual.ps1` 完成真实可见 release 窗口完整任务端到端人工验收、正式 MSIX / installer 分发路径；portable 包脚本已补到“可移动 release 目录 + 包内 Local Service RPC + 用户级脚本安装”层级，但不包含正式安装器、Python runtime 或 FFmpeg；系统通知真实横幅已由人工确认出现，Windows 通知设置 key 和 AppUserModelID 用户级开始菜单快捷方式已由 release smoke 校验；真实外部翻译 / 语音识别场景已在本机用 `smoke_external_services.ps1` 跑通，但需在目标用户环境复跑。
+8. 待验收：运行 `scripts\accept_flutter_release_manual.ps1` 完成真实可见 release 窗口完整任务端到端人工验收、正式 MSIX / installer 分发路径；portable 包脚本已补到“固定主 Python runtime + 可移动 release 目录 + 包内 Local Service RPC + 用户级脚本安装”层级，但不包含正式安装器或 FFmpeg；系统通知真实横幅已由人工确认出现，Windows 通知设置 key 和 AppUserModelID 用户级开始菜单快捷方式已由 release smoke 校验；真实外部翻译 / 语音识别场景已在本机用 `smoke_external_services.ps1` 跑通，但需在目标用户环境复跑。
 9. 后续：做完整历史恢复矩阵、完整诊断修复台、术语、跨任务批量结果筛查、完整结果编辑器、高级导出复核、托盘 / 打包分发和更完整的人工验收矩阵。
 
 ---

@@ -62,6 +62,8 @@ flutter run -d windows
 
 Flutter 正常启动把任务资料固定保存在 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可重建的音频处理文件进入同级 `Cache` 并在任务成功后清理。用户通过任务处理窗打开任务目录、结果目录或重新导出，不直接管理内部存储根。仓库 `artifacts/` 继续作为显式仓库 CLI 的开发 / 实验工作区，不会自动进入正式桌面任务历史。
 
+Windows 发布包使用随应用提供的固定 Python runtime 启动 Local Service，不要求用户安装 Python；开发态仍可使用仓库 Python 环境。主 runtime 的构建和分发边界见 `docs/APP_RUNTIME.md`。
+
 桌面端默认选择“本机 Whisper”，但基础包不携带运行组件、模型或 CUDA。用户在语音识别设置中安装隔离组件和所选模型，或明确选择已有的 faster-whisper / CTranslate2 Python 环境。组件、模型和断点下载分别保存在 `%LOCALAPPDATA%\TransVortex\Components`、`Models` 和 `Downloads\ASR`。详细边界及发布流程见 `docs/LOCAL_ASR_COMPONENTS.md`。
 
 ## 云端 ASR 示例
