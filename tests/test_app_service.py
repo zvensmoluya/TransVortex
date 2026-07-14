@@ -448,6 +448,7 @@ def test_app_service_subprocess_no_pump_health(tmp_path: Path) -> None:
 def test_app_service_subprocess_uses_explicit_artifacts_directory(tmp_path: Path) -> None:
     _write_config(tmp_path)
     desktop_tasks = tmp_path / "desktop-workspace" / "Tasks"
+    desktop_cache = tmp_path / "desktop-workspace" / "Cache"
     request = (
         _request("config.get")
         + "\n"
@@ -464,6 +465,8 @@ def test_app_service_subprocess_uses_explicit_artifacts_directory(tmp_path: Path
             str(tmp_path),
             "--artifacts-dir",
             str(desktop_tasks),
+            "--cache-dir",
+            str(desktop_cache),
             "--no-pump",
         ],
         input=request,
@@ -477,6 +480,7 @@ def test_app_service_subprocess_uses_explicit_artifacts_directory(tmp_path: Path
     lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
     assert Path(lines[0]["result"]["artifacts_dir"]) == desktop_tasks
     assert desktop_tasks.is_dir()
+    assert desktop_cache.is_dir()
     assert lines[1]["result"]["shutdown"] == "requested"
 
 

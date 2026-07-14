@@ -326,7 +326,6 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         "task.json",
         "checkpoint.json",
         "events.jsonl",
-        "media",
         "source",
         "chunks",
         "translate",
@@ -338,6 +337,7 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
 
     events = store.read_events(task.task_id)
     assert any(event["type"] == "done" for event in events)
+    assert not (root / "artifacts" / ".cache" / task.task_id).exists()
     assert any(event["type"] == "warning" and "max cps" in event["message"] for event in events)
     assert (task_dir / "translate" / "segments.translated.jsonl").exists()
     assert (task_dir / "translate" / "validation.jsonl").exists()
@@ -741,7 +741,7 @@ chunking:
     task_dir = store.task_dir(task_id)
     assert seen["provider"] == "cloud1"
     assert seen["prompt"] == "Names: Subaru"
-    assert seen["audio_path"] == task_dir / "source" / "asr" / "upload" / "segment_00000.wav"
+    assert seen["audio_path"] == root / "artifacts" / ".cache" / task_id / "asr" / "upload" / "segment_00000.wav"
     assert seen["offset"] == 22.75
     preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
     assert preprocess["reason"] == "trimmed"
@@ -1269,9 +1269,10 @@ chunking:
     assert retry_call["audio_path"] == root / "artifacts" / "placeholder_full_audio.m4a"
     preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
     assert preprocess["reason"] == "split_retry"
-    assert "source/asr/retry/segment_00000" in preprocess["child_artifact_dir"].replace("\\", "/")
+    assert "/.cache/" in preprocess["child_artifact_dir"].replace("\\", "/")
+    assert "/asr/retry/segment_00000" in preprocess["child_artifact_dir"].replace("\\", "/")
     assert not (task_dir / "source" / "asr" / "rows" / "segment_00001.json").exists()
-    assert (task_dir / "source" / "asr" / "retry" / "segment_00000" / "asr" / "rows" / "segment_00001.json").exists()
+    assert not (root / "artifacts" / ".cache" / task_id).exists()
 
 
 def test_cloud_asr_http_transport_error_splits_segment(tmp_path: Path, monkeypatch) -> None:
@@ -1981,8 +1982,8 @@ def test_video_auto_source_uses_matching_embedded_subtitle_and_skips_asr(tmp_pat
 
     store = TaskStore(root / "artifacts")
     task_dir = store.task_dir(task_id)
-    assert (task_dir / "media" / "embedded_subtitle.srt").exists()
-    assert (task_dir / "media" / "subtitle_streams.json").exists()
+    assert (task_dir / "source" / "embedded_subtitle.srt").exists()
+    assert (task_dir / "source" / "subtitle_streams.json").exists()
     source_file = task_dir / "source" / "segments.normalized.jsonl"
     assert source_file.exists()
     rows = [json.loads(line) for line in source_file.read_text(encoding="utf-8").splitlines()]

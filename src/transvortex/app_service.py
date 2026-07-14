@@ -10,9 +10,10 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .app.config import ARTIFACTS_DIR_ENV, load_app_config
+from .app.config import ARTIFACTS_DIR_ENV, CACHE_DIR_ENV, load_app_config
 from .app.desktop_api import DesktopApi, DesktopApiError
 from .artifacts.runtime import DEFAULT_CANCEL_GRACE_SECONDS, TaskRuntime
+from .artifacts.task_cache import cleanup_completed_task_caches
 from .artifacts.task_store import TaskStore
 from .protocol.errors import classify_exception
 from .protocol.redaction import redact
@@ -30,15 +31,28 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Optional task artifacts directory override",
     )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Optional task cache directory override",
+    )
     parser.add_argument("--providers-file", default=None, help="Optional providers config file path")
     parser.add_argument("--no-pump", action="store_true", help="Disable the local service queue pump")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
+    artifacts_dir: Path | None = None
+    cache_dir: Path | None = None
     if args.artifacts_dir:
         artifacts_dir = Path(args.artifacts_dir).expanduser().resolve()
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         os.environ[ARTIFACTS_DIR_ENV] = str(artifacts_dir)
+    if args.cache_dir:
+        cache_dir = Path(args.cache_dir).expanduser().resolve()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ[CACHE_DIR_ENV] = str(cache_dir)
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
+    if artifacts_dir is not None and cache_dir is not None:
+        cleanup_completed_task_caches(artifacts_dir, cache_dir)
     pump = LocalServicePump(root_dir=root, providers_file=providers_file, explicit_queue_only=True)
     service = DesktopApi(
         root_dir=root,

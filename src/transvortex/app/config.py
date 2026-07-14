@@ -60,6 +60,7 @@ from .credentials import read_dotenv_values
 
 
 ARTIFACTS_DIR_ENV = "TRANSVORTEX_ARTIFACTS_DIR"
+CACHE_DIR_ENV = "TRANSVORTEX_CACHE_DIR"
 MEMORY_INJECT_INTENSITIES = {"low", "auto", "high", "max"}
 MEMORY_PATCH_MODES = {"serial"}
 LEGACY_MEMORY_INJECT_FIELDS = {
@@ -830,6 +831,13 @@ def load_app_config(
         "artifacts_dir", "artifacts"
     )
     artifacts_dir = Path(str(artifacts_value or "artifacts")).expanduser()
+    resolved_artifacts_dir = root_dir / artifacts_dir
+    cache_value = os.getenv(CACHE_DIR_ENV, "").strip()
+    cache_dir = (
+        root_dir / Path(cache_value).expanduser()
+        if cache_value
+        else resolved_artifacts_dir / ".cache"
+    )
     asr_raw = pip_yaml.get("asr") or {}
     if not isinstance(asr_raw, dict):
         asr_raw = {}
@@ -1080,7 +1088,8 @@ def load_app_config(
     )
     setattr(subtitle_ass_style, "_explicit_fields", set(ass_raw.keys()))
     pipeline = PipelineConfig(
-        artifacts_dir=(root_dir / artifacts_dir),
+        artifacts_dir=resolved_artifacts_dir,
+        cache_dir=cache_dir,
         chunk_seconds=_to_int(pip_yaml.get("chunk_seconds"), 60),
         chunk_overlap_seconds=_to_int(pip_yaml.get("chunk_overlap_seconds"), 1),
         translation_batch_size=chunk_lines,

@@ -575,6 +575,7 @@ class MemoryConfig:
 @dataclass
 class PipelineConfig:
     artifacts_dir: Path
+    cache_dir: Path | None = None
     chunk_seconds: int = 60
     chunk_overlap_seconds: int = 1
     translation_batch_size: int = 120

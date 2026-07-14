@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .aligner import apply_translations, merge_asr_window_segments, normalize_timeline, validate_segments
 from ..artifacts.task_store import TaskStore
+from ..artifacts.task_cache import cleanup_task_cache, task_cache_dir
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
@@ -251,7 +252,7 @@ def _asr_artifact_paths(paths: dict[str, Path], idx: int) -> dict[str, Path]:
         "rows": paths["source"] / "asr" / "rows" / f"segment_{idx:05d}.json",
         "raw": paths["source"] / "asr" / "raw" / f"segment_{idx:05d}.json",
         "preprocess": paths["source"] / "asr" / "preprocess" / f"segment_{idx:05d}.json",
-        "upload": paths["source"] / "asr" / "upload" / f"segment_{idx:05d}.wav",
+        "upload": paths["cache"] / "asr" / "upload" / f"segment_{idx:05d}.wav",
         "quality": paths["source"] / "asr" / "quality" / f"segment_{idx:05d}.json",
     }
 
@@ -480,7 +481,7 @@ def _retry_asr_manifest_item_with_subsegments(
             child["trusted_end"] = parent_start + float(child.get("trusted_end", 0.0))
             child["source_audio_path"] = str(source_audio_path)
     retry_artifact_paths = dict(paths)
-    retry_artifact_paths["source"] = paths["source"] / "asr" / "retry" / f"segment_{idx:05d}"
+    retry_artifact_paths["source"] = paths["cache"] / "asr" / "retry" / f"segment_{idx:05d}"
     rows: list[dict] = []
     raw_children: list[dict] = []
     preprocess_children: list[dict] = []
@@ -745,11 +746,13 @@ def _asr_prompt_text(config: AppConfig) -> str:
     return _asr_segment_prompt(config)
 
 
-def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
+def _task_paths(store: TaskStore, task_id: str, cache_root: Path) -> dict[str, Path]:
     base = store.task_dir(task_id)
+    cache = task_cache_dir(cache_root, task_id)
     return {
         "base": base,
-        "media": base / "media",
+        "cache": cache,
+        "media": cache / "media",
         "asr": base / "asr",
         "source": base / "source",
         "translate": base / "translate",
@@ -1977,7 +1980,8 @@ def _execute_task(
 ) -> None:
     task = store.load_task(task_id)
     input_type = str(task.settings.get("input_type", "video_asr_translate"))
-    paths = _task_paths(store, task_id)
+    cache_root = config.pipeline.cache_dir or config.pipeline.artifacts_dir / ".cache"
+    paths = _task_paths(store, task_id, cache_root)
     _ensure_artifact_dirs(paths)
 
     checkpoint = store.load_checkpoint(task_id)
@@ -2047,7 +2051,7 @@ def _execute_task(
             if source_mode == "embedded_subtitle":
                 _emit_stage(store, task_id, "INGEST", "Extracting embedded subtitles")
                 source_jsonl = _source_segments_path(paths)
-                embedded_srt = paths["media"] / "embedded_subtitle.srt"
+                embedded_srt = paths["source"] / "embedded_subtitle.srt"
                 requested_source_mode = str(task.settings.get("source_mode", config.pipeline.source_mode))
                 if requested_source_mode == "auto" and subtitle_stream is not None:
                     store.append_event(
@@ -2074,7 +2078,7 @@ def _execute_task(
                         raise RuntimeError("No subtitle segments parsed from embedded subtitle stream")
                     source_jsonl = persist_source_segments(paths, all_segments)
                     write_json(
-                        paths["media"] / "subtitle_streams.json",
+                        paths["source"] / "subtitle_streams.json",
                         {
                             "selected": subtitle_stream,
                             "streams": subtitle_streams,
@@ -2483,7 +2487,6 @@ def _execute_task(
             progress=0.88,
             details={"path": str(paths["final"] / "segments.aligned.json"), "segments": len(aligned_segments)},
         )
-
         _check_cancel(store, task_id)
         _emit_stage(store, task_id, "QUALITY", "Optimizing subtitle readability")
         quality_progress = _translation_progress_callback(store, task_id, checkpoint, stage="QUALITY")
@@ -2741,6 +2744,17 @@ def _execute_task(
             details={"error_info": err},
         )
         raise PipelineTaskError(task_id, err) from exc
+    finally:
+        try:
+            completed = store.load_task(task_id).status == "DONE"
+        except Exception:
+            completed = False
+        if completed:
+            try:
+                cleanup_task_cache(cache_root, task_id)
+            except OSError:
+                # A later Local Service startup retries completed task caches.
+                pass
 
 
 def task_status_json(task: TaskRecord, store: TaskStore | None = None) -> dict[str, Any]:

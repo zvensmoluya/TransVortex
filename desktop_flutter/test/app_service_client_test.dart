@@ -604,21 +604,11 @@ routing:
       final desktopHome = await Directory.systemTemp.createTemp(
         'transvortex_product_home_',
       );
-      final selectedWorkspace = await Directory.systemTemp.createTemp(
-        'transvortex_product_workspace_',
-      );
       addTearDown(() => _deleteDirectoryWithRetries(desktopHome));
-      addTearDown(() => _deleteDirectoryWithRetries(selectedWorkspace));
       final appPaths = _desktopPaths(desktopHome);
-      final settings = DesktopWorkspaceSettings(
-        paths: appPaths,
-        environment: const {},
-      );
-      await settings.saveWorkspaceRoot(selectedWorkspace.path);
       final supervisor = LocalServiceSupervisor(
         repoRoot: Directory.current.parent,
         appPaths: appPaths,
-        workspaceSettings: settings,
         pythonExecutable: Platform.isWindows ? 'python' : 'python3',
         requestTimeout: const Duration(seconds: 10),
       );
@@ -627,14 +617,14 @@ routing:
 
       final snapshot = await session.client.desktopSnapshot();
       final expectedConfig = appPaths.configRoot.resolveSymbolicLinksSync();
-      final expectedTasks = appPaths
-          .tasksRoot(selectedWorkspace)
-          .resolveSymbolicLinksSync();
+      final expectedTasks = appPaths.tasksRoot.resolveSymbolicLinksSync();
+      final expectedCache = appPaths.cacheRoot.resolveSymbolicLinksSync();
 
       expect(snapshot.config['root_dir'], expectedConfig);
       expect(snapshot.config['artifacts_dir'], expectedTasks);
       expect(Directory(expectedTasks).existsSync(), isTrue);
-      expect('$expectedConfig'.contains('.transvortex-desktop'), isFalse);
+      expect(Directory(expectedCache).existsSync(), isTrue);
+      expect(expectedConfig.contains('.transvortex-desktop'), isFalse);
     },
   );
 
@@ -676,18 +666,9 @@ routing:
       String? capturedWorkingDirectory;
       Map<String, String>? capturedEnvironment;
       final appPaths = _desktopPaths(desktopHome);
-      final workspaceSettings = DesktopWorkspaceSettings(
-        paths: appPaths,
-        environment: const {},
-      );
-      final selectedWorkspace = Directory(
-        '${desktopHome.path}${Platform.pathSeparator}Selected Workspace',
-      );
-      await workspaceSettings.saveWorkspaceRoot(selectedWorkspace.path);
       final supervisor = LocalServiceSupervisor(
         repoRoot: repoRoot,
         appPaths: appPaths,
-        workspaceSettings: workspaceSettings,
         pythonExecutable: 'python-test',
         processStarter:
             (
@@ -707,7 +688,8 @@ routing:
       await supervisor.start();
 
       final runtimeRoot = appPaths.configRoot;
-      final runtimeArtifacts = appPaths.tasksRoot(selectedWorkspace);
+      final runtimeArtifacts = appPaths.tasksRoot;
+      final runtimeCache = appPaths.cacheRoot;
       expect(executable, 'python-test');
       expect(arguments, [
         '-m',
@@ -716,6 +698,8 @@ routing:
         runtimeRoot.path,
         '--artifacts-dir',
         runtimeArtifacts.path,
+        '--cache-dir',
+        runtimeCache.path,
       ]);
       expect(capturedWorkingDirectory, repoRoot.path);
       expect(capturedEnvironment?['PYTHONIOENCODING'], 'utf-8');
@@ -773,10 +757,6 @@ routing:
       final supervisor = LocalServiceSupervisor(
         repoRoot: repoRoot,
         appPaths: appPaths,
-        workspaceSettings: DesktopWorkspaceSettings(
-          paths: appPaths,
-          environment: const {},
-        ),
         pythonExecutable: 'python-test',
         processStarter:
             (
@@ -835,10 +815,6 @@ routing:
     final supervisor = LocalServiceSupervisor(
       repoRoot: repoRoot,
       appPaths: appPaths,
-      workspaceSettings: DesktopWorkspaceSettings(
-        paths: appPaths,
-        environment: const {},
-      ),
       pythonExecutable: 'python-test',
       processStarter:
           (
@@ -1706,15 +1682,14 @@ Future<void> _deleteDirectoryWithRetries(Directory directory) async {
 }
 
 DesktopAppPaths _desktopPaths(Directory appDataRoot) {
+  final workspaceRoot = Directory(
+    '${appDataRoot.path}${Platform.pathSeparator}Workspace',
+  );
   return DesktopAppPaths(
     appDataRoot: appDataRoot,
     configRoot: Directory('${appDataRoot.path}${Platform.pathSeparator}Config'),
-    defaultWorkspaceRoot: Directory(
-      '${appDataRoot.path}${Platform.pathSeparator}Workspace',
-    ),
-    settingsFile: File(
-      '${appDataRoot.path}${Platform.pathSeparator}desktop-settings.json',
-    ),
+    tasksRoot: Directory('${workspaceRoot.path}${Platform.pathSeparator}Tasks'),
+    cacheRoot: Directory('${workspaceRoot.path}${Platform.pathSeparator}Cache'),
   );
 }
 

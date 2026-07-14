@@ -32,14 +32,14 @@
 - `LocalServiceSupervisor`
 - `LocalServiceController`
 - `AppServiceClient`
-- `DesktopAppPaths` 与用户级任务资料库设置；正式桌面启动不得退回仓库相对 `artifacts/`
+- `DesktopAppPaths` 管理固定的用户级 `Config`、`Tasks` 和 `Cache`；正式桌面启动不得退回仓库相对 `artifacts/`
 - Python `transvortex.app_service` JSON-RPC 入口
 - `DesktopApi` 中已经存在的桌面控制面方法
 - 短期由主 Flutter engine 托管 Local Service，子窗口通过 bridge 转发调用的过渡方案
 
 这些属于通信和服务基础设施，可以继续演进。
 
-显式仓库 CLI、自动化临时目录和正式 Flutter 用户资料库是三种不同运行模式。正式模式不得扫描或迁移仓库实验数据；用户自定义资料库由 Flutter 显式传给 Local Service，Python worker 必须沿用同一路径。`pipeline.yaml` 的相对 `artifacts_dir` 只继续约束仓库 / 测试工作区。
+显式仓库 CLI、自动化临时目录和正式 Flutter 用户数据是三种不同运行模式。正式模式不得扫描或迁移仓库实验数据；Flutter 将固定的任务根和 Cache 根显式传给 Local Service，Python worker 必须沿用同一路径。`pipeline.yaml` 的相对 `artifacts_dir` 只继续约束仓库 / 测试工作区。
 
 ### 已从早期验证收束
 

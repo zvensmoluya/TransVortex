@@ -64,7 +64,7 @@
 ### 4.1 标题栏（薄，只有 chrome）
 
 - 自绘二次元标题栏：左=品牌点 + 标题 + 一行轻状态字；右=窗控簇 `≡ — ✕`，标题栏拖拽区行为像原生窗口。
-- **`≡` = 准备配置、任务历史与应用级存储的门**（单个 app 菜单，在窗控簇里 = 窗口 chrome）：当前放翻译模型设置 / 语音识别设置 / 任务处理 / 任务资料库位置。任务资料库使用系统目录选择器，已有正式任务时不得无迁移切换；诊断是内部支持能力，不进入普通用户菜单；术语管理等后续窗口在完整产品语义成立前不得作为假菜单项出现。
+- **`≡` = 准备配置与任务历史的门**（单个 app 菜单，在窗控簇里 = 窗口 chrome）：当前放翻译模型设置 / 语音识别设置 / 任务处理。内部任务存储根不作为普通用户设置；诊断是内部支持能力，不进入普通用户菜单；术语管理等后续窗口在完整产品语义成立前不得作为假菜单项出现。
 - **顶栏不出现任何「一排具名入口」**（翻译·识别·术语 横排）——那是顶栏导航的软变体，禁。一个 `≡` 汉堡可以，一排标签不行。
 
 ### 4.2 主体（唯一主角，居中）
@@ -308,7 +308,7 @@
 
 > 本节部分条目原用旧栈（Tauri / web）措辞。凡针对**已冻结 `desktop/` 树**的清理（旧路由、`lucide-react`、DOM 死分支）均已失效——该树不交付，无需清理；Flutter 主体验只需自身不引入对应结构。以下为对 Flutter 仍有效的待接项：
 
-- Flutter 正常启动已不再把任务资料写到仓库或安装根：用户级配置副本进入 `%LOCALAPPDATA%\TransVortex\Config`，任务资料库默认进入 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`；主窗口菜单可在没有正式任务时选择其他资料库并重启 Local Service。显式 `serviceRoot` 的 smoke / 测试和仓库 `--root` CLI 继续使用隔离工作区，开发数据不自动迁移。后续仍需拆分 `Tasks` 与可回收 `Cache`、支持用户主动搬迁已有正式任务，并让正式安装器在该拓扑上完成升级验收。
+- Flutter 正常启动已不再把任务资料写到仓库或安装根：用户级配置副本进入 `%LOCALAPPDATA%\TransVortex\Config`，任务固定进入 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，ffmpeg / ASR 可重建音频进入同级 `Cache`。成功任务会清理对应 Cache，失败或取消时保留以支持恢复；主窗口不提供内部存储根选择。显式 `serviceRoot` 的 smoke / 测试和仓库 `--root` CLI 继续使用隔离工作区，开发数据不自动迁移。后续仍需补 logs / temp 和正式安装器升级验收。
 
 - 系统通知已接 Windows Toast 路径和点击聚焦回调；release smoke 已覆盖任务状态转移触发 native 初始化 / show 调用 / AUMID registry 注册和 Windows Notifications Settings key；Windows runner 已设置进程级 AUMID，用户级开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 创建并校验，`-CheckAppIdentity` release smoke 已验证通知 AUMID 与快捷方式 AUMID 一致；用户已人工确认真实系统横幅出现；portable 包脚本可验证 release bundle + Python 源码布局、包内 Local Service RPC、用户级脚本安装和包目录启动；后续补正式 MSIX / installer 分发路径下的通知中心行为验收（§7）。
 - 已打包真实多档字重字体：`desktop_flutter/assets/fonts/NotoSansSC-VF.ttf`，release 构建的 `FontManifest.json` 可验证 `TransVortexNotoSansSC` 注册。

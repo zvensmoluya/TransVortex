@@ -7,6 +7,7 @@ import pytest
 
 from transvortex.app.config import (
     ARTIFACTS_DIR_ENV,
+    CACHE_DIR_ENV,
     apply_route_overrides,
     load_app_config,
 )
@@ -50,6 +51,23 @@ def test_artifacts_directory_environment_overrides_workspace_yaml(
     cfg = load_app_config(root_dir=tmp_path)
 
     assert cfg.pipeline.artifacts_dir == desktop_tasks
+    assert cfg.pipeline.cache_dir == desktop_tasks / ".cache"
+
+
+def test_cache_directory_environment_is_independent_from_task_artifacts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text("artifacts_dir: artifacts\n", encoding="utf-8")
+    desktop_tasks = tmp_path / "desktop-workspace" / "Tasks"
+    desktop_cache = tmp_path / "desktop-workspace" / "Cache"
+    monkeypatch.setenv(ARTIFACTS_DIR_ENV, str(desktop_tasks))
+    monkeypatch.setenv(CACHE_DIR_ENV, str(desktop_cache))
+
+    cfg = load_app_config(root_dir=tmp_path)
+
+    assert cfg.pipeline.artifacts_dir == desktop_tasks
+    assert cfg.pipeline.cache_dir == desktop_cache
 
 
 def test_long_context_translation_defaults(tmp_path: Path) -> None:
