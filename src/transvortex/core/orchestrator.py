@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields, is_dataclass, replace
@@ -25,6 +24,7 @@ from .media import (
     select_subtitle_stream,
     split_audio_for_asr,
 )
+from .media_tools import resolve_media_executable
 from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.bootstrapper import bootstrap_memory
 from ..memory.presets import build_selected_presets_snapshot
@@ -1137,8 +1137,8 @@ def _preflight(
         raise RuntimeError(f"Input path is not a file: {input_path}")
     if input_type in {"video_asr_translate", "video_asr"}:
         for binary in ("ffmpeg", "ffprobe"):
-            if shutil.which(binary) is None:
-                raise RuntimeError(f"Required executable not found in PATH: {binary}")
+            if resolve_media_executable(binary) is None:
+                raise RuntimeError(f"Required media executable not found: {binary}")
     output_dir = output_file.parent if output_file else store.task_dir(task.task_id) / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     probe_file = output_dir / ".tvx_write_probe"

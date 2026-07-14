@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import write_json
+from .media_tools import resolve_media_executable
 
 
 TEXT_SUBTITLE_CODECS = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
@@ -17,6 +18,9 @@ ASR_UPLOAD_WAV_BYTES_PER_SECOND = 16000 * 2
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+    resolved = resolve_media_executable(cmd[0])
+    if resolved is not None:
+        cmd = [resolved, *cmd[1:]]
     return subprocess.run(
         cmd,
         check=True,

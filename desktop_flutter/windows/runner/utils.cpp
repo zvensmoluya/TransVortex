@@ -2,6 +2,8 @@
 
 #include <flutter_windows.h>
 #include <io.h>
+#include <propkey.h>
+#include <propvarutil.h>
 #include <stdio.h>
 #include <ShObjIdl_core.h>
 #include <windows.h>
@@ -25,6 +27,58 @@ void CreateAndAttachConsole() {
 void SetTransVortexAppUserModelId() {
   // Best-effort shell identity for taskbar grouping and unpackaged toast paths.
   (void)::SetCurrentProcessExplicitAppUserModelID(kTransVortexAppUserModelId);
+}
+
+bool SetShortcutAppUserModelId(const wchar_t* shortcut_path) {
+  if (shortcut_path == nullptr || shortcut_path[0] == L'\0') {
+    return false;
+  }
+
+  IShellLinkW* shell_link = nullptr;
+  HRESULT result = ::CoCreateInstance(CLSID_ShellLink, nullptr,
+                                      CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&shell_link));
+  if (FAILED(result)) {
+    return false;
+  }
+
+  IPersistFile* persist_file = nullptr;
+  result = shell_link->QueryInterface(IID_PPV_ARGS(&persist_file));
+  if (SUCCEEDED(result)) {
+    result = persist_file->Load(shortcut_path, STGM_READWRITE);
+  }
+
+  IPropertyStore* property_store = nullptr;
+  if (SUCCEEDED(result)) {
+    result = shell_link->QueryInterface(IID_PPV_ARGS(&property_store));
+  }
+
+  PROPVARIANT app_user_model_id;
+  ::PropVariantInit(&app_user_model_id);
+  if (SUCCEEDED(result)) {
+    result = ::InitPropVariantFromString(kTransVortexAppUserModelId,
+                                         &app_user_model_id);
+  }
+  if (SUCCEEDED(result)) {
+    result = property_store->SetValue(PKEY_AppUserModel_ID,
+                                      app_user_model_id);
+  }
+  if (SUCCEEDED(result)) {
+    result = property_store->Commit();
+  }
+  if (SUCCEEDED(result)) {
+    result = persist_file->Save(shortcut_path, TRUE);
+  }
+
+  ::PropVariantClear(&app_user_model_id);
+  if (property_store != nullptr) {
+    property_store->Release();
+  }
+  if (persist_file != nullptr) {
+    persist_file->Release();
+  }
+  shell_link->Release();
+  return SUCCEEDED(result);
 }
 
 std::vector<std::string> GetCommandLineArguments() {

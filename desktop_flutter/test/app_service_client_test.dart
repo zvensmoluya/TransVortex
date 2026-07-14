@@ -861,6 +861,22 @@ routing:
       await File(
         '${runtimeRoot.path}${Platform.pathSeparator}app_runtime.json',
       ).writeAsString('{"schema_version":1}', encoding: utf8);
+      final mediaToolsRoot = Directory(
+        '${appRoot.path}${Platform.pathSeparator}tools'
+        '${Platform.pathSeparator}ffmpeg',
+      );
+      await File(
+        '${mediaToolsRoot.path}${Platform.pathSeparator}ffmpeg_runtime.json',
+      ).create(recursive: true);
+      final mediaBin = Directory(
+        '${mediaToolsRoot.path}${Platform.pathSeparator}bin',
+      );
+      await File(
+        '${mediaBin.path}${Platform.pathSeparator}ffmpeg.exe',
+      ).create(recursive: true);
+      await File(
+        '${mediaBin.path}${Platform.pathSeparator}ffprobe.exe',
+      ).create(recursive: true);
       await File(
         '${appRoot.path}${Platform.pathSeparator}pipeline.yaml',
       ).writeAsString('artifacts_dir: artifacts\n', encoding: utf8);
@@ -898,6 +914,10 @@ routing:
       expect(capturedEnvironment?['PYTHONPATH'], '');
       expect(capturedEnvironment?['PYTHONNOUSERSITE'], '1');
       expect(
+        capturedEnvironment?['TRANSVORTEX_MEDIA_TOOLS_DIR'],
+        mediaBin.path,
+      );
+      expect(
         Directory('${appRoot.path}${Platform.pathSeparator}src').existsSync(),
         isFalse,
       );
@@ -928,6 +948,43 @@ routing:
             (error) => error.message,
             'message',
             contains('runtime 不完整'),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'LocalServiceSupervisor rejects incomplete bundled FFmpeg tools',
+    () async {
+      final appRoot = await Directory.systemTemp.createTemp(
+        'transvortex_broken_ffmpeg_',
+      );
+      addTearDown(() => _deleteDirectoryWithRetries(appRoot));
+      await File(
+        '${appRoot.path}${Platform.pathSeparator}runtime'
+        '${Platform.pathSeparator}app_runtime.json',
+      ).create(recursive: true);
+      await File(
+        '${appRoot.path}${Platform.pathSeparator}runtime'
+        '${Platform.pathSeparator}python'
+        '${Platform.pathSeparator}python.exe',
+      ).create(recursive: true);
+      await File(
+        '${appRoot.path}${Platform.pathSeparator}tools'
+        '${Platform.pathSeparator}ffmpeg'
+        '${Platform.pathSeparator}ffmpeg_runtime.json',
+      ).create(recursive: true);
+
+      final supervisor = LocalServiceSupervisor(repoRoot: appRoot);
+
+      await expectLater(
+        supervisor.start(),
+        throwsA(
+          isA<LocalServiceLaunchException>().having(
+            (error) => error.message,
+            'message',
+            contains('FFmpeg 工具不完整'),
           ),
         ),
       );

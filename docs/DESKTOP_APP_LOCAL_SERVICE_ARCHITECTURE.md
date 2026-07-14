@@ -124,7 +124,7 @@ Python 后端已经是一套相对成熟、但按 agent 用途打磨的能力，
 - Dart 侧通过 `AppServiceClient` 调用 `desktop.snapshot`、`runtime.submitRun`、`tasks.events`、`runtime.cancel`、`result.*` 等真实 RPC。
 - release smoke 已覆盖启动 Local Service、读取配置摘要、提交任务到真实 worker、等待 `DONE`、校验输出文件和重新导出。
 
-因此它不再是“临时探针式验证”。当前本机已补真实外部翻译服务 / 语音识别证据、系统通知横幅人工确认、AppUserModelID 开始菜单快捷方式自动创建 / 校验，以及 portable release 包内 Local Service RPC 检查、用户级脚本安装检查和包目录启动检查。portable 包会把 Flutter release bundle、固定 Embedded Python 主 runtime、`prompts/`、`pipeline.yaml` 和由 `providers.example.yaml` 复制出的 `providers.yaml` 放在同一包根；Dart 侧 Local Service supervisor 在安装态直接定位 `runtime/python/python.exe`，不再依赖包内 `src/`、系统 `python` 或 `PYTHONPATH`。打包脚本会用固定 runtime 验证 `service.info` / `service.health` / `asr.status` / `service.shutdown` 及版本清单，包根 `Install-TransVortex.ps1` 或仓库脚本 `scripts\install_flutter_portable_release.ps1` 可把 portable 包复制到用户级安装目录、创建 AUMID 快捷方式并在安装目录复跑 Local Service RPC。仍未完成的系统级证明是通过 `scripts\accept_flutter_release_manual.ps1` 完成完整真实可见 release 窗口人工端到端，以及正式 MSIX / installer 分发包下的新机器安装验收。
+因此它不再是“临时探针式验证”。当前基础发布目录包含固定 Embedded Python 主 runtime 和独立的固定 FFmpeg LGPL shared runtime；Dart 侧 Local Service supervisor 在安装态直接定位 `runtime/python/python.exe`，并把 `tools/ffmpeg/bin` 显式交给后端，不再依赖包内 `src/`、系统 `python`、`PYTHONPATH` 或系统 FFmpeg。`scripts\build_windows_installer.ps1` 已能生成用户级 NSIS 安装器，`scripts\accept_windows_installer.ps1` 已自动验证全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留。仍未完成的系统级证明是完整真实可见窗口人工端到端、已安装路径通知、干净 Windows 环境真实媒体任务，以及公开发布所需的签名和 FFmpeg 对应源码托管。
 
 ### 6.3 Flutter 多窗口
 
@@ -416,20 +416,20 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 - 主 Python runtime 已按固定 Embedded Python 随包分发，后续需继续明确升级与完整性校验策略。
 - `transvortex` 已以 wheel 安装到主 runtime，开发态继续使用仓库 `src/`。
-- FFmpeg 如何提供或检测。
+- FFmpeg 已采用固定 Windows x64 LGPL shared runtime，并通过安装目录、环境变量和 Python 自定位三层契约解析；公开发布仍需配套对应源码。
 - artifact、日志、配置、凭据目录如何定位。
-- Windows 托盘、正式安装包、通知中心和分发路径如何建立；当前 AppUserModelID 开始菜单快捷方式可由 `scripts\install_flutter_desktop_shortcut.ps1` 建立并校验，portable 包可由 `scripts\package_flutter_release.ps1` 生成，并验证包内 Local Service RPC、用户级脚本安装与可选窗口启动，但它不等于正式安装器。
+- Windows 正式安装包已采用 NSIS 用户级路径，覆盖 staging、失败回滚、升级清旧文件、运行进程保护、卸载注册和 AppUserModelID 快捷方式；仍需完成签名、公开源码配套、已安装路径通知中心和干净机验收。
 
 这些问题不属于“UI 细节”，而是 App Host / Local Service 架构的一部分。
 
-### 12.1 当前实现审计（2026-07-14）
+### 12.1 当前实现审计（2026-07-15）
 
-当前 Python core、artifact/runtime、JSON-RPC typed client 和跨进程锁已经具备继续演进的基础。主 Local Service 也已有固定 Embedded Python + 已安装 wheel 的交付形态，portable 包和复制后的用户级目录均能在空 `PYTHONPATH` 下启动包内服务。发布前的主要问题不在字幕业务核心，而集中在 FFmpeg、运行资源初始化、版本迁移、Supervisor 收口和正式安装升级这一圈。
+当前 Python core、artifact/runtime、JSON-RPC typed client 和跨进程锁已经具备继续演进的基础。主 Local Service 已有固定 Embedded Python + 已安装 wheel 的交付形态，FFmpeg 也已有固定版本、来源、许可变体和哈希清单；NSIS 安装器已经通过本机安装 / 升级 / 卸载自动验收。发布前的主要问题不在字幕业务核心或文件复制，而集中在运行资源初始化、版本迁移、Supervisor / 日志收口、公开分发合规和干净机真实任务证明。
 
 #### 发布阻塞项
 
 1. **任务资料与 Cache 已和安装目录分离，但完整 AppPaths 尚未完成。** Flutter 正常启动把配置副本放到 `%LOCALAPPDATA%\TransVortex\Config`，把任务固定写入 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，把可重建音频写入同级 `Cache`，并通过 Local Service 显式传给 worker；成功任务清理 Cache，失败或取消时保留以支持恢复。仓库 `artifacts/` 和旧 `.transvortex-desktop` 不自动迁移，普通用户不选择内部存储根。logs / temp 尚未拆分。
-2. **干净机器完整媒体链路仍未闭环。** portable 包现在包含固定 Python 3.13.14 主 runtime、TransVortex wheel 和锁定依赖，Flutter 安装态直接启动包内 `python.exe`，包内及复制安装目录的 Local Service 检查均已通过；但基础包仍不包含 FFmpeg，也尚未在干净 Windows 虚拟机上完成正式安装、首启和媒体任务验收。
+2. **固定媒体 runtime 已进入安装器，但干净机器完整媒体任务仍未闭环。** 基础包包含固定 Python 3.13.14 主 runtime，以及 FFmpeg 8.1 LGPL shared 的 `ffmpeg.exe`、`ffprobe.exe` 和所需 DLL；自动验收已在受限 `PATH` 下从已安装目录真实执行两项工具并启动 Local Service。尚未在干净 Windows 虚拟机完成正式安装、首启和用户片源端到端任务，也尚未托管公开分发所需的完整对应源码。
 3. **缺少版本化初始化与迁移。** 当前初始化主要是“目录不存在则创建、配置不存在则复制”。已有 `pipeline.yaml` 不会随默认配置演进，也没有安装状态文件、配置 schema migration、迁移前备份和失败回滚。`providers_file_version` / `pipeline_file_version` 只是并发写保护，不是数据格式版本。
 4. **安装资源与运行资源没有完整统一。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到只读包根，但正常 App 把 Local Service 的 `--root` 指向 `%LOCALAPPDATA%\TransVortex\Config`，目前只初始化 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，仍需明确版本化资源初始化与用户覆盖策略。
 5. **前后端兼容没有真正握手。** `service.info` 已返回 `protocol_version` 和 `app_version`，Dart 侧目前只解析，不校验可接受版本；Python `0.1.0` 与 Flutter `1.0.0+1` 的版本口径也尚未统一。
@@ -438,19 +438,19 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 
 - 设置窗口在主窗口 bridge 不可用时会自行启动 Local Service，和“同一 App 会话只有一个后端宿主”的目标边界不一致。跨进程 runtime lock 能避免重复 acquire worker，但不能替代清楚的服务所有权与退出策略。
 - release smoke 的参数解析、伪造状态、自动编辑/恢复/取消和报告写入仍编译在产品 widget 中。它们对当前验收有价值，后续应收敛到独立 automation driver 或受构建开关约束的测试入口。
-- portable 包已经改为复制固定主 runtime，不再携带整棵 Python `src/`；但 runtime 构建、目录复制和 JSON-RPC 健康检查仍由 PowerShell 组合，尚未进入带升级、回滚和签名的正式安装流水线。
+- runtime 和安装器构建仍由 PowerShell 驱动，但 PowerShell 只属于构建机；installer payload 会拒绝任何 `.ps1`，终端用户安装和运行不依赖 PowerShell。NSIS 已覆盖 staging、升级、回滚和卸载，尚缺 Authenticode 签名和 CI/干净机构建执行器。
 - Flutter/Local Service 缺少持久化启动日志和崩溃日志；服务启动前的 Python/依赖错误只能退化成连接失败，无法依赖尚未启动的 `doctor` 完成首次运行引导。
-- 当前安装脚本没有运行进程保护、staging/原子替换、回滚、卸载注册、代码签名或完整性清单。用户级 `auth.json` 已与安装目录分开，但 Windows ACL 或 Credential Manager 的长期安全边界仍需明确。
+- NSIS 安装器已有运行进程 mutex、staging、同盘目录切换、失败回滚、卸载注册和 payload/runtime 哈希清单；当前内部验收件没有 Authenticode 签名。用户级 `auth.json` 已与安装目录分开，但 Windows ACL 或 Credential Manager 的长期安全边界仍需明确。
 
 #### Release Foundation 建议顺序
 
 1. **继续收口 AppPaths。** 已明确 Flutter 固定的用户级 `config_root`、任务根和 Cache 根，并保留 `TRANSVORTEX_HOME` / 显式 service root 作为开发测试覆盖；下一步拆分 logs / temp，补 Cache 清理失败的可观测性。开发阶段仓库 `artifacts/` 与旧 `.transvortex-desktop` 明确保留为实验数据，不进入正式迁移范围。
-2. **固定 Local Service 交付（基础已完成）。** 当前采用内置 Embedded Python + 已安装 wheel，Flutter 安装态使用明确可执行文件路径，不再依赖系统 `python`、仓库发现和 `PYTHONPATH`；下一步补 FFmpeg 固定分发、干净机器首启证据及 runtime 升级完整性策略。本机 ASR 已明确为按需组件。
+2. **固定 Local Service 与媒体工具交付（基础已完成）。** 当前采用内置 Embedded Python + 已安装 wheel，以及固定 FFmpeg LGPL shared runtime；Flutter 安装态不再依赖系统 Python / FFmpeg。下一步补干净机器首启与真实媒体任务证据、对应源码托管和 runtime 升级完整性策略。本机 ASR 仍明确为按需组件。
 3. **建立版本化 initializer。** 首次运行创建目录和默认配置；升级时按 schema 执行幂等迁移、备份和回滚；启动服务后校验 protocol、capability 与 App/backend 版本组合。
 4. **收口 Supervisor。** 同一 App 会话只允许一个 Local Service 宿主，页面只依赖 `AppServiceClient`；补持久日志、服务重启、运行中 Worker 的退出策略，并把 smoke 驱动移出产品 widget。
-5. **建立正式安装流水线。** 使用 staging 和安全升级保留用户数据，补卸载、快捷方式/AUMID、签名、hash manifest、干净 Windows 环境首启和已安装目录端到端验收。
+5. **完成正式安装发布门槛。** staging、安全升级、卸载、快捷方式 / AUMID、hash manifest 和本机已安装目录验收已经完成；下一步接 Authenticode 签名、FFmpeg 完整对应源码地址、CI 构建、干净 Windows 首启和已安装目录真实端到端任务。
 
-当前 G1 可以继续用于锁定真实窗口中的用户流程，但最终 Release Candidate 验收必须在上述安装拓扑上重跑一轮精简 G1。否则通过的仍是“仓库或 portable 包旁运行的 Release”，不是可升级、可恢复的已安装应用。
+当前 G1 可以继续用于锁定真实窗口中的用户流程；最终 Release Candidate 仍必须在已安装拓扑和干净 Windows 环境重跑一轮精简 G1。现有自动验收已经证明安装器可安装、可升级、可回滚和可卸载，但不等于真实片源、外部服务、通知、签名与公开分发条件全部成立。
 
 ## 13. 技术选项与当前取舍
 
@@ -611,7 +611,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - App Host / Supervisor 最终放在主 Flutter engine、Windows native runner，还是独立 supervisor 进程（见 13）。
 - 通信是否在未来升级为 named pipe / local socket / localhost HTTP（仅当需要窗口全关后仍运行或多客户端并发时再评估）。
 - 任务并发模型：当前 `active.json` 强制单活动 Worker、任务串行；是否支持多 Worker 并发是后续产品决策。
-- release 包当前内置固定主 Python runtime，但不内置 FFmpeg；仍需确定 FFmpeg 来源、体积管理、主 runtime 升级与正式安装包完整性策略。
+- release 包当前内置固定主 Python runtime 和固定 FFmpeg LGPL shared runtime；仍需完成两套 runtime 的升级策略、FFmpeg 对应源码托管、代码签名和干净机完整性验证。
 - macOS / Linux 是否作为早期目标，还是 Windows 优先。
 
 ## 17. 当前建议

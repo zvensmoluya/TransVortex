@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import platform
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +12,7 @@ import httpx
 from .config import load_app_config, resolve_providers_file
 from .credentials import resolve_credential
 from .asr_runtime import asr_provider_readiness
+from ..core.media_tools import resolve_media_executable
 from ..providers.probe import probe_provider
 
 FASTER_WHISPER_MIN_VERSION = "1.0.2"
@@ -48,7 +48,7 @@ def _overall_status(checks: list[dict[str, Any]]) -> str:
 
 
 def _binary_check(binary: str) -> dict[str, Any]:
-    path = shutil.which(binary)
+    path = resolve_media_executable(binary)
     if path:
         return _check(
             binary,
@@ -62,8 +62,8 @@ def _binary_check(binary: str) -> dict[str, Any]:
         binary,
         "FAIL",
         f"{binary}_missing",
-        f"{binary} not found in PATH",
-        f"未找到 {binary}。请安装并加入 PATH。",
+        f"{binary} not found in the bundled media tools or PATH",
+        f"未找到 {binary}。请修复应用安装，或在开发环境中把它加入 PATH。",
     )
 
 

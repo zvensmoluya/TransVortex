@@ -261,11 +261,20 @@ class LocalServiceSupervisor {
     final explicitPython = pythonExecutable?.trim() ?? '';
     final bundledPython = _bundledPython(root);
     final hasBundledRuntime = _hasBundledRuntimeManifest(root);
+    final bundledMediaTools = _bundledMediaTools(root);
+    final hasBundledMediaTools = _hasBundledMediaToolsManifest(root);
     if (explicitPython.isEmpty &&
         hasBundledRuntime &&
         !bundledPython.existsSync()) {
       throw LocalServiceLaunchException(
         '应用内置的 Python runtime 不完整：缺少 ${bundledPython.path}',
+      );
+    }
+    if (hasBundledMediaTools &&
+        (!_bundledFfmpeg(root).existsSync() ||
+            !_bundledFfprobe(root).existsSync())) {
+      throw LocalServiceLaunchException(
+        '应用内置的 FFmpeg 工具不完整：${bundledMediaTools.path}',
       );
     }
     final useBundledRuntime = explicitPython.isEmpty && hasBundledRuntime;
@@ -308,6 +317,8 @@ class LocalServiceSupervisor {
       environment: {
         'PYTHONIOENCODING': 'utf-8',
         'PYTHONUTF8': '1',
+        if (hasBundledMediaTools)
+          'TRANSVORTEX_MEDIA_TOOLS_DIR': bundledMediaTools.path,
         if (useBundledRuntime) ...{
           'PYTHONPATH': '',
           'PYTHONNOUSERSITE': '1',
@@ -437,11 +448,39 @@ class LocalServiceSupervisor {
     ).existsSync();
   }
 
+  static bool _hasBundledMediaToolsManifest(Directory root) {
+    return File(
+      '${root.path}${Platform.pathSeparator}tools'
+      '${Platform.pathSeparator}ffmpeg'
+      '${Platform.pathSeparator}ffmpeg_runtime.json',
+    ).existsSync();
+  }
+
   static File _bundledPython(Directory root) {
     return File(
       '${root.path}${Platform.pathSeparator}runtime'
       '${Platform.pathSeparator}python'
       '${Platform.pathSeparator}python.exe',
+    );
+  }
+
+  static Directory _bundledMediaTools(Directory root) {
+    return Directory(
+      '${root.path}${Platform.pathSeparator}tools'
+      '${Platform.pathSeparator}ffmpeg'
+      '${Platform.pathSeparator}bin',
+    );
+  }
+
+  static File _bundledFfmpeg(Directory root) {
+    return File(
+      '${_bundledMediaTools(root).path}${Platform.pathSeparator}ffmpeg.exe',
+    );
+  }
+
+  static File _bundledFfprobe(Directory root) {
+    return File(
+      '${_bundledMediaTools(root).path}${Platform.pathSeparator}ffprobe.exe',
     );
   }
 

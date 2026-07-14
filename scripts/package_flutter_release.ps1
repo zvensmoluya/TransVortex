@@ -3,8 +3,11 @@ param(
     [string]$OutputRoot = "",
     [string]$PackageName = "",
     [string]$AppRuntimeRoot = "",
+    [string]$FfmpegRuntimeRoot = "",
     [switch]$Build,
     [switch]$BuildAppRuntime,
+    [switch]$BuildFfmpegRuntime,
+    [switch]$InstallerPayload,
     [switch]$Force,
     [switch]$NoZip,
     [switch]$LaunchCheck,
@@ -197,6 +200,7 @@ function Invoke-PortableServiceCheck {
     $psi.Environment["PYTHONUTF8"] = "1"
     $psi.Environment["PYTHONPATH"] = ""
     $psi.Environment["PYTHONNOUSERSITE"] = "1"
+    $psi.Environment["TRANSVORTEX_MEDIA_TOOLS_DIR"] = Join-Path $PackageRoot "tools\ffmpeg\bin"
     $escapedPackageRoot = $PackageRoot.Replace('"', '\"')
     $psi.Arguments = "-m transvortex.app_service --root `"$escapedPackageRoot`" --no-pump"
 
@@ -297,6 +301,65 @@ function Invoke-PortableServiceCheck {
     }
 }
 
+function Test-PackagedFfmpegRuntime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageRoot
+    )
+
+    $ffmpegRoot = Join-Path $PackageRoot "tools\ffmpeg"
+    $manifestPath = Join-Path $ffmpegRoot "ffmpeg_runtime.json"
+    $ffmpegPath = Join-Path $ffmpegRoot "bin\ffmpeg.exe"
+    $ffprobePath = Join-Path $ffmpegRoot "bin\ffprobe.exe"
+    foreach ($required in @($manifestPath, $ffmpegPath, $ffprobePath, (Join-Path $ffmpegRoot "SOURCE_NOTICE.txt"))) {
+        if (-not (Test-Path -LiteralPath $required)) {
+            throw "Packaged FFmpeg runtime is incomplete: $required"
+        }
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Encoding utf8 -Raw | ConvertFrom-Json
+    $ffmpegOutput = @(& $ffmpegPath -version 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Packaged ffmpeg -version failed with exit code $LASTEXITCODE"
+    }
+    $ffprobeOutput = @(& $ffprobePath -version 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Packaged ffprobe -version failed with exit code $LASTEXITCODE"
+    }
+    $ffmpegHash = (Get-FileHash -LiteralPath $ffmpegPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ffprobeHash = (Get-FileHash -LiteralPath $ffprobePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ffmpegHash -ne [string]$manifest.ffmpeg_sha256 -or $ffprobeHash -ne [string]$manifest.ffprobe_sha256) {
+        throw "Packaged FFmpeg executable hash does not match ffmpeg_runtime.json."
+    }
+    $libraryProperties = @($manifest.shared_library_sha256.PSObject.Properties)
+    if ($libraryProperties.Count -ne [int]$manifest.shared_library_count) {
+        throw "Packaged FFmpeg shared library count does not match ffmpeg_runtime.json."
+    }
+    foreach ($property in $libraryProperties) {
+        $libraryPath = Join-Path $ffmpegRoot ("bin\" + $property.Name)
+        if (-not (Test-Path -LiteralPath $libraryPath)) {
+            throw "Packaged FFmpeg shared library is missing: $libraryPath"
+        }
+        $libraryHash = (Get-FileHash -LiteralPath $libraryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($libraryHash -ne [string]$property.Value) {
+            throw "Packaged FFmpeg shared library hash mismatch: $($property.Name)"
+        }
+    }
+
+    return [ordered]@{
+        ok = $true
+        version = [string]$manifest.version
+        variant = [string]$manifest.variant
+        license = [string]$manifest.license
+        ffmpeg_path = $ffmpegPath
+        ffprobe_path = $ffprobePath
+        ffmpeg_version_line = [string]$ffmpegOutput[0]
+        ffprobe_version_line = [string]$ffprobeOutput[0]
+        shared_library_count = $libraryProperties.Count
+        public_distribution_requires_corresponding_source = [bool]$manifest.public_distribution_requires_corresponding_source
+    }
+}
+
 function New-PortableReadme {
     param(
         [Parameter(Mandatory = $true)]
@@ -316,10 +379,11 @@ Optional start-menu identity shortcut:
 Optional user-level install:
   powershell -ExecutionPolicy Bypass -File .\Install-TransVortex.ps1
 
-This portable package includes the Flutter release bundle and a fixed embedded
-Python runtime for the TransVortex Local Service. It does not depend on a system
-Python installation. It does not include FFmpeg, model files, API keys,
-auth.json, .env files, or local provider configuration.
+This portable package includes the Flutter release bundle, a fixed embedded
+Python runtime for the TransVortex Local Service, and pinned FFmpeg command-line
+tools. It does not depend on a system Python or FFmpeg installation. It does not
+include model files, API keys, auth.json, .env files, or local provider
+configuration.
 
 Local Whisper is represented as an optional managed component. Runtime,
 model, and NVIDIA packages are downloaded only after an explicit user action
@@ -336,6 +400,35 @@ installer path is built. The package manifest records the package-root Local
 Service RPC check performed by the packaging script. The optional install script
 copies the package to a user-level directory and creates a Start menu shortcut,
 but it is still not a formal Windows installer.
+"@
+    Set-Content -LiteralPath $Path -Value $content -Encoding utf8
+}
+
+function New-InstallerPayloadReadme {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $content = @"
+TransVortex Windows installer payload
+=====================================
+
+This directory is an intermediate input for the TransVortex Windows installer.
+It contains the Flutter release bundle, the fixed Local Service Python runtime,
+and pinned FFmpeg command-line tools. It does not depend on a system Python,
+FFmpeg, or PowerShell installation at runtime.
+
+This payload does not include model files, API keys, auth.json, .env files, or
+local provider configuration. Local Whisper components are installed only after
+an explicit user action and remain under the user-level TransVortex data root.
+
+FFmpeg notices and source traceability are under tools\ffmpeg. Public release of
+an installer must be accompanied by the complete corresponding FFmpeg source
+and a legal review of the distribution notices.
+
+Do not distribute this directory as the formal installer. The NSIS build step
+embeds it into the signed-or-explicitly-unsigned installer artifact.
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding utf8
 }
@@ -417,6 +510,7 @@ exit $LASTEXITCODE
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $desktopFlutterRoot = Join-Path $repoRoot "desktop_flutter"
 $appRuntimeBuildScript = Join-Path $PSScriptRoot "build_app_runtime.ps1"
+$ffmpegRuntimeBuildScript = Join-Path $PSScriptRoot "build_ffmpeg_runtime.ps1"
 if ([string]::IsNullOrWhiteSpace($AppRuntimeRoot)) {
     $AppRuntimeRoot = Join-Path $repoRoot "dist\app-runtime\windows-x64"
 }
@@ -442,6 +536,33 @@ $missingRuntimePaths = @(
 )
 if ($missingRuntimePaths.Count -gt 0) {
     throw "App runtime is incomplete under $resolvedAppRuntimeRoot. Missing: $($missingRuntimePaths -join ', '). Build it with scripts\build_app_runtime.ps1."
+}
+if ([string]::IsNullOrWhiteSpace($FfmpegRuntimeRoot)) {
+    $FfmpegRuntimeRoot = Join-Path $repoRoot "dist\ffmpeg-runtime\windows-x64"
+}
+if ($BuildFfmpegRuntime -or $Build) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $ffmpegRuntimeBuildScript -OutputRoot $FfmpegRuntimeRoot -Force
+    if ($LASTEXITCODE -ne 0) {
+        throw "FFmpeg runtime build failed with exit code $LASTEXITCODE"
+    }
+}
+if (-not (Test-Path -LiteralPath $FfmpegRuntimeRoot)) {
+    throw "FFmpeg runtime not found: $FfmpegRuntimeRoot. Build it with scripts\build_ffmpeg_runtime.ps1."
+}
+$resolvedFfmpegRuntimeRoot = (Resolve-Path -LiteralPath $FfmpegRuntimeRoot).Path
+$requiredFfmpegRuntimePaths = @(
+    "ffmpeg_runtime.json",
+    "bin\ffmpeg.exe",
+    "bin\ffprobe.exe",
+    "licenses\FFmpeg-LICENSE.txt",
+    "SOURCE_NOTICE.txt"
+)
+$missingFfmpegRuntimePaths = @(
+    $requiredFfmpegRuntimePaths |
+        Where-Object { -not (Test-Path -LiteralPath (Join-Path $resolvedFfmpegRuntimeRoot $_)) }
+)
+if ($missingFfmpegRuntimePaths.Count -gt 0) {
+    throw "FFmpeg runtime is incomplete under $resolvedFfmpegRuntimeRoot. Missing: $($missingFfmpegRuntimePaths -join ', ')."
 }
 if ($Build) {
     Push-Location $desktopFlutterRoot
@@ -470,7 +591,8 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $resolvedOutputRoot = (Resolve-Path -LiteralPath $OutputRoot).Path
 
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
-    $PackageName = "TransVortex-portable-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    $packageKind = if ($InstallerPayload) { "installer-payload" } else { "portable" }
+    $PackageName = "TransVortex-$packageKind-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 }
 $packageRoot = Join-Path $resolvedOutputRoot $PackageName
 Assert-PathInsideDirectory -Path $packageRoot -Directory $resolvedOutputRoot
@@ -486,6 +608,7 @@ Get-ChildItem -LiteralPath $releaseRoot -Force | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $packageRoot -Recurse -Force
 }
 Copy-RequiredDirectory -Source $resolvedAppRuntimeRoot -Destination (Join-Path $packageRoot "runtime")
+Copy-RequiredDirectory -Source $resolvedFfmpegRuntimeRoot -Destination (Join-Path $packageRoot "tools\ffmpeg")
 Copy-RequiredDirectory -Source (Join-Path $repoRoot "prompts") -Destination (Join-Path $packageRoot "prompts")
 if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
     Copy-RequiredDirectory -Source (Join-Path $repoRoot "memory\presets") -Destination (Join-Path $packageRoot "memory\presets")
@@ -495,11 +618,15 @@ Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destin
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
 Copy-RequiredFile -Source (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE")
-Copy-RequiredFile -Source (Join-Path $PSScriptRoot "install_flutter_desktop_shortcut.ps1") -Destination (Join-Path $packageRoot "scripts\install_flutter_desktop_shortcut.ps1")
-Copy-RequiredFile -Source (Join-Path $PSScriptRoot "install_flutter_portable_release.ps1") -Destination (Join-Path $packageRoot "scripts\install_flutter_portable_release.ps1")
-New-PortableShortcutInstaller -Path (Join-Path $packageRoot "Install-StartMenuShortcut.ps1")
-New-PortableUserInstaller -Path (Join-Path $packageRoot "Install-TransVortex.ps1")
-New-PortableReadme -Path (Join-Path $packageRoot "README_PORTABLE.txt")
+if ($InstallerPayload) {
+    New-InstallerPayloadReadme -Path (Join-Path $packageRoot "README_INSTALLER_PAYLOAD.txt")
+} else {
+    Copy-RequiredFile -Source (Join-Path $PSScriptRoot "install_flutter_desktop_shortcut.ps1") -Destination (Join-Path $packageRoot "scripts\install_flutter_desktop_shortcut.ps1")
+    Copy-RequiredFile -Source (Join-Path $PSScriptRoot "install_flutter_portable_release.ps1") -Destination (Join-Path $packageRoot "scripts\install_flutter_portable_release.ps1")
+    New-PortableShortcutInstaller -Path (Join-Path $packageRoot "Install-StartMenuShortcut.ps1")
+    New-PortableUserInstaller -Path (Join-Path $packageRoot "Install-TransVortex.ps1")
+    New-PortableReadme -Path (Join-Path $packageRoot "README_PORTABLE.txt")
+}
 Remove-GeneratedPackageFiles -PackageRoot $packageRoot
 
 $requiredPaths = @(
@@ -514,12 +641,19 @@ $requiredPaths = @(
     "runtime\python\Lib\site-packages\transvortex\app\asr_operations.py",
     "runtime\python\Lib\site-packages\transvortex\core\whisper_host.py",
     "runtime\python\Lib\site-packages\transvortex\resources\asr_components.json",
+    "tools\ffmpeg\ffmpeg_runtime.json",
+    "tools\ffmpeg\bin\ffmpeg.exe",
+    "tools\ffmpeg\bin\ffprobe.exe",
+    "tools\ffmpeg\SOURCE_NOTICE.txt",
     "prompts\translation\system.v1.md",
     "pipeline.yaml",
-    "providers.yaml",
-    "Install-TransVortex.ps1",
-    "Install-StartMenuShortcut.ps1"
+    "providers.yaml"
 )
+if ($InstallerPayload) {
+    $requiredPaths += "README_INSTALLER_PAYLOAD.txt"
+} else {
+    $requiredPaths += @("Install-TransVortex.ps1", "Install-StartMenuShortcut.ps1", "README_PORTABLE.txt")
+}
 $missing = @(
     $requiredPaths | Where-Object { -not (Test-Path -LiteralPath (Join-Path $packageRoot $_)) }
 )
@@ -528,7 +662,14 @@ if ($missing.Count -gt 0) {
 }
 Assert-PortablePackageNoSecrets -PackageRoot $packageRoot
 
+$ffmpegReport = Test-PackagedFfmpegRuntime -PackageRoot $packageRoot
 $serviceReport = Invoke-PortableServiceCheck -PackageRoot $packageRoot
+if ($InstallerPayload) {
+    $ffmpegReport["ffmpeg_path"] = "tools\ffmpeg\bin\ffmpeg.exe"
+    $ffmpegReport["ffprobe_path"] = "tools\ffmpeg\bin\ffprobe.exe"
+    $serviceReport["working_directory"] = "."
+    $serviceReport["python_executable"] = "runtime\python\python.exe"
+}
 Remove-GeneratedPackageFiles -PackageRoot $packageRoot
 Assert-PortablePackageNoSecrets -PackageRoot $packageRoot
 
@@ -560,25 +701,28 @@ $files = Get-ChildItem -LiteralPath $packageRoot -Recurse -File
 $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
 $report = [ordered]@{
     ok = $true
-    package_type = "portable"
+    package_type = if ($InstallerPayload) { "installer_payload" } else { "portable" }
     installer = $false
     formal_installer = $false
-    user_level_install_script = "Install-TransVortex.ps1"
-    user_level_install_supported = $true
+    user_level_install_script = if ($InstallerPayload) { $null } else { "Install-TransVortex.ps1" }
+    user_level_install_supported = -not [bool]$InstallerPayload
     frontend_design_mvp_complete = $false
-    completion_claim = "Portable release package created; this validates package layout and package-root Local Service RPC, but is not a formal MSIX/MSI/NSIS/Inno installer."
-    package_dir = $packageRoot
+    completion_claim = if ($InstallerPayload) { "Installer payload created and validated; the payload itself is not a formal installer." } else { "Portable release package created; this validates package layout and package-root Local Service RPC, but is not a formal installer." }
+    package_dir = if ($InstallerPayload) { "." } else { $packageRoot }
     zip_path = $zipPath
-    exe_path = Join-Path $packageRoot "TransVortex.exe"
-    source_release_dir = $releaseRoot
+    exe_path = if ($InstallerPayload) { "TransVortex.exe" } else { Join-Path $packageRoot "TransVortex.exe" }
+    source_release_dir = if ($InstallerPayload) { $null } else { $releaseRoot }
     file_count = $files.Count
     total_bytes = [int64]$totalBytes
     providers_yaml_source = "providers.example.yaml"
     python_runtime_included = $true
     python_runtime_root = "runtime"
     python_runtime_manifest = "runtime\app_runtime.json"
-    python_runtime_source = $resolvedAppRuntimeRoot
-    ffmpeg_included = $false
+    python_runtime_source = if ($InstallerPayload) { $null } else { $resolvedAppRuntimeRoot }
+    ffmpeg_included = $true
+    ffmpeg_runtime_root = "tools\ffmpeg"
+    ffmpeg_runtime_source = if ($InstallerPayload) { $null } else { $resolvedFfmpegRuntimeRoot }
+    ffmpeg_check = $ffmpegReport
     local_asr_runtime_included = $false
     local_asr_models_included = $false
     local_asr_accelerator_included = $false
@@ -589,11 +733,13 @@ $report = [ordered]@{
     launch_check = if ($launchReport -ne $null) { $launchReport } else { $null }
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-        "formal MSIX/MSI/NSIS/Inno installer acceptance"
+        "formal NSIS installer install, upgrade, running-process protection, and uninstall acceptance",
+        "publish complete corresponding FFmpeg source alongside any public installer"
     )
 }
-$manifestPath = Join-Path $packageRoot "portable_manifest.json"
-$report["manifest_path"] = $manifestPath
+$manifestName = if ($InstallerPayload) { "installer_payload_manifest.json" } else { "portable_manifest.json" }
+$manifestPath = Join-Path $packageRoot $manifestName
+$report["manifest_path"] = if ($InstallerPayload) { $manifestName } else { $manifestPath }
 $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding utf8
 
 $files = Get-ChildItem -LiteralPath $packageRoot -Recurse -File

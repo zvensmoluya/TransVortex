@@ -69,6 +69,10 @@ function Assert-RequiredPackagePaths {
         "runtime\python\python.exe",
         "runtime\python\Lib\site-packages\transvortex\app_service.py",
         "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
+        "tools\ffmpeg\ffmpeg_runtime.json",
+        "tools\ffmpeg\bin\ffmpeg.exe",
+        "tools\ffmpeg\bin\ffprobe.exe",
+        "tools\ffmpeg\SOURCE_NOTICE.txt",
         "pipeline.yaml",
         "providers.yaml"
     )
@@ -168,6 +172,7 @@ function Invoke-InstalledServiceCheck {
     $psi.Environment["PYTHONUTF8"] = "1"
     $psi.Environment["PYTHONPATH"] = ""
     $psi.Environment["PYTHONNOUSERSITE"] = "1"
+    $psi.Environment["TRANSVORTEX_MEDIA_TOOLS_DIR"] = Join-Path $Root "tools\ffmpeg\bin"
     $escapedRoot = $Root.Replace('"', '\"')
     $psi.Arguments = "-m transvortex.app_service --root `"$escapedRoot`" --no-pump"
 
@@ -249,6 +254,38 @@ function Invoke-InstalledServiceCheck {
     }
 }
 
+function Test-InstalledFfmpeg {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root
+    )
+
+    $ffmpegRoot = Join-Path $Root "tools\ffmpeg"
+    $manifest = Get-Content -LiteralPath (Join-Path $ffmpegRoot "ffmpeg_runtime.json") -Encoding utf8 -Raw | ConvertFrom-Json
+    $ffmpegPath = Join-Path $ffmpegRoot "bin\ffmpeg.exe"
+    $ffprobePath = Join-Path $ffmpegRoot "bin\ffprobe.exe"
+    $ffmpegOutput = @(& $ffmpegPath -version 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installed ffmpeg -version failed with exit code $LASTEXITCODE"
+    }
+    $ffprobeOutput = @(& $ffprobePath -version 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installed ffprobe -version failed with exit code $LASTEXITCODE"
+    }
+    $ffmpegHash = (Get-FileHash -LiteralPath $ffmpegPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ffprobeHash = (Get-FileHash -LiteralPath $ffprobePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ffmpegHash -ne [string]$manifest.ffmpeg_sha256 -or $ffprobeHash -ne [string]$manifest.ffprobe_sha256) {
+        throw "Installed FFmpeg executable hash does not match ffmpeg_runtime.json."
+    }
+    return [ordered]@{
+        ok = $true
+        version = [string]$manifest.version
+        variant = [string]$manifest.variant
+        ffmpeg_version_line = [string]$ffmpegOutput[0]
+        ffprobe_version_line = [string]$ffprobeOutput[0]
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
     $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
@@ -291,6 +328,7 @@ Assert-RequiredPackagePaths -Root $installFullPath
 Remove-GeneratedPackageFiles -Root $installFullPath
 Assert-NoLocalSecrets -Root $installFullPath
 $serviceReport = Invoke-InstalledServiceCheck -Root $installFullPath -TimeoutSeconds $ServiceCheckTimeoutSeconds
+$ffmpegReport = Test-InstalledFfmpeg -Root $installFullPath
 Remove-GeneratedPackageFiles -Root $installFullPath
 Assert-NoLocalSecrets -Root $installFullPath
 
@@ -321,10 +359,11 @@ $report = [ordered]@{
     file_count = $files.Count
     total_bytes = [int64]$totalBytes
     service_check = $serviceReport
+    ffmpeg_check = $ffmpegReport
     shortcut_check = $shortcutReport
     python_runtime_included = $true
     python_runtime_manifest = "runtime\app_runtime.json"
-    ffmpeg_included = $false
+    ffmpeg_included = $true
     verify_only = [bool]$VerifyOnly
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",

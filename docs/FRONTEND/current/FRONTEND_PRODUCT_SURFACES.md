@@ -44,7 +44,7 @@
 - FunASR：连接用户提供的服务，并通过最小音频请求确认可用。
 - 云端识别：独立读取用户级凭据。
 
-受管本机 Whisper 分开显示运行组件、`small` / `medium` / `large-v3` 模型和可选 NVIDIA 加速包。下载过程提供进度、取消和失败重试；NVIDIA 包安装后必须实际检查 CUDA，明确选择 NVIDIA 时不得静默降级到 CPU。基础安装包不携带这些运行组件和模型。
+受管本机 Whisper 分开显示运行组件、`small` / `medium` / `large-v3` 模型和可选 NVIDIA 加速包。下载过程提供进度、取消和失败重试；NVIDIA 包安装后必须实际检查 CUDA，明确选择 NVIDIA 时不得静默降级到 CPU。基础安装包携带通用媒体读写工具 FFmpeg，但不携带本机 Whisper runtime、模型或 NVIDIA / CUDA 包；后三者仍只在用户明确操作后按需下载。
 
 已有 Python 只从 PATH、Windows Python Launcher 和 Conda 登记列表发现；选择前不执行候选解释器，也不扫描整台电脑。用户选择后才验证依赖、硬件、模型和最小转录，不修改或升级该环境。
 

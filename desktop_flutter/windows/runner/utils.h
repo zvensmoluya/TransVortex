@@ -5,6 +5,8 @@
 #include <vector>
 
 constexpr wchar_t kTransVortexAppUserModelId[] = L"TransVortex.Desktop";
+constexpr wchar_t kTransVortexAppMutexName[] =
+    L"Local\\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B";
 
 // Creates a console for the process, and redirects stdout and stderr to
 // it for both the runner and the Flutter library.
@@ -12,6 +14,9 @@ void CreateAndAttachConsole();
 
 // Assigns the process AppUserModelID used by Windows shell integration.
 void SetTransVortexAppUserModelId();
+
+// Applies the application's shell identity to an existing Windows shortcut.
+bool SetShortcutAppUserModelId(const wchar_t* shortcut_path);
 
 // Takes a null-terminated wchar_t* encoded in UTF-16 and returns a std::string
 // encoded in UTF-8. Returns an empty std::string on failure.
