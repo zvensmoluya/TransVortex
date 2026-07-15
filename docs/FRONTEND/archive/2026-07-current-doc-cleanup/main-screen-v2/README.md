@@ -1,5 +1,7 @@
 # TransVortex Main Screen Prototype V2
 
+> **文档状态：历史素材实验。** 本原型没有进入当前 Flutter 产品，路径和命令仅保留当时环境证据。
+
 本目录用于修正 `main-screen-v1` 的素材问题。
 
 V1 已经验证了首屏方向的大致形状，但素材没有通过验收：

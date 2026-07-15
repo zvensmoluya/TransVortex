@@ -4,7 +4,7 @@
 
 任务参数的来源、作用域和片源类型差异见 `FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`。
 
-当界面归属与 `FRONTEND_DESIGN_SPEC.md`、`FRONTEND_DELIVERY_GOALS.md` 或施工清单中的历史描述冲突时，以本文档为准。后端已经接线、测试已经覆盖，不自动等于该能力必须公开展示。
+当界面归属与设计稿、测试入口或归档材料冲突时，以本文档为准。后端已经接线、测试已经覆盖，不自动等于该能力必须公开展示。
 
 ## 1. 当前产品表面
 

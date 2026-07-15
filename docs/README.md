@@ -10,28 +10,26 @@
 2. [`运行与测试指南.md`](运行与测试指南.md)
    - 开发、构建、打包和验收命令。
 3. [`FRONTEND/README.md`](FRONTEND/README.md)
-   - Flutter 主体验前端的当前规则、规格、施工清单和历史归档入口。
+   - Flutter 主体验前端的产品表面、配置语义、设计规格和历史归档入口。
 
 ## 当前专题文档
 
 | 主题 | 文档 | 说明 |
 | --- | --- | --- |
-| 综合设计背景 | [`项目设计说明书.md`](../项目设计说明书.md) | 产品与架构演进说明，不代替当前施工计划和专题边界 |
-| 产品方向 | [`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md) | 长期产品定位和能力边界，不代替短期待办 |
+| 产品与系统总览 | [`项目设计说明书.md`](../项目设计说明书.md) | 当前产品定位、核心流程、数据与交付边界 |
 | 后端分层 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Python core、CLI、协议和桌面接入的所有权边界 |
 | 桌面运行架构 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) | Local Service、Worker、Supervisor、托盘和发布基础 |
 | 应用运行时与安装 | [`APP_RUNTIME.md`](APP_RUNTIME.md) | 固定 Python / FFmpeg runtime、NSIS 安装器和公开发布边界 |
 | 配置与凭据 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) | 配置优先级、provider、用户级凭据和安全边界 |
 | 本机语音识别 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) | 本机 Whisper 组件、模型、下载和安装边界 |
-| 云端语音识别方向 | [`ASR_PROVIDER_DIRECTION.md`](ASR_PROVIDER_DIRECTION.md) | 云端 ASR provider 的设计和演进方向 |
-| 翻译链路 | [`TRANSLATION_DESIGN.md`](TRANSLATION_DESIGN.md) | 翻译、术语记忆、校验和修复设计 |
+| 翻译链路 | [`TRANSLATION_DESIGN.md`](TRANSLATION_DESIGN.md) | 当前分片、术语记忆、校验和修复边界 |
 | 低优先级验证 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) | 已观察到但暂不承诺实现的实验问题 |
 
 ## 历史归档
 
 以下目录保留历史上下文，不再表示当前实现或优先级：
 
-- [`archive/README.md`](archive/README.md)：开发快照、单次执行记录和带日期的 E2E 报告。
+- [`archive/README.md`](archive/README.md)：开发与设计快照、研究材料、单次执行记录和 E2E 报告。
 - [`FRONTEND/README.md`](FRONTEND/README.md)：前端当前入口及其方向、失败实验和技术路线归档说明。
 
 ## 文档优先级

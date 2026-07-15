@@ -1,6 +1,8 @@
 # TransVortex Desktop
 
-Local Tauri workbench for the TransVortex headless worker.
+> **Frozen reference implementation.** 主体验前端是 `desktop_flutter/`。本目录不作为产品、设计、验收或后端兼容目标，完整边界见 [`FROZEN.md`](FROZEN.md)。
+
+Local Tauri workbench retained for historical backend integration reference.
 
 ## Prerequisites
 

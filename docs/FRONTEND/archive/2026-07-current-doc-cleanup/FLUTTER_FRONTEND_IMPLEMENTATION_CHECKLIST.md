@@ -1,5 +1,7 @@
 # Flutter 前端实现清单
 
+> **文档状态：历史施工与验收记录。** 本文的大部分接线已经完成，不再作为当前施工清单。
+
 本文档把 `FRONTEND_PRODUCT_SURFACES.md` 的公开产品边界、`FRONTEND_DELIVERY_GOALS.md` 的当前交付目标、`FRONTEND_DESIGN_SPEC.md` 的窗口规格、`FRONTEND_IMPLEMENTATION_CONTRACT.md` 的实施边界和 `DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md` 的本地服务模型，收敛成一份可直接施工的实现清单。能力是否公开和状态动作归属以 `FRONTEND_PRODUCT_SURFACES.md` 为准。
 
 它不是新的设计稿，也不是再抽象一层架构图。它只回答四件事：

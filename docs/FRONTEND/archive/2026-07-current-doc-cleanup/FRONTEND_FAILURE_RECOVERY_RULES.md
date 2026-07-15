@@ -1,5 +1,7 @@
 # TransVortex 前端失败后开发准则
 
+> **文档状态：历史长版规则。** 当前禁止模式已经收敛到 `docs/FRONTEND/current/FRONTEND_DESIGN_SPEC.md`。
+
 本文档只写禁令、停止条件和少量允许项。
 
 它不是设计说明书，也不是实现教程。

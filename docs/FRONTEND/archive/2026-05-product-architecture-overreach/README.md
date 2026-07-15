@@ -24,7 +24,7 @@
 当前前端重建优先遵守：
 
 ```text
-docs/FRONTEND/rules/FRONTEND_FAILURE_RECOVERY_RULES.md
+docs/FRONTEND/current/FRONTEND_DESIGN_SPEC.md
 ```
 
 后续如果需要新的产品意图说明，应写成短文档，只回答“这是什么应用、要避免什么、第一张工作面应该是什么感觉”，不要恢复大而全的治理文档。

@@ -4,12 +4,7 @@
 
 这些文档记录了前端从旧 Web/Tauri 失败、设计方向探索、首屏白描、风格稿、图片资源验证、技术栈复盘到 Flutter MVP 的推导过程。它们仍有历史价值，但不再是当前实现入口。
 
-当前有效入口见：
-
-- `docs/FRONTEND/rules/FRONTEND_FAILURE_RECOVERY_RULES.md`
-- `docs/FRONTEND/current/FRONTEND_DESIGN_SPEC.md`
-- `docs/FRONTEND/current/FRONTEND_IMPLEMENTATION_CONTRACT.md`
-- `docs/FRONTEND/current/FLUTTER_FRONTEND_IMPLEMENTATION_CHECKLIST.md`
+当前有效入口统一见 `docs/FRONTEND/README.md`。本目录中的旧文件关系和路径只保留历史含义。
 
 归档文件说明：
 

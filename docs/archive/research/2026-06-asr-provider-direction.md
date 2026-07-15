@@ -1,5 +1,7 @@
 # TransVortex 云端 ASR 生态与适配方向
 
+> **文档状态：历史研究材料。** 本文是多厂商 ASR 生态调研，不是当前 provider 支持列表或实施计划。
+
 ## 1. 当前判断
 
 当前 TransVortex 的云端 ASR 首先面向 OpenAI Transcriptions API。

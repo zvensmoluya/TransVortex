@@ -18,6 +18,14 @@
 - [`e2e-reports/2026-07-11-mare-postmortem.md`](e2e-reports/2026-07-11-mare-postmortem.md)
   - Mare 任务请求放大问题及后续修正的复盘证据。
 
+## 设计快照与研究
+
+- [`design-snapshots/2026-07-project-design-evolution.md`](design-snapshots/2026-07-project-design-evolution.md)：旧项目设计演进说明。
+- [`design-snapshots/2026-07-product-direction.md`](design-snapshots/2026-07-product-direction.md)：旧产品方向与入口路线。
+- [`design-snapshots/2026-05-translation-design.md`](design-snapshots/2026-05-translation-design.md)：早期翻译 MVP 与目标设计。
+- [`design-snapshots/2026-07-local-service-architecture.md`](design-snapshots/2026-07-local-service-architecture.md)：Local Service 分阶段架构长稿。
+- [`research/2026-06-asr-provider-direction.md`](research/2026-06-asr-provider-direction.md)：多厂商 ASR 生态调研。
+
 ## 归档规则
 
 - 带日期的一次性执行记录、测试报告和复盘在结论稳定后移入这里。

@@ -1,5 +1,7 @@
 # Flutter 前端实施契约
 
+> **文档状态：历史实施契约。** Flutter 从验证路径进入正式实现的收束工作已经完成。
+
 本文档只解决一件事：把早期 Flutter 验证收束为正式候选前端的施工边界，并约束后续不能再回到临时前端路径。
 
 它不是新的设计方向，也不是新的视觉原型。硬规则以 `../rules/FRONTEND_FAILURE_RECOVERY_RULES.md` 为准，剩余交付目标以 `FRONTEND_DELIVERY_GOALS.md` 为准，窗口与交互规格以 `FRONTEND_DESIGN_SPEC.md` 为准。本文只规定实现时哪些东西保留、哪些东西重做、每个窗口先接哪些能力，以及如何验收。

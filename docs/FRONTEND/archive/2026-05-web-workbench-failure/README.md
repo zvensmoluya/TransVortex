@@ -32,4 +32,4 @@
 - 以 Linear、VS Code、Notion、SaaS dashboard 作为默认参考。
 - 先建组件系统，再让设计服从系统。
 
-需要重新使用其中某个观点时，必须先用 `docs/FRONTEND/rules/FRONTEND_FAILURE_RECOVERY_RULES.md` 校验。
+需要重新使用其中某个观点时，必须先用 `docs/FRONTEND/current/FRONTEND_DESIGN_SPEC.md` 校验。

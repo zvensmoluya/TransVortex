@@ -1,225 +1,133 @@
 # TransVortex
 
-TransVortex 是一个面向本地视频字幕生成的 CLI-first 流水线，支持：
-- 流式/分块处理，不需要一次把整片视频装入内存
-- 受管本机 faster-whisper、FunASR 服务或云端 ASR
-- 可配置的翻译 provider / model / base URL
-- 强模型优先的全片 memory bootstrap 与 capacity-aware 大 chunk 翻译
-- 可恢复任务与稳定工件目录
-- Windows Flutter 桌面应用
+TransVortex 是本地优先的字幕制作工具，支持视频、音频和 SRT 输入，通过语音识别、翻译、质量处理和重新导出生成可审看的字幕结果。
 
-## 项目定位
+当前主要形态：
 
-TransVortex 目标是成为一个可被脚本和 agent 调用的无界面核心，同时保留对人类友好的命令行和桌面工作台。长期方向见 `docs/PRODUCT_DIRECTION.md`。
+- Windows Flutter 桌面应用，面向日常使用。
+- CLI / Agent 接口，面向脚本、自动化和高级用户。
+- 可恢复的 Python Worker，统一承载 ASR、翻译、质量和导出。
 
-## 快速开始
+## 当前能力
 
-1. 安装依赖
-   - `python -m pip install -e .`
-   - CLI / 开发实验如需进程内本地 ASR：`python -m pip install -e .[asr]`
-2. 确保 `ffmpeg` 和 `ffprobe` 在 `PATH` 中。
-3. 准备 provider 配置和凭据。
-   - 推荐把真实配置放在 `providers.local.yaml`（已加入 `.gitignore`）。
-   - 长期默认凭据文件是 `~/.transvortex/auth.json`，可用 `TRANSVORTEX_HOME` 改目录。
-   - 推荐使用 `transvortex auth set <credential-id>` 保存 key。
-   - `.env` 只作为开发兼容 fallback。
-4. 先做健康检查：
-   - `transvortex doctor`
-   - `transvortex doctor --json`
-5. 先做零 token 预检：
-   - `transvortex probe-provider --strict`
-6. 运行一次任务：
-   - 人工前台运行：`transvortex run --input demo.mp4 --src en --tgt zh-CN`
-   - Agent/脚本立即获取 `task_id`：`transvortex run --input demo.mp4 --src en --tgt zh-CN --detach --json`
-7. 一键 demo：
-   - `.\scripts\run_demo.ps1 -ApiKey "<your-key>"`
+- 受管本机 faster-whisper、FunASR 本地服务或 OpenAI Transcriptions 云端 ASR。
+- 视频内嵌字幕自动检查；SRT 直译跳过 ASR。
+- 可配置翻译 provider、模型、routing fallback 和容量感知分片。
+- 术语记忆初始化、注入和运行中更新。
+- 任务事件、checkpoint、取消、继续、结果编辑和重新导出。
+- SRT、ASS、WebVTT 和 LRC 输出。
+- 固定 Python / FFmpeg runtime 和 NSIS Windows 安装器。
 
-## 凭据与配置
+产品与架构总览见 [`项目设计说明书.md`](项目设计说明书.md)，当前待办见 [`docs/CURRENT_BACKLOG.md`](docs/CURRENT_BACKLOG.md)。
 
-更完整的配置说明见 `docs/CONFIG_GUIDE.md`。简要规则是：
-
-- `providers.example.yaml`：示例配置，可提交
-- `providers.local.yaml`：本机真实配置，建议不提交
-- `providers.yaml`：兼容旧流程的默认文件
-- 真实 key 不要写进 provider YAML
-- 真实运行优先用 `auth.json` 或环境变量，`.env` 只用于开发兼容
-
-## 桌面端
-
-桌面端是 Windows 日常使用的推荐入口。
+## 开发环境
 
 ```powershell
-cd desktop_flutter
+python -m pip install -e .[test]
+transvortex doctor
+python -m pytest -q
+```
+
+开发态本机 ASR 需要额外安装：
+
+```powershell
+python -m pip install -e .[asr]
+```
+
+显式仓库 CLI 使用系统 `ffmpeg` / `ffprobe`。正式 Windows 安装包内置固定 Python 和 FFmpeg，不要求终端用户安装这些开发依赖。
+
+## 配置与凭据
+
+Provider 配置文件职责：
+
+- `providers.example.yaml`：可提交的示例。
+- `providers.local.yaml`：本机真实配置，已忽略。
+- `providers.yaml`：兼容默认配置。
+- `pipeline.yaml`：ASR、翻译、术语记忆、质量和导出策略。
+
+真实 key 默认保存在用户级 `~/.transvortex/auth.json`：
+
+```powershell
+transvortex auth set <credential-id>
+transvortex auth status --json
+```
+
+Provider YAML 只保存 `credential_id`、endpoint 和 model 等非敏感引用。环境变量和 `.env` 仅作为开发兼容方式。
+
+详细说明见 [`docs/CONFIG_GUIDE.md`](docs/CONFIG_GUIDE.md)。
+
+## CLI 快速使用
+
+先检查环境和翻译连接：
+
+```powershell
+transvortex doctor --json
+transvortex probe-provider --strict
+```
+
+前台运行一次任务：
+
+```powershell
+transvortex run --input demo.mp4 --src en --tgt zh-CN
+```
+
+Agent 或脚本需要立即取得 `task_id` 时：
+
+```powershell
+transvortex run --input demo.mp4 --src en --tgt zh-CN --detach --json
+transvortex events --task-id <task_id> --follow
+transvortex status --task-id <task_id> --json
+transvortex result open --task-id <task_id> --json
+```
+
+`--detach --json` 返回排队回执，不是最终任务结果。机器调用不要解析人类日志，完整约定见 [`AGENT_USAGE.md`](AGENT_USAGE.md)。
+
+## Flutter 桌面端
+
+```powershell
+Set-Location desktop_flutter
 flutter pub get
 flutter run -d windows
 ```
 
-在应用里：
-- 从主菜单准备翻译模型和语音识别方案
-- 需要时设置用户级凭据
-- 选择视频、音频或 SRT，设置语言、翻译模型和输出形式
-- 任务结束后进入任务处理窗审看、编辑或重新导出
+桌面端提供：
 
-Flutter 正常启动把任务资料固定保存在 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可重建的音频处理文件进入同级 `Cache` 并在任务成功后清理。用户通过任务处理窗打开任务目录、结果目录或重新导出，不直接管理内部存储根。仓库 `artifacts/` 继续作为显式仓库 CLI 的开发 / 实验工作区，不会自动进入正式桌面任务历史。
+- 主窗口的一次制作流程。
+- 翻译模型和语音识别设置。
+- 任务处理、结果编辑和重新导出。
+- 内部诊断与 Windows 系统通知。
 
-Windows 发布包使用随应用提供的固定 Python runtime 启动 Local Service，不要求用户安装 Python；开发态仍可使用仓库 Python 环境。主 runtime 的构建和分发边界见 `docs/APP_RUNTIME.md`。
+正式任务位于 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可重建媒体缓存位于 `Workspace\Cache`。受管 ASR 组件、模型和下载分别位于 `Components`、`Models` 和 `Downloads\ASR`。
 
-桌面端默认选择“本机 Whisper”，但基础包不携带运行组件、模型或 CUDA。用户在语音识别设置中安装隔离组件和所选模型，或明确选择已有的 faster-whisper / CTranslate2 Python 环境。组件、模型和断点下载分别保存在 `%LOCALAPPDATA%\TransVortex\Components`、`Models` 和 `Downloads\ASR`。详细边界及发布流程见 `docs/LOCAL_ASR_COMPONENTS.md`。
+开发与验证说明见 [`desktop_flutter/README.md`](desktop_flutter/README.md) 和 [`docs/运行与测试指南.md`](docs/运行与测试指南.md)。
 
-## 云端 ASR 示例
+## Windows 安装包
 
-如果要用 OpenAI `whisper-1` 云端 ASR，可以这样配置：
-
-`pipeline.yaml`:
-
-```yaml
-asr:
-  mode: cloud
-  provider: openai_whisper
-  prompt:
-    enabled: true
-    active_profile: ""
-    profiles: []
-    include_previous_text: false
-    max_chars: 800
-  preprocessing:
-    cloud_trim_silence:
-      enabled: true
-      backend: ffmpeg_silencedetect
-  execution:
-    cloud_concurrency: 8
-    adaptive_concurrency: true
-  chunking:
-    mode: silence
-    window_seconds: 300
-    max_window_seconds: 120
-    min_window_seconds: 12
-    overlap_seconds: 5
-    max_upload_mb: 24
-    silence:
-      noise_db: -35
-      min_silence_seconds: 0.25
-
-asr_providers:
-  - name: openai_whisper
-    protocol: openai_transcriptions
-    base_url: https://api.openai.com
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
-    env_key: TVX_MODEL_API_KEY
-    credential_id: openai_asr
-    timeout_seconds: 300
-    retry: 2
-    http2: true
-    request:
-      response_format: verbose_json
-      temperature: 0
-      timestamp_granularities: [segment]
-      include: []
-      array_format: brackets
-      extra_form_fields: {}
-```
-
-保存 key：
+内部未签名安装包：
 
 ```powershell
-transvortex auth set openai_asr
+.\scripts\build_windows_installer.ps1 -AllowUnsigned -Force
+.\scripts\accept_windows_installer.ps1
 ```
 
-当前云端 ASR 适配的是 OpenAI Transcriptions multipart API；原始响应会先归一化为 `source/segments.normalized.jsonl`，翻译层不直接依赖 ASR 原始格式。长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为云端 transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`。provider `request` 保存 OpenAI transcription 表单字段和受限 `extra_form_fields` 扩展，`response_format` 第一版固定使用 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。`timestamp_granularities` 默认请求 `segment`。Cloud ASR 默认通过统一 `httpx` 传输层请求，`http2: true` 表示优先 HTTP/2，实际不可用时会按客户端能力降级。Cloud ASR 默认用 ffmpeg 静音边界切成约 120 秒以内的自然片段，并发 8 个上传；`max_upload_mb: 24` 只作为 OpenAI 25MB 上传限制保护。请求遇到 timeout、429 或 5xx 会重试并降并发，单片仍失败会细分重跑。明显垃圾 ASR 行会在进入标准 source 前过滤，raw 和 quality diagnostics 会保留。
+当前 `0.1.0` Alpha 内部安装包已通过本机安装、升级、运行中保护、固定 runtime、快捷方式、卸载和用户数据保留验收。它还不是公开发布件；剩余门槛见 [`docs/APP_RUNTIME.md`](docs/APP_RUNTIME.md)。
 
-## 常用命令
+## 输出与工件
 
-- `transvortex run --input <video> --src <lang> --tgt <lang> [--bilingual] [--output <path>] [--json] [--stream-events] [--detach]`
-- `transvortex resume --task-id <id> [--json] [--stream-events] [--detach]`
-- `transvortex status --task-id <id> [--json]`
-- `transvortex events --task-id <id>`
-- `transvortex cancel --task-id <id> [--json]`
-- `transvortex tasks [--json]`
-- `transvortex doctor [--json]`
-- `transvortex config show [--json]`
-- `transvortex probe-provider [--provider <name>] [--model <name>] [--strict]`
-- `transvortex auth set/delete/list/status [--json]`
+每个任务保留结构化 source、翻译结果、质量信息、事件、checkpoint 和输出。`Segment` 是唯一业务真实来源；SRT、ASS、WebVTT 和 LRC 是独立 renderer。
 
-运行时常用覆盖项包括：`--provider`、`--model`、`--asr-mode`、`--asr-device`、`--asr-model-size`、`--asr-compute-type`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-model`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、chunk 设置、batch size 和并发。
+字幕表现层样例位于 `samples/subtitle_delivery/`。
 
-`run`、`resume`、`asr`、`translate` 是长任务。`--json` 不带 `--detach` 时只会在任务结束后输出一个 JSON；如果需要立即拿到 `task_id`，使用 `--detach --json`。detached JSON 只是排队回执，不是最终结果；再用 `status --task-id <id> --json` 和 `events --task-id <id> --follow` 跟踪进度。
+## 文档
 
-## 任务工件
-
-每个任务都会写入稳定目录 `artifacts/<task_id>/`，常见内容包括：
-
-- `task.json`
-- `checkpoint.json`
-- `events.jsonl`
-- `media/`
-- `asr/`
-- `chunks/`
-- `translate/`
-- `final/`
-- `output/`
-
-其中：
-
-- `translate/` 保存 `segments.translated.jsonl`、`validation.jsonl`、`repairs.jsonl`
-- `final/` 保存对齐/重排后的段落
-- `output/` 保存最终字幕文件
-
-## 输出格式
-
-TransVortex 可以导出 SRT、ASS、WebVTT 或 LRC。
-
-- SRT 是兼容格式，使用 UTF-8 BOM，适合通用播放器、人工审稿和平台交付。
-- ASS 是表现型格式，默认使用 `cinematic` preset，包含 CJK 友好的字体候选说明、主译文/辅原文层级、克制描边阴影、安全区和自动换行。双语顺序可用 `--subtitle-bilingual-order target_source|source_target` 选择，默认译文在上、原文在下；`--subtitle-prefer-single-line true|false` 控制是否尽量保持单行。ASS 样式本身只声明一个 `Fontname`，实际缺字替换取决于播放器和系统字体。
-- WebVTT 是适合网页/HTML5 和音视频时间轴的字幕格式，可通过 `--format vtt` 或 `output_format: vtt` 导出。
-- LRC 是紧凑的音频字幕/时间轴文本格式，可通过 `--format lrc` 或 `output_format: lrc` 单独导出；当前不作为输入格式。
-- SRT、ASS 和 WebVTT 导出会生成 `quality/subtitle_delivery.json`，检查样式、换行、双语拥挤、格式兼容和时间轴表现问题；LRC 暂无专用交付检查，重新导出时不会保留其他格式的旧报告。
-- 结构化 `Segment` 始终是唯一真实来源；SRT、ASS、VTT 和 LRC 是不同 renderer，不会互相作为主中间格式。
-- 最终文件写入任务目录的 `output/`。
-
-表现层样例在 `samples/subtitle_delivery/`：
-
-```powershell
-python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format both --output samples\subtitle_delivery\preview --bilingual --json
-python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format vtt --output samples\subtitle_delivery\preview --bilingual --json
-python -m transvortex.cli --root . export --segments samples\subtitle_delivery\segments.delivery_sample.json --format lrc --output samples\subtitle_delivery\preview --bilingual --json
-```
-
-## 参考文档
-
-- `docs/README.md`：当前文档导航和有效性说明
-- `docs/CURRENT_BACKLOG.md`：仓库级当前待办、状态和优先级
-- `docs/CONFIG_GUIDE.md`：配置、凭据和 provider 约定
-- `docs/运行与测试指南.md`：运行、验证和桌面端的简化说明
-- `docs/PRODUCT_DIRECTION.md`：长期产品方向
-- `docs/ARCHITECTURE.md`：代码结构与边界
-- `docs/KNOWN_ISSUES_AND_VALIDATION.md`：低优先级待验证问题和优化观察
-- `docs/LOCAL_ASR_COMPONENTS.md`：本机 Whisper 组件、下载安全与发布流程
-
-<details>
-<summary>English summary (secondary)</summary>
-
-TransVortex is a CLI-first subtitle pipeline for local videos.
-
-- Streamed/chunked processing
-- Managed local faster-whisper, FunASR service, or cloud ASR
-- Configurable translation providers and resumable tasks
-- Windows Flutter desktop application
-
-Key commands:
-
-```powershell
-transvortex doctor
-transvortex probe-provider --strict
-transvortex run --input demo.mp4 --src en --tgt zh-CN
-```
-
-Credentials default to `~/.transvortex/auth.json`; `.env` is a development fallback.
-
-</details>
+- [`docs/README.md`](docs/README.md)：文档导航和有效性。
+- [`docs/CURRENT_BACKLOG.md`](docs/CURRENT_BACKLOG.md)：当前待办和发布边界。
+- [`docs/运行与测试指南.md`](docs/运行与测试指南.md)：开发、构建和验收命令。
+- [`docs/CONFIG_GUIDE.md`](docs/CONFIG_GUIDE.md)：配置、凭据、翻译和 ASR 参数。
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)：后端代码所有权。
+- [`docs/TRANSLATION_DESIGN.md`](docs/TRANSLATION_DESIGN.md)：当前翻译架构。
+- [`docs/FRONTEND/README.md`](docs/FRONTEND/README.md)：当前 Flutter 产品与设计规格。
 
 ## License
 
-TransVortex is licensed under the Apache License, Version 2.0. See `LICENSE` for details.
-
-Samples and third-party materials may have separate attribution or licensing terms. See `samples/ATTRIBUTION.md`.
+TransVortex 使用 Apache License 2.0。样例和第三方材料的单独授权见 [`samples/ATTRIBUTION.md`](samples/ATTRIBUTION.md)。

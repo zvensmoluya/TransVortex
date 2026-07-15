@@ -350,7 +350,7 @@ transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-
 - 默认退出码：`0`
 - 开启 `--strict` 时：只要有 `FAIL`，退出码为 `1`
 
-## 6. 常见错误
+## 7. 常见错误
 
 - `missing environment variable: TVX_MODEL_API_KEY`
   - 未设置 key，执行：

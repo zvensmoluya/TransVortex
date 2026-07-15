@@ -1,5 +1,7 @@
 # Flutter 前端当前交付目标
 
+> **文档状态：历史交付目标。** 当前未完成事项统一维护在 `docs/CURRENT_BACKLOG.md`。
+
 本文档只回答一个问题：**Flutter 前端下一阶段还必须交付什么，做到什么算完成**。
 
 它不是旧 `FRONTEND_DEVELOPMENT_GOALS.md` 的续写，也不是新的设计规格。旧 Goal 已归档为历史推导；当前交付目标以已经成立的 Flutter MVP 接线为起点，聚焦剩余产品闭环、验收纪律和工程清理。

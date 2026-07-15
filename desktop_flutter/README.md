@@ -1,85 +1,64 @@
 # TransVortex Desktop Flutter
 
-This directory contains the main Flutter desktop frontend for TransVortex.
+`desktop_flutter/` 是 TransVortex 的主体验桌面前端。冻结的 Tauri 树只作参考，不是兼容目标。
 
-The old Tauri desktop tree is frozen as a reference implementation. Active
-desktop delivery, release smoke checks, native notifications, and Local Service
-wiring live here.
+## 当前窗口
 
-## Local SDK
+- 主窗口：当前一次字幕制作。
+- 翻译模型设置：连接、模型和常用 routing。
+- 语音识别设置：本机 Whisper、FunASR 和云端识别。
+- 任务处理：历史任务、事件、继续/取消、结果编辑和重新导出。
+- 诊断：内部开发、测试和支持工具，不进入普通用户菜单。
 
-The local Flutter SDK is installed outside the repository:
+产品与设计边界见 [`../docs/FRONTEND/README.md`](../docs/FRONTEND/README.md)。
 
-```powershell
-$env:PATH = 'D:\openai\flutter-sdk\flutter\bin;' + $env:PATH
-flutter --version
-```
+## 开发
 
-Current SDK:
-
-- Flutter 3.44.4 stable
-- Dart 3.12.2
-- Windows desktop target enabled
-
-`flutter doctor -v` confirms Visual Studio Build Tools 2022 is available at `D:\openai\vs-buildtools-2022`.
-Android and Chrome targets are not required for the desktop workflow.
-
-## Run
+确保 Flutter Windows desktop 工具链已在 `PATH`：
 
 ```powershell
-$env:PATH = 'D:\openai\flutter-sdk\flutter\bin;' + $env:PATH
+flutter doctor -v
 Set-Location desktop_flutter
+flutter pub get
 flutter run -d windows
 ```
 
-## Build
+开发态使用仓库 Python 环境；安装态使用包内固定 Python 和 FFmpeg runtime。
+
+## 验证
 
 ```powershell
-$env:PATH = 'D:\openai\flutter-sdk\flutter\bin;' + $env:PATH
-Set-Location desktop_flutter
-flutter build windows --release
-```
-
-## Validation Scope
-
-Current release validation focuses on proving the real desktop app path, not a
-temporary validation path:
-
-- Three-window model: main window, translation settings window, ASR settings window.
-- Supporting tool windows: diagnostics, result review, task history, task detail.
-- Cross-window state sync: settings changes update the main window immediately.
-- Chinese IME behavior in Windows release builds.
-- Python Local Service startup through JSON-RPC line-based stdin/stdout.
-- Real task submission, cancellation, resume, result open, segment edit, and re-export.
-- Windows Toast notification wiring, AUMID shortcut identity, and release bundle contents.
-- Portable package layout: `TransVortex.exe` can find the fixed
-  `runtime/python/python.exe`, and package-root Local Service RPC responds to
-  `service.info`, `service.health`, `asr.status`, and `service.shutdown` without
-  using a system Python or `PYTHONPATH`.
-- Portable user-level install check: the packaged `Install-TransVortex.ps1` can
-  copy the package to an install directory, create the AUMID shortcut, and rerun
-  Local Service RPC from the installed layout. This is not a formal installer.
-
-Useful checks from the repository root:
-
-```powershell
+flutter analyze
 flutter test
 flutter build windows
+```
+
+从仓库根运行 release 验证：
+
+```powershell
+.\scripts\smoke_flutter_release.ps1 -ScreenshotPath "$env:TEMP\transvortex-main.png"
 .\scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity
-.\scripts\smoke_flutter_release_matrix.ps1 -SkipCompletedTask
-.\scripts\build_app_runtime.ps1 -Force
-.\scripts\package_flutter_release.ps1 -OutputRoot "$env:TEMP\transvortex-release" -PackageName TransVortex-portable-test -Force -LaunchCheck
-.\scripts\install_flutter_portable_release.ps1 -SourceRoot "$env:TEMP\transvortex-release\TransVortex-portable-test" -InstallRoot "$env:TEMP\transvortex-installed" -ShortcutPath "$env:TEMP\TransVortex.lnk" -Force
+.\scripts\smoke_flutter_release_matrix.ps1 -CheckDesktopComposite
 .\scripts\accept_flutter_release_manual.ps1 -LaunchCheck
 ```
 
-The smoke scripts intentionally report `frontend_design_mvp_complete=false`.
-They prove wiring and release behavior; they do not replace full manual visible
-end-to-end acceptance.
+自动 smoke 验证真实 Local Service、任务提交、结果动作、窗口状态、通知调用和布局回归，但不替代人工完整任务流程。
 
-## Non-goals
+## 打包与安装
 
-- Do not port all existing Tauri UI code.
-- Do not revive a second long-term desktop frontend.
-- Do not use HTML mocks, static previews, or debug-only screenshots as release evidence.
-- Do not introduce a broad shared protocol layer unless repeated payload problems appear.
+```powershell
+.\scripts\build_app_runtime.ps1 -Force
+.\scripts\build_ffmpeg_runtime.ps1 -Force
+.\scripts\package_flutter_release.ps1 -Force -LaunchCheck
+.\scripts\build_windows_installer.ps1 -AllowUnsigned -Force
+.\scripts\accept_windows_installer.ps1
+```
+
+NSIS 是当前原生安装路径。基础包不携带本机 Whisper runtime、模型或 CUDA；这些由用户在应用里按需安装。
+
+## 边界
+
+- 不移植冻结 Tauri UI。
+- 不让窗口直接启动 Worker 或持有业务权威状态。
+- 不以 debug 画面、HTML mock 或静态预览替代 Windows release 验收。
+- 不把内部诊断、协议字段和完整本地路径变成普通用户界面。
