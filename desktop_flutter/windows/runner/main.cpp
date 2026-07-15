@@ -7,6 +7,27 @@
 
 namespace {
 
+bool ActivateRunningInstance() {
+  constexpr wchar_t kMainWindowTitle[] = L"TransVortex";
+  HWND existing_window = nullptr;
+  for (int attempt = 0; attempt < 40 && existing_window == nullptr; ++attempt) {
+    existing_window = ::FindWindowW(nullptr, kMainWindowTitle);
+    if (existing_window == nullptr) {
+      ::Sleep(50);
+    }
+  }
+  if (existing_window == nullptr) {
+    return false;
+  }
+  if (::IsIconic(existing_window)) {
+    ::ShowWindow(existing_window, SW_RESTORE);
+  } else {
+    ::ShowWindow(existing_window, SW_SHOW);
+  }
+  ::SetForegroundWindow(existing_window);
+  return true;
+}
+
 int RunShellIntegrationCommandIfRequested() {
   int argc = 0;
   wchar_t** argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
@@ -44,6 +65,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   HANDLE app_mutex = ::CreateMutexW(nullptr, FALSE, kTransVortexAppMutexName);
+  const DWORD app_mutex_error = ::GetLastError();
+  if (app_mutex != nullptr && app_mutex_error == ERROR_ALREADY_EXISTS) {
+    ActivateRunningInstance();
+    ::CloseHandle(app_mutex);
+    ::CoUninitialize();
+    return EXIT_SUCCESS;
+  }
   SetTransVortexAppUserModelId();
 
   flutter::DartProject project(L"data");

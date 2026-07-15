@@ -12,6 +12,7 @@ param(
     [ValidateSet("browse", "edit", "failure", "resume", "cancel")]
     [string]$TaskProcessingScenario = "browse",
     [switch]$CheckNotifications,
+    [switch]$CheckTray,
     [switch]$CheckAppIdentity,
     [switch]$CheckDesktopComposite,
     [switch]$KeepTemp
@@ -42,7 +43,7 @@ function Add-SmokeAcceptanceBoundary {
         [object]$Report
     )
 
-    $Report | Add-Member -Force -NotePropertyName automated_scope -NotePropertyValue "single release smoke check for Local Service wiring, selected window rendering, release screenshot sampling when requested, native notification call/registry checks when enabled, and AppUserModelID shortcut identity checks when enabled"
+    $Report | Add-Member -Force -NotePropertyName automated_scope -NotePropertyValue "single release smoke check for Local Service wiring, selected window rendering, release screenshot sampling when requested, native notification call/registry checks when enabled, tray close/restore lifecycle when enabled, and AppUserModelID shortcut identity checks when enabled"
     $Report | Add-Member -Force -NotePropertyName frontend_design_mvp_complete -NotePropertyValue $false
     $Report | Add-Member -Force -NotePropertyName completion_claim -NotePropertyValue "Automated release smoke passed; this is evidence for Flutter MVP wiring, not proof that the frontend design MVP is complete."
     $Report | Add-Member -Force -NotePropertyName manual_acceptance_required -NotePropertyValue $script:manualAcceptanceRequired
@@ -57,6 +58,10 @@ if ([string]::IsNullOrWhiteSpace($ExePath)) {
     $ExePath = if (Test-Path -LiteralPath $newExePath) { $newExePath } else { $legacyExePath }
 }
 $resolvedExe = Resolve-Path -LiteralPath $ExePath
+
+if ($CheckTray -and $WindowType -ne "main") {
+    throw "Tray lifecycle smoke is only supported for the main window."
+}
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("transvortex_release_smoke_" + [System.Guid]::NewGuid().ToString("N"))
 $serviceRoot = Join-Path $tempRoot "service"
@@ -804,7 +809,7 @@ if ($WindowType -eq "main") {
 }
 
 try {
-    $showWindow = -not [string]::IsNullOrWhiteSpace($ScreenshotPath) -or $CheckDesktopComposite
+    $showWindow = -not [string]::IsNullOrWhiteSpace($ScreenshotPath) -or $CheckDesktopComposite -or $CheckTray
     $postReportSeconds = if ($CheckDesktopComposite) { 24 } elseif ($showWindow) { 6 } else { 0 }
     $appArgs = @()
     if ($WindowType -ne "main") {
@@ -823,6 +828,9 @@ try {
     )
     if (-not [string]::IsNullOrWhiteSpace($ScreenshotPath)) {
         $appArgs += "--tvx-smoke-screenshot=$ScreenshotPath"
+    }
+    if ($CheckTray) {
+        $appArgs += "--tvx-smoke-check-tray=true"
     }
     if ($WindowType -eq "main" -and $MainPhase -eq "normal") {
         $appArgs += @(
@@ -906,6 +914,14 @@ try {
             $report | Add-Member -NotePropertyName notification_settings_setting -NotePropertyValue $(if ($settingsInfo.PSObject.Properties.Name -contains "Setting") { $settingsInfo.Setting } else { "" })
             $report | Add-Member -NotePropertyName notification_settings_last_added_time -NotePropertyValue $(if ($settingsInfo.PSObject.Properties.Name -contains "LastNotificationAddedTime") { $settingsInfo.LastNotificationAddedTime } else { "" })
             $report | Add-Member -NotePropertyName notification_settings_periodic_count -NotePropertyValue $(if ($settingsInfo.PSObject.Properties.Name -contains "PeriodicNotificationCount") { $settingsInfo.PeriodicNotificationCount } else { "" })
+        }
+        if ($CheckTray) {
+            if ($report.tray_initialized -ne $true -or $report.tray_prevent_close -ne $true -or $report.tray_visible_before_close -ne $true -or $report.tray_close_hid_window -ne $true -or $report.tray_service_alive_after_hide -ne $true -or $report.tray_restore_visible -ne $true -or $report.tray_restore_trigger -ne "second_instance_activation" -or $report.tray_activation_process_exited -ne $true -or $report.tray_activation_exit_code -ne 0 -or [string]::IsNullOrWhiteSpace([string]$report.tray_service_health)) {
+                throw "Release smoke did not complete the tray close/restore lifecycle: $($report | ConvertTo-Json -Compress -Depth 5)"
+            }
+            if ($MainPhase -eq "normal" -and $report.tray_task_active_before_close -ne $true) {
+                throw "Release smoke did not close the main window while a task was active: $($report | ConvertTo-Json -Compress -Depth 5)"
+            }
         }
     } else {
         if ($report.window_type -ne $WindowType) {

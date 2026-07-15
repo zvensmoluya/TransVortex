@@ -30,12 +30,14 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| App Host / Supervisor 与托盘 | 待决策 | 明确唯一 Local Service 宿主、关窗驻留、恢复窗口、任务运行中退出和崩溃重启策略 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
+| 窗口无关的 App Host / Supervisor | 待决策 | 当前托盘由主 Flutter engine 持有；继续明确应用崩溃重启、唯一 Local Service 宿主和 Worker 进程树归属 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 完整 AppPaths | 待实现 | 将 `logs`、`temp` 纳入用户目录规划，并让 Cache 清理失败可观察 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 配置和资源版本迁移 | 待实现 | 首次初始化和升级迁移具备 schema、备份、幂等执行与失败回滚 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 前后端兼容握手 | 待实现 | Flutter 启动时校验 protocol、capability 和可接受的 App/backend 版本组合 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 启动与崩溃日志 | 待实现 | Local Service 启动前错误和应用崩溃可被持久记录并用于恢复提示 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 凭据长期安全边界 | 待决策 | 明确 `auth.json` 的 Windows ACL 加固或 Credential Manager 演进策略 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
+
+当前已经成立的边界：正常关闭主窗口会收起产品窗口并驻留托盘，Local Service 与当前任务继续运行；托盘可恢复窗口，明确退出会在活动任务存在时先要求确认。该能力不覆盖应用自身崩溃后的恢复。
 
 ## P1：产品与界面闭环
 

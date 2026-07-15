@@ -18,6 +18,7 @@ import 'painters/source_object_painter.dart';
 import 'services/app_service_client.dart';
 import 'services/directory_probe.dart';
 import 'services/current_window_controls.dart';
+import 'services/desktop_tray_service.dart';
 import 'services/local_service_controller.dart';
 import 'services/path_opener.dart';
 import 'services/smoke_render_capture.dart';
@@ -30,6 +31,8 @@ import 'widgets/designed_tooltip.dart';
 import 'widgets/settings_window.dart';
 import 'widgets/task_processing_window.dart';
 import 'widgets/title_bar.dart';
+
+Completer<void>? _initialWindowShowCompleter;
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,6 +49,8 @@ Future<void> main(List<String> args) async {
   await configureCurrentWindow(parsedArgs);
   await registerCurrentWindowControls();
 
+  final initialWindowShowCompleter = Completer<void>();
+  _initialWindowShowCompleter = initialWindowShowCompleter;
   runApp(
     TransVortexApp(
       windowType: parsedArgs.type,
@@ -55,7 +60,7 @@ Future<void> main(List<String> args) async {
       smoke: startupArgs.smoke,
     ),
   );
-  unawaited(_showConfiguredWindowAfterFirstRaster());
+  unawaited(_showConfiguredWindowAfterFirstRaster(initialWindowShowCompleter));
 }
 
 Future<WindowController?> _currentWindowController() async {
@@ -66,17 +71,23 @@ Future<WindowController?> _currentWindowController() async {
   }
 }
 
-Future<void> _showConfiguredWindowAfterFirstRaster() async {
+Future<void> _showConfiguredWindowAfterFirstRaster(
+  Completer<void> completion,
+) async {
   try {
-    await WidgetsBinding.instance.waitUntilFirstFrameRasterized.timeout(
-      const Duration(seconds: 10),
-    );
-  } on TimeoutException {
-    // Do not leave a window hidden forever if a host cannot report rasterization.
-  } on Object {
-    // Unsupported test hosts still need the normal best-effort show path below.
+    try {
+      await WidgetsBinding.instance.waitUntilFirstFrameRasterized.timeout(
+        const Duration(seconds: 10),
+      );
+    } on TimeoutException {
+      // Do not leave a window hidden forever if a host cannot report rasterization.
+    } on Object {
+      // Unsupported test hosts still need the normal best-effort show path below.
+    }
+    await showConfiguredWindow();
+  } finally {
+    if (!completion.isCompleted) completion.complete();
   }
-  await showConfiguredWindow();
 }
 
 const List<String> _sourceLanguageOptions = [
@@ -110,6 +121,7 @@ class TransVortexApp extends StatelessWidget {
     this.store,
     this.bridge,
     this.localServiceController,
+    this.desktopTrayService,
     this.taskNotificationService,
     this.pathOpener,
     this.directoryProbe,
@@ -121,6 +133,7 @@ class TransVortexApp extends StatelessWidget {
   final WindowStateStore? store;
   final WindowStateBridge? bridge;
   final LocalServiceController? localServiceController;
+  final DesktopTrayService? desktopTrayService;
   final TaskNotificationService? taskNotificationService;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
@@ -166,6 +179,7 @@ class TransVortexApp extends StatelessWidget {
           store: appStore,
           bridge: appBridge,
           localServiceController: localServiceController,
+          desktopTrayService: desktopTrayService,
           taskNotificationService: taskNotificationService,
           smoke: smoke,
         ),
@@ -196,6 +210,7 @@ class MainScreen extends StatefulWidget {
     required this.store,
     required this.bridge,
     this.localServiceController,
+    this.desktopTrayService,
     this.taskNotificationService,
     this.smoke,
   });
@@ -203,6 +218,7 @@ class MainScreen extends StatefulWidget {
   final WindowStateStore store;
   final WindowStateBridge bridge;
   final LocalServiceController? localServiceController;
+  final DesktopTrayService? desktopTrayService;
   final TaskNotificationService? taskNotificationService;
   final AppSmokeArgs? smoke;
 
@@ -210,7 +226,8 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
+class _MainScreenState extends State<MainScreen>
+    with TickerProviderStateMixin, WindowListener {
   late final LocalServiceController _service;
   late final bool _ownsService;
   late final MainWindowController _controller;
@@ -218,6 +235,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late final TaskNotificationObserver _notificationObserver;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'main-smoke-render');
   final Map<String, WindowController> _toolWindows = {};
+  DesktopTrayService? _trayService;
+  StreamSubscription<DesktopTrayAction>? _trayActionSubscription;
+  bool _trayReady = false;
+  bool _windowCloseListenerInstalled = false;
+  bool _exitRequested = false;
+  bool _exitRequestInProgress = false;
+  bool _trayCloseEventObserved = false;
+  bool _trayHideAttempted = false;
+  String _trayHideError = '';
   bool _dropTargetHover = false;
   bool _dropTargetDown = false;
 
@@ -250,6 +276,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     widget.bridge.attachToolWindowOpener(_openToolWindowFromArgs);
     widget.bridge.attachServiceRefresher(_controller.refreshSnapshot);
     unawaited(_controller.startService());
+    if (widget.smoke == null ||
+        widget.smoke?.checkTray == true ||
+        widget.desktopTrayService != null) {
+      unawaited(_initializeDesktopLifecycle());
+    }
     final smoke = widget.smoke;
     if (smoke != null) {
       unawaited(_runStartupSmoke(smoke));
@@ -258,6 +289,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    if (_windowCloseListenerInstalled) {
+      windowManager.removeListener(this);
+      _windowCloseListenerInstalled = false;
+    }
+    unawaited(_trayActionSubscription?.cancel());
+    _trayActionSubscription = null;
+    final trayService = _trayService;
+    _trayService = null;
+    if (trayService != null) unawaited(trayService.dispose());
     _controller.removeListener(_syncBridgeState);
     _controller.dispose();
     if (_ownsService) _service.dispose();
@@ -269,6 +309,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   void _syncBridgeState() {
     final view = _controller.view;
     _notificationObserver.handle(view);
+    _updateTrayPresentation(view);
     widget.store.replace(
       widget.store.value.copyWith(
         translationDefaultLabel: view.translationLabel,
@@ -276,6 +317,234 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         asrDefaultLabel: view.asrLabel,
         asrConfigured: view.asrConfigured,
       ),
+    );
+  }
+
+  Future<void> _initializeDesktopLifecycle() async {
+    final trayService = widget.desktopTrayService ?? SystemDesktopTrayService();
+    _trayService = trayService;
+    _trayActionSubscription = trayService.actions.listen(_handleTrayAction);
+    final initialized = await trayService.initialize(
+      _trayPresentation(_controller.view),
+    );
+    if (!mounted || !initialized) {
+      await _disposeTrayService(trayService);
+      return;
+    }
+    try {
+      windowManager.addListener(this);
+      _windowCloseListenerInstalled = true;
+      await windowManager.setPreventClose(true);
+      _trayReady = true;
+      _updateTrayPresentation(_controller.view);
+    } on Object {
+      if (_windowCloseListenerInstalled) {
+        windowManager.removeListener(this);
+        _windowCloseListenerInstalled = false;
+      }
+      await _disposeTrayService(trayService);
+    }
+  }
+
+  Future<void> _disposeTrayService(DesktopTrayService trayService) async {
+    _trayReady = false;
+    await _trayActionSubscription?.cancel();
+    _trayActionSubscription = null;
+    if (identical(_trayService, trayService)) _trayService = null;
+    await trayService.dispose();
+  }
+
+  void _updateTrayPresentation(MainWindowViewModel view) {
+    final trayService = _trayService;
+    if (!_trayReady || trayService == null) return;
+    unawaited(
+      trayService.update(_trayPresentation(view)).catchError((_) {
+        // A temporary tray update failure must not affect the active task.
+      }),
+    );
+  }
+
+  DesktopTrayPresentation _trayPresentation(MainWindowViewModel view) {
+    final activeTasks = _activeTasks();
+    final activeTask = activeTasks.isEmpty ? null : activeTasks.first;
+    final taskName = _shortTrayName(activeTask?.displayName ?? '');
+    final taskSuffix = taskName.isEmpty ? '' : ' · $taskName';
+    final status = activeTask != null
+        ? activeTask.status == 'QUEUED'
+              ? '等待制作$taskSuffix'
+              : activeTask.status == 'CANCEL_REQUESTED'
+              ? '正在取消$taskSuffix'
+              : '正在制作$taskSuffix'
+        : switch (view.state) {
+            MainState.running => view.canceling ? '正在取消任务' : '正在制作字幕',
+            MainState.completed => '本次任务已完成',
+            MainState.failed => '任务需要处理',
+            MainState.empty when view.homeTaskReminder != null => '有任务可以继续',
+            _ => '空闲 · 可以开始新任务',
+          };
+    return DesktopTrayPresentation(
+      statusLabel: status,
+      toolTip: 'TransVortex · $status',
+    );
+  }
+
+  List<TaskSummary> _activeTasks() {
+    final snapshot = _service.snapshot.desktopSnapshot;
+    if (snapshot == null) return const [];
+    return snapshot.tasks
+        .where((task) => task.isActive && !task.isTerminal)
+        .toList(growable: false);
+  }
+
+  String _shortTrayName(String value) {
+    final normalized = value.trim();
+    if (normalized.length <= 26) return normalized;
+    return '${normalized.substring(0, 25)}…';
+  }
+
+  void _handleTrayAction(DesktopTrayAction action) {
+    switch (action) {
+      case DesktopTrayAction.showMain:
+        unawaited(_focusMainWindow());
+        return;
+      case DesktopTrayAction.openTasks:
+        unawaited(_openTaskProcessingFromTray());
+        return;
+      case DesktopTrayAction.exitApp:
+        unawaited(_requestAppExit());
+        return;
+    }
+  }
+
+  Future<void> _openTaskProcessingFromTray() async {
+    await _focusMainWindow();
+    await _openToolWindow(AppWindowType.taskProcessing);
+  }
+
+  @override
+  void onWindowClose() {
+    _trayCloseEventObserved = true;
+    if (!_trayReady || _exitRequested) return;
+    unawaited(_hideToTray());
+  }
+
+  Future<void> _hideToTray() async {
+    if (!_trayReady || _exitRequested) return;
+    _trayHideAttempted = true;
+    _trayHideError = '';
+    await _closeToolWindows();
+    try {
+      await windowManager.hide();
+    } on Object catch (error) {
+      _trayHideError = '$error';
+      // If hiding fails, keep the visible app alive rather than shutting down.
+    }
+  }
+
+  Future<void> _requestAppExit() async {
+    if (_exitRequested || _exitRequestInProgress) return;
+    _exitRequestInProgress = true;
+    try {
+      await _focusMainWindow();
+      if (_hasActiveWork) {
+        final confirmed = await _confirmCancelAndExit();
+        if (confirmed != true) return;
+        if (!await _cancelActiveTasksForExit()) return;
+      }
+
+      _exitRequested = true;
+      await _closeToolWindows();
+      try {
+        await windowManager.setPreventClose(false);
+      } on Object {
+        // destroy() below bypasses prevent-close if this best-effort call fails.
+      }
+      final trayService = _trayService;
+      if (trayService != null) await _disposeTrayService(trayService);
+      await _service.shutdown();
+      try {
+        await windowManager.destroy();
+      } on Object {
+        exit(0);
+      }
+    } finally {
+      if (!_exitRequested) _exitRequestInProgress = false;
+    }
+  }
+
+  Future<bool?> _confirmCancelAndExit() {
+    if (!mounted) return Future<bool?>.value(false);
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        surfaceTintColor: T.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(T.rMd),
+          side: const BorderSide(color: T.line),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.hourglass_top_rounded, color: T.accentStrong),
+            const SizedBox(width: T.s8),
+            Text('任务还在制作', style: T.tSection),
+          ],
+        ),
+        content: Text(
+          '关闭窗口会继续留在托盘；如果现在退出，TransVortex 会先取消进行中和排队任务。',
+          style: T.tBody,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('继续后台'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('取消任务并退出'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _cancelActiveTasksForExit() async {
+    try {
+      await _service.start();
+      final client = _service.client;
+      if (client == null) throw StateError('本地服务未连接');
+      final taskIds = <String>{
+        for (final task in _activeTasks()) task.taskId,
+        if (_controller.view.state == MainState.running &&
+            _controller.view.taskId?.trim().isNotEmpty == true)
+          _controller.view.taskId!.trim(),
+      };
+      for (final taskId in taskIds) {
+        await client.cancel(taskId);
+      }
+      return true;
+    } on Object catch (error) {
+      _toast('取消任务失败，应用将继续在后台：$error');
+      return false;
+    }
+  }
+
+  bool get _hasActiveWork {
+    return _controller.view.state == MainState.running ||
+        _activeTasks().isNotEmpty;
+  }
+
+  Future<void> _closeToolWindows() async {
+    final controllers = _toolWindows.values.toList(growable: false);
+    _toolWindows.clear();
+    await Future.wait(
+      controllers.map((controller) async {
+        try {
+          await controller.invokeMethod<void>('window_close');
+        } on Object {
+          // Closed or crashed tool windows can be dropped from the registry.
+        }
+      }),
     );
   }
 
@@ -322,6 +591,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     await reportFile.parent.create(recursive: true);
     try {
       await _controller.startService().timeout(smoke.timeout);
+      final checkTrayBeforeTask =
+          smoke.checkTray &&
+          (smoke.mainPhase != SmokeMainPhase.normal || smoke.inputPath == null);
+      final trayReport = checkTrayBeforeTask
+          ? await _checkTrayLifecycle(deadline)
+          : const <String, Object?>{};
       if (smoke.mainPhase != SmokeMainPhase.normal) {
         await _applyMainPhaseSmoke(smoke);
         final payload = <String, Object?>{
@@ -337,6 +612,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           'started_at': startedAt.toIso8601String(),
           'finished_at': DateTime.now().toUtc().toIso8601String(),
           'last_error': _service.snapshot.lastError ?? '',
+          ...trayReport,
         };
         payload.addAll(
           await captureSmokeRender(
@@ -392,6 +668,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         'finished_at': DateTime.now().toUtc().toIso8601String(),
         'last_error': snapshot.lastError ?? '',
         'refresh_error': refreshError,
+        ...trayReport,
       };
       if (smoke.checkNotifications) {
         await _waitForSmokeNotification(deadline);
@@ -421,6 +698,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       };
       await _writeSmokeReportAndHold(reportFile, payload, smoke);
     } finally {
+      if (smoke.checkTray) {
+        await _prepareSmokeExit();
+      }
       try {
         await _service.shutdown();
       } on Object {
@@ -432,6 +712,141 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         exit(0);
       }
     }
+  }
+
+  Future<Map<String, Object?>> _checkTrayLifecycle(DateTime deadline) async {
+    final initialWindowShow = _initialWindowShowCompleter?.future;
+    if (initialWindowShow != null) {
+      await initialWindowShow.timeout(_remaining(deadline));
+    }
+    final initializationDeadline = _earlierDeadline(
+      deadline,
+      DateTime.now().add(const Duration(seconds: 5)),
+    );
+    while (!_trayReady && DateTime.now().isBefore(initializationDeadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    if (!_trayReady) {
+      throw StateError('系统托盘未能在时限内初始化');
+    }
+
+    if (!await windowManager.isVisible()) {
+      await _focusMainWindow();
+    }
+    final visibleBeforeClose = await _waitForWindowVisibility(
+      expected: true,
+      deadline: initializationDeadline,
+    );
+    final preventClose = await windowManager.isPreventClose();
+    if (!visibleBeforeClose || !preventClose) {
+      throw StateError('系统托盘未接管主窗口关闭行为');
+    }
+
+    await windowManager.close();
+    final hiddenAfterClose = await _waitForWindowVisibility(
+      expected: false,
+      deadline: _earlierDeadline(
+        deadline,
+        DateTime.now().add(const Duration(seconds: 3)),
+      ),
+    );
+    if (!hiddenAfterClose) {
+      throw StateError(
+        '关闭主窗口后应用没有隐藏到系统托盘'
+        '（closeEvent=$_trayCloseEventObserved, '
+        'hideAttempted=$_trayHideAttempted, hideError=$_trayHideError）',
+      );
+    }
+
+    final client = _service.client;
+    if (client == null) {
+      throw StateError('主窗口隐藏后本地服务连接丢失');
+    }
+    final health = await client.health().timeout(_remaining(deadline));
+
+    final activation = await _activateExistingInstance(deadline);
+    final restored = await _waitForWindowVisibility(
+      expected: true,
+      deadline: _earlierDeadline(
+        deadline,
+        DateTime.now().add(const Duration(seconds: 3)),
+      ),
+    );
+    if (!restored) {
+      throw StateError('无法从系统托盘生命周期恢复主窗口');
+    }
+
+    return <String, Object?>{
+      'tray_initialized': true,
+      'tray_prevent_close': preventClose,
+      'tray_visible_before_close': visibleBeforeClose,
+      'tray_close_hid_window': hiddenAfterClose,
+      'tray_service_alive_after_hide': true,
+      'tray_service_health': health.status,
+      'tray_restore_visible': restored,
+      ...activation,
+    };
+  }
+
+  Future<Map<String, Object?>> _activateExistingInstance(
+    DateTime deadline,
+  ) async {
+    final activationProcess = await Process.start(
+      Platform.resolvedExecutable,
+      const ['--tvx-activate-existing'],
+    );
+    int? exitCode;
+    try {
+      exitCode = await activationProcess.exitCode.timeout(
+        _remaining(
+          _earlierDeadline(
+            deadline,
+            DateTime.now().add(const Duration(seconds: 5)),
+          ),
+        ),
+      );
+    } on TimeoutException {
+      activationProcess.kill();
+      try {
+        await activationProcess.exitCode.timeout(const Duration(seconds: 2));
+      } on Object {
+        // The smoke report below records that activation did not exit cleanly.
+      }
+    }
+    if (exitCode != 0) {
+      throw StateError('再次启动应用没有唤醒现有托盘实例（exitCode=$exitCode）');
+    }
+    return <String, Object?>{
+      'tray_restore_trigger': 'second_instance_activation',
+      'tray_activation_process_exited': true,
+      'tray_activation_exit_code': exitCode,
+    };
+  }
+
+  Future<bool> _waitForWindowVisibility({
+    required bool expected,
+    required DateTime deadline,
+  }) async {
+    while (DateTime.now().isBefore(deadline)) {
+      if (await windowManager.isVisible() == expected) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    return await windowManager.isVisible() == expected;
+  }
+
+  Future<void> _prepareSmokeExit() async {
+    _exitRequested = true;
+    if (_windowCloseListenerInstalled) {
+      windowManager.removeListener(this);
+      _windowCloseListenerInstalled = false;
+    }
+    try {
+      await windowManager.setPreventClose(false);
+    } on Object {
+      // The final close below still has an exit(0) fallback.
+    }
+    final trayService = _trayService;
+    if (trayService != null) await _disposeTrayService(trayService);
   }
 
   Future<void> _applyMainPhaseSmoke(AppSmokeArgs smoke) async {
@@ -607,6 +1022,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           'source_mode': 'embedded_subtitle',
         })
         .timeout(_remaining(deadline));
+    final trayTaskWasActive = !submitted.terminal;
+    final trayReport = smoke.checkTray
+        ? await _checkTrayLifecycle(deadline)
+        : const <String, Object?>{};
     final terminal = await _waitForSmokeTask(
       client,
       submitted.taskId,
@@ -641,6 +1060,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         (event) => event is Map && event['type'] == 'done',
       ),
       'task_error': terminal.error ?? '',
+      if (smoke.checkTray) 'tray_task_active_before_close': trayTaskWasActive,
+      ...trayReport,
     };
   }
 
@@ -656,6 +1077,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       final failure = _controller.view.failure?.reason ?? 'unknown failure';
       throw StateError('Smoke controller submission failed: $failure');
     }
+    final trayTaskWasActive = _controller.view.state == MainState.running;
+    final trayReport = smoke.checkTray
+        ? await _checkTrayLifecycle(deadline)
+        : const <String, Object?>{};
     final client = await _ensureSmokeClient(deadline);
     final controllerTerminal = await _waitForControllerSmokeTask(deadline);
     final outputPaths = controllerTerminal.outputPaths;
@@ -783,6 +1208,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       'reexport_output_paths': reexportOutputPaths,
       'reexport_same_directory': reexportSameDirectory,
       'reexport_error': reexportError,
+      if (smoke.checkTray) 'tray_task_active_before_close': trayTaskWasActive,
+      ...trayReport,
     };
   }
 

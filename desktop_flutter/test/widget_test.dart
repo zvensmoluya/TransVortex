@@ -57,7 +57,7 @@ void main() {
       AppWindowType.translationSettings,
     );
     final startup = AppStartupArgs.parse(
-      '{"type":"main","smoke":{"reportPath":"D:/tmp/report.json","serviceRoot":"D:/tmp/root","timeoutSeconds":3,"inputPath":"D:/tmp/demo.mkv","expectedOutputText":"Hello","screenshotPath":"D:/tmp/smoke.png","minVisibleSeconds":2,"postReportVisibleSeconds":3,"useControllerSubmission":true,"checkNotifications":true,"mainPhase":"blockedTranslation"}}',
+      '{"type":"main","smoke":{"reportPath":"D:/tmp/report.json","serviceRoot":"D:/tmp/root","timeoutSeconds":3,"inputPath":"D:/tmp/demo.mkv","expectedOutputText":"Hello","screenshotPath":"D:/tmp/smoke.png","minVisibleSeconds":2,"postReportVisibleSeconds":3,"useControllerSubmission":true,"checkNotifications":true,"checkTray":true,"mainPhase":"blockedTranslation"}}',
     );
     expect(startup.window.type, AppWindowType.main);
     expect(startup.smoke?.reportPath, 'D:/tmp/report.json');
@@ -73,6 +73,7 @@ void main() {
     );
     expect(startup.smoke?.useControllerSubmission, isTrue);
     expect(startup.smoke?.checkNotifications, isTrue);
+    expect(startup.smoke?.checkTray, isTrue);
     expect(startup.smoke?.mainPhase, SmokeMainPhase.blockedTranslation);
     final flagStartup = AppStartupArgs.fromSources(null, [
       '--tvx-smoke-report=D:/tmp/report.json',
@@ -85,6 +86,7 @@ void main() {
       '--tvx-smoke-post-report-seconds=6',
       '--tvx-smoke-use-controller=true',
       '--tvx-smoke-check-notifications=true',
+      '--tvx-smoke-check-tray=true',
       '--tvx-smoke-main-phase=blockedAsr',
       '--tvx-smoke-task-processing-scenario=edit',
     ]);
@@ -102,6 +104,7 @@ void main() {
     );
     expect(flagStartup.smoke?.useControllerSubmission, isTrue);
     expect(flagStartup.smoke?.checkNotifications, isTrue);
+    expect(flagStartup.smoke?.checkTray, isTrue);
     expect(flagStartup.smoke?.mainPhase, SmokeMainPhase.blockedAsr);
     expect(flagStartup.smoke?.taskProcessingScenario, 'edit');
     final cancelFlagStartup = AppStartupArgs.fromSources(null, [

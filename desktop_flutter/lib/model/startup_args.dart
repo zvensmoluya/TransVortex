@@ -41,6 +41,7 @@ class AppStartupArgs {
       args,
       '--tvx-smoke-check-notifications',
     );
+    final checkTrayArg = _optionValue(args, '--tvx-smoke-check-tray');
     final mainPhaseArg = _optionValue(args, '--tvx-smoke-main-phase');
     final taskProcessingScenarioArg = _optionValue(
       args,
@@ -87,6 +88,7 @@ class AppStartupArgs {
           ),
           useControllerSubmission: _boolOption(useControllerArg),
           checkNotifications: _boolOption(checkNotificationsArg),
+          checkTray: _boolOption(checkTrayArg),
           mainPhase: SmokeMainPhaseLabel.fromId(mainPhaseArg),
           taskProcessingScenario: _optionalString(taskProcessingScenarioArg),
         ),
@@ -155,6 +157,7 @@ class AppSmokeArgs {
     this.postReportVisibleDuration = Duration.zero,
     this.useControllerSubmission = false,
     this.checkNotifications = false,
+    this.checkTray = false,
     this.mainPhase = SmokeMainPhase.normal,
     this.taskProcessingScenario,
   });
@@ -169,6 +172,7 @@ class AppSmokeArgs {
   final Duration postReportVisibleDuration;
   final bool useControllerSubmission;
   final bool checkNotifications;
+  final bool checkTray;
   final SmokeMainPhase mainPhase;
   final String? taskProcessingScenario;
 
@@ -191,6 +195,7 @@ class AppSmokeArgs {
         map?['useControllerSubmission'] ?? map?['use_controller_submission'];
     final checkNotifications =
         map?['checkNotifications'] ?? map?['check_notifications'];
+    final checkTray = map?['checkTray'] ?? map?['check_tray'];
     final mainPhase = map?['mainPhase'] ?? map?['main_phase'];
     final taskProcessingScenario =
         map?['taskProcessingScenario'] ?? map?['task_processing_scenario'];
@@ -227,6 +232,7 @@ class AppSmokeArgs {
       ),
       useControllerSubmission: useControllerSubmission == true,
       checkNotifications: checkNotifications == true,
+      checkTray: checkTray == true,
       mainPhase: SmokeMainPhaseLabel.fromId(mainPhase as String?),
       taskProcessingScenario: _optionalString(taskProcessingScenario),
     );
@@ -281,9 +287,7 @@ String? _optionValueFromRaw(String raw, String name) {
   final trimmed = raw.trim();
   if (trimmed.isEmpty) return null;
   final escaped = RegExp.escape(name);
-  final match = RegExp('(?:^|\\s)$escaped(?:=|\\s+)(\\S+)').firstMatch(
-    trimmed,
-  );
+  final match = RegExp('(?:^|\\s)$escaped(?:=|\\s+)(\\S+)').firstMatch(trimmed);
   return match?.group(1);
 }
 

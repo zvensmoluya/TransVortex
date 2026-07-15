@@ -10,6 +10,8 @@
 - 任务处理：历史任务、事件、继续/取消、结果编辑和重新导出。
 - 诊断：内部开发、测试和支持工具，不进入普通用户菜单。
 
+关闭主窗口会收起产品窗口并驻留系统托盘，当前任务与 Local Service 继续运行。单击托盘图标或再次启动应用会恢复已有主窗口；需要真正结束进程时使用托盘菜单的“退出 TransVortex”。
+
 产品与设计边界见 [`../docs/FRONTEND/README.md`](../docs/FRONTEND/README.md)。
 
 ## 开发
@@ -38,11 +40,12 @@ flutter build windows
 ```powershell
 .\scripts\smoke_flutter_release.ps1 -ScreenshotPath "$env:TEMP\transvortex-main.png"
 .\scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity
+.\scripts\smoke_flutter_release.ps1 -MainPhase empty -CheckTray
 .\scripts\smoke_flutter_release_matrix.ps1 -CheckDesktopComposite
 .\scripts\accept_flutter_release_manual.ps1 -LaunchCheck
 ```
 
-自动 smoke 验证真实 Local Service、任务提交、结果动作、窗口状态、通知调用和布局回归，但不替代人工完整任务流程。
+自动 smoke 验证真实 Local Service、任务提交、结果动作、窗口状态、托盘关闭/恢复、通知调用和布局回归，但不替代人工完整任务流程。
 
 ## 打包与安装
 

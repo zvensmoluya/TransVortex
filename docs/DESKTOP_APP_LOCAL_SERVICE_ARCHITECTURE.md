@@ -111,16 +111,17 @@ tools/ffmpeg/ffmpeg_runtime.json
 - 任务 pump、单活动 Worker、取消和 reconcile。
 - 多窗口 typed client 边界。
 - Windows Toast、AUMID 快捷方式和 NSIS 安装拓扑。
+- 主 Flutter engine 持有系统托盘；关闭主窗口时收起产品窗口，保留 engine、Local Service 和当前任务。
+- 托盘或再次启动应用可恢复已有主窗口，不创建第二套 Local Service；明确退出时，运行中先确认并请求取消活动与排队任务，再关闭服务和进程。
 
 尚未具备完整产品闭环：
 
 - 窗口无关的 App Host / Supervisor。
-- 托盘驻留、关窗继续任务和运行中退出策略。
 - Local Service 崩溃后的用户可见重启策略。
 - 持久化启动日志和崩溃日志。
 - Worker 进程树 / Job Object 的最终生命周期策略。
 
-在这些决策完成前，不能宣称“关闭主窗口后任务由托盘继续”已经实现。
+当前可以保证正常关闭主窗口后任务由托盘继续；该保证仍依赖主 Flutter engine 和应用进程存活，不等于已经具备独立宿主、应用崩溃恢复或进程树守护能力。
 
 ## 8. 兼容与升级
 
