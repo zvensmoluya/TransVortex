@@ -38,6 +38,42 @@ void main() {
     await stdout.close();
   });
 
+  test('JsonRpcTransport serializes writes across sink flushes', () async {
+    final stdout = StreamController<List<int>>();
+    final stdin = _ControlledFlushSink();
+    final exit = Completer<int>();
+    final transport = JsonRpcTransport(
+      stdout: stdout.stream,
+      stdin: stdin,
+      exitCode: exit.future,
+      defaultTimeout: const Duration(seconds: 1),
+    );
+
+    final first = transport.call('service.info');
+    final second = transport.call('service.health');
+
+    await stdin.firstFlushStarted.future;
+    expect(stdin.writes, hasLength(1));
+    expect(stdin.secondFlushStarted.isCompleted, isFalse);
+
+    stdin.releaseFlush();
+    await stdin.secondFlushStarted.future;
+    expect(stdin.writes, hasLength(2));
+    stdin.releaseFlush();
+
+    stdout.add(
+      utf8.encode('{"jsonrpc":"2.0","id":1,"result":{"service":"ready"}}\n'),
+    );
+    stdout.add(
+      utf8.encode('{"jsonrpc":"2.0","id":2,"result":{"status":"healthy"}}\n'),
+    );
+
+    expect(await first, {'service': 'ready'});
+    expect(await second, {'status': 'healthy'});
+    await transport.close();
+    await stdout.close();
+  });
+
   test(
     'JsonRpcTransport surfaces RPC errors and ignores non JSON diagnostics',
     () async {
@@ -2000,4 +2036,91 @@ class _FakeSink implements IOSink {
 
   @override
   void writeln([Object? object = '']) => writes.add('$object\n');
+}
+
+class _ControlledFlushSink implements IOSink {
+  final writes = <Object?>[];
+  final firstFlushStarted = Completer<void>();
+  final secondFlushStarted = Completer<void>();
+  Completer<void>? _activeFlush;
+  int _flushCount = 0;
+  bool closed = false;
+
+  @override
+  Encoding encoding = utf8;
+
+  void _checkWritable() {
+    final active = _activeFlush;
+    if (active != null && !active.isCompleted) {
+      throw StateError('StreamSink is bound to a stream');
+    }
+  }
+
+  void releaseFlush() {
+    final active = _activeFlush;
+    if (active != null && !active.isCompleted) active.complete();
+  }
+
+  @override
+  void add(List<int> data) {
+    _checkWritable();
+    writes.add(data);
+  }
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {}
+
+  @override
+  Future<void> addStream(Stream<List<int>> stream) async {
+    _checkWritable();
+    await for (final data in stream) {
+      writes.add(data);
+    }
+  }
+
+  @override
+  Future<void> close() async {
+    releaseFlush();
+    closed = true;
+  }
+
+  @override
+  Future<void> get done async {}
+
+  @override
+  Future<void> flush() {
+    _checkWritable();
+    final completer = Completer<void>();
+    _activeFlush = completer;
+    _flushCount += 1;
+    if (_flushCount == 1) firstFlushStarted.complete();
+    if (_flushCount == 2) secondFlushStarted.complete();
+    return completer.future.whenComplete(() {
+      if (identical(_activeFlush, completer)) _activeFlush = null;
+    });
+  }
+
+  @override
+  void write(Object? object) {
+    _checkWritable();
+    writes.add(object);
+  }
+
+  @override
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) {
+    _checkWritable();
+    writes.add(objects.join(separator));
+  }
+
+  @override
+  void writeCharCode(int charCode) {
+    _checkWritable();
+    writes.add(charCode);
+  }
+
+  @override
+  void writeln([Object? object = '']) {
+    _checkWritable();
+    writes.add('$object\n');
+  }
 }

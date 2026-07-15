@@ -442,11 +442,21 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _controller.removeSource();
         return;
       case SmokeMainPhase.ready:
+        _controller.pickSource(
+          r'D:\Media\sample-opening-line.wav',
+          name: 'sample-opening-line.wav',
+        );
+        return;
       case SmokeMainPhase.blockedTranslation:
+        _controller.pickSource(
+          r'D:\Media\sample-opening-line.srt',
+          name: 'sample-opening-line.srt',
+        );
+        return;
       case SmokeMainPhase.blockedAsr:
         _controller.pickSource(
-          r'D:\Media\sample-opening-line.mp4',
-          name: 'sample-opening-line.mp4',
+          r'D:\Media\sample-opening-line.wav',
+          name: 'sample-opening-line.wav',
         );
         return;
       case SmokeMainPhase.running:
@@ -965,10 +975,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         if (view.state != MainState.failed) ...[
           PrimaryAction(
             key: ValueKey(
-              'main-cta-${view.state.name}-${_ctaVariant(view.state).name}',
+              'main-cta-${view.state.name}-${_ctaVariant(view).name}',
             ),
             label: _ctaLabel(view),
-            variant: _ctaVariant(view.state),
+            variant: _ctaVariant(view),
             onTap: () => _onCta(view),
           ),
           if (view.state == MainState.completed) ...[
@@ -1215,16 +1225,24 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   String _ctaLabel(MainWindowViewModel view) {
     return switch (view.state) {
       MainState.empty => '选择片源',
-      MainState.ready => view.submitting ? '提交中…' : '开始译制',
+      MainState.ready =>
+        view.sourceInspectionPending
+            ? '检查片源中…'
+            : view.submitting
+            ? '提交中…'
+            : '开始译制',
       MainState.blocked => !view.translationConfigured ? '去配置翻译' : '去配置识别',
-      MainState.running => view.canceling ? '取消中…' : '停止任务',
+      MainState.running => view.canceling ? '取消中…' : '取消任务',
       MainState.completed => '审看结果',
       MainState.failed => view.failure?.actionLabel ?? '重试',
     };
   }
 
-  CtaVariant _ctaVariant(MainState state) {
-    return switch (state) {
+  CtaVariant _ctaVariant(MainWindowViewModel view) {
+    if (view.state == MainState.ready && view.sourceInspectionPending) {
+      return CtaVariant.disabled;
+    }
+    return switch (view.state) {
       MainState.empty => CtaVariant.filled,
       MainState.running => CtaVariant.outline,
       _ => CtaVariant.filled,
@@ -1237,6 +1255,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         unawaited(_pickFile());
         break;
       case MainState.ready:
+        if (view.sourceInspectionPending) return;
         unawaited(_controller.submitRun());
         break;
       case MainState.blocked:

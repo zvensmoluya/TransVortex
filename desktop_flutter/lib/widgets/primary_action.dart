@@ -3,7 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/tokens.dart';
 
 /// 主动作焦点 CTA（design spec §4.4）。样子 = 当前状态，承载全部六态。
-/// 三种观感：filled（主焦点，选择片源 / 开始 / 重试）、outline（次级，停止任务）、
+/// 三种观感：filled（主焦点，选择片源 / 开始 / 重试）、outline（次级，取消任务）、
 /// disabled（保留给不可执行的未来状态）。hover / active / disabled 四态可读（G7）。
 enum CtaVariant { filled, outline, disabled }
 

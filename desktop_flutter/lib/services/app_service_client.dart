@@ -91,6 +91,7 @@ class JsonRpcTransport implements AppServiceTransport {
   final List<String> _diagnosticLines = [];
   late final StreamSubscription<String> _stdoutSub;
   StreamSubscription<String>? _stderrSub;
+  Future<void> _writeTail = Future<void>.value();
   int _nextId = 1;
   int? _exitCode;
   bool _closed = false;
@@ -119,15 +120,24 @@ class JsonRpcTransport implements AppServiceTransport {
       'method': method,
       'params': params,
     };
-    try {
+    final write = _writeTail.then((_) async {
+      if (_closed) {
+        throw RpcConnectionClosedException('service is closed');
+      }
       stdin.writeln(jsonEncode(payload));
-      unawaited(stdin.flush());
-    } on Object catch (error) {
-      _pending.remove(id);
-      return Future.error(
-        RpcConnectionClosedException('failed to write request: $error'),
-      );
-    }
+      await stdin.flush();
+    });
+    _writeTail = write.then<void>((_) {}, onError: (_) {});
+    unawaited(
+      write.catchError((Object error) {
+        final removed = _pending.remove(id);
+        removed?.completeError(
+          error is RpcConnectionClosedException
+              ? error
+              : RpcConnectionClosedException('failed to write request: $error'),
+        );
+      }),
+    );
 
     final effectiveTimeout = timeout ?? defaultTimeout;
     Timer? timer;
@@ -151,6 +161,11 @@ class JsonRpcTransport implements AppServiceTransport {
     _pending.clear();
     await _stdoutSub.cancel();
     await _stderrSub?.cancel();
+    try {
+      await _writeTail;
+    } on Object {
+      // Pending write failures are already forwarded to their RPC callers.
+    }
     try {
       await stdin.close();
     } on Object {

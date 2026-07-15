@@ -688,7 +688,7 @@ void main() {
     expect(find.text('翻译字幕'), findsOneWidget);
     expect(find.text('按分片翻译对白'), findsOneWidget);
     expect(find.textContaining('ridiculously-long-tail'), findsOneWidget);
-    expect(find.text('停止任务'), findsOneWidget);
+    expect(find.text('取消任务'), findsOneWidget);
     expect(find.text('自动生成术语建议'), findsNothing);
     expect(find.textContaining('Task created'), findsNothing);
     expectNoFlutterException();

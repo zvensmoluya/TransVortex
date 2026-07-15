@@ -195,6 +195,7 @@ class MainWindowViewModel {
     required this.homeTaskReminder,
     required this.submitting,
     this.sourceNeedsAsr,
+    this.sourceInspectionPending = false,
     this.runProgress,
     this.completionNotice,
   });
@@ -225,6 +226,7 @@ class MainWindowViewModel {
   final HomeTaskReminder? homeTaskReminder;
   final bool submitting;
   final bool? sourceNeedsAsr;
+  final bool sourceInspectionPending;
   final MainRunProgress? runProgress;
   final String? completionNotice;
 
@@ -271,6 +273,10 @@ class MainWindowController extends ChangeNotifier {
   MediaInspection? _sourceInspection;
   String? _sourceInspectionLanguage;
   int _sourceInspectionGeneration = 0;
+  Future<MediaInspection>? _videoInspectionFuture;
+  int? _videoInspectionFutureGeneration;
+  String? _videoInspectionFutureLanguage;
+  String? _videoInspectionFuturePath;
   final Set<String> _dismissedHomeTaskReminderIds = <String>{};
 
   late MainWindowViewModel _view;
@@ -304,6 +310,7 @@ class MainWindowController extends ChangeNotifier {
       unsupportedReason: unsupported,
     );
     _sourceInspectionGeneration += 1;
+    _discardVideoInspectionFuture();
     _sourceInspection = switch (kind) {
       SourceKind.subtitle => const MediaInspection(
         kind: 'subtitle',
@@ -349,6 +356,7 @@ class MainWindowController extends ChangeNotifier {
     _taskPoll = null;
     _source = null;
     _sourceInspectionGeneration += 1;
+    _discardVideoInspectionFuture();
     _sourceInspection = null;
     _sourceInspectionLanguage = null;
     _outputDirectory = null;
@@ -378,6 +386,7 @@ class MainWindowController extends ChangeNotifier {
     _sourceLang = normalized.isEmpty ? 'auto' : normalized;
     if (_source?.kind == SourceKind.video) {
       _sourceInspectionGeneration += 1;
+      _discardVideoInspectionFuture();
       _sourceInspection = null;
       _sourceInspectionLanguage = null;
       if (service.client != null) {
@@ -980,6 +989,7 @@ class MainWindowController extends ChangeNotifier {
           : null,
       submitting: _submitting,
       sourceNeedsAsr: _source == null ? null : _requiresAsr,
+      sourceInspectionPending: _sourceInspectionPending,
       runProgress: _runProgress,
       completionNotice: _completionNotice,
     );
@@ -1059,6 +1069,15 @@ class MainWindowController extends ChangeNotifier {
     };
   }
 
+  bool get _sourceInspectionPending {
+    final source = _source;
+    return source?.kind == SourceKind.video &&
+        _videoInspectionFuture != null &&
+        _videoInspectionFutureGeneration == _sourceInspectionGeneration &&
+        _videoInspectionFutureLanguage == _sourceLang &&
+        _videoInspectionFuturePath == source?.path;
+  }
+
   Future<bool> _inspectCurrentVideo({required bool showFailure}) async {
     final source = _source;
     if (source == null || source.kind != SourceKind.video) return true;
@@ -1066,20 +1085,21 @@ class MainWindowController extends ChangeNotifier {
       return _sourceInspection!.available;
     }
     final generation = _sourceInspectionGeneration;
+    final sourceLanguage = _sourceLang;
+    final inspectionFuture = _videoInspectionFor(
+      source: source,
+      generation: generation,
+      sourceLanguage: sourceLanguage,
+    );
     try {
-      await service.start();
-      final client = service.client;
-      if (client == null) throw StateError('本地服务未连接');
-      final inspection = await client.inspectMedia(
-        input: source.path,
-        sourceLang: _sourceLang,
-      );
+      final inspection = await inspectionFuture;
       if (_source?.path != source.path ||
-          generation != _sourceInspectionGeneration) {
+          generation != _sourceInspectionGeneration ||
+          sourceLanguage != _sourceLang) {
         return false;
       }
       _sourceInspection = inspection;
-      _sourceInspectionLanguage = _sourceLang;
+      _sourceInspectionLanguage = sourceLanguage;
       if (!inspection.available && showFailure) {
         _failure = const MainFailureView(
           reason: '没有找到可用的内嵌字幕轨，请改用语音识别或重新选择片源。',
@@ -1094,7 +1114,8 @@ class MainWindowController extends ChangeNotifier {
       return inspection.available;
     } on Object catch (error) {
       if (_source?.path != source.path ||
-          generation != _sourceInspectionGeneration) {
+          generation != _sourceInspectionGeneration ||
+          sourceLanguage != _sourceLang) {
         return false;
       }
       if (showFailure) {
@@ -1103,10 +1124,58 @@ class MainWindowController extends ChangeNotifier {
           actionLabel: '重试',
           target: MainRecoveryTarget.retry,
         );
-        _publish();
       }
+      _publish();
       return false;
     }
+  }
+
+  Future<MediaInspection> _videoInspectionFor({
+    required MainSourceDraft source,
+    required int generation,
+    required String sourceLanguage,
+  }) {
+    final current = _videoInspectionFuture;
+    if (current != null &&
+        _videoInspectionFutureGeneration == generation &&
+        _videoInspectionFutureLanguage == sourceLanguage &&
+        _videoInspectionFuturePath == source.path) {
+      return current;
+    }
+
+    final next = _loadVideoInspection(source, sourceLanguage);
+    _videoInspectionFuture = next;
+    _videoInspectionFutureGeneration = generation;
+    _videoInspectionFutureLanguage = sourceLanguage;
+    _videoInspectionFuturePath = source.path;
+    next.then<void>(
+      (_) => _clearVideoInspectionFuture(next),
+      onError: (_) => _clearVideoInspectionFuture(next),
+    );
+    _publish();
+    return next;
+  }
+
+  Future<MediaInspection> _loadVideoInspection(
+    MainSourceDraft source,
+    String sourceLanguage,
+  ) async {
+    await service.start();
+    final client = service.client;
+    if (client == null) throw StateError('本地服务未连接');
+    return client.inspectMedia(input: source.path, sourceLang: sourceLanguage);
+  }
+
+  void _clearVideoInspectionFuture(Future<MediaInspection> expected) {
+    if (!identical(_videoInspectionFuture, expected)) return;
+    _discardVideoInspectionFuture();
+  }
+
+  void _discardVideoInspectionFuture() {
+    _videoInspectionFuture = null;
+    _videoInspectionFutureGeneration = null;
+    _videoInspectionFutureLanguage = null;
+    _videoInspectionFuturePath = null;
   }
 
   String _statusLine(MainState state) {

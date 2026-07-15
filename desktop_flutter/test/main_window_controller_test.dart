@@ -112,8 +112,15 @@ void main() {
       await controller.startService();
       controller.pickSource(r'D:\movie.mkv');
 
+      expect(controller.view.sourceInspectionPending, isTrue);
+
       await controller.submitRun();
 
+      expect(controller.view.sourceInspectionPending, isFalse);
+      expect(
+        handle.transport.calls.where((call) => call == 'media.inspect'),
+        hasLength(1),
+      );
       expect(controller.view.requiresAsr, isFalse);
       final request =
           handle.transport.lastParams['runtime.submitRun']!['request']
