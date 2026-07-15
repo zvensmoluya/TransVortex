@@ -825,7 +825,6 @@ class MainWindowController extends ChangeNotifier {
   }
 
   Map<String, Object?> _memoryGenerationOverrides() => {
-    'allowSystemSuggestions': _termsEnabled,
     if (_termsEnabled) 'memory_enabled': true,
     'memory_bootstrap_enabled': _termsEnabled,
     'memory_patch_enabled': _termsEnabled,

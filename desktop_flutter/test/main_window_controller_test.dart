@@ -551,7 +551,6 @@ void main() {
     expect(payload.containsKey('model'), isFalse);
     expect(overrides['output_format'], 'both');
     expect(overrides['subtitle_quality_mode'], 'balanced');
-    expect(overrides['allowSystemSuggestions'], isTrue);
     expect(overrides['memory_enabled'], isTrue);
     expect(overrides['memory_bootstrap_enabled'], isTrue);
     expect(overrides['memory_patch_enabled'], isTrue);
@@ -662,7 +661,6 @@ void main() {
     final overrides = payload['overrides'] as Map<String, Object?>;
 
     expect(controller.view.termsEnabled, isFalse);
-    expect(overrides['allowSystemSuggestions'], isFalse);
     expect(overrides.containsKey('memory_enabled'), isFalse);
     expect(overrides['memory_bootstrap_enabled'], isFalse);
     expect(overrides['memory_patch_enabled'], isFalse);
