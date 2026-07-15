@@ -60,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package_flutter_rele
 
 只需要重建某项 runtime 而复用现有 Flutter Release 时，可以传入 `-BuildAppRuntime` 或 `-BuildFfmpegRuntime`。不带构建开关时，脚本复用 `dist/app-runtime/windows-x64` 和 `dist/ffmpeg-runtime/windows-x64` 中的现有产物。打包和用户级安装检查会直接调用包内 `python.exe`、`ffmpeg.exe` 和 `ffprobe.exe`，并核对 runtime 清单与文件哈希。
 
-正式 NSIS 安装器使用：
+NSIS 原生安装器使用：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -AllowUnsigned -Force
@@ -68,3 +68,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 ```
 
 `-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册及用户数据保留。终端用户运行安装器和已安装应用均不依赖 PowerShell。公开发布仍需 Authenticode 签名、FFmpeg 完整对应源码托管，以及干净 Windows 环境的首启和真实媒体任务验收。
+
+安装器始终使用专用的 `TransVortex` 安装目录：如果用户选择的是其他父目录，会在其中创建 `TransVortex` 子目录；如果目标目录非空且没有有效的安装归属标记，安装器会拒绝覆盖。检测到已有安装时，升级必须沿用原安装路径；如需更换路径，应先卸载旧版本，避免遗留两套程序或误删无关文件。

@@ -7,6 +7,7 @@ SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 
 !ifndef APP_SOURCE
   !error "APP_SOURCE must point to the validated installer payload"
@@ -15,10 +16,10 @@ SetCompressor /SOLID lzma
   !error "OUTPUT_FILE must point to the installer executable"
 !endif
 !ifndef APP_VERSION
-  !define APP_VERSION "1.0.0"
+  !define APP_VERSION "0.1.0"
 !endif
 !ifndef APP_FILE_VERSION
-  !define APP_FILE_VERSION "1.0.0.1"
+  !define APP_FILE_VERSION "0.1.0.1"
 !endif
 !ifndef ESTIMATED_SIZE_KB
   !define ESTIMATED_SIZE_KB 0
@@ -62,6 +63,8 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 TransVortex"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${LICENSE_FILE}"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择安装位置。若所选目录不是 TransVortex 专用目录，安装程序会在其中新建 TransVortex 子目录。"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -98,6 +101,81 @@ cancel_install:
 not_running:
 FunctionEnd
 
+Function NormalizeInstallDirectory
+  ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
+  StrCmp $0 "" normalize_leaf
+  IfFileExists "$0\TransVortex.exe" 0 normalize_leaf
+  System::Call 'kernel32::lstrcmpiW(w "$INSTDIR", w "$0") i .r1'
+  IntCmp $1 0 normalize_done normalize_leaf normalize_leaf
+
+normalize_leaf:
+  ${GetFileName} "$INSTDIR" $1
+  System::Call 'kernel32::lstrcmpiW(w "$1", w "${APP_NAME}") i .r2'
+  IntCmp $2 0 normalize_done
+  StrCpy $INSTDIR "$INSTDIR\${APP_NAME}"
+
+normalize_done:
+FunctionEnd
+
+Function CheckInstallDirectorySafety
+  StrCpy $2 "0"
+  ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
+  StrCmp $0 "" check_target
+  IfFileExists "$0\TransVortex.exe" 0 check_target
+  System::Call 'kernel32::lstrcmpiW(w "$INSTDIR", w "$0") i .r1'
+  IntCmp $1 0 registered_same registered_different registered_different
+
+registered_same:
+  StrCpy $2 "1"
+  Goto check_target
+
+registered_different:
+  IfSilent registered_different_silent registered_different_interactive
+
+registered_different_silent:
+  SetErrorLevel 12
+  Quit
+
+registered_different_interactive:
+  MessageBox MB_OK|MB_ICONEXCLAMATION \
+    "已检测到安装在 $0 的 TransVortex。为避免遗留旧版本，升级时不能直接更改安装位置；请先卸载旧版本。"
+  Abort
+
+check_target:
+  IfFileExists "$INSTDIR\*.*" target_not_empty target_safe
+
+target_not_empty:
+  ReadINIStr $0 "$INSTDIR\.transvortex-install.ini" "Install" "AppId"
+  StrCmp $0 "${APP_ID}" target_safe
+
+  ; Accept the one pre-marker installer layout only when the registry points
+  ; to this exact directory and the fixed runtime layout is intact.
+  StrCmp $2 "1" 0 target_unsafe
+  IfFileExists "$INSTDIR\TransVortex.exe" 0 target_unsafe
+  IfFileExists "$INSTDIR\Uninstall.exe" 0 target_unsafe
+  IfFileExists "$INSTDIR\runtime\app_runtime.json" 0 target_unsafe
+  Goto target_safe
+
+target_unsafe:
+  IfSilent target_unsafe_silent target_unsafe_interactive
+
+target_unsafe_silent:
+  SetErrorLevel 11
+  Quit
+
+target_unsafe_interactive:
+  MessageBox MB_OK|MB_ICONSTOP \
+    "目标目录已经包含其他文件，且无法确认它属于 TransVortex。请选择其他位置；安装程序会在所选位置下创建专用的 TransVortex 子目录。"
+  Abort
+
+target_safe:
+FunctionEnd
+
+Function DirectoryPageLeave
+  Call NormalizeInstallDirectory
+  Call CheckInstallDirectorySafety
+FunctionEnd
+
 Function ValidateStagingPayload
   IfFileExists "$StagingDir\TransVortex.exe" +2
     Abort "安装内容不完整：缺少 TransVortex.exe"
@@ -111,6 +189,9 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少 ffprobe.exe"
   IfFileExists "$StagingDir\tools\ffmpeg\ffmpeg_runtime.json" +2
     Abort "安装内容不完整：缺少 FFmpeg runtime 清单"
+  ReadINIStr $0 "$StagingDir\.transvortex-install.ini" "Install" "AppId"
+  StrCmp $0 "${APP_ID}" +2
+    Abort "安装内容不完整：缺少安装归属标记"
 FunctionEnd
 
 Function RollBackPayload
@@ -129,6 +210,8 @@ FunctionEnd
 Section "${APP_NAME}" SecMain
   Call CheckAppNotRunning
   SetShellVarContext current
+  Call NormalizeInstallDirectory
+  Call CheckInstallDirectorySafety
   StrCpy $StagingDir "$INSTDIR.__staging"
   StrCpy $PreviousDir "$INSTDIR.__previous"
   StrCpy $HadPreviousInstall "0"
@@ -149,6 +232,8 @@ current_ready:
   CreateDirectory "$StagingDir"
   SetOutPath "$StagingDir"
   File /r "${APP_SOURCE}\*.*"
+  WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "AppId" "${APP_ID}"
+  WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "Version" "${APP_VERSION}"
   WriteUninstaller "$StagingDir\Uninstall.exe"
   Call ValidateStagingPayload
   SetOutPath "$TEMP"

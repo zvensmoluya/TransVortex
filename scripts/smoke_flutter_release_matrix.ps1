@@ -194,7 +194,7 @@ foreach ($case in $cases) {
 
 $manualAcceptanceRequired = @(
     "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-    "formal MSIX/MSI/NSIS/Inno installer acceptance"
+    "native Windows installer acceptance"
 )
 if (-not $appIdentityCovered) {
     $manualAcceptanceRequired += "AppUserModelID shortcut identity acceptance; rerun with -CheckAppIdentity"

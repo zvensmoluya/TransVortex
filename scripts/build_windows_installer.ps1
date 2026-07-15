@@ -112,8 +112,10 @@ if ($pubspecVersionLine -notmatch '^version:\s*([0-9]+)\.([0-9]+)\.([0-9]+)\+([0
 }
 $appVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
 $appFileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$($Matches[4])"
+$releaseStage = "alpha"
+$releaseChannel = if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) { "internal" } else { "candidate" }
 if ([string]::IsNullOrWhiteSpace($CertificateThumbprint) -and -not $AllowUnsigned) {
-    throw "No signing certificate was provided. Pass -CertificateThumbprint for a public artifact, or explicitly pass -AllowUnsigned for internal acceptance only."
+    throw "No signing certificate was provided. Pass -CertificateThumbprint for a signed candidate, or explicitly pass -AllowUnsigned for internal acceptance only."
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
@@ -124,8 +126,9 @@ New-Item -ItemType Directory -Force -Path $outputFullPath | Out-Null
 $workRoot = Join-Path $outputFullPath "work"
 $payloadName = "TransVortex-installer-payload-$appVersion"
 $payloadRoot = Join-Path $workRoot $payloadName
-$installerPath = Join-Path $outputFullPath "TransVortex-Setup-$appVersion.exe"
-$installerManifestPath = Join-Path $outputFullPath "TransVortex-Setup-$appVersion.manifest.json"
+$artifactBaseName = "TransVortex-$appVersion-windows-x64-setup-$releaseChannel"
+$installerPath = Join-Path $outputFullPath "$artifactBaseName.exe"
+$installerManifestPath = Join-Path $outputFullPath "$artifactBaseName.manifest.json"
 Assert-PathInsideDirectory -Path $workRoot -Directory $outputFullPath
 Assert-PathInsideDirectory -Path $installerPath -Directory $outputFullPath
 
@@ -229,15 +232,21 @@ $installerFile = Get-Item -LiteralPath $installerPath
 $report = [ordered]@{
     ok = $true
     installer = $true
-    formal_installer = $true
+    native_installer = $true
+    installer_format_complete = $true
     installer_framework = "NSIS"
     installer_path = $installerFile.Name
     installer_sha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
     installer_bytes = [int64]$installerFile.Length
     app_version = $appVersion
     app_file_version = $appFileVersion
+    release_stage = $releaseStage
+    release_channel = $releaseChannel
     install_scope = "per_user"
     default_install_root = "%LOCALAPPDATA%\Programs\TransVortex"
+    dedicated_install_subdirectory = $true
+    unsafe_existing_directory_rejected = $true
+    install_path_change_requires_uninstall = $true
     end_user_powershell_required = $false
     python_runtime_included = $true
     ffmpeg_included = $true
@@ -254,6 +263,8 @@ $report = [ordered]@{
     public_release_ready = $false
     acceptance_complete = $false
     acceptance_required = @(
+        "dedicated application directory and unrelated-file preservation",
+        "installed-path change rejection",
         "fresh silent install and installed Local Service RPC",
         "upgrade replacement and obsolete-file removal",
         "running-process install and uninstall protection",

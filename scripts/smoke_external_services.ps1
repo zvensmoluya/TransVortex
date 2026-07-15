@@ -139,7 +139,7 @@ $commandInfo = Get-TransVortexCommand
 
 $manualAcceptanceRequired = @(
     "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-    "formal MSIX/MSI/NSIS/Inno installer acceptance"
+    "native Windows installer acceptance"
 )
 if ([string]::IsNullOrWhiteSpace($inputFilePath)) {
     $manualAcceptanceRequired += "real speech recognition or media-task evidence; rerun with -InputPath to collect it"

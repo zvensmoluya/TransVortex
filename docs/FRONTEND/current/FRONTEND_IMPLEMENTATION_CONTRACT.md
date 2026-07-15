@@ -56,7 +56,7 @@
 - 更完整的失败修复矩阵和诊断入口。
 - 真实可见 release 窗口端到端人工验收；使用 `scripts\accept_flutter_release_manual.ps1` 记录逐步确认、窗口截图和 JSON 报告。
 - 其他目标用户环境里的真实外部翻译服务 / 语音识别复跑；本机已用 `smoke_external_services.ps1` 跑通真实 provider、样本翻译、媒体任务和 ASR 产物证据。
-- 托盘、已安装路径下的通知中心行为、干净 Windows 真实任务、签名和 FFmpeg 对应源码公开托管；NSIS 用户级安装器及固定 Python / FFmpeg runtime 已通过本机安装、升级、运行中保护、快捷方式和卸载自动验收，但当前内部产物仍明确 `public_release_ready=false`。
+- 托盘、已安装路径下的通知中心行为、干净 Windows 真实任务、签名和 FFmpeg 对应源码公开托管；NSIS 用户级原生安装器及固定 Python / FFmpeg runtime 已通过本机安装、升级、运行中保护、快捷方式和卸载自动验收，但当前 `0.1.0` Alpha 内部产物仍明确 `public_release_ready=false`。
 - 跨任务批量筛查、完整结果编辑器、完整历史恢复矩阵和术语管理等后续窗口；任务处理窗已经作为任务历史 / 详情 / 结果编辑的新主入口接入，支持任务片列、按全部 / 制作中 / 待处理 / 已完成筛选任务、按片源 / 任务 ID / 状态 / 失败摘要 / 目录线索搜索任务、选中任务预览、创建 / 更新时间、运行记录、可用操作摘要、失败 / 中断线索、最近事件、按 cursor 加载更多事件和已加载事件本地搜索、完成任务内嵌编辑、任务目录 / 结果目录打开、可恢复任务继续动作和可取消任务取消动作；旧最小结果审看 / 任务历史 / 任务详情独立窗已移除，旧启动 ID 兼容进入任务处理窗。
 
 ### 先修护栏
@@ -246,7 +246,7 @@ MVP 美术执行采用文字契约 + 真实 Flutter 窗口验收：
 - `flutter test`
 - Windows release 运行或等效真实桌面窗口验证
 - portable release 包变更时，跑 `scripts\package_flutter_release.ps1 -OutputRoot <dir> -LaunchCheck`，确认包内 Local Service 能响应 `service.info` / `service.health` / `service.shutdown`，并确认包目录内 `TransVortex.exe` 能启动；再跑 `scripts\install_flutter_portable_release.ps1 -SourceRoot <portable-package> -InstallRoot <dir> -ShortcutPath <lnk> -Force`，确认用户级安装目录里的 Local Service RPC 和 AUMID 快捷方式
-- 正式安装路径变更时，跑 `scripts\build_windows_installer.ps1 -AllowUnsigned -Force` 和 `scripts\accept_windows_installer.ps1`，确认安装器 payload 不含 `.ps1`，并覆盖全新安装、升级、运行中保护、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留；未提供签名与 FFmpeg 对应源码地址时不得把内部验收件写成公开发布就绪
+- 原生安装路径变更时，跑 `scripts\build_windows_installer.ps1 -AllowUnsigned -Force` 和 `scripts\accept_windows_installer.ps1`，确认安装器 payload 不含 `.ps1`，并覆盖全新安装、升级、运行中保护、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留；任何自动验收都不得直接把内部验收件提升为公开发布就绪
 - 涉及 Python 后端时，运行相关 `pytest`
 
 如果某项无法验证，必须在回复或提交说明里明确写出原因和风险。

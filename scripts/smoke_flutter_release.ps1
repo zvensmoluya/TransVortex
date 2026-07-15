@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 $script:manualAcceptanceRequired = @(
     "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
     "AppUserModelID shortcut identity acceptance; rerun with -CheckAppIdentity",
-    "formal MSIX/MSI/NSIS/Inno installer acceptance"
+    "native Windows installer acceptance"
 )
 
 function Remove-SmokeManualAcceptanceRequirement {

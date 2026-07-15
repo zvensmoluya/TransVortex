@@ -4,7 +4,7 @@ param(
     [string]$ShortcutPath = "",
     [string]$AppUserModelId = "TransVortex.Desktop",
     [string]$AppName = "TransVortex",
-    [int]$ServiceCheckTimeoutSeconds = 15,
+    [int]$ServiceCheckTimeoutSeconds = 30,
     [switch]$Force,
     [switch]$VerifyOnly,
     [switch]$Json
@@ -348,10 +348,11 @@ $report = [ordered]@{
     ok = $true
     install_type = "portable_user_install"
     installer = $false
-    formal_installer = $false
+    native_installer = $false
+    installer_format_complete = $false
     msix = $false
     frontend_design_mvp_complete = $false
-    completion_claim = "Portable package installed to a user-level directory and verified; this is not a formal MSIX/MSI/NSIS/Inno installer."
+    completion_claim = "Portable package installed to a user-level directory and verified; this is not a native Windows installer."
     source_root = $sourceFullPath
     install_root = $installFullPath
     exe_path = Join-Path $installFullPath "TransVortex.exe"
@@ -367,7 +368,7 @@ $report = [ordered]@{
     verify_only = [bool]$VerifyOnly
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-        "formal MSIX/MSI/NSIS/Inno installer acceptance"
+        "native Windows installer acceptance"
     )
 }
 

@@ -418,7 +418,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 - `transvortex` 已以 wheel 安装到主 runtime，开发态继续使用仓库 `src/`。
 - FFmpeg 已采用固定 Windows x64 LGPL shared runtime，并通过安装目录、环境变量和 Python 自定位三层契约解析；公开发布仍需配套对应源码。
 - artifact、日志、配置、凭据目录如何定位。
-- Windows 正式安装包已采用 NSIS 用户级路径，覆盖 staging、失败回滚、升级清旧文件、运行进程保护、卸载注册和 AppUserModelID 快捷方式；仍需完成签名、公开源码配套、已安装路径通知中心和干净机验收。
+- Windows 原生安装包已采用 NSIS 用户级路径，覆盖 staging、失败回滚、升级清旧文件、运行进程保护、卸载注册和 AppUserModelID 快捷方式；当前版本为 `0.1.0` Alpha 内部验收件，仍需完成签名、公开源码配套、已安装路径通知中心和干净机验收。
 
 这些问题不属于“UI 细节”，而是 App Host / Local Service 架构的一部分。
 
@@ -432,7 +432,7 @@ Local Service pump 线程 -> 宽限期后仍未终止则 force cancel（终止 p
 2. **固定媒体 runtime 已进入安装器，但干净机器完整媒体任务仍未闭环。** 基础包包含固定 Python 3.13.14 主 runtime，以及 FFmpeg 8.1 LGPL shared 的 `ffmpeg.exe`、`ffprobe.exe` 和所需 DLL；自动验收已在受限 `PATH` 下从已安装目录真实执行两项工具并启动 Local Service。尚未在干净 Windows 虚拟机完成正式安装、首启和用户片源端到端任务，也尚未托管公开分发所需的完整对应源码。
 3. **缺少版本化初始化与迁移。** 当前初始化主要是“目录不存在则创建、配置不存在则复制”。已有 `pipeline.yaml` 不会随默认配置演进，也没有安装状态文件、配置 schema migration、迁移前备份和失败回滚。`providers_file_version` / `pipeline_file_version` 只是并发写保护，不是数据格式版本。
 4. **安装资源与运行资源没有完整统一。** 打包脚本复制 `prompts/` 和 `memory/presets/` 到只读包根，但正常 App 把 Local Service 的 `--root` 指向 `%LOCALAPPDATA%\TransVortex\Config`，目前只初始化 pipeline/provider YAML。当前 prompt 依靠代码内 fallback 继续工作，仍需明确版本化资源初始化与用户覆盖策略。
-5. **前后端兼容没有真正握手。** `service.info` 已返回 `protocol_version` 和 `app_version`，Dart 侧目前只解析，不校验可接受版本；Python `0.1.0` 与 Flutter `1.0.0+1` 的版本口径也尚未统一。
+5. **前后端兼容没有真正握手。** `service.info` 已返回 `protocol_version` 和 `app_version`，Dart 侧目前只解析，不校验可接受版本；Python 与 Flutter 的产品版本已经统一到 `0.1.0`，但仍需把兼容范围校验落到启动握手。
 
 #### 仍属过渡胶水的实现
 

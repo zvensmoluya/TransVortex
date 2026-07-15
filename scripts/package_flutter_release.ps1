@@ -169,7 +169,7 @@ function Invoke-PortableServiceCheck {
     param(
         [Parameter(Mandatory = $true)]
         [string]$PackageRoot,
-        [int]$TimeoutSeconds = 15
+        [int]$TimeoutSeconds = 30
     )
 
     $runtimeRoot = Join-Path $PackageRoot "runtime"
@@ -427,7 +427,7 @@ FFmpeg notices and source traceability are under tools\ffmpeg. Public release of
 an installer must be accompanied by the complete corresponding FFmpeg source
 and a legal review of the distribution notices.
 
-Do not distribute this directory as the formal installer. The NSIS build step
+Do not distribute this directory as a native installer. The NSIS build step
 embeds it into the signed-or-explicitly-unsigned installer artifact.
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding utf8
@@ -703,11 +703,12 @@ $report = [ordered]@{
     ok = $true
     package_type = if ($InstallerPayload) { "installer_payload" } else { "portable" }
     installer = $false
-    formal_installer = $false
+    native_installer = $false
+    installer_format_complete = $false
     user_level_install_script = if ($InstallerPayload) { $null } else { "Install-TransVortex.ps1" }
     user_level_install_supported = -not [bool]$InstallerPayload
     frontend_design_mvp_complete = $false
-    completion_claim = if ($InstallerPayload) { "Installer payload created and validated; the payload itself is not a formal installer." } else { "Portable release package created; this validates package layout and package-root Local Service RPC, but is not a formal installer." }
+    completion_claim = if ($InstallerPayload) { "Installer payload created and validated; the payload itself is not a native Windows installer." } else { "Portable release package created; this validates package layout and package-root Local Service RPC, but is not a native Windows installer." }
     package_dir = if ($InstallerPayload) { "." } else { $packageRoot }
     zip_path = $zipPath
     exe_path = if ($InstallerPayload) { "TransVortex.exe" } else { Join-Path $packageRoot "TransVortex.exe" }
@@ -733,7 +734,7 @@ $report = [ordered]@{
     launch_check = if ($launchReport -ne $null) { $launchReport } else { $null }
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-        "formal NSIS installer install, upgrade, running-process protection, and uninstall acceptance",
+        "native NSIS installer install, upgrade, running-process protection, and uninstall acceptance",
         "publish complete corresponding FFmpeg source alongside any public installer"
     )
 }

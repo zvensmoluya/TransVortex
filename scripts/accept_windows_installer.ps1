@@ -53,6 +53,20 @@ function Write-Utf8NoBom {
     )
 }
 
+function Get-EffectiveInstallRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RequestedPath
+    )
+
+    $requestedFullPath = Get-FullPath -Path $RequestedPath
+    $leaf = Split-Path -Leaf $requestedFullPath
+    if ([string]::Equals($leaf, "TransVortex", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $requestedFullPath
+    }
+    return Join-Path $requestedFullPath "TransVortex"
+}
+
 function Invoke-WaitingProcess {
     param(
         [Parameter(Mandatory = $true)]
@@ -73,6 +87,7 @@ function Assert-InstalledLayout {
     $required = @(
         "TransVortex.exe",
         "Uninstall.exe",
+        ".transvortex-install.ini",
         "flutter_windows.dll",
         "data\flutter_assets\FontManifest.json",
         "runtime\app_runtime.json",
@@ -90,6 +105,10 @@ function Assert-InstalledLayout {
     $powershellFiles = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Filter "*.ps1")
     if ($powershellFiles.Count -gt 0) {
         throw "Installed layout unexpectedly contains PowerShell scripts: $($powershellFiles.FullName -join ', ')"
+    }
+    $installMarker = Get-Content -LiteralPath (Join-Path $Root ".transvortex-install.ini") -Raw
+    if ($installMarker -notmatch '(?m)^AppId=TransVortex\s*$') {
+        throw "Installed layout has an invalid TransVortex ownership marker."
     }
 }
 
@@ -259,7 +278,17 @@ function Start-IsolatedInstalledApp {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-    $InstallerPath = Join-Path $repoRoot "dist\installer\windows\TransVortex-Setup-1.0.0.exe"
+    $installerOutputRoot = Join-Path $repoRoot "dist\installer\windows"
+    $candidateManifests = @(
+        Get-ChildItem -LiteralPath $installerOutputRoot -File -Filter "TransVortex-*-windows-x64-setup-*.manifest.json" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending
+    )
+    if ($candidateManifests.Count -eq 0) {
+        throw "No versioned Windows installer manifest was found under: $installerOutputRoot"
+    }
+    $manifestSuffix = ".manifest.json"
+    $manifestFullName = $candidateManifests[0].FullName
+    $InstallerPath = $manifestFullName.Substring(0, $manifestFullName.Length - $manifestSuffix.Length) + ".exe"
 }
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installerDirectory = Split-Path -Parent $resolvedInstaller
@@ -269,8 +298,8 @@ if (-not (Test-Path -LiteralPath $installerManifestPath)) {
     throw "Installer build manifest not found: $installerManifestPath"
 }
 $installerManifest = Get-Content -LiteralPath $installerManifestPath -Encoding utf8 -Raw | ConvertFrom-Json
-if (-not [bool]$installerManifest.formal_installer) {
-    throw "Installer manifest does not describe a formal installer."
+if (-not [bool]$installerManifest.native_installer -or -not [bool]$installerManifest.installer_format_complete) {
+    throw "Installer manifest does not describe a complete native installer."
 }
 $actualInstallerHash = (Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualInstallerHash -ne [string]$installerManifest.installer_sha256) {
@@ -280,9 +309,28 @@ if ($actualInstallerHash -ne [string]$installerManifest.installer_sha256) {
 $acceptanceId = [guid]::NewGuid().ToString("N")
 $acceptanceRoot = Join-Path $env:TEMP "transvortex-installer-acceptance-$acceptanceId"
 if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
-    $InstallRoot = Join-Path $acceptanceRoot "install"
+    $InstallRoot = Join-Path $acceptanceRoot "install-parent"
 }
-$installFullPath = Get-FullPath -Path $InstallRoot
+
+function Wait-PathRemoved {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (Test-Path -LiteralPath $Path) {
+        if ([DateTime]::UtcNow -ge $deadline) {
+            return $false
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return $true
+}
+$installerRequestedPath = Get-FullPath -Path $InstallRoot
+$installFullPath = Get-EffectiveInstallRoot -RequestedPath $installerRequestedPath
+Assert-PathInsideDirectory -Path $installerRequestedPath -Directory $acceptanceRoot
 Assert-PathInsideDirectory -Path $installFullPath -Directory $acceptanceRoot
 if ([string]::IsNullOrWhiteSpace($ReportPath)) {
     $ReportPath = Join-Path $installerDirectory "$installerBaseName.acceptance.json"
@@ -307,6 +355,11 @@ $userDataSentinel = Join-Path $userDataSentinelRoot "preserve.txt"
 $serviceRoot = Join-Path $acceptanceRoot "service"
 $isolatedProfile = Join-Path $acceptanceRoot "profile"
 $isolatedLocalAppData = Join-Path $acceptanceRoot "local-app-data"
+$unsafeParent = Join-Path $acceptanceRoot "unsafe-parent"
+$unsafeTarget = Join-Path $unsafeParent "TransVortex"
+$unsafeSentinel = Join-Path $unsafeTarget "unrelated-user-file.txt"
+$relocatedParent = Join-Path $acceptanceRoot "relocated-parent"
+$relocatedTarget = Join-Path $relocatedParent "TransVortex"
 $installedApp = $null
 $acceptanceSucceeded = $false
 $installed = $false
@@ -318,7 +371,21 @@ New-Item -ItemType Directory -Force -Path $userDataSentinelRoot | Out-Null
 Set-Content -LiteralPath $userDataSentinel -Value $acceptanceId -Encoding utf8
 
 try {
-    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installFullPath")
+    New-Item -ItemType Directory -Force -Path $unsafeTarget | Out-Null
+    Set-Content -LiteralPath $unsafeSentinel -Value $acceptanceId -Encoding utf8
+    $unsafeDirectoryExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$unsafeParent")
+    if ($unsafeDirectoryExit -ne 11) {
+        throw "Unsafe non-application directory returned $unsafeDirectoryExit instead of 11."
+    }
+    if (-not (Test-Path -LiteralPath $unsafeSentinel) -or (Test-Path -LiteralPath (Join-Path $unsafeTarget "TransVortex.exe"))) {
+        throw "Unsafe-directory protection changed an unrelated target directory."
+    }
+    $unsafeSentinelContent = (Get-Content -LiteralPath $unsafeSentinel -Encoding utf8 -Raw).Trim()
+    if ($unsafeSentinelContent -ne $acceptanceId) {
+        throw "Unsafe-directory protection changed the unrelated sentinel."
+    }
+
+    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($freshInstallExit -ne 0) {
         throw "Fresh silent install failed with exit code $freshInstallExit"
     }
@@ -339,9 +406,14 @@ try {
     $shortcutReport = (($shortcutJson | Out-String).Trim() | ConvertFrom-Json)
     $serviceReport = Invoke-InstalledServiceCheck -Root $installFullPath -ServiceRoot $serviceRoot -IsolatedProfile $isolatedProfile -TimeoutSeconds $ServiceTimeoutSeconds
 
+    $pathChangeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$relocatedParent")
+    if ($pathChangeExit -ne 12 -or (Test-Path -LiteralPath $relocatedTarget)) {
+        throw "Installed-path change protection failed. Exit=$pathChangeExit"
+    }
+
     $obsoleteMarker = Join-Path $installFullPath "obsolete-upgrade-marker.txt"
     Set-Content -LiteralPath $obsoleteMarker -Value "must be removed" -Encoding utf8
-    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installFullPath")
+    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($upgradeExit -ne 0) {
         throw "Silent upgrade failed with exit code $upgradeExit"
     }
@@ -358,7 +430,7 @@ try {
     $mutex = [System.Threading.Mutex]::OpenExisting("Local\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B")
     $mutex.Dispose()
 
-    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installFullPath")
+    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($blockedUpgradeExit -ne 10) {
         throw "Running-process install protection returned $blockedUpgradeExit instead of 10."
     }
@@ -380,6 +452,9 @@ try {
     $uninstallExit = Invoke-WaitingProcess -FilePath $uninstallerPath -ArgumentList @("/S")
     if ($uninstallExit -ne 0) {
         throw "Silent uninstall failed with exit code $uninstallExit"
+    }
+    if (-not (Wait-PathRemoved -Path $installFullPath)) {
+        throw "Install root was not removed within the uninstall timeout: $installFullPath"
     }
     $installed = $false
     if (Test-Path -LiteralPath $installFullPath) {
@@ -403,10 +478,17 @@ try {
         ok = $true
         installer_sha256 = $actualInstallerHash
         app_version = [string]$installerManifest.app_version
+        release_stage = [string]$installerManifest.release_stage
+        release_channel = [string]$installerManifest.release_channel
         install_scope = "per_user"
         custom_install_root = $true
+        dedicated_install_subdirectory = $true
+        unsafe_directory_block_exit_code = $unsafeDirectoryExit
+        unsafe_directory_preserved = $true
+        installed_path_change_block_exit_code = $pathChangeExit
         fresh_install_exit_code = $freshInstallExit
         installed_layout_ok = $true
+        install_ownership_marker_ok = $true
         installed_powershell_script_count = 0
         local_service = $serviceReport
         shortcut_app_user_model_id_ok = [bool]$shortcutReport.shortcut_app_user_model_id_ok
@@ -427,7 +509,7 @@ try {
     }
     Write-Utf8NoBom -Path $reportFullPath -Content ($report | ConvertTo-Json -Depth 10)
     $installerManifest.acceptance_complete = $true
-    $installerManifest.public_release_ready = [bool]$installerManifest.signing_and_source_prerequisites_present
+    $installerManifest.public_release_ready = $false
     $installerManifest | Add-Member -NotePropertyName acceptance_report -NotePropertyValue ([System.IO.Path]::GetFileName($reportFullPath)) -Force
     Write-Utf8NoBom -Path $installerManifestPath -Content ($installerManifest | ConvertTo-Json -Depth 10)
     $acceptanceSucceeded = $true
