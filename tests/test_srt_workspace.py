@@ -139,13 +139,62 @@ World
     assert delivery_file.exists()
     assert set(result["delivery"]) == {"srt", "ass"}
 
+    stale_checkpoint = store.load_checkpoint(task_id)
+    stale_checkpoint["quality_status"] = "WARN"
+    stale_checkpoint["quality_issue_counts"] = {"cps_too_high": 1}
+    stale_checkpoint["quality_residual_counts"] = {"over_hard_cps": 1}
+    stale_checkpoint["delivery_status"] = "WARN"
+    stale_checkpoint["delivery_issue_counts"] = {"srt": {"line_too_wide": 1}}
+    store.save_checkpoint(task_id, stale_checkpoint)
+
     edited = result["segments"]
     edited[0]["text_tgt"] = "改过的译文"
     saved = save_task_segments(root_dir=root, task_id=task_id, segments_payload=edited)
     assert saved["segments"][0]["text_tgt"] == "改过的译文"
-    reexported = reexport_task(root_dir=root, task_id=task_id, output_format="srt")
+    assert saved["quality"]["status"] == "PASS"
+    saved_checkpoint = store.load_checkpoint(task_id)
+    assert saved_checkpoint["quality_status"] == "PASS"
+    assert not any(saved_checkpoint["quality_residual_counts"].values())
+    assert saved_checkpoint["delivery_status"] == "WARN"
+    saved_task = store.load_task(task_id)
+    assert saved_task.settings["result_revision"] == 1
+    assert saved_task.settings["result_export_revision"] == 0
+    reexported = reexport_task(
+        root_dir=root,
+        task_id=task_id,
+        output_format="srt",
+        subtitle_bilingual_order="target_source",
+        subtitle_prefer_single_line=False,
+    )
     assert reexported["output_paths"]["srt"] == str(external_base.with_suffix(".srt"))
-    assert Path(reexported["output_paths"]["srt"]).read_text(encoding="utf-8").find("改过的译文") >= 0
+    bilingual_body = Path(reexported["output_paths"]["srt"]).read_text(encoding="utf-8")
+    assert bilingual_body.find("改过的译文") < bilingual_body.find("Hello")
+    assert reexported["subtitle_bilingual_order"] == "target_source"
+    assert reexported["subtitle_prefer_single_line"] is False
+    exported_task = store.load_task(task_id)
+    assert exported_task.settings["result_revision"] == 1
+    assert exported_task.settings["result_export_revision"] == 1
+    assert exported_task.settings["reexport_subtitle_ass_style"] == {
+        "bilingual_order": "target_source",
+        "prefer_single_line": False,
+    }
+    exported_checkpoint = store.load_checkpoint(task_id)
+    assert exported_checkpoint["delivery_status"] == "PASS"
+    assert not any(
+        count
+        for counts in exported_checkpoint["delivery_issue_counts"].values()
+        for count in counts.values()
+    )
+    reexported_vtt = reexport_task(
+        root_dir=root,
+        task_id=task_id,
+        output_format="vtt",
+        bilingual=True,
+        subtitle_bilingual_order="source_target",
+        subtitle_prefer_single_line=False,
+    )
+    vtt_body = Path(reexported_vtt["output_paths"]["vtt"]).read_text(encoding="utf-8")
+    assert vtt_body.find("Hello") < vtt_body.find("改过的译文")
     reexported_plain = reexport_task(root_dir=root, task_id=task_id, output_format="srt", bilingual=False)
     plain_body = Path(reexported_plain["output_paths"]["srt"]).read_text(encoding="utf-8")
     assert "Hello" not in plain_body
@@ -179,6 +228,21 @@ World
     events = store.read_events(task_id)
     assert any(event["type"] == "edited" for event in events)
     assert any(event["type"] == "reexported" for event in events)
+
+    incomplete = open_task_result(root_dir=root, task_id=task_id)["segments"]
+    incomplete[1]["text_tgt"] = ""
+    saved_incomplete = save_task_segments(root_dir=root, task_id=task_id, segments_payload=incomplete)
+    assert saved_incomplete["quality"]["status"] == "FAIL"
+    assert saved_incomplete["quality"]["segments_with_issues"] == 1
+    incomplete_checkpoint = store.load_checkpoint(task_id)
+    assert incomplete_checkpoint["quality_residual_counts"]["empty_target"] == 1
+
+    repaired = saved_incomplete["segments"]
+    repaired[1]["text_tgt"] = "第二句译文"
+    saved_repaired = save_task_segments(root_dir=root, task_id=task_id, segments_payload=repaired)
+    assert saved_repaired["quality"]["status"] == "PASS"
+    repaired_checkpoint = store.load_checkpoint(task_id)
+    assert not any(repaired_checkpoint["quality_residual_counts"].values())
 
 
 def test_srt_translate_can_export_lrc_on_first_run(tmp_path: Path, monkeypatch) -> None:

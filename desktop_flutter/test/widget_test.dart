@@ -3114,18 +3114,27 @@ void main() {
     expect(find.text('review-source.mp4'), findsOneWidget);
     expect(find.text('源语 英语 · 目标 简体中文'), findsOneWidget);
     expect(find.text('源语 en · 目标 zh-CN'), findsNothing);
-    expect(find.text('片段'), findsOneWidget);
-    expect(find.text('2'), findsWidgets);
-    expect(find.text('问题'), findsOneWidget);
-    expect(find.text('1'), findsWidgets);
+    expect(find.text('2 个片段'), findsOneWidget);
+    expect(find.text('1 条提示'), findsOneWidget);
+    expect(find.text('已有 SRT'), findsOneWidget);
     expect(find.text('导出复核'), findsOneWidget);
-    expect(find.text('将导出 SRT · 双语字幕'), findsOneWidget);
+    expect(find.text('将导出 SRT · 双语字幕 · 译文在前 · 尽量单行'), findsOneWidget);
     expect(find.text('已有输出 SRT review-source.zh-CN.srt'), findsOneWidget);
     expect(find.text('LRC'), findsOneWidget);
+    expect(find.text('问题 1 条'), findsOneWidget);
     expect(find.text('Good morning.'), findsOneWidget);
     expect(find.text('早上好。'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
     expect(find.text('字幕阅读速度偏快'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('下一条问题'));
+    await tester.pumpAndSettle();
+    expect(find.text('问题 1 / 1'), findsOneWidget);
+    expect(find.byIcon(Icons.bookmark_rounded), findsOneWidget);
+    expect(find.text('Good morning.'), findsOneWidget);
+    expect(find.text('Welcome back.'), findsNothing);
+    await tester.tap(find.text('全部'));
+    await tester.pump(const Duration(milliseconds: 100));
 
     final segmentSearch = find.widgetWithText(TextField, '搜索源文或译文');
     expect(segmentSearch, findsOneWidget);
@@ -3191,14 +3200,32 @@ void main() {
     final calls = <String>[];
     final paramsByMethod = <String, Map<String, Object?>>{};
     final dirtyStates = <bool>[];
+    var resultChanges = 0;
     var targetText = '早上好。';
+    var resultRevision = 0;
+    var resultExportRevision = 0;
+    var outputFormat = 'srt';
+    var exportBilingual = true;
+    var bilingualOrder = 'target_source';
+    var preferSingleLine = true;
 
     Map<String, Object?> resultPayload() => {
       'task': _task(
         taskId: 'tvx_review_edit_123456',
         status: 'DONE',
         inputFile: r'D:\media\review-source.mp4',
-        outputPaths: {'srt': r'D:\media\review-source.zh-CN.srt'},
+        outputPaths: {
+          outputFormat: 'D:\\media\\review-source.zh-CN.$outputFormat',
+        },
+        settings: {
+          'result_revision': resultRevision,
+          'result_export_revision': resultExportRevision,
+          'reexport_bilingual': exportBilingual,
+          'reexport_subtitle_ass_style': {
+            'bilingual_order': bilingualOrder,
+            'prefer_single_line': preferSingleLine,
+          },
+        },
       ),
       'segments': [
         {
@@ -3211,7 +3238,9 @@ void main() {
           'model': 'real-model',
         },
       ],
-      'output_paths': {'srt': r'D:\media\review-source.zh-CN.srt'},
+      'output_paths': {
+        outputFormat: 'D:\\media\\review-source.zh-CN.$outputFormat',
+      },
     };
 
     bridge.attachServiceCaller((method, params) async {
@@ -3222,9 +3251,15 @@ void main() {
         final segments = params['segments'] as List<Object?>;
         final first = segments.first as Map<Object?, Object?>;
         targetText = '${first['text_tgt']}';
+        resultRevision += 1;
         return resultPayload();
       }
       if (method == 'result.reexport') {
+        outputFormat = '${params['output_format']}';
+        exportBilingual = params['bilingual'] == true;
+        bilingualOrder = '${params['subtitle_bilingual_order']}';
+        preferSingleLine = params['subtitle_prefer_single_line'] == true;
+        resultExportRevision = resultRevision;
         return {
           'task_id': 'tvx_review_edit_123456',
           'output_paths': {'ass': r'D:\media\review-source.zh-CN.ass'},
@@ -3240,6 +3275,7 @@ void main() {
             taskId: 'tvx_review_edit_123456',
             bridge: bridge,
             onDirtyChanged: dirtyStates.add,
+            onResultChanged: () => resultChanges += 1,
           ),
         ),
       ),
@@ -3286,15 +3322,18 @@ void main() {
         paramsByMethod['result.segments.save']?['segments'] as List<Object?>;
     final savedFirst = savedSegments.first as Map<Object?, Object?>;
     expect(savedFirst['text_tgt'], '早上好，欢迎回来。');
-    expect(find.text('已保存修改'), findsOneWidget);
+    expect(find.text('修改已保存，字幕文件尚未更新'), findsOneWidget);
     expect(dirtyStates.last, isFalse);
+    expect(resultChanges, 1);
 
     expect(find.text('导出格式'), findsOneWidget);
     await tester.tap(find.text('ASS'));
     await tester.pump(const Duration(milliseconds: 100));
-    await tester.tap(find.byType(Switch).first);
+    await tester.tap(find.text('源文在前'));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('将导出 ASS · 单语字幕'), findsOneWidget);
+    await tester.tap(find.byType(Switch).last);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('将导出 ASS · 双语字幕 · 源文在前 · 自然换行'), findsOneWidget);
 
     await tester.tap(find.text('重新导出'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3303,12 +3342,122 @@ void main() {
     expect(paramsByMethod['result.reexport'], {
       'task_id': 'tvx_review_edit_123456',
       'output_format': 'ass',
-      'bilingual': false,
+      'bilingual': true,
+      'subtitle_bilingual_order': 'source_target',
+      'subtitle_prefer_single_line': false,
     });
     expect(calls.where((method) => method == 'result.open').length, 2);
-    expect(find.text('已重新导出字幕'), findsOneWidget);
+    expect(find.text('字幕文件已更新'), findsOneWidget);
+    expect(resultChanges, 2);
     expectNoFlutterException();
   });
+
+  testWidgets(
+    'result review keeps the workspace available after action failures',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 640));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      var targetText = '早上好。';
+      var resultRevision = 0;
+      var resultExportRevision = 0;
+      var saveAttempts = 0;
+      var exportAttempts = 0;
+
+      Map<String, Object?> resultPayload() => {
+        'task': _task(
+          taskId: 'tvx_review_retry_123456',
+          status: 'DONE',
+          inputFile: r'D:\media\review-retry.mp4',
+          outputPaths: {'srt': r'D:\media\review-retry.zh-CN.srt'},
+          settings: {
+            'result_revision': resultRevision,
+            'result_export_revision': resultExportRevision,
+          },
+        ),
+        'segments': [
+          {
+            'id': 1,
+            'start': 0.4,
+            'end': 2.8,
+            'text_src': 'Good morning.',
+            'text_tgt': targetText,
+          },
+        ],
+        'output_paths': {'srt': r'D:\media\review-retry.zh-CN.srt'},
+      };
+
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'result.open') return resultPayload();
+        if (method == 'result.segments.save') {
+          saveAttempts += 1;
+          if (saveAttempts == 1) {
+            throw RpcRemoteException('write_failed', '字幕修改暂时无法保存。');
+          }
+          final segments = params['segments'] as List<Object?>;
+          final first = segments.first as Map<Object?, Object?>;
+          targetText = '${first['text_tgt']}';
+          resultRevision += 1;
+          return resultPayload();
+        }
+        if (method == 'result.reexport') {
+          exportAttempts += 1;
+          if (exportAttempts == 1) {
+            throw RpcRemoteException('output_not_writable', '字幕文件暂时无法写入。');
+          }
+          resultExportRevision = resultRevision;
+          return {
+            'task_id': 'tvx_review_retry_123456',
+            'output_paths': {'srt': r'D:\media\review-retry.zh-CN.srt'},
+          };
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ResultReviewWorkspace(
+              taskId: 'tvx_review_retry_123456',
+              bridge: bridge,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextField, '输入译文'),
+        '早上好，已经校对。',
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('保存修改'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('字幕修改暂时无法保存。'), findsOneWidget);
+      expect(find.text('重试保存'), findsOneWidget);
+      expect(find.text('Good morning.'), findsOneWidget);
+      expect(find.text('早上好，已经校对。'), findsOneWidget);
+
+      await tester.tap(find.text('重试保存'));
+      await tester.pumpAndSettle();
+      expect(find.text('修改已保存，字幕文件尚未更新'), findsOneWidget);
+
+      await tester.tap(find.text('重新导出'));
+      await tester.pumpAndSettle();
+      expect(find.text('字幕文件暂时无法写入。'), findsOneWidget);
+      expect(find.text('重试导出'), findsOneWidget);
+      expect(find.text('Good morning.'), findsOneWidget);
+
+      await tester.tap(find.text('重试导出'));
+      await tester.pumpAndSettle();
+      expect(find.text('字幕文件已更新'), findsOneWidget);
+      expect(saveAttempts, 2);
+      expect(exportAttempts, 2);
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets('task processing window selects tasks and runs light actions', (
     tester,
@@ -3506,7 +3655,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('放弃未保存修改？'), findsOneWidget);
     expect(find.textContaining('关闭任务处理后'), findsOneWidget);
-    expect(find.byIcon(Icons.edit_note_rounded), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byIcon(Icons.edit_note_rounded),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.widgetWithText(TextButton, '继续校对'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(await closeRequest, isFalse);
@@ -3706,6 +3861,19 @@ void main() {
             },
           ),
           _task(
+            taskId: 'tvx_review_pending_export_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\pending-export.mp4',
+            taskDir: r'D:\artifacts\tvx_review_pending_export_123456',
+            outputPaths: {'srt': r'D:\media\pending-export.zh-CN.srt'},
+            runtime: {'state': 'terminal'},
+            settings: {'result_revision': 2, 'result_export_revision': 1},
+            progressDetail: {
+              'quality_status': 'PASS',
+              'delivery_status': 'PASS',
+            },
+          ),
+          _task(
             taskId: 'tvx_review_cancelled_123456',
             status: 'CANCELLED',
             inputFile: r'D:\media\cancelled.mp4',
@@ -3765,21 +3933,22 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('全部 3'), findsOneWidget);
+    expect(find.text('全部 4'), findsOneWidget);
     expect(find.text('制作中 0'), findsOneWidget);
     expect(find.text('待处理 0'), findsOneWidget);
-    expect(find.text('待校对 1'), findsOneWidget);
-    expect(find.text('已完成 2'), findsOneWidget);
+    expect(find.text('待校对 2'), findsOneWidget);
+    expect(find.text('已完成 3'), findsOneWidget);
     expect(find.text('已取消 1'), findsOneWidget);
     expect(find.text('还有字幕值得再看一眼'), findsOneWidget);
     expect(find.textContaining('3 条质量或交付提示'), findsOneWidget);
     expect(find.text('质量检查 有提醒'), findsOneWidget);
     expect(find.text('交付检查 有提醒'), findsOneWidget);
 
-    await tester.tap(find.text('待校对 1'));
+    await tester.tap(find.text('待校对 2'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('review-me.mp4'), findsWidgets);
+    expect(find.text('pending-export.mp4'), findsOneWidget);
     expect(find.text('clean.mp4'), findsNothing);
     expect(find.text('cancelled.mp4'), findsNothing);
 
@@ -3792,6 +3961,12 @@ void main() {
 
     await tester.tap(find.text('返回概览'));
     await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('pending-export.mp4'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('待导出 · 修改已保存'), findsOneWidget);
+    expect(find.textContaining('成品文件仍是旧版本'), findsOneWidget);
+
     await tester.tap(find.text('已取消 1'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3799,11 +3974,12 @@ void main() {
     expect(find.text('review-me.mp4'), findsNothing);
     expect(find.text('继续任务'), findsNothing);
 
-    await tester.tap(find.text('已完成 2'));
+    await tester.tap(find.text('已完成 3'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('review-me.mp4'), findsWidgets);
     expect(find.text('clean.mp4'), findsOneWidget);
+    expect(find.text('pending-export.mp4'), findsOneWidget);
     expect(find.text('cancelled.mp4'), findsNothing);
     expectNoFlutterException();
   });
@@ -3860,6 +4036,11 @@ void main() {
             settings: {
               'output_format': 'ass',
               'subtitle_ass_style': {
+                'bilingual_order': 'target_source',
+                'prefer_single_line': true,
+              },
+              'reexport_bilingual': false,
+              'reexport_subtitle_ass_style': {
                 'bilingual_order': 'source_target',
                 'prefer_single_line': false,
               },
@@ -3923,7 +4104,7 @@ void main() {
       'task_id': 'tvx_output_recovery_123456',
       'output_format': 'ass',
       'output_dir': r'E:\fixed-output',
-      'bilingual': true,
+      'bilingual': false,
       'subtitle_bilingual_order': 'source_target',
       'subtitle_prefer_single_line': false,
     });

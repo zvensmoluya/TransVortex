@@ -2172,11 +2172,17 @@ class TaskSummary {
   int get deliveryIssueCount =>
       _sumNumericLeaves(progressDetail['delivery_issue_counts']);
   int get reviewIssueCount => qualityResidualIssueCount + deliveryIssueCount;
+  int get resultRevision => _intValue(settings['result_revision']) ?? 0;
+  int get resultExportRevision =>
+      _intValue(settings['result_export_revision']) ?? 0;
+  bool get hasSavedResultPendingExport =>
+      isDone && resultRevision > resultExportRevision;
   bool get needsReview =>
       isDone &&
       ({'WARN', 'FAIL'}.contains(qualityStatus) ||
           {'WARN', 'FAIL'}.contains(deliveryStatus) ||
-          reviewIssueCount > 0);
+          reviewIssueCount > 0 ||
+          hasSavedResultPendingExport);
 
   double? get latestProgress {
     final progress = _numValue(raw['progress']);
@@ -2243,8 +2249,7 @@ class TaskResultWorkspace {
   int get issueCount {
     return segments.fold<int>(
       0,
-      (total, segment) =>
-          total + segment.issues.length + segment.qualityIssues.length,
+      (total, segment) => total + segment.issueCount,
     );
   }
 }
@@ -2307,6 +2312,49 @@ class ResultSegment {
   String get timeRangeLabel {
     return '${_formatTimestamp(start)} - ${_formatTimestamp(end)}';
   }
+
+  int get issueCount {
+    final keys = <String>{};
+    for (final issue in issues) {
+      final key = _resultIssueKey(issue);
+      if (key.isNotEmpty) keys.add(key);
+    }
+    for (final issue in qualityIssues) {
+      final code = _stringValue(issue['code']);
+      final message = _stringValue(issue['message']);
+      final key = _resultIssueKey(code ?? message ?? 'quality_issue');
+      if (key.isNotEmpty) keys.add(key);
+    }
+    return keys.length;
+  }
+}
+
+String _resultIssueKey(String value) {
+  final normalized = value.trim().toLowerCase();
+  if (normalized.isEmpty) return '';
+  if (normalized == 'cps_high' ||
+      normalized == 'cps_too_high' ||
+      normalized.contains('阅读速度')) {
+    return 'cps_too_high';
+  }
+  if (normalized == 'empty_target' || normalized.contains('译文为空')) {
+    return 'empty_target';
+  }
+  if (normalized == 'timeline_overlap' || normalized.contains('时间轴与上一条重叠')) {
+    return 'timeline_overlap';
+  }
+  if (normalized == 'invalid_timing' || normalized.contains('结束时间早于')) {
+    return 'invalid_timing';
+  }
+  if (normalized == 'too_many_lines' || normalized.contains('行数过多')) {
+    return 'too_many_lines';
+  }
+  if (normalized == 'line_too_wide' ||
+      normalized == 'line_too_long' ||
+      normalized.contains('单行过长')) {
+    return 'line_too_wide';
+  }
+  return normalized;
 }
 
 class _PendingRpc {

@@ -426,7 +426,10 @@ void main() {
           'chunk_id': 'chunk-1',
           'issues': ['译文为空'],
           'quality_issues': [
-            {'code': 'cps_high', 'message': 'too fast'},
+            {'code': 'empty_target', 'message': 'empty target'},
+            {'code': 'cps_too_high', 'message': 'too fast'},
+            {'code': 'line_too_long', 'message': 'long line'},
+            {'code': 'line_too_wide', 'message': 'wide line'},
           ],
         },
       ],
@@ -446,7 +449,7 @@ void main() {
     expect(workspace.segments.single.sourceText, 'Hello');
     expect(workspace.segments.single.targetText, '你好');
     expect(workspace.segments.single.provider, 'p1');
-    expect(workspace.issueCount, 2);
+    expect(workspace.issueCount, 3);
     expect(workspace.outputPaths, {'srt': r'D:\movie.zh-CN.srt'});
   });
 
@@ -1511,6 +1514,12 @@ routing:
       'status': 'FAILED',
       'progress_detail': {'quality_status': 'WARN'},
     });
+    final pendingExport = TaskSummary.fromJson({
+      'task_id': 'tvx_pending_export',
+      'status': 'DONE',
+      'settings': {'result_revision': 3, 'result_export_revision': 2},
+      'progress_detail': {'quality_status': 'PASS', 'delivery_status': 'PASS'},
+    });
 
     expect(review.qualityStatus, 'WARN');
     expect(review.deliveryStatus, 'FAIL');
@@ -1520,6 +1529,9 @@ routing:
     expect(review.needsReview, isTrue);
     expect(clean.needsReview, isFalse);
     expect(failed.needsReview, isFalse);
+    expect(pendingExport.hasSavedResultPendingExport, isTrue);
+    expect(pendingExport.reviewIssueCount, 0);
+    expect(pendingExport.needsReview, isTrue);
   });
 
   test('TaskSummary does not infer task type from legacy file extension', () {

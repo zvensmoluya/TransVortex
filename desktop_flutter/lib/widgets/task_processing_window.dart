@@ -123,6 +123,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String _smokeEditedText = '';
   String _smokeReexportFormat = '';
   bool? _smokeReexportBilingual;
+  String _smokeReexportBilingualOrder = '';
+  bool? _smokeReexportPreferSingleLine;
+  bool _smokeReexportStyleApplied = false;
+  bool _smokeReexportOutputUsesRequestedOrder = false;
   bool _smokeResumeAttempted = false;
   bool _smokeResumeOk = false;
   String _smokeResumeStatus = '';
@@ -226,6 +230,22 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                 _taskSearchController.text,
               ),
             );
+          } else if (_smokeScenario == 'edit') {
+            reportTasks = await _client.taskList();
+            reportSelected = _selectedTask(reportTasks);
+            if (mounted && reportSelected != null) {
+              setState(() {
+                _tasks = reportTasks;
+                _selectedTaskId = reportSelected?.taskId;
+                _editingTaskId = null;
+              });
+              await WidgetsBinding.instance.endOfFrame;
+              if (mounted) {
+                setState(() => _editingTaskId = reportSelected?.taskId);
+                await Future<void>.delayed(const Duration(milliseconds: 300));
+                if (mounted) await WidgetsBinding.instance.endOfFrame;
+              }
+            }
           } else if (_smokeScenario == 'resume' || _smokeScenario == 'cancel') {
             reportTasks = await _client.taskList();
             reportSelected = _selectedTask(reportTasks);
@@ -791,12 +811,20 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       _error = null;
     });
     try {
-      final subtitleStyle = _stringMap(task.settings['subtitle_ass_style']);
+      final reexportStyle = _stringMap(
+        task.settings['reexport_subtitle_ass_style'],
+      );
+      final subtitleStyle = reexportStyle.isNotEmpty
+          ? reexportStyle
+          : _stringMap(task.settings['subtitle_ass_style']);
+      final reexportBilingual = _firstDiagnosticBool(task.settings, const [
+        'reexport_bilingual',
+      ]);
       await _client.resultReexport(
         task.taskId,
         outputFormat: _taskOutputFormat(task),
         outputDir: outputDirectory,
-        bilingual: task.bilingual,
+        bilingual: reexportBilingual ?? task.bilingual,
         subtitleBilingualOrder: _stringValue(subtitleStyle['bilingual_order']),
         subtitlePreferSingleLine: _firstDiagnosticBool(subtitleStyle, const [
           'prefer_single_line',
@@ -936,13 +964,22 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _smokeResultSegmentCount = saved.segments.length;
     _smokeResultIssueCount = saved.issueCount;
     _smokeReexportFormat = 'ass';
-    _smokeReexportBilingual = false;
+    _smokeReexportBilingual = true;
+    _smokeReexportBilingualOrder = 'source_target';
+    _smokeReexportPreferSingleLine = false;
     final reexported = await _client.resultReexport(
       task.taskId,
       outputFormat: _smokeReexportFormat,
-      bilingual: _smokeReexportBilingual ?? false,
+      bilingual: _smokeReexportBilingual ?? true,
+      subtitleBilingualOrder: _smokeReexportBilingualOrder,
+      subtitlePreferSingleLine: _smokeReexportPreferSingleLine,
     );
     _smokeReexported = reexported.isNotEmpty;
+    _smokeReexportStyleApplied =
+        _stringValue(reexported['subtitle_bilingual_order']) ==
+            _smokeReexportBilingualOrder &&
+        reexported['subtitle_prefer_single_line'] ==
+            _smokeReexportPreferSingleLine;
     final outputPaths = _stringMap(reexported['output_paths']);
     final outputPath =
         _stringValue(outputPaths['ass']) ??
@@ -954,6 +991,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       if (await output.exists()) {
         final text = await output.readAsString(encoding: utf8);
         _smokeOutputContainsEdit = text.contains(_smokeEditedText);
+        final sourceIndex = text.indexOf(first.sourceText);
+        final targetIndex = text.indexOf(_smokeEditedText);
+        _smokeReexportOutputUsesRequestedOrder =
+            sourceIndex >= 0 && targetIndex >= 0 && sourceIndex < targetIndex;
       }
     }
   }
@@ -1029,6 +1070,12 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_edited_text': _smokeEditedText,
       'task_processing_reexport_format': _smokeReexportFormat,
       'task_processing_reexport_bilingual': _smokeReexportBilingual,
+      'task_processing_reexport_bilingual_order': _smokeReexportBilingualOrder,
+      'task_processing_reexport_prefer_single_line':
+          _smokeReexportPreferSingleLine,
+      'task_processing_reexport_style_applied': _smokeReexportStyleApplied,
+      'task_processing_reexport_output_uses_requested_order':
+          _smokeReexportOutputUsesRequestedOrder,
       'task_processing_resume_attempted': _smokeResumeAttempted,
       'task_processing_resume_ok': _smokeResumeOk,
       'task_processing_resume_status': _smokeResumeStatus,
@@ -1133,6 +1180,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onOpenResult: (task) => unawaited(_openResult(task)),
                   onCloseEditor: () => unawaited(_leaveResultEditor()),
                   onResultDirtyChanged: _handleResultDirtyChanged,
+                  onResultChanged: () => unawaited(_loadTasks()),
                   onResume: (task) => unawaited(_resumeTask(task)),
                   onRetranslate: (task) => unawaited(_retranslateTask(task)),
                   onCancel: (task) => unawaited(_cancelTask(task)),
@@ -1204,6 +1252,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResultDirtyChanged,
+    required this.onResultChanged,
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
@@ -1247,6 +1296,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<bool> onResultDirtyChanged;
+  final VoidCallback onResultChanged;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
@@ -1305,6 +1355,7 @@ class _TaskProcessingBody extends StatelessWidget {
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
             onResultDirtyChanged: onResultDirtyChanged,
+            onResultChanged: onResultChanged,
             onResume: onResume,
             onRetranslate: onRetranslate,
             onCancel: onCancel,
@@ -1751,6 +1802,7 @@ class _TaskPreview extends StatelessWidget {
     required this.onOpenResult,
     required this.onCloseEditor,
     required this.onResultDirtyChanged,
+    required this.onResultChanged,
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
@@ -1784,6 +1836,7 @@ class _TaskPreview extends StatelessWidget {
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
   final ValueChanged<bool> onResultDirtyChanged;
+  final VoidCallback onResultChanged;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
@@ -1827,6 +1880,7 @@ class _TaskPreview extends StatelessWidget {
               transportOverride: resultTransportOverride,
               focusIssuesInitially: task.needsReview,
               onDirtyChanged: onResultDirtyChanged,
+              onResultChanged: onResultChanged,
             ),
           ),
         ],
@@ -2142,6 +2196,8 @@ class _TaskSummaryPanel extends StatelessWidget {
               value: '${task.reviewIssueCount} 条',
               warn: true,
             ),
+          if (task.hasSavedResultPendingExport)
+            const _InfoPill(label: '字幕文件', value: '等待更新', warn: true),
         ],
       ),
     );
@@ -2611,6 +2667,7 @@ String _taskActionabilityLabel(TaskSummary task) {
   }
   if (task.canResume) return '可继续任务';
   if (task.canCancel) return '可取消任务';
+  if (task.hasSavedResultPendingExport) return '修改待导出';
   if (task.needsReview) return '待校对';
   if (task.isDone) return '可编辑结果';
   if (task.isFailed || task.isRuntimeStale) return '无可用恢复动作';
@@ -2830,11 +2887,15 @@ String _taskSubtitle(TaskSummary task) {
 }
 
 String _taskReviewSummary(TaskSummary task) {
+  if (task.hasSavedResultPendingExport) return '待导出 · 修改已保存';
   final count = task.reviewIssueCount;
   return count > 0 ? '待校对 · $count 条提示' : '待校对 · 有检查提醒';
 }
 
 String _taskReviewDetail(TaskSummary task) {
+  if (task.hasSavedResultPendingExport) {
+    return '字幕修改已经保存，但成品文件仍是旧版本；打开字幕后重新导出即可更新。';
+  }
   final count = task.reviewIssueCount;
   if (count > 0) {
     return '还有 $count 条质量或交付提示，打开字幕会先显示有问题的片段。';

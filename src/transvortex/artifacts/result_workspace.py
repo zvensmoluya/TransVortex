@@ -4,12 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from ..app.config import load_app_config
-from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..app.models import Segment
-from ..utils import read_json, read_jsonl, to_plain, write_json
-from .task_store import TaskStore
+from ..core.subtitle_optimizer import evaluate_subtitle_quality
+from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..memory.schema import entry_from_dict, normalize_status
 from ..memory.store import MemoryStore
+from ..utils import read_json, read_jsonl, to_plain, write_json
+from .task_store import TaskStore
 
 
 def _task_paths(store: TaskStore, task_id: str) -> dict[str, Path]:
@@ -116,6 +117,28 @@ def _issues_for_segments(segments: list[Segment], max_cps: int) -> dict[int, lis
     return issues
 
 
+def _manual_edit_issue_summary(segments: list[Segment]) -> tuple[dict[str, int], set[int]]:
+    counts = {
+        "invalid_timing": 0,
+        "timeline_overlap": 0,
+        "empty_target": 0,
+    }
+    segment_ids: set[int] = set()
+    previous: Segment | None = None
+    for segment in sorted(segments, key=lambda item: (item.start, item.end, item.id)):
+        if segment.end <= segment.start:
+            counts["invalid_timing"] += 1
+            segment_ids.add(segment.id)
+        if previous is not None and segment.start < previous.end:
+            counts["timeline_overlap"] += 1
+            segment_ids.add(segment.id)
+        if not (segment.text_tgt or "").strip():
+            counts["empty_target"] += 1
+            segment_ids.add(segment.id)
+        previous = segment
+    return counts, segment_ids
+
+
 def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     config = load_app_config(root_dir=root_dir)
     store = TaskStore(config.pipeline.artifacts_dir)
@@ -195,9 +218,46 @@ def save_task_segments(*, root_dir: Path, task_id: str, segments_payload: list[d
     segments = sorted([_segment_from_payload(row) for row in segments_payload], key=lambda item: (item.start, item.end, item.id))
     paths = _task_paths(store, task_id)
     write_json(paths["final"] / "segments.final.json", segments)
+    quality_report = evaluate_subtitle_quality(segments, config.pipeline.subtitle.quality)
+    quality_summary = dict(quality_report.get("summary") or {})
+    manual_issue_counts, manual_issue_segment_ids = _manual_edit_issue_summary(segments)
+    quality_issue_counts = dict(quality_summary.get("issue_counts") or {})
+    quality_residual_counts = dict(quality_summary.get("residual_counts") or {})
+    quality_issue_counts.update(manual_issue_counts)
+    quality_residual_counts.update(manual_issue_counts)
+    if any(manual_issue_counts.values()):
+        quality_summary["status"] = "FAIL"
+    quality_issue_segment_ids = {
+        int(row["id"])
+        for row in quality_report.get("segments", [])
+        if row.get("issues")
+    }
+    quality_summary["segments_with_issues"] = len(quality_issue_segment_ids | manual_issue_segment_ids)
+    quality_summary["issue_counts"] = quality_issue_counts
+    quality_summary["residual_counts"] = quality_residual_counts
+    quality_report["summary"] = quality_summary
+    write_json(paths["quality"] / "subtitle_quality.json", quality_report)
+    checkpoint = store.load_checkpoint(task_id)
+    checkpoint["quality_status"] = str(quality_summary.get("status") or "")
+    checkpoint["quality_issue_counts"] = quality_issue_counts
+    checkpoint["quality_residual_counts"] = quality_residual_counts
+    store.save_checkpoint(task_id, checkpoint)
+    previous_revision = _settings_revision(task.settings, "result_revision")
+    task.settings.setdefault("result_export_revision", previous_revision)
+    task.settings["result_revision"] = previous_revision + 1
     task.settings["edited"] = True
     store.save_task(task)
-    store.append_event(task_id, "edited", stage="EDIT", message="Task result segments edited", details={"segments": len(segments)})
+    store.append_event(
+        task_id,
+        "edited",
+        stage="EDIT",
+        message="Task result segments edited",
+        details={
+            "segments": len(segments),
+            "quality_status": checkpoint["quality_status"],
+            "quality_residual_counts": checkpoint["quality_residual_counts"],
+        },
+    )
     return open_task_result(root_dir=root_dir, task_id=task_id)
 
 
@@ -254,6 +314,13 @@ def _optional_bool(value: bool | str | None, default: bool) -> bool:
     return default
 
 
+def _settings_revision(settings: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(settings.get(key, 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _primary_output_base(task: Any, paths: dict[str, Path], output_dir: str | None = None) -> Path:
     if output_dir and output_dir.strip():
         stem = Path(task.input_file).stem
@@ -303,13 +370,23 @@ def reexport_task(
     output_paths: dict[str, Path] = {}
     if normalized in {"srt", "both"}:
         output_paths["srt"] = base.parent / f"{base.name}.srt"
-        export_srt(segments, output_paths["srt"], effective_bilingual)
+        export_srt(
+            segments,
+            output_paths["srt"],
+            effective_bilingual,
+            style=config.pipeline.subtitle_ass_style,
+        )
     if normalized in {"ass", "both"}:
         output_paths["ass"] = base.parent / f"{base.name}.ass"
         export_ass(segments, output_paths["ass"], bilingual=effective_bilingual, style=config.pipeline.subtitle_ass_style)
     if normalized == "vtt":
         output_paths["vtt"] = base.parent / f"{base.name}.vtt"
-        export_vtt(segments, output_paths["vtt"], effective_bilingual)
+        export_vtt(
+            segments,
+            output_paths["vtt"],
+            effective_bilingual,
+            style=config.pipeline.subtitle_ass_style,
+        )
     if normalized == "lrc":
         output_paths["lrc"] = base.parent / f"{base.name}.lrc"
         export_lrc(segments, output_paths["lrc"], effective_bilingual, style=config.pipeline.subtitle_ass_style)
@@ -324,10 +401,35 @@ def reexport_task(
         if fmt != "lrc"
     }
     delivery_file = paths["quality"] / "subtitle_delivery.json"
+    checkpoint = store.load_checkpoint(task_id)
+    checkpoint.pop("delivery_status", None)
+    checkpoint.pop("delivery_issue_counts", None)
     if delivery_reports:
         write_json(delivery_file, delivery_reports)
+        delivery_summary = {
+            fmt: dict(report.get("summary") or {})
+            for fmt, report in delivery_reports.items()
+            if isinstance(report, dict)
+        }
+        delivery_statuses = [
+            str(summary.get("status") or "")
+            for summary in delivery_summary.values()
+        ]
+        checkpoint["delivery_status"] = (
+            "FAIL"
+            if "FAIL" in delivery_statuses
+            else "WARN"
+            if "WARN" in delivery_statuses
+            else "PASS"
+        )
+        checkpoint["delivery_issue_counts"] = {
+            fmt: dict(summary.get("issue_counts") or {})
+            for fmt, summary in delivery_summary.items()
+        }
     elif delivery_file.exists():
         delivery_file.unlink()
+    checkpoint["status"] = "DONE"
+    store.save_checkpoint(task_id, checkpoint)
     output_payload = {key: str(path) for key, path in output_paths.items()}
     primary = output_payload.get("srt") or output_payload.get("ass") or output_payload.get("vtt") or output_payload.get("lrc")
     store.update_task_status(task_id, "DONE", output_path=primary, output_paths=output_payload)
@@ -339,6 +441,9 @@ def reexport_task(
         "bilingual_order": config.pipeline.subtitle_ass_style.bilingual_order,
         "prefer_single_line": config.pipeline.subtitle_ass_style.prefer_single_line,
     }
+    result_revision = _settings_revision(task.settings, "result_revision")
+    task.settings["result_revision"] = result_revision
+    task.settings["result_export_revision"] = result_revision
     store.save_task(task)
     store.append_event(
         task_id,
@@ -347,4 +452,13 @@ def reexport_task(
         message=f"Re-exported {normalized.upper()} subtitles",
         details={"output_path": primary or "", "output_paths": output_payload},
     )
-    return {"task_id": task_id, "output_path": primary, "output_paths": output_payload, "bilingual": effective_bilingual}
+    return {
+        "task_id": task_id,
+        "output_path": primary,
+        "output_paths": output_payload,
+        "bilingual": effective_bilingual,
+        "subtitle_bilingual_order": config.pipeline.subtitle_ass_style.bilingual_order,
+        "subtitle_prefer_single_line": config.pipeline.subtitle_ass_style.prefer_single_line,
+        "result_revision": result_revision,
+        "result_export_revision": result_revision,
+    }

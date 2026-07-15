@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../model/task_labels.dart';
 import '../services/app_service_client.dart';
@@ -14,6 +15,7 @@ class ResultReviewWorkspace extends StatefulWidget {
     required this.bridge,
     this.transportOverride,
     this.onDirtyChanged,
+    this.onResultChanged,
     this.focusIssuesInitially = false,
   });
 
@@ -21,6 +23,7 @@ class ResultReviewWorkspace extends StatefulWidget {
   final WindowStateBridge bridge;
   final AppServiceTransport? transportOverride;
   final ValueChanged<bool>? onDirtyChanged;
+  final VoidCallback? onResultChanged;
   final bool focusIssuesInitially;
 
   @override
@@ -30,18 +33,28 @@ class ResultReviewWorkspace extends StatefulWidget {
 class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   late final AppServiceClient _client;
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _segmentScrollController = ScrollController();
   final Map<int, TextEditingController> _segmentControllers = {};
+  final Map<int, FocusNode> _segmentFocusNodes = {};
+  final Map<int, GlobalKey> _segmentKeys = {};
   TaskResultWorkspace? _result;
   String? _error;
+  String? _actionError;
+  _FailedReviewAction? _failedAction;
   bool _loading = false;
   bool _saving = false;
   bool _reexporting = false;
   bool _dirty = false;
+  bool _exportedInSession = false;
   String _notice = '';
   String? _selectedOutputFormat;
   bool? _selectedBilingual;
+  String? _selectedBilingualOrder;
+  bool? _selectedPreferSingleLine;
+  _ExportSelection? _exportBaseline;
   _SegmentFilter _filter = _SegmentFilter.all;
   bool _filterInitialized = false;
+  int? _selectedSegmentId;
 
   String get _taskId => widget.taskId?.trim() ?? '';
 
@@ -63,22 +76,34 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     for (final controller in _segmentControllers.values) {
       controller.dispose();
     }
+    for (final focusNode in _segmentFocusNodes.values) {
+      focusNode.dispose();
+    }
     _segmentControllers.clear();
+    _segmentFocusNodes.clear();
+    _segmentKeys.clear();
     if (_searchController.text.isNotEmpty) {
       _searchController.clear();
     }
     setState(() {
       _result = null;
       _error = null;
+      _actionError = null;
+      _failedAction = null;
       _loading = false;
       _saving = false;
       _reexporting = false;
+      _exportedInSession = false;
       _updateDirty(false);
       _notice = '';
       _selectedOutputFormat = null;
       _selectedBilingual = null;
+      _selectedBilingualOrder = null;
+      _selectedPreferSingleLine = null;
+      _exportBaseline = null;
       _filter = _SegmentFilter.all;
       _filterInitialized = false;
+      _selectedSegmentId = null;
     });
     unawaited(_loadResult());
   }
@@ -86,8 +111,12 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   @override
   void dispose() {
     _searchController.dispose();
+    _segmentScrollController.dispose();
     for (final controller in _segmentControllers.values) {
       controller.dispose();
+    }
+    for (final focusNode in _segmentFocusNodes.values) {
+      focusNode.dispose();
     }
     super.dispose();
   }
@@ -110,29 +139,43 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() {
       _loading = true;
       _error = null;
+      _actionError = null;
+      _failedAction = null;
     });
     try {
       final result = await _client.openTaskResult(taskId);
       if (!mounted) return;
       _syncSegmentControllers(result);
+      _initializeExportSelection(result);
       setState(() {
         _result = result;
-        _selectedOutputFormat ??= _outputFormatFor(result);
-        _selectedBilingual ??= result.task.bilingual;
         if (!_filterInitialized) {
           _filter = widget.focusIssuesInitially && result.issueCount > 0
               ? _SegmentFilter.issues
               : _SegmentFilter.all;
           _filterInitialized = true;
         }
+        if (_selectedSegmentId == null && _filter == _SegmentFilter.issues) {
+          final issues = _issueSegments(result);
+          if (issues.isNotEmpty) _selectedSegmentId = issues.first.id;
+        }
         _loading = false;
         _updateDirty(false);
+        _actionError = null;
+        _failedAction = null;
+        _exportedInSession = false;
         _notice = '';
       });
     } on Object catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = _friendlyResultError(error);
+        final message = _friendlyResultError(error);
+        if (_result == null) {
+          _error = message;
+        } else {
+          _actionError = message;
+          _failedAction = _FailedReviewAction.refresh;
+        }
         _loading = false;
       });
     }
@@ -156,6 +199,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         .toList();
     for (final id in stale) {
       _segmentControllers.remove(id)?.dispose();
+      _segmentFocusNodes.remove(id)?.dispose();
+      _segmentKeys.remove(id);
     }
   }
 
@@ -165,6 +210,20 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       controller.addListener(_handleSegmentTextChanged);
       return controller;
     });
+  }
+
+  FocusNode _focusNodeFor(ResultSegment segment) {
+    return _segmentFocusNodes.putIfAbsent(
+      segment.id,
+      () => FocusNode(debugLabel: 'result-segment-${segment.id}'),
+    );
+  }
+
+  GlobalKey _keyFor(ResultSegment segment) {
+    return _segmentKeys.putIfAbsent(
+      segment.id,
+      () => GlobalKey(debugLabel: 'result-segment-${segment.id}'),
+    );
   }
 
   bool _hasModifiedSegments(TaskResultWorkspace result) {
@@ -185,7 +244,12 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     if (!shouldRebuild) return;
     setState(() {
       _updateDirty(dirty);
-      if (dirty) _notice = '';
+      if (dirty) {
+        _notice = '';
+        _actionError = null;
+        _failedAction = null;
+        _exportedInSession = false;
+      }
     });
   }
 
@@ -209,7 +273,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() {
       _updateDirty(false);
       _notice = '已放弃未保存修改';
-      _error = null;
+      _actionError = null;
+      _failedAction = null;
     });
   }
 
@@ -223,7 +288,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() {
       _updateDirty(dirty);
       _notice = dirty ? '' : '已还原片段修改';
-      _error = null;
+      _actionError = null;
+      _failedAction = null;
     });
   }
 
@@ -232,7 +298,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     if (result == null || _saving) return result;
     setState(() {
       _saving = true;
-      _error = null;
+      _actionError = null;
+      _failedAction = null;
       _notice = '';
     });
     try {
@@ -255,13 +322,16 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _result = saved;
         _updateDirty(false);
         _saving = false;
-        _notice = '已保存修改';
+        _exportedInSession = false;
+        _notice = '';
       });
+      widget.onResultChanged?.call();
       return saved;
     } on Object catch (error) {
       if (!mounted) return null;
       setState(() {
-        _error = _friendlyResultError(error);
+        _actionError = _friendlyResultError(error);
+        _failedAction = _FailedReviewAction.save;
         _saving = false;
       });
       return null;
@@ -273,7 +343,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     if (result == null || _reexporting) return null;
     setState(() {
       _reexporting = true;
-      _error = null;
+      _actionError = null;
+      _failedAction = null;
       _notice = '';
     });
     try {
@@ -291,6 +362,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _taskId,
         outputFormat: _exportFormatFor(result),
         bilingual: _exportBilingualFor(result),
+        subtitleBilingualOrder: _exportBilingualOrderFor(result),
+        subtitlePreferSingleLine: _exportPreferSingleLineFor(result),
       );
       final refreshed = await _client.openTaskResult(_taskId);
       if (!mounted) return reexported;
@@ -299,13 +372,17 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _result = refreshed;
         _updateDirty(false);
         _reexporting = false;
-        _notice = '已重新导出字幕';
+        _exportBaseline = _currentExportSelection(refreshed);
+        _exportedInSession = true;
+        _notice = '';
       });
+      widget.onResultChanged?.call();
       return reexported;
     } on Object catch (error) {
       if (!mounted) return null;
       setState(() {
-        _error = _friendlyResultError(error);
+        _actionError = _friendlyResultError(error);
+        _failedAction = _FailedReviewAction.reexport;
         _reexporting = false;
       });
       return null;
@@ -333,10 +410,93 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     return _selectedBilingual ?? result.task.bilingual;
   }
 
+  String _exportBilingualOrderFor(TaskResultWorkspace result) {
+    return _normalizeBilingualOrder(_selectedBilingualOrder) ??
+        _exportSelectionFor(result).bilingualOrder;
+  }
+
+  bool _exportPreferSingleLineFor(TaskResultWorkspace result) {
+    return _selectedPreferSingleLine ??
+        _exportSelectionFor(result).preferSingleLine;
+  }
+
+  void _initializeExportSelection(TaskResultWorkspace result) {
+    if (_exportBaseline != null) return;
+    final selection = _exportSelectionFor(result);
+    _selectedOutputFormat = selection.outputFormat;
+    _selectedBilingual = selection.bilingual;
+    _selectedBilingualOrder = selection.bilingualOrder;
+    _selectedPreferSingleLine = selection.preferSingleLine;
+    _exportBaseline = selection;
+  }
+
+  _ExportSelection _exportSelectionFor(TaskResultWorkspace result) {
+    final task = result.task;
+    final reexportStyle = _stringMap(
+      task.settings['reexport_subtitle_ass_style'],
+    );
+    final taskStyle = _stringMap(task.settings['subtitle_ass_style']);
+    final style = reexportStyle.isNotEmpty ? reexportStyle : taskStyle;
+    return (
+      outputFormat: _outputFormatFor(result),
+      bilingual:
+          _boolValue(task.settings['reexport_bilingual']) ?? task.bilingual,
+      bilingualOrder:
+          _normalizeBilingualOrder(_stringValue(style['bilingual_order'])) ??
+          'target_source',
+      preferSingleLine: _boolValue(style['prefer_single_line']) ?? true,
+    );
+  }
+
+  _ExportSelection _currentExportSelection(TaskResultWorkspace result) {
+    return (
+      outputFormat: _exportFormatFor(result),
+      bilingual: _exportBilingualFor(result),
+      bilingualOrder: _exportBilingualOrderFor(result),
+      preferSingleLine: _exportPreferSingleLineFor(result),
+    );
+  }
+
+  bool _hasExportSelectionChanges(TaskResultWorkspace result) {
+    final baseline = _exportBaseline;
+    return baseline != null && baseline != _currentExportSelection(result);
+  }
+
+  _ReviewFlowState _flowState(TaskResultWorkspace result) {
+    if (_reexporting) return _ReviewFlowState.exporting;
+    if (_saving) return _ReviewFlowState.saving;
+    if (_actionError != null) return _ReviewFlowState.failed;
+    if (_dirty) return _ReviewFlowState.dirty;
+    if (result.task.hasSavedResultPendingExport ||
+        _hasExportSelectionChanges(result)) {
+      return _ReviewFlowState.savedPendingExport;
+    }
+    if (_exportedInSession) return _ReviewFlowState.exported;
+    return _ReviewFlowState.synced;
+  }
+
+  String _flowMessage(TaskResultWorkspace result) {
+    return switch (_flowState(result)) {
+      _ReviewFlowState.synced => _notice.isNotEmpty ? _notice : '字幕内容与已导出文件一致',
+      _ReviewFlowState.dirty => '有未保存修改',
+      _ReviewFlowState.saving => '正在保存字幕修改…',
+      _ReviewFlowState.savedPendingExport =>
+        result.task.hasSavedResultPendingExport
+            ? '修改已保存，字幕文件尚未更新'
+            : '交付方案已调整，尚未重新导出',
+      _ReviewFlowState.exporting => '正在生成新的字幕文件…',
+      _ReviewFlowState.exported => '字幕文件已更新',
+      _ReviewFlowState.failed => _actionError ?? '操作没有完成，请重试。',
+    };
+  }
+
   void _setOutputFormat(String format) {
     setState(() {
       _selectedOutputFormat = _normalizeOutputFormat(format);
       _notice = '';
+      _actionError = null;
+      _failedAction = null;
+      _exportedInSession = false;
     });
   }
 
@@ -344,12 +504,117 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() {
       _selectedBilingual = value;
       _notice = '';
+      _actionError = null;
+      _failedAction = null;
+      _exportedInSession = false;
     });
+  }
+
+  void _setBilingualOrder(String value) {
+    setState(() {
+      _selectedBilingualOrder = _normalizeBilingualOrder(value);
+      _notice = '';
+      _actionError = null;
+      _failedAction = null;
+      _exportedInSession = false;
+    });
+  }
+
+  void _setPreferSingleLine(bool value) {
+    setState(() {
+      _selectedPreferSingleLine = value;
+      _notice = '';
+      _actionError = null;
+      _failedAction = null;
+      _exportedInSession = false;
+    });
+  }
+
+  List<ResultSegment> _issueSegments(TaskResultWorkspace result) {
+    return result.segments
+        .where(
+          (segment) =>
+              segment.issues.isNotEmpty || segment.qualityIssues.isNotEmpty,
+        )
+        .toList(growable: false);
+  }
+
+  void _selectSegment(ResultSegment segment) {
+    if (_selectedSegmentId == segment.id) return;
+    setState(() => _selectedSegmentId = segment.id);
+  }
+
+  void _navigateIssue(int direction) {
+    final result = _result;
+    if (result == null || _saving || _reexporting) return;
+    final issues = _issueSegments(result);
+    if (issues.isEmpty) return;
+    final currentIndex = issues.indexWhere(
+      (segment) => segment.id == _selectedSegmentId,
+    );
+    final nextIndex = currentIndex < 0
+        ? (direction < 0 ? issues.length - 1 : 0)
+        : (currentIndex + direction) % issues.length;
+    final normalizedIndex = nextIndex < 0 ? issues.length - 1 : nextIndex;
+    final target = issues[normalizedIndex];
+    if (_searchController.text.isNotEmpty) {
+      _searchController.clear();
+    }
+    setState(() {
+      _filter = _SegmentFilter.issues;
+      _filterInitialized = true;
+      _selectedSegmentId = target.id;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_revealSegment(target, normalizedIndex, issues.length));
+    });
+  }
+
+  Future<void> _revealSegment(
+    ResultSegment target,
+    int index,
+    int itemCount,
+  ) async {
+    if (!mounted) return;
+    final initialContext = _keyFor(target).currentContext;
+    if (initialContext == null && _segmentScrollController.hasClients) {
+      final position = _segmentScrollController.position;
+      final ratio = itemCount <= 1 ? 0.0 : index / (itemCount - 1);
+      final offset = position.maxScrollExtent * ratio;
+      await _segmentScrollController.animateTo(
+        offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      );
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!mounted) return;
+    final visibleContext = _keyFor(target).currentContext;
+    if (visibleContext != null && visibleContext.mounted) {
+      await Scrollable.ensureVisible(
+        visibleContext,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        alignment: 0.18,
+      );
+    }
+    if (mounted) _focusNodeFor(target).requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
-    return _body();
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.f8): () => _navigateIssue(1),
+        const SingleActivator(LogicalKeyboardKey.f8, shift: true): () =>
+            _navigateIssue(-1),
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          if (_dirty && !_saving && !_reexporting) unawaited(_saveEdits());
+        },
+      },
+      child: FocusTraversalGroup(child: _body()),
+    );
   }
 
   Widget _body() {
@@ -380,16 +645,26 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       dirty: _dirty,
       saving: _saving,
       reexporting: _reexporting,
-      notice: _notice,
       selectedOutputFormat: _exportFormatFor(result),
       selectedBilingual: _exportBilingualFor(result),
+      selectedBilingualOrder: _exportBilingualOrderFor(result),
+      selectedPreferSingleLine: _exportPreferSingleLineFor(result),
+      flowState: _flowState(result),
+      flowMessage: _flowMessage(result),
+      failedAction: _failedAction,
       filter: _filter,
+      selectedSegmentId: _selectedSegmentId,
       searchController: _searchController,
+      segmentScrollController: _segmentScrollController,
       controllerFor: _controllerFor,
+      focusNodeFor: _focusNodeFor,
+      keyFor: _keyFor,
       onRefresh: _loadResult,
       onSave: _saveEdits,
       onOutputFormatChanged: _setOutputFormat,
       onBilingualChanged: _setBilingual,
+      onBilingualOrderChanged: _setBilingualOrder,
+      onPreferSingleLineChanged: _setPreferSingleLine,
       onFilterChanged: (filter) => setState(() {
         _filter = filter;
         _filterInitialized = true;
@@ -397,10 +672,32 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onClearSearch: _searchController.clear,
       onDiscardEdits: _discardEdits,
       onRestoreSegment: _restoreSegment,
+      onSelectSegment: _selectSegment,
+      onPreviousIssue: () => _navigateIssue(-1),
+      onNextIssue: () => _navigateIssue(1),
       onReexport: () => unawaited(_reexport()),
     );
   }
 }
+
+typedef _ExportSelection = ({
+  String outputFormat,
+  bool bilingual,
+  String bilingualOrder,
+  bool preferSingleLine,
+});
+
+enum _ReviewFlowState {
+  synced,
+  dirty,
+  saving,
+  savedPendingExport,
+  exporting,
+  exported,
+  failed,
+}
+
+enum _FailedReviewAction { refresh, save, reexport }
 
 enum _SegmentFilter { all, issues, emptyTarget, modified }
 
@@ -411,20 +708,33 @@ class _ResultReviewBody extends StatelessWidget {
     required this.dirty,
     required this.saving,
     required this.reexporting,
-    required this.notice,
     required this.selectedOutputFormat,
     required this.selectedBilingual,
+    required this.selectedBilingualOrder,
+    required this.selectedPreferSingleLine,
+    required this.flowState,
+    required this.flowMessage,
+    required this.failedAction,
     required this.filter,
+    required this.selectedSegmentId,
     required this.searchController,
+    required this.segmentScrollController,
     required this.controllerFor,
+    required this.focusNodeFor,
+    required this.keyFor,
     required this.onRefresh,
     required this.onSave,
     required this.onOutputFormatChanged,
     required this.onBilingualChanged,
+    required this.onBilingualOrderChanged,
+    required this.onPreferSingleLineChanged,
     required this.onFilterChanged,
     required this.onClearSearch,
     required this.onDiscardEdits,
     required this.onRestoreSegment,
+    required this.onSelectSegment,
+    required this.onPreviousIssue,
+    required this.onNextIssue,
     required this.onReexport,
   });
 
@@ -433,20 +743,33 @@ class _ResultReviewBody extends StatelessWidget {
   final bool dirty;
   final bool saving;
   final bool reexporting;
-  final String notice;
   final String selectedOutputFormat;
   final bool selectedBilingual;
+  final String selectedBilingualOrder;
+  final bool selectedPreferSingleLine;
+  final _ReviewFlowState flowState;
+  final String flowMessage;
+  final _FailedReviewAction? failedAction;
   final _SegmentFilter filter;
+  final int? selectedSegmentId;
   final TextEditingController searchController;
+  final ScrollController segmentScrollController;
   final TextEditingController Function(ResultSegment segment) controllerFor;
+  final FocusNode Function(ResultSegment segment) focusNodeFor;
+  final GlobalKey Function(ResultSegment segment) keyFor;
   final VoidCallback onRefresh;
   final Future<TaskResultWorkspace?> Function() onSave;
   final ValueChanged<String> onOutputFormatChanged;
   final ValueChanged<bool> onBilingualChanged;
+  final ValueChanged<String> onBilingualOrderChanged;
+  final ValueChanged<bool> onPreferSingleLineChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
   final VoidCallback onClearSearch;
   final VoidCallback onDiscardEdits;
   final ValueChanged<ResultSegment> onRestoreSegment;
+  final ValueChanged<ResultSegment> onSelectSegment;
+  final VoidCallback onPreviousIssue;
+  final VoidCallback onNextIssue;
   final VoidCallback onReexport;
 
   @override
@@ -457,6 +780,15 @@ class _ResultReviewBody extends StatelessWidget {
         .where((segment) => _matchesFilter(segment, filter, controllerFor))
         .where((segment) => _matchesSearch(segment, searchQuery, controllerFor))
         .toList();
+    final issueSegments = segments
+        .where(
+          (segment) =>
+              segment.issues.isNotEmpty || segment.qualityIssues.isNotEmpty,
+        )
+        .toList(growable: false);
+    final selectedIssueIndex = issueSegments.indexWhere(
+      (segment) => segment.id == selectedSegmentId,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -466,18 +798,28 @@ class _ResultReviewBody extends StatelessWidget {
           dirty: dirty,
           saving: saving,
           reexporting: reexporting,
-          notice: notice,
           selectedOutputFormat: selectedOutputFormat,
           selectedBilingual: selectedBilingual,
+          selectedBilingualOrder: selectedBilingualOrder,
+          selectedPreferSingleLine: selectedPreferSingleLine,
+          flowState: flowState,
+          flowMessage: flowMessage,
+          failedAction: failedAction,
           filter: filter,
           searchController: searchController,
+          issueCount: issueSegments.length,
+          selectedIssueIndex: selectedIssueIndex,
           onRefresh: onRefresh,
           onSave: onSave,
           onOutputFormatChanged: onOutputFormatChanged,
           onBilingualChanged: onBilingualChanged,
+          onBilingualOrderChanged: onBilingualOrderChanged,
+          onPreferSingleLineChanged: onPreferSingleLineChanged,
           onFilterChanged: onFilterChanged,
           onClearSearch: onClearSearch,
           onDiscardEdits: onDiscardEdits,
+          onPreviousIssue: onPreviousIssue,
+          onNextIssue: onNextIssue,
           onReexport: onReexport,
         ),
         const SizedBox(height: T.s16),
@@ -492,14 +834,19 @@ class _ResultReviewBody extends StatelessWidget {
                   ),
                 )
               : ListView.separated(
+                  controller: segmentScrollController,
                   padding: EdgeInsets.zero,
                   itemCount: filteredSegments.length,
                   separatorBuilder: (_, _) =>
                       const Divider(height: T.s24, color: T.line),
                   itemBuilder: (context, index) => _SegmentRow(
+                    key: keyFor(filteredSegments[index]),
                     segment: filteredSegments[index],
                     controller: controllerFor(filteredSegments[index]),
+                    focusNode: focusNodeFor(filteredSegments[index]),
+                    selected: filteredSegments[index].id == selectedSegmentId,
                     enabled: !saving && !reexporting,
+                    onSelect: () => onSelectSegment(filteredSegments[index]),
                     onRestore: () => onRestoreSegment(filteredSegments[index]),
                   ),
                 ),
@@ -516,18 +863,28 @@ class _ResultHeader extends StatelessWidget {
     required this.dirty,
     required this.saving,
     required this.reexporting,
-    required this.notice,
     required this.selectedOutputFormat,
     required this.selectedBilingual,
+    required this.selectedBilingualOrder,
+    required this.selectedPreferSingleLine,
+    required this.flowState,
+    required this.flowMessage,
+    required this.failedAction,
     required this.filter,
     required this.searchController,
+    required this.issueCount,
+    required this.selectedIssueIndex,
     required this.onRefresh,
     required this.onSave,
     required this.onOutputFormatChanged,
     required this.onBilingualChanged,
+    required this.onBilingualOrderChanged,
+    required this.onPreferSingleLineChanged,
     required this.onFilterChanged,
     required this.onClearSearch,
     required this.onDiscardEdits,
+    required this.onPreviousIssue,
+    required this.onNextIssue,
     required this.onReexport,
   });
 
@@ -536,18 +893,28 @@ class _ResultHeader extends StatelessWidget {
   final bool dirty;
   final bool saving;
   final bool reexporting;
-  final String notice;
   final String selectedOutputFormat;
   final bool selectedBilingual;
+  final String selectedBilingualOrder;
+  final bool selectedPreferSingleLine;
+  final _ReviewFlowState flowState;
+  final String flowMessage;
+  final _FailedReviewAction? failedAction;
   final _SegmentFilter filter;
   final TextEditingController searchController;
+  final int issueCount;
+  final int selectedIssueIndex;
   final VoidCallback onRefresh;
   final Future<TaskResultWorkspace?> Function() onSave;
   final ValueChanged<String> onOutputFormatChanged;
   final ValueChanged<bool> onBilingualChanged;
+  final ValueChanged<String> onBilingualOrderChanged;
+  final ValueChanged<bool> onPreferSingleLineChanged;
   final ValueChanged<_SegmentFilter> onFilterChanged;
   final VoidCallback onClearSearch;
   final VoidCallback onDiscardEdits;
+  final VoidCallback onPreviousIssue;
+  final VoidCallback onNextIssue;
   final VoidCallback onReexport;
 
   @override
@@ -555,6 +922,9 @@ class _ResultHeader extends StatelessWidget {
     final task = result.task;
     final filename = _basename(task.inputFile);
     final formats = subtitleFormatListLabel(result.outputPaths.keys);
+    final refreshEnabled =
+        flowState == _ReviewFlowState.synced ||
+        flowState == _ReviewFlowState.exported;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -596,7 +966,8 @@ class _ResultHeader extends StatelessWidget {
                   label: loading ? '刷新中' : '刷新',
                   icon: Icons.refresh,
                   onTap: onRefresh,
-                  enabled: !dirty && !loading && !saving && !reexporting,
+                  enabled:
+                      refreshEnabled && !loading && !saving && !reexporting,
                 ),
                 _ReviewButton(
                   label: saving ? '保存中' : '保存修改',
@@ -620,50 +991,165 @@ class _ResultHeader extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: T.s12),
+        _ReviewStatusStrip(
+          state: flowState,
+          message: flowMessage,
+          failedAction: failedAction,
+          onRetryRefresh: onRefresh,
+          onRetrySave: () => unawaited(onSave()),
+          onRetryExport: onReexport,
+        ),
         const SizedBox(height: T.s16),
-        Wrap(
-          spacing: T.s8,
-          runSpacing: T.s8,
-          children: [
-            _MetricPill(label: '片段', value: '${result.segments.length}'),
-            _MetricPill(label: '问题', value: '${result.issueCount}'),
-            _MetricPill(label: '输出', value: formats.isEmpty ? '无记录' : formats),
-          ],
+        _ResultSummaryLine(
+          segmentCount: result.segments.length,
+          issueCount: result.issueCount,
+          formats: formats,
         ),
         const SizedBox(height: T.s12),
         _ExportControls(
           selectedOutputFormat: selectedOutputFormat,
           selectedBilingual: selectedBilingual,
+          selectedBilingualOrder: selectedBilingualOrder,
+          selectedPreferSingleLine: selectedPreferSingleLine,
           enabled: !saving && !reexporting,
           onOutputFormatChanged: onOutputFormatChanged,
           onBilingualChanged: onBilingualChanged,
+          onBilingualOrderChanged: onBilingualOrderChanged,
+          onPreferSingleLineChanged: onPreferSingleLineChanged,
         ),
         const SizedBox(height: T.s8),
         _ExportReview(
           result: result,
           selectedOutputFormat: selectedOutputFormat,
           selectedBilingual: selectedBilingual,
+          selectedBilingualOrder: selectedBilingualOrder,
+          selectedPreferSingleLine: selectedPreferSingleLine,
         ),
         const SizedBox(height: T.s8),
         _FilterControls(
           selected: filter,
           searchController: searchController,
           enabled: !saving && !reexporting,
+          issueCount: issueCount,
+          selectedIssueIndex: selectedIssueIndex,
           onChanged: onFilterChanged,
           onClearSearch: onClearSearch,
+          onPreviousIssue: onPreviousIssue,
+          onNextIssue: onNextIssue,
         ),
-        if (dirty || notice.isNotEmpty) ...[
-          const SizedBox(height: T.s8),
-          Text(
-            notice.isNotEmpty ? notice : '有未保存修改',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: T.tCaption.copyWith(
-              color: notice.isNotEmpty ? T.ok : T.warn,
-              fontWeight: T.wMedium,
+      ],
+    );
+  }
+}
+
+class _ReviewStatusStrip extends StatelessWidget {
+  const _ReviewStatusStrip({
+    required this.state,
+    required this.message,
+    required this.failedAction,
+    required this.onRetryRefresh,
+    required this.onRetrySave,
+    required this.onRetryExport,
+  });
+
+  final _ReviewFlowState state;
+  final String message;
+  final _FailedReviewAction? failedAction;
+  final VoidCallback onRetryRefresh;
+  final VoidCallback onRetrySave;
+  final VoidCallback onRetryExport;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (state) {
+      _ReviewFlowState.dirty || _ReviewFlowState.savedPendingExport => T.warn,
+      _ReviewFlowState.exported => T.ok,
+      _ReviewFlowState.failed => T.danger,
+      _ => T.sky,
+    };
+    final icon = switch (state) {
+      _ReviewFlowState.synced => Icons.check_circle_outline_rounded,
+      _ReviewFlowState.dirty => Icons.edit_note_rounded,
+      _ReviewFlowState.saving => Icons.sync_rounded,
+      _ReviewFlowState.savedPendingExport => Icons.inventory_2_outlined,
+      _ReviewFlowState.exporting => Icons.ios_share_rounded,
+      _ReviewFlowState.exported => Icons.task_alt_rounded,
+      _ReviewFlowState.failed => Icons.error_outline_rounded,
+    };
+    final retry = switch (failedAction) {
+      _FailedReviewAction.refresh => (label: '重试读取', callback: onRetryRefresh),
+      _FailedReviewAction.save => (label: '重试保存', callback: onRetrySave),
+      _FailedReviewAction.reexport => (label: '重试导出', callback: onRetryExport),
+      null => null,
+    };
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.09),
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: color.withValues(alpha: 0.58)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 3,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: T.s8),
+              Icon(icon, size: 17, color: color),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption.copyWith(
+                    color: T.ink,
+                    fontWeight: T.wMedium,
+                  ),
+                ),
+              ),
+              if (retry != null) ...[
+                const SizedBox(width: T.s8),
+                _MiniActionButton(
+                  label: retry.label,
+                  icon: Icons.refresh_rounded,
+                  onTap: retry.callback,
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (state == _ReviewFlowState.savedPendingExport)
+          Positioned(
+            top: -3,
+            right: T.s24,
+            child: IgnorePointer(
+              child: Container(
+                width: 42,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: T.skySoft,
+                  border: Border.all(color: T.sky.withValues(alpha: 0.38)),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
             ),
           ),
-        ],
       ],
     );
   }
@@ -671,24 +1157,30 @@ class _ResultHeader extends StatelessWidget {
 
 class _SegmentRow extends StatelessWidget {
   const _SegmentRow({
+    super.key,
     required this.segment,
     required this.controller,
+    required this.focusNode,
+    required this.selected,
     required this.enabled,
+    required this.onSelect,
     required this.onRestore,
   });
 
   final ResultSegment segment;
   final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool selected;
   final bool enabled;
+  final VoidCallback onSelect;
   final VoidCallback onRestore;
 
   @override
   Widget build(BuildContext context) {
-    final issueLabels = [
+    final issueLabels = <String>{
       ...segment.issues,
-      for (final issue in segment.qualityIssues)
-        _stringValue(issue['code']) ?? _stringValue(issue['message']) ?? '质量提示',
-    ];
+      for (final issue in segment.qualityIssues) _qualityIssueLabel(issue),
+    }.toList(growable: false);
     final engine = [
       segment.provider,
       segment.model,
@@ -697,84 +1189,123 @@ class _SegmentRow extends StatelessWidget {
       animation: controller,
       builder: (context, _) {
         final modified = controller.text != segment.targetText;
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 96,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('#${segment.id}', style: T.tSection),
-                  const SizedBox(height: T.s4),
-                  Text(segment.timeRangeLabel, style: T.tCaption),
-                ],
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.fromLTRB(T.s8, T.s8, T.s8, T.s8),
+          decoration: BoxDecoration(
+            color: selected
+                ? T.warn.withValues(alpha: 0.08)
+                : const Color(0x00000000),
+            border: Border(
+              left: BorderSide(
+                color: selected ? T.warn : const Color(0x00000000),
+                width: 3,
               ),
             ),
-            const SizedBox(width: T.s16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (segment.sourceText.isNotEmpty) ...[
-                    Text(segment.sourceText, style: T.tBody),
-                    const SizedBox(height: T.s8),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 96,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (selected) ...[
+                          const Icon(
+                            Icons.bookmark_rounded,
+                            size: 14,
+                            color: T.warn,
+                          ),
+                          const SizedBox(width: T.s4),
+                        ],
+                        Text('#${segment.id}', style: T.tSection),
+                      ],
+                    ),
+                    const SizedBox(height: T.s4),
+                    Text(
+                      segment.timeRangeLabel.replaceFirst(' - ', '\n'),
+                      maxLines: 2,
+                      style: T.tCaption,
+                    ),
                   ],
-                  TextField(
-                    controller: controller,
-                    enabled: enabled,
-                    minLines: 1,
-                    maxLines: 4,
-                    style: T.tBody.copyWith(fontWeight: T.wMedium),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      hintText: '输入译文',
-                      filled: true,
-                      fillColor: T.surface,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: T.s12,
-                        vertical: T.s8,
+                ),
+              ),
+              const SizedBox(width: T.s16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (segment.sourceText.isNotEmpty) ...[
+                      Text(
+                        segment.sourceText,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tBody,
                       ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(T.rSm),
-                        borderSide: const BorderSide(color: T.line),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(T.rSm),
-                        borderSide: const BorderSide(color: T.line),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(T.rSm),
-                        borderSide: const BorderSide(
-                          color: T.accentStrong,
-                          width: 1.4,
+                      const SizedBox(height: T.s8),
+                    ],
+                    TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      onTap: onSelect,
+                      enabled: enabled,
+                      minLines: 1,
+                      maxLines: 4,
+                      style: T.tBody.copyWith(fontWeight: T.wMedium),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: '输入译文',
+                        filled: true,
+                        fillColor: T.surface,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: T.s12,
+                          vertical: T.s8,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(T.rSm),
+                          borderSide: const BorderSide(color: T.line),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(T.rSm),
+                          borderSide: const BorderSide(color: T.line),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(T.rSm),
+                          borderSide: const BorderSide(
+                            color: T.accentStrong,
+                            width: 1.4,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: T.s8),
-                  Wrap(
-                    spacing: T.s8,
-                    runSpacing: T.s4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (modified)
-                        _MiniActionButton(
-                          label: '还原片段',
-                          icon: Icons.undo,
-                          onTap: enabled ? onRestore : null,
-                        ),
-                      if (engine.isNotEmpty) _SoftLabel(label: engine),
-                      for (final issue in issueLabels.take(3))
-                        _SoftLabel(label: issue, warning: true),
-                      if (issueLabels.length > 3)
-                        _SoftLabel(label: '+${issueLabels.length - 3}'),
-                    ],
-                  ),
-                ],
+                    const SizedBox(height: T.s8),
+                    Wrap(
+                      spacing: T.s8,
+                      runSpacing: T.s4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (modified)
+                          _MiniActionButton(
+                            label: '还原片段',
+                            icon: Icons.undo,
+                            onTap: enabled ? onRestore : null,
+                          ),
+                        if (engine.isNotEmpty) _SoftLabel(label: engine),
+                        for (final issue in issueLabels.take(3))
+                          _SoftLabel(label: issue, warning: true),
+                        if (issueLabels.length > 3)
+                          _SoftLabel(label: '+${issueLabels.length - 3}'),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );
@@ -785,16 +1316,24 @@ class _ExportControls extends StatelessWidget {
   const _ExportControls({
     required this.selectedOutputFormat,
     required this.selectedBilingual,
+    required this.selectedBilingualOrder,
+    required this.selectedPreferSingleLine,
     required this.enabled,
     required this.onOutputFormatChanged,
     required this.onBilingualChanged,
+    required this.onBilingualOrderChanged,
+    required this.onPreferSingleLineChanged,
   });
 
   final String selectedOutputFormat;
   final bool selectedBilingual;
+  final String selectedBilingualOrder;
+  final bool selectedPreferSingleLine;
   final bool enabled;
   final ValueChanged<String> onOutputFormatChanged;
   final ValueChanged<bool> onBilingualChanged;
+  final ValueChanged<String> onBilingualOrderChanged;
+  final ValueChanged<bool> onPreferSingleLineChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -855,6 +1394,41 @@ class _ExportControls extends StatelessWidget {
             ),
           ],
         ),
+        if (selectedBilingual)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('双语顺序', style: T.tCaption),
+              const SizedBox(width: T.s8),
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                selected: {selectedBilingualOrder},
+                segments: const [
+                  ButtonSegment(value: 'target_source', label: Text('译文在前')),
+                  ButtonSegment(value: 'source_target', label: Text('源文在前')),
+                ],
+                onSelectionChanged: enabled
+                    ? (selection) {
+                        final next = selection.isEmpty ? null : selection.first;
+                        if (next != null) onBilingualOrderChanged(next);
+                      }
+                    : null,
+                style: _compactSegmentedStyle(),
+              ),
+            ],
+          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('尽量单行', style: T.tCaption),
+            const SizedBox(width: T.s4),
+            Switch(
+              value: selectedPreferSingleLine,
+              onChanged: enabled ? onPreferSingleLineChanged : null,
+              activeThumbColor: T.accentStrong,
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -865,11 +1439,15 @@ class _ExportReview extends StatelessWidget {
     required this.result,
     required this.selectedOutputFormat,
     required this.selectedBilingual,
+    required this.selectedBilingualOrder,
+    required this.selectedPreferSingleLine,
   });
 
   final TaskResultWorkspace result;
   final String selectedOutputFormat;
   final bool selectedBilingual;
+  final String selectedBilingualOrder;
+  final bool selectedPreferSingleLine;
 
   @override
   Widget build(BuildContext context) {
@@ -889,7 +1467,9 @@ class _ExportReview extends StatelessWidget {
         _SoftLabel(
           label:
               '将导出 ${plannedLabel.isEmpty ? '未知格式' : plannedLabel} · '
-              '${selectedBilingual ? '双语字幕' : '单语字幕'}',
+              '${selectedBilingual ? '双语字幕' : '单语字幕'} · '
+              '${selectedBilingual ? '${_bilingualOrderLabel(selectedBilingualOrder)} · ' : ''}'
+              '${selectedPreferSingleLine ? '尽量单行' : '自然换行'}',
         ),
         if (outputEntries.isEmpty)
           const _SoftLabel(label: '已有输出 无记录')
@@ -929,15 +1509,23 @@ class _FilterControls extends StatelessWidget {
     required this.selected,
     required this.searchController,
     required this.enabled,
+    required this.issueCount,
+    required this.selectedIssueIndex,
     required this.onChanged,
     required this.onClearSearch,
+    required this.onPreviousIssue,
+    required this.onNextIssue,
   });
 
   final _SegmentFilter selected;
   final TextEditingController searchController;
   final bool enabled;
+  final int issueCount;
+  final int selectedIssueIndex;
   final ValueChanged<_SegmentFilter> onChanged;
   final VoidCallback onClearSearch;
+  final VoidCallback onPreviousIssue;
+  final VoidCallback onNextIssue;
 
   @override
   Widget build(BuildContext context) {
@@ -981,8 +1569,15 @@ class _FilterControls extends StatelessWidget {
             }),
           ),
         ),
+        _IssueNavigator(
+          issueCount: issueCount,
+          selectedIssueIndex: selectedIssueIndex,
+          enabled: enabled,
+          onPrevious: onPreviousIssue,
+          onNext: onNextIssue,
+        ),
         SizedBox(
-          width: 220,
+          width: 180,
           child: TextField(
             controller: searchController,
             enabled: enabled,
@@ -1027,36 +1622,161 @@ class _FilterControls extends StatelessWidget {
   }
 }
 
-class _MetricPill extends StatelessWidget {
-  const _MetricPill({required this.label, required this.value});
+class _IssueNavigator extends StatelessWidget {
+  const _IssueNavigator({
+    required this.issueCount,
+    required this.selectedIssueIndex,
+    required this.enabled,
+    required this.onPrevious,
+    required this.onNext,
+  });
 
-  final String label;
-  final String value;
+  final int issueCount;
+  final int selectedIssueIndex;
+  final bool enabled;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
 
   @override
   Widget build(BuildContext context) {
+    final canNavigate = enabled && issueCount > 0;
+    final position = selectedIssueIndex >= 0
+        ? '${selectedIssueIndex + 1} / $issueCount'
+        : '$issueCount 条';
     return Container(
-      constraints: const BoxConstraints(minWidth: 86),
-      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      height: 36,
+      padding: const EdgeInsets.only(left: T.s8, right: 2),
       decoration: BoxDecoration(
-        color: T.surface,
+        color: issueCount > 0 ? T.warn.withValues(alpha: 0.1) : T.surface,
         borderRadius: BorderRadius.circular(T.rSm),
-        border: Border.all(color: T.line),
+        border: Border.all(
+          color: issueCount > 0 ? T.warn.withValues(alpha: 0.68) : T.line,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: T.tCaption),
-          const SizedBox(height: T.s4),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: T.tSection,
+          Icon(
+            Icons.rate_review_rounded,
+            size: 15,
+            color: issueCount > 0 ? T.warn : T.muted,
+          ),
+          const SizedBox(width: T.s4),
+          SizedBox(
+            width: 62,
+            child: Text(
+              '问题 $position',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: T.tCaption.copyWith(
+                color: T.ink,
+                fontWeight: issueCount > 0 ? T.wMedium : T.wRegular,
+              ),
+            ),
+          ),
+          _CompactIconButton(
+            tooltip: '上一条问题',
+            icon: Icons.keyboard_arrow_up_rounded,
+            onTap: canNavigate ? onPrevious : null,
+          ),
+          _CompactIconButton(
+            tooltip: '下一条问题',
+            icon: Icons.keyboard_arrow_down_rounded,
+            onTap: canNavigate ? onNext : null,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CompactIconButton extends StatelessWidget {
+  const _CompactIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onTap,
+      icon: Icon(icon, size: 17),
+      color: T.accentStrong,
+      disabledColor: T.muted.withValues(alpha: 0.56),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 32),
+      splashRadius: 16,
+    );
+  }
+}
+
+class _ResultSummaryLine extends StatelessWidget {
+  const _ResultSummaryLine({
+    required this.segmentCount,
+    required this.issueCount,
+    required this.formats,
+  });
+
+  final int segmentCount;
+  final int issueCount;
+  final String formats;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: T.s16,
+      runSpacing: T.s4,
+      children: [
+        _SummaryValue(
+          icon: Icons.subtitles_outlined,
+          label: '$segmentCount 个片段',
+        ),
+        _SummaryValue(
+          icon: Icons.rate_review_outlined,
+          label: '$issueCount 条提示',
+          color: issueCount > 0 ? T.warn : T.muted,
+        ),
+        _SummaryValue(
+          icon: Icons.inventory_2_outlined,
+          label: formats.isEmpty ? '暂无输出记录' : '已有 $formats',
+          color: T.sky,
+        ),
+      ],
+    );
+  }
+}
+
+class _SummaryValue extends StatelessWidget {
+  const _SummaryValue({
+    required this.icon,
+    required this.label,
+    this.color = T.muted,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: T.s4),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: T.tCaption.copyWith(color: T.ink),
+        ),
+      ],
     );
   }
 }
@@ -1244,10 +1964,18 @@ class _ReviewButtonState extends State<_ReviewButton> {
 String _friendlyResultError(Object error) {
   if (error is RpcRemoteException) {
     final message = error.message.trim();
-    if (message.isNotEmpty) return message;
-    return '读取结果失败：${error.code}';
+    if (message.isNotEmpty && RegExp(r'[\u3400-\u9fff]').hasMatch(message)) {
+      return message;
+    }
+    return switch (error.code.trim().toLowerCase()) {
+      'output_not_writable' => '字幕文件无法写入，请检查输出目录后重试。',
+      'not_found' || 'task_not_found' => '这项任务的字幕结果已经不在原位置。',
+      'invalid_request' => '字幕数据不完整，暂时无法完成这项操作。',
+      'method_not_found' => '当前版本暂不支持这项结果操作。',
+      _ => '字幕操作没有完成，请稍后重试。',
+    };
   }
-  return '读取结果失败：$error';
+  return '字幕操作没有完成，请稍后重试。';
 }
 
 String _basename(String path) {
@@ -1263,6 +1991,76 @@ String? _stringValue(Object? value) {
   if (value == null) return null;
   final text = '$value';
   return text.isEmpty ? null : text;
+}
+
+Map<String, Object?> _stringMap(Object? value) {
+  if (value is Map) {
+    return value.map((key, item) => MapEntry('$key', item));
+  }
+  return const <String, Object?>{};
+}
+
+bool? _boolValue(Object? value) {
+  if (value is bool) return value;
+  return switch ('$value'.trim().toLowerCase()) {
+    'true' || '1' || 'yes' || 'on' => true,
+    'false' || '0' || 'no' || 'off' => false,
+    _ => null,
+  };
+}
+
+String? _normalizeBilingualOrder(String? value) {
+  return switch (value?.trim().toLowerCase()) {
+    'source_target' => 'source_target',
+    'target_source' => 'target_source',
+    _ => null,
+  };
+}
+
+String _bilingualOrderLabel(String value) {
+  return _normalizeBilingualOrder(value) == 'source_target' ? '源文在前' : '译文在前';
+}
+
+String _qualityIssueLabel(Map<String, Object?> issue) {
+  for (final key in const ['hint_zh', 'message_zh', 'label_zh']) {
+    final label = _stringValue(issue[key])?.trim();
+    if (label != null && label.isNotEmpty) return label;
+  }
+  final code = (_stringValue(issue['code']) ?? '').trim().toLowerCase();
+  final mapped = switch (code) {
+    'duration_too_short' => '显示时间太短',
+    'cps_too_high' || 'over_hard_cps' => '字幕阅读速度偏快',
+    'too_many_lines' => '字幕行数过多',
+    'line_too_wide' || 'line_too_long' => '字幕单行过长',
+    'empty_target' => '译文为空',
+    'overlap' || 'timeline_overlap' => '时间轴发生重叠',
+    _ => '',
+  };
+  if (mapped.isNotEmpty) return mapped;
+  for (final key in const ['message', 'hint']) {
+    final label = _stringValue(issue[key])?.trim();
+    if (label != null && RegExp(r'[\u3400-\u9fff]').hasMatch(label)) {
+      return label;
+    }
+  }
+  return '质量提示';
+}
+
+ButtonStyle _compactSegmentedStyle() {
+  return ButtonStyle(
+    visualDensity: VisualDensity.compact,
+    foregroundColor: WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) return T.muted;
+      if (states.contains(WidgetState.selected)) return T.accentStrong;
+      return T.ink;
+    }),
+    side: WidgetStateProperty.resolveWith((states) {
+      final color = states.contains(WidgetState.selected)
+          ? T.accentStrong
+          : T.line;
+      return BorderSide(color: color, width: 1.2);
+    }),
+  );
 }
 
 String? _normalizeOutputFormat(String? value) {

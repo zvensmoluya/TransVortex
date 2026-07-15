@@ -191,6 +191,14 @@ def _report_payload(rows: list[SubtitleQualityRow], mode: str, config: SubtitleQ
     }
 
 
+def evaluate_subtitle_quality(segments: list[Segment], config: SubtitleQualityConfig) -> dict[str, Any]:
+    """Evaluate user-edited segments without applying automatic timing or merge changes."""
+    mode = "off" if not config.enabled else (config.mode or "balanced").lower()
+    ordered = sorted(segments, key=lambda seg: (seg.start, seg.end, seg.id))
+    rows = [_quality_row(seg, config, []) for seg in ordered]
+    return _report_payload(rows, mode, config)
+
+
 def _can_merge(left: Segment, right: Segment, config: SubtitleQualityConfig) -> bool:
     if has_high_asr_risk(left) or has_high_asr_risk(right):
         return False
@@ -254,8 +262,7 @@ def optimize_subtitles(segments: list[Segment], config: SubtitleQualityConfig) -
     mode = "off" if not config.enabled else (config.mode or "balanced").lower()
     ordered = sorted(segments, key=lambda seg: (seg.start, seg.end, seg.id))
     if mode == "off":
-        rows = [_quality_row(seg, config, []) for seg in ordered]
-        return SubtitleOptimizationResult(segments=ordered, report=_report_payload(rows, mode, config))
+        return SubtitleOptimizationResult(segments=ordered, report=evaluate_subtitle_quality(ordered, config))
 
     optimized: list[Segment] = []
     pending = list(ordered)
