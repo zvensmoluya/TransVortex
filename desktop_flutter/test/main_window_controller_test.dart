@@ -782,6 +782,72 @@ void main() {
     );
   });
 
+  test('controller retries transient provider submission errors', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.pickSource(r'D:\movie.mp4');
+    controller.applyFailureForTesting(
+      RpcRemoteException(
+        'provider_gateway_timeout',
+        'gateway timeout',
+        details: const {
+          'error_info': {
+            'code': 'provider_gateway_timeout',
+            'hint_zh': '翻译服务暂时超时，可以重试。',
+            'retryable': true,
+          },
+        },
+      ),
+    );
+
+    expect(controller.view.failure?.reason, '翻译服务暂时超时，可以重试。');
+    expect(controller.view.failure?.actionLabel, '重试');
+    expect(controller.view.failure?.target, MainRecoveryTarget.retry);
+  });
+
+  test('controller resumes checkpoint after a transient provider failure', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'FAILED',
+          inputFile: r'D:\movie.mp4',
+          errorInfo: const {
+            'code': 'provider_retryable_http_error',
+            'hint_zh': '翻译服务暂时不可用，可以继续任务。',
+            'retryable': true,
+          },
+          runtime: const {'can_resume': true},
+        ),
+      ),
+    );
+
+    expect(controller.view.failure?.actionLabel, '继续任务');
+    expect(controller.view.failure?.target, MainRecoveryTarget.resume);
+  });
+
+  test('controller replaces an unreadable media source', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.pickSource(r'D:\broken.mp4');
+    controller.applyFailureForTesting(
+      RpcRemoteException(
+        'media_processing_failed',
+        'ffmpeg failed',
+        details: const {
+          'error_info': {
+            'code': 'media_processing_failed',
+            'hint_zh': '音频处理失败，请换一个文件。',
+          },
+        },
+      ),
+    );
+
+    expect(controller.view.failure?.actionLabel, '重新选择片源');
+    expect(controller.view.failure?.target, MainRecoveryTarget.pickSource);
+  });
+
   test('controller does not treat missing credentials as missing results', () {
     final controller = MainWindowController(service: _readyController());
 

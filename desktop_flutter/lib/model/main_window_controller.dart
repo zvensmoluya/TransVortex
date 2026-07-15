@@ -1506,8 +1506,7 @@ class MainWindowController extends ChangeNotifier {
     if (lower.contains('asr') || lower.contains('whisper')) {
       return ('去配置识别', MainRecoveryTarget.asrSettings);
     }
-    if (lower.contains('provider') ||
-        lower.contains('routing') ||
+    if (_isTranslationConfigurationFailure(lower) ||
         lower.contains('credential') ||
         lower.contains('missing_env') ||
         lower.contains('env_key') ||
@@ -1521,7 +1520,9 @@ class MainWindowController extends ChangeNotifier {
         lower.contains('deleted')) {
       return ('重新导出', MainRecoveryTarget.reexport);
     }
-    if (lower.contains('input') || lower.contains('not_found')) {
+    if (lower == 'input_not_found' ||
+        lower == 'no_segments' ||
+        lower == 'media_processing_failed') {
       return ('重新选择片源', MainRecoveryTarget.pickSource);
     }
     if (lower.contains('permission') ||
@@ -1533,6 +1534,24 @@ class MainWindowController extends ChangeNotifier {
       return ('继续任务', MainRecoveryTarget.resume);
     }
     return ('重试', MainRecoveryTarget.retry);
+  }
+
+  static bool _isTranslationConfigurationFailure(String code) {
+    if (code.contains('routing')) return true;
+    if (!code.contains('provider')) return false;
+    return const {
+      'auth',
+      'config',
+      'credential',
+      'invalid',
+      'key',
+      'mapping',
+      'missing',
+      'model',
+      'not_found',
+      'preflight',
+      'protocol',
+    }.any(code.contains);
   }
 
   Future<String?> _existingPrimaryResultPath() async {
