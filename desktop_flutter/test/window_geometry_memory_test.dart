@@ -5,8 +5,54 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/current_window_controls.dart';
+import 'package:transvortex_desktop_flutter/services/native_window_lifecycle.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('window close results preserve legacy success and explicit refusal', () {
+    expect(windowCloseResultAccepted(null), isTrue);
+    expect(windowCloseResultAccepted(true), isTrue);
+    expect(windowCloseResultAccepted({'closed': true}), isTrue);
+    expect(windowCloseResultAccepted({'accepted': true}), isTrue);
+    expect(windowCloseResultAccepted(false), isFalse);
+    expect(
+      windowCloseResultAccepted({
+        'accepted': false,
+        'reason': 'unsaved_changes',
+      }),
+      isFalse,
+    );
+    expect(
+      windowCloseResultAccepted({'closed': false, 'reason': 'unsaved_changes'}),
+      isFalse,
+    );
+  });
+
+  test(
+    'current window close approval delegates to the registered owner',
+    () async {
+      addTearDown(() => registerCurrentWindowCloseRequestHandler(null));
+      registerCurrentWindowCloseRequestHandler(() async => false);
+      expect(await requestCurrentWindowCloseForTesting(), isFalse);
+
+      registerCurrentWindowCloseRequestHandler(() async => true);
+      expect(await requestCurrentWindowCloseForTesting(), isTrue);
+    },
+  );
+
+  test('native window close delegates to the current engine owner', () async {
+    var calls = 0;
+    addTearDown(() => registerNativeWindowCloseHandler(null));
+    registerNativeWindowCloseHandler(() async {
+      calls += 1;
+    });
+
+    await dispatchNativeWindowCloseForTesting();
+
+    expect(calls, 1);
+  });
+
   test('window geometry memory stores role-scoped window bounds', () async {
     final temp = await Directory.systemTemp.createTemp('tvx_window_geometry_');
     addTearDown(() async {

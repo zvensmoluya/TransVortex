@@ -12,6 +12,7 @@ class TitleBar extends StatelessWidget {
     this.title = 'TransVortex',
     this.status = '',
     this.onMenu,
+    this.onClose,
     this.menuKey,
     this.canMaximize = false,
   });
@@ -19,6 +20,7 @@ class TitleBar extends StatelessWidget {
   final String title;
   final String status;
   final VoidCallback? onMenu;
+  final VoidCallback? onClose;
   final Key? menuKey;
   final bool canMaximize;
 
@@ -78,7 +80,7 @@ class TitleBar extends StatelessWidget {
           _ChromeButton(
             glyph: _Glyph.close,
             danger: true,
-            onTap: windowManager.close,
+            onTap: onClose ?? windowManager.close,
           ),
         ],
       ),

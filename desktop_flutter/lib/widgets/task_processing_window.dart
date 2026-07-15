@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../model/startup_args.dart';
@@ -12,6 +13,7 @@ import '../services/app_service_client.dart';
 import '../services/current_window_controls.dart';
 import '../services/directory_probe.dart';
 import '../services/local_service_controller.dart';
+import '../services/native_window_lifecycle.dart';
 import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
@@ -106,6 +108,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _checkingOutputDirectory = false;
   String? _editingTaskId;
   bool _resultEditorDirty = false;
+  bool _windowCloseAllowed = false;
+  bool _windowCloseRequestInProgress = false;
+  Future<bool>? _windowCloseApproval;
+  bool _smokeRejectWindowClose = false;
   String _smokeScenario = 'browse';
   int _smokeResultSegmentCount = 0;
   int _smokeResultIssueCount = 0;
@@ -141,12 +147,19 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       unawaited(widget.bridge.initializeChild());
     }
     registerCurrentWindowRetargetHandler(_retarget);
+    registerCurrentWindowCloseRequestHandler(_approveWindowCloseRequest);
+    registerCurrentWindowCommandHandler(_handleWindowCommand);
+    registerNativeWindowCloseHandler(_handleNativeWindowClose);
+    unawaited(_installWindowCloseGuard());
     unawaited(_loadTasks());
   }
 
   @override
   void dispose() {
     registerCurrentWindowRetargetHandler(null);
+    registerCurrentWindowCloseRequestHandler(null);
+    registerCurrentWindowCommandHandler(null);
+    registerNativeWindowCloseHandler(null);
     _taskSearchController.dispose();
     _eventSearchController.dispose();
     _smokeService?.dispose();
@@ -435,31 +448,124 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   Future<bool> _leaveResultEditor() async {
     if (_editingTaskId == null) return true;
-    if (_resultEditorDirty) {
-      final discard = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('放弃未保存修改？'),
-          content: const Text('字幕修改尚未保存，离开后这些修改会丢失。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('继续编辑'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('放弃修改'),
-            ),
-          ],
-        ),
-      );
-      if (discard != true || !mounted) return false;
-    }
+    if (!await _confirmDiscardResultEdits() || !mounted) return false;
     setState(() {
       _editingTaskId = null;
       _resultEditorDirty = false;
     });
     return true;
+  }
+
+  Future<bool> _confirmDiscardResultEdits({bool closingWindow = false}) async {
+    if (!_resultEditorDirty) return true;
+    if (closingWindow) {
+      unawaited(_focusWindowForClosePrompt());
+    }
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        surfaceTintColor: T.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(T.rMd),
+          side: const BorderSide(color: T.line),
+        ),
+        title: Row(
+          children: [
+            const Icon(Icons.edit_note_rounded, color: T.accentStrong),
+            const SizedBox(width: T.s8),
+            Text('放弃未保存修改？', style: T.tSection),
+          ],
+        ),
+        content: Text(
+          closingWindow ? '字幕修改尚未保存，关闭任务处理后这些修改会丢失。' : '字幕修改尚未保存，离开后这些修改会丢失。',
+          style: T.tBody,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(closingWindow ? '继续校对' : '继续编辑'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: T.danger),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(closingWindow ? '放弃并关闭' : '放弃修改'),
+          ),
+        ],
+      ),
+    );
+    return discard == true;
+  }
+
+  Future<void> _focusWindowForClosePrompt() async {
+    try {
+      await windowManager.show();
+      await windowManager.focus();
+    } on Object {
+      // The dialog still protects the edit if native focus is unavailable.
+    }
+  }
+
+  Future<bool> _approveWindowCloseRequest() {
+    if (_windowCloseAllowed) return Future<bool>.value(true);
+    final pending = _windowCloseApproval;
+    if (pending != null) return pending;
+    late final Future<bool> approval;
+    approval = _resolveWindowCloseRequest().whenComplete(() {
+      if (identical(_windowCloseApproval, approval)) {
+        _windowCloseApproval = null;
+      }
+    });
+    _windowCloseApproval = approval;
+    return approval;
+  }
+
+  Future<bool> _resolveWindowCloseRequest() async {
+    if (_smokeRejectWindowClose) return false;
+    final approved = await _confirmDiscardResultEdits(closingWindow: true);
+    if (approved) _windowCloseAllowed = true;
+    return approved;
+  }
+
+  Future<Object?> _handleWindowCommand(MethodCall call) async {
+    if (call.method != 'window_smoke_set_close_refusal') {
+      throw MissingPluginException('No handler for ${call.method}');
+    }
+    final arguments = call.arguments;
+    final enabled =
+        arguments == true || (arguments is Map && arguments['enabled'] == true);
+    _smokeRejectWindowClose = enabled;
+    return {'ok': true, 'enabled': enabled};
+  }
+
+  Future<void> _installWindowCloseGuard() async {
+    try {
+      await windowManager.setPreventClose(true);
+    } on Object {
+      // Unsupported test hosts still use the in-window close button guard.
+    }
+  }
+
+  Future<void> _handleNativeWindowClose() async {
+    if (_windowCloseAllowed) return;
+    await _requestWindowClose();
+  }
+
+  Future<void> _requestWindowClose() async {
+    if (_windowCloseRequestInProgress) return;
+    _windowCloseRequestInProgress = true;
+    try {
+      if (!await _approveWindowCloseRequest()) return;
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } on Object catch (error) {
+      _windowCloseAllowed = false;
+      if (mounted) {
+        setState(() => _error = '关闭任务处理失败：$error');
+      }
+    } finally {
+      _windowCloseRequestInProgress = false;
+    }
   }
 
   void _handleResultDirtyChanged(bool dirty) {
@@ -848,6 +954,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
               title: '任务处理',
               status: _statusText(selected),
               canMaximize: true,
+              onClose: () => unawaited(_requestWindowClose()),
             ),
             Expanded(
               child: Padding(

@@ -3502,6 +3502,16 @@ void main() {
     final lockedTaskSearch = find.widgetWithText(TextField, '搜索任务');
     expect(tester.widget<TextField>(lockedTaskSearch).enabled, isFalse);
 
+    final closeRequest = requestCurrentWindowCloseForTesting();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('放弃未保存修改？'), findsOneWidget);
+    expect(find.textContaining('关闭任务处理后'), findsOneWidget);
+    expect(find.byIcon(Icons.edit_note_rounded), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '继续校对'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(await closeRequest, isFalse);
+    expect(find.text('这是未保存修改。'), findsOneWidget);
+
     await tester.tap(find.text('返回概览'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('放弃未保存修改？'), findsOneWidget);

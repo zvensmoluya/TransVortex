@@ -20,6 +20,7 @@ import 'services/directory_probe.dart';
 import 'services/current_window_controls.dart';
 import 'services/desktop_tray_service.dart';
 import 'services/local_service_controller.dart';
+import 'services/native_window_lifecycle.dart';
 import 'services/path_opener.dart';
 import 'services/smoke_render_capture.dart';
 import 'services/task_notification_service.dart';
@@ -248,8 +249,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen>
-    with TickerProviderStateMixin, WindowListener {
+class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late final LocalServiceController _service;
   late final bool _ownsService;
   late final MainWindowController _controller;
@@ -260,9 +260,9 @@ class _MainScreenState extends State<MainScreen>
   DesktopTrayService? _trayService;
   StreamSubscription<DesktopTrayAction>? _trayActionSubscription;
   bool _trayReady = false;
-  bool _windowCloseListenerInstalled = false;
   bool _exitRequested = false;
   bool _exitRequestInProgress = false;
+  bool _trayHideInProgress = false;
   bool _trayCloseEventObserved = false;
   bool _trayHideAttempted = false;
   String _trayHideError = '';
@@ -297,6 +297,7 @@ class _MainScreenState extends State<MainScreen>
     });
     widget.bridge.attachToolWindowOpener(_openToolWindowFromArgs);
     widget.bridge.attachServiceRefresher(_controller.refreshSnapshot);
+    registerNativeWindowCloseHandler(_handleNativeWindowClose);
     unawaited(_controller.startService());
     if (widget.smoke == null ||
         widget.smoke?.checkTray == true ||
@@ -311,10 +312,7 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   void dispose() {
-    if (_windowCloseListenerInstalled) {
-      windowManager.removeListener(this);
-      _windowCloseListenerInstalled = false;
-    }
+    registerNativeWindowCloseHandler(null);
     unawaited(_trayActionSubscription?.cancel());
     _trayActionSubscription = null;
     final trayService = _trayService;
@@ -354,16 +352,10 @@ class _MainScreenState extends State<MainScreen>
       return;
     }
     try {
-      windowManager.addListener(this);
-      _windowCloseListenerInstalled = true;
       await windowManager.setPreventClose(true);
       _trayReady = true;
       _updateTrayPresentation(_controller.view);
     } on Object {
-      if (_windowCloseListenerInstalled) {
-        windowManager.removeListener(this);
-        _windowCloseListenerInstalled = false;
-      }
       await _disposeTrayService(trayService);
     }
   }
@@ -443,23 +435,30 @@ class _MainScreenState extends State<MainScreen>
     await _openToolWindow(AppWindowType.taskProcessing);
   }
 
-  @override
-  void onWindowClose() {
+  Future<void> _handleNativeWindowClose() async {
     _trayCloseEventObserved = true;
     if (!_trayReady || _exitRequested) return;
-    unawaited(_hideToTray());
+    await _hideToTray();
   }
 
   Future<void> _hideToTray() async {
-    if (!_trayReady || _exitRequested) return;
-    _trayHideAttempted = true;
-    _trayHideError = '';
-    await _closeToolWindows();
+    if (!_trayReady || _exitRequested || _trayHideInProgress) return;
+    _trayHideInProgress = true;
     try {
-      await windowManager.hide();
-    } on Object catch (error) {
-      _trayHideError = '$error';
-      // If hiding fails, keep the visible app alive rather than shutting down.
+      _trayHideAttempted = true;
+      _trayHideError = '';
+      if (!await _closeToolWindows()) {
+        _trayHideError = '任务处理或工具窗口尚未安全关闭';
+        return;
+      }
+      try {
+        await windowManager.hide();
+      } on Object catch (error) {
+        _trayHideError = '$error';
+        // If hiding fails, keep the visible app alive rather than shutting down.
+      }
+    } finally {
+      _trayHideInProgress = false;
     }
   }
 
@@ -468,14 +467,15 @@ class _MainScreenState extends State<MainScreen>
     _exitRequestInProgress = true;
     try {
       await _focusMainWindow();
-      if (_hasActiveWork) {
+      final shouldCancelActiveWork = _hasActiveWork;
+      if (shouldCancelActiveWork) {
         final confirmed = await _confirmCancelAndExit();
         if (confirmed != true) return;
-        if (!await _cancelActiveTasksForExit()) return;
       }
 
+      if (!await _closeToolWindows()) return;
+      if (shouldCancelActiveWork && !await _cancelActiveTasksForExit()) return;
       _exitRequested = true;
-      await _closeToolWindows();
       try {
         await windowManager.setPreventClose(false);
       } on Object {
@@ -556,18 +556,70 @@ class _MainScreenState extends State<MainScreen>
         _activeTasks().isNotEmpty;
   }
 
-  Future<void> _closeToolWindows() async {
-    final controllers = _toolWindows.values.toList(growable: false);
-    _toolWindows.clear();
-    await Future.wait(
-      controllers.map((controller) async {
-        try {
-          await controller.invokeMethod<void>('window_close');
-        } on Object {
-          // Closed or crashed tool windows can be dropped from the registry.
+  Future<bool> _closeToolWindows() async {
+    final entries = _toolWindows.entries.toList(growable: false);
+    for (final entry in entries) {
+      final controller = entry.value;
+      try {
+        await controller
+            .invokeMethod<Object?>('window_ping')
+            .timeout(const Duration(seconds: 2));
+      } on Object {
+        if (await _toolWindowStillExists(controller)) {
+          try {
+            await controller.show().timeout(const Duration(seconds: 2));
+          } on Object {
+            // Keeping the main window visible is the safe fallback.
+          }
+          return false;
         }
-      }),
-    );
+        _toolWindows.remove(entry.key);
+        continue;
+      }
+
+      Object? request;
+      try {
+        request = await controller.invokeMethod<Object?>(
+          'window_request_close',
+        );
+      } on Object {
+        if (await _toolWindowStillExists(controller)) return false;
+        _toolWindows.remove(entry.key);
+        continue;
+      }
+      if (!windowCloseResultAccepted(request)) {
+        try {
+          await controller
+              .invokeMethod<void>('window_focus')
+              .timeout(const Duration(seconds: 2));
+        } on Object {
+          // The refusal is authoritative even if focus restoration fails.
+        }
+        return false;
+      }
+      try {
+        final result = await controller
+            .invokeMethod<Object?>('window_close')
+            .timeout(const Duration(seconds: 2));
+        if (!windowCloseResultAccepted(result)) return false;
+      } on Object {
+        if (await _toolWindowStillExists(controller)) return false;
+      }
+      _toolWindows.remove(entry.key);
+    }
+    return true;
+  }
+
+  Future<bool> _toolWindowStillExists(WindowController controller) async {
+    try {
+      final windows = await WindowController.getAll().timeout(
+        const Duration(seconds: 2),
+      );
+      return windows.any((window) => window.windowId == controller.windowId);
+    } on Object {
+      // An uncertain child state must not allow the app to hide or exit.
+      return true;
+    }
   }
 
   TaskNotificationService _defaultNotificationService() {
@@ -858,10 +910,7 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _prepareSmokeExit() async {
     _exitRequested = true;
-    if (_windowCloseListenerInstalled) {
-      windowManager.removeListener(this);
-      _windowCloseListenerInstalled = false;
-    }
+    registerNativeWindowCloseHandler(null);
     try {
       await windowManager.setPreventClose(false);
     } on Object {
@@ -1202,6 +1251,9 @@ class _MainScreenState extends State<MainScreen>
         reexportError = '$error';
       }
     }
+    final unsavedToolWindowReport = smoke.checkTray
+        ? await _checkTrayUnsavedToolWindowGuard(taskId, deadline)
+        : const <String, Object?>{};
 
     return <String, Object?>{
       'task_submission_path': 'controller',
@@ -1232,6 +1284,113 @@ class _MainScreenState extends State<MainScreen>
       'reexport_error': reexportError,
       if (smoke.checkTray) 'tray_task_active_before_close': trayTaskWasActive,
       ...trayReport,
+      ...unsavedToolWindowReport,
+    };
+  }
+
+  Future<Map<String, Object?>> _checkTrayUnsavedToolWindowGuard(
+    String taskId,
+    DateTime deadline,
+  ) async {
+    await _focusMainWindow();
+    await _openToolWindow(AppWindowType.taskProcessing, taskId: taskId);
+    final windowKey = _toolWindowKey(
+      AppWindowType.taskProcessing,
+      taskId: taskId,
+    );
+    final childReadyDeadline = _earlierDeadline(
+      deadline,
+      DateTime.now().add(const Duration(seconds: 6)),
+    );
+    WindowController? controller;
+    Object? lastChildError;
+    var refusalEnabled = false;
+    while (DateTime.now().isBefore(childReadyDeadline)) {
+      controller = _toolWindows[windowKey];
+      if (controller != null) {
+        try {
+          final result = await controller
+              .invokeMethod<Object?>('window_smoke_set_close_refusal', const {
+                'enabled': true,
+              })
+              .timeout(const Duration(milliseconds: 750));
+          refusalEnabled =
+              result is Map &&
+              result['ok'] == true &&
+              result['enabled'] == true;
+          if (refusalEnabled) break;
+        } on Object catch (error) {
+          lastChildError = error;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (controller == null || !refusalEnabled) {
+      throw StateError('任务处理窗未能进入关闭保护 smoke 状态：$lastChildError');
+    }
+
+    var keptMainVisible = false;
+    var keptToolWindow = false;
+    var serviceAlive = false;
+    var cleanupOk = false;
+    var refusalReason = '';
+    try {
+      _trayHideAttempted = false;
+      _trayHideError = '';
+      await _focusMainWindow();
+      await windowManager.close();
+      final refusalDeadline = _earlierDeadline(
+        deadline,
+        DateTime.now().add(const Duration(seconds: 4)),
+      );
+      while (_trayHideError.isEmpty &&
+          DateTime.now().isBefore(refusalDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+
+      keptMainVisible = await windowManager.isVisible();
+      keptToolWindow = identical(_toolWindows[windowKey], controller);
+      refusalReason = _trayHideError;
+      final client = _service.client;
+      if (client != null) {
+        final health = await client.health().timeout(_remaining(deadline));
+        serviceAlive = health.status.trim().isNotEmpty;
+      }
+    } finally {
+      if (!await windowManager.isVisible()) await _focusMainWindow();
+      try {
+        await controller
+            .invokeMethod<Object?>('window_smoke_set_close_refusal', const {
+              'enabled': false,
+            })
+            .timeout(const Duration(seconds: 2));
+      } on Object {
+        // Cleanup below also drops a child that already exited unexpectedly.
+      }
+      cleanupOk = await _closeToolWindows();
+    }
+
+    if (!_trayHideAttempted ||
+        refusalReason.isEmpty ||
+        !keptMainVisible ||
+        !keptToolWindow ||
+        !serviceAlive ||
+        !cleanupOk) {
+      throw StateError(
+        '未保存字幕关闭保护失败'
+        '（hideAttempted=$_trayHideAttempted, reason=$refusalReason, '
+        'mainVisible=$keptMainVisible, toolRetained=$keptToolWindow, '
+        'serviceAlive=$serviceAlive, cleanup=$cleanupOk）',
+      );
+    }
+
+    return <String, Object?>{
+      'tray_unsaved_close_guard_checked': true,
+      'tray_unsaved_close_kept_main_visible': keptMainVisible,
+      'tray_unsaved_close_kept_tool_window': keptToolWindow,
+      'tray_unsaved_close_service_alive': serviceAlive,
+      'tray_unsaved_close_reason': refusalReason,
+      'tray_unsaved_close_cleanup_ok': cleanupOk,
     };
   }
 

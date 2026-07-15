@@ -43,7 +43,7 @@ function Add-SmokeAcceptanceBoundary {
         [object]$Report
     )
 
-    $Report | Add-Member -Force -NotePropertyName automated_scope -NotePropertyValue "single release smoke check for Local Service wiring, selected window rendering, release screenshot sampling when requested, native notification call/registry checks when enabled, tray close/restore lifecycle when enabled, and AppUserModelID shortcut identity checks when enabled"
+    $Report | Add-Member -Force -NotePropertyName automated_scope -NotePropertyValue "single release smoke check for Local Service wiring, selected window rendering, release screenshot sampling when requested, native notification call/registry checks when enabled, tray close/restore and unsaved child-window protection when enabled, and AppUserModelID shortcut identity checks when enabled"
     $Report | Add-Member -Force -NotePropertyName frontend_design_mvp_complete -NotePropertyValue $false
     $Report | Add-Member -Force -NotePropertyName completion_claim -NotePropertyValue "Automated release smoke passed; this is evidence for Flutter MVP wiring, not proof that the frontend design MVP is complete."
     $Report | Add-Member -Force -NotePropertyName manual_acceptance_required -NotePropertyValue $script:manualAcceptanceRequired
@@ -924,6 +924,9 @@ try {
             }
             if ($MainPhase -eq "normal" -and $report.tray_task_active_before_close -ne $true) {
                 throw "Release smoke did not close the main window while a task was active: $($report | ConvertTo-Json -Compress -Depth 5)"
+            }
+            if ($MainPhase -eq "normal" -and ($report.tray_unsaved_close_guard_checked -ne $true -or $report.tray_unsaved_close_kept_main_visible -ne $true -or $report.tray_unsaved_close_kept_tool_window -ne $true -or $report.tray_unsaved_close_service_alive -ne $true -or $report.tray_unsaved_close_cleanup_ok -ne $true -or [string]::IsNullOrWhiteSpace([string]$report.tray_unsaved_close_reason))) {
+                throw "Release smoke did not preserve an unsaved task-processing window: $($report | ConvertTo-Json -Compress -Depth 5)"
             }
         }
     } else {

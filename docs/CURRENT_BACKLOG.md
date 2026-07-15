@@ -37,7 +37,7 @@
 | 启动与崩溃日志 | 待实现 | Local Service 启动前错误和应用崩溃可被持久记录并用于恢复提示 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 凭据长期安全边界 | 待决策 | 明确 `auth.json` 的 Windows ACL 加固或 Credential Manager 演进策略 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：正常关闭主窗口会收起产品窗口并驻留托盘，Local Service 与当前任务继续运行；托盘可恢复窗口，明确退出会在活动任务存在时先要求确认。该能力不覆盖应用自身崩溃后的恢复。
+当前已经成立的边界：正常关闭主窗口会收起产品窗口并驻留托盘，Local Service 与当前任务继续运行；托盘可恢复窗口，明确退出会在活动任务存在时先要求确认；任务处理窗有未保存字幕时会阻止主窗口收起或应用退出，并前置编辑窗口等待用户决定。该能力不覆盖应用自身崩溃后的恢复。
 
 ## P1：产品与界面闭环
 

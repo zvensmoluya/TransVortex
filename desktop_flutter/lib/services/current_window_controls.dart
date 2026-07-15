@@ -13,6 +13,8 @@ import '../model/window_state.dart';
 import '../theme/tokens.dart';
 
 Future<void> Function(AppWindowArgs args)? _retargetHandler;
+Future<bool> Function()? _closeRequestHandler;
+Future<Object?> Function(MethodCall call)? _windowCommandHandler;
 _WindowGeometryMemoryListener? _geometryMemoryListener;
 AppWindowArgs? _configuredWindowArgs;
 WindowGeometryMemory? _windowGeometryMemory = WindowGeometryMemory.userStore();
@@ -21,6 +23,46 @@ void registerCurrentWindowRetargetHandler(
   Future<void> Function(AppWindowArgs args)? handler,
 ) {
   _retargetHandler = handler;
+}
+
+void registerCurrentWindowCloseRequestHandler(
+  Future<bool> Function()? handler,
+) {
+  _closeRequestHandler = handler;
+}
+
+void registerCurrentWindowCommandHandler(
+  Future<Object?> Function(MethodCall call)? handler,
+) {
+  _windowCommandHandler = handler;
+}
+
+@visibleForTesting
+Future<bool> requestCurrentWindowCloseForTesting() =>
+    _closeRequestHandler?.call() ?? Future<bool>.value(true);
+
+bool windowCloseResultAccepted(Object? result) {
+  if (result == false) return false;
+  if (result is Map &&
+      (result['accepted'] == false || result['closed'] == false)) {
+    return false;
+  }
+  return true;
+}
+
+void _scheduleCurrentWindowClose() {
+  Timer.run(() async {
+    try {
+      await windowManager.setPreventClose(false);
+    } on Object {
+      // Hosts without prevent-close support can still attempt close.
+    }
+    try {
+      await windowManager.close();
+    } on Object {
+      // The owner already received a close acceptance response.
+    }
+  });
 }
 
 Future<void> configureCurrentWindow(AppWindowArgs args) async {
@@ -393,13 +435,28 @@ Future<void> registerCurrentWindowControls() async {
           await windowManager.show();
           await windowManager.focus();
           return null;
+        case 'window_ping':
+          return {'ready': true};
+        case 'window_request_close':
+          final approved =
+              await (_closeRequestHandler?.call() ?? Future<bool>.value(true));
+          return approved
+              ? {'accepted': true}
+              : {'accepted': false, 'reason': 'unsaved_changes'};
         case 'window_close':
-          await windowManager.close();
-          return null;
+          final approved =
+              await (_closeRequestHandler?.call() ?? Future<bool>.value(true));
+          if (!approved) {
+            return {'closed': false, 'reason': 'unsaved_changes'};
+          }
+          _scheduleCurrentWindowClose();
+          return {'closed': true, 'scheduled': true};
         case 'window_reset_geometry':
           await _resetCurrentWindowGeometry();
           return {'ok': true};
         default:
+          final handler = _windowCommandHandler;
+          if (handler != null) return handler(call);
           throw MissingPluginException('No handler for ${call.method}');
       }
     });

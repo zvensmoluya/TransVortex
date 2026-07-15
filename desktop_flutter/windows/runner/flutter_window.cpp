@@ -5,6 +5,7 @@
 #include <desktop_multi_window/desktop_multi_window_plugin.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "window_lifecycle_plugin.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -26,10 +27,19 @@ bool FlutterWindow::OnCreate() {
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
+  // window_manager 0.4.x shares its Windows event channel across engines.
+  // Register an engine-owned close channel before it for reliable WM_CLOSE.
+  RegisterTransVortexWindowLifecyclePlugin(
+      flutter_controller_->engine()->GetRegistrarForPlugin(
+          "TransVortexWindowLifecyclePlugin"));
   RegisterPlugins(flutter_controller_->engine());
   DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
     auto *flutter_view_controller =
         reinterpret_cast<flutter::FlutterViewController *>(controller);
+    // Keep each desktop_multi_window engine on its own close event channel.
+    RegisterTransVortexWindowLifecyclePlugin(
+        flutter_view_controller->engine()->GetRegistrarForPlugin(
+            "TransVortexWindowLifecyclePlugin"));
     RegisterPlugins(flutter_view_controller->engine());
   });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
