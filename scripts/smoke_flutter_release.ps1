@@ -9,7 +9,7 @@
     [string]$MainPhase = "normal",
     [ValidateSet("normal", "longModels")]
     [string]$TranslationScenario = "normal",
-    [ValidateSet("browse", "edit", "failure", "resume", "cancel")]
+    [ValidateSet("browse", "edit", "failure", "outputFailure", "resume", "cancel")]
     [string]$TaskProcessingScenario = "browse",
     [switch]$CheckNotifications,
     [switch]$CheckTray,
@@ -342,14 +342,15 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         default { "sample-diagnostics-context.mp4" }
     }
     $taskOutputPaths = @{}
-    if ($WindowType -eq "taskProcessing") {
+    if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -ne "outputFailure") {
         $taskOutputPaths = @{srt = (Join-Path $fixtureRoot "result-review.zh-CN.srt")}
     } elseif ($WindowType -eq "diagnostics") {
         $diagnosticOutputPath = Join-Path $fixtureRoot "diagnostics-context.zh-CN.srt"
         [System.IO.File]::WriteAllText($diagnosticOutputPath, "1`n00:00:00,000 --> 00:00:01,000`n诊断 smoke 字幕`n", $utf8NoBom)
         $taskOutputPaths = @{srt = $diagnosticOutputPath}
     }
-    $isTaskProcessingFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -in @("failure", "resume")
+    $isTaskProcessingOutputFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "outputFailure"
+    $isTaskProcessingFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -in @("failure", "outputFailure", "resume")
     $contextStatus = if ($isTaskProcessingFailure) {
         "FAILED"
     } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
@@ -362,7 +363,13 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
     $fixtureErrorHint = ""
     $fixtureErrorStage = ""
     $fixtureErrorRetryable = ""
-    if ($isTaskProcessingFailure) {
+    if ($isTaskProcessingOutputFailure) {
+        $fixtureErrorMessage = "Smoke output directory failure"
+        $fixtureErrorCode = "output_not_writable"
+        $fixtureErrorHint = "输出目录不可写，请选择新目录重新导出。"
+        $fixtureErrorStage = "EXPORT"
+        $fixtureErrorRetryable = "false"
+    } elseif ($isTaskProcessingFailure) {
         $fixtureErrorMessage = "Smoke detail resumable failure"
         $fixtureErrorCode = "smoke_detail_resumable"
         $fixtureErrorHint = -join @(
@@ -389,7 +396,9 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         ErrorRetryable = $fixtureErrorRetryable
     }
     if ($WindowType -eq "taskProcessing") {
-        $checkpointStatus = if ($isTaskProcessingFailure) {
+        $checkpointStatus = if ($isTaskProcessingOutputFailure) {
+            "EXPORT"
+        } elseif ($isTaskProcessingFailure) {
             "TRANSLATE"
         } elseif ($TaskProcessingScenario -eq "cancel") {
             "TRANSLATE"
@@ -415,7 +424,7 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
     $taskDir = Write-SmokeTaskFixture @contextFixtureArgs
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
     if ($isTaskProcessingFailure) {
-        Write-SmokeTaskEvent -TaskDir $taskDir -Type "error" -Stage "FAILED" -Message "Smoke detail resumable failure"
+        Write-SmokeTaskEvent -TaskDir $taskDir -Type "error" -Stage "FAILED" -Message $fixtureErrorMessage
     } elseif ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "cancel") {
         Write-SmokeTaskEvent -TaskDir $taskDir -Type "stage" -Stage "RUNNING" -Message "Task running" -Progress 0.4
         Write-SmokeTaskRuntimeActive -TaskDir $taskDir
@@ -968,6 +977,9 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false -or $report.task_processing_diagnostic_clue_count -lt 2 -or $report.task_processing_diagnostic_code -ne $fixtureErrorCode -or $report.task_processing_diagnostic_stage -ne $fixtureErrorStage -or $report.task_processing_diagnostic_retryable -ne $true -or $report.task_processing_diagnostic_can_resume -ne $true -or $report.task_processing_recovery_target -ne "resume" -or $report.task_processing_recovery_action -ne "继续任务")) {
             throw "Release task processing failure smoke did not stay on the failed task with diagnostic clues: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "outputFailure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_diagnostic_code -ne "output_not_writable" -or $report.task_processing_diagnostic_stage -ne "EXPORT" -or $report.task_processing_recovery_target -ne "outputDirectory" -or $report.task_processing_recovery_action -ne "选择输出目录")) {
+            throw "Release task processing output failure smoke did not expose directory recovery: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"

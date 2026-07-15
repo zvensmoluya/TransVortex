@@ -3664,6 +3664,223 @@ void main() {
     ]);
     expectNoFlutterException();
   });
+
+  testWidgets('task processing repairs an output failure in a new directory', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1040, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    FilePickerIO.registerWith();
+    const pickerChannel = MethodChannel(
+      'miguelruivo.flutter.plugins.filepicker',
+      JSONMethodCodec(),
+    );
+    var pickerCalls = 0;
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        pickerChannel,
+        null,
+      );
+    });
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pickerChannel,
+      (call) async {
+        expect(call.method, 'dir');
+        pickerCalls += 1;
+        return r'E:\fixed-output';
+      },
+    );
+
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final reexportParams = <Map<String, Object?>>[];
+    var taskStatus = 'FAILED';
+    var outputPaths = <String, String>{};
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'tasks.list') {
+        return [
+          _task(
+            taskId: 'tvx_output_recovery_123456',
+            status: taskStatus,
+            inputFile: r'D:\media\output-failed.mp4',
+            taskDir: r'D:\artifacts\tvx_output_recovery_123456',
+            outputPaths: outputPaths,
+            errorInfo: taskStatus == 'FAILED'
+                ? {
+                    'code': 'output_not_writable',
+                    'stage': 'EXPORT',
+                    'hint_zh': '输出目录不可写。',
+                    'retryable': false,
+                  }
+                : const {},
+            runtime: {'state': 'terminal'},
+            settings: {
+              'output_format': 'ass',
+              'subtitle_ass_style': {
+                'bilingual_order': 'source_target',
+                'prefer_single_line': false,
+              },
+            },
+          ),
+        ];
+      }
+      if (method == 'tasks.events') {
+        return {
+          'task_id': 'tvx_output_recovery_123456',
+          'events': const [],
+          'cursor': 0,
+          'next_cursor': 0,
+          'has_more': false,
+        };
+      }
+      if (method == 'result.reexport') {
+        reexportParams.add(Map<String, Object?>.from(params));
+        if (reexportParams.length == 1) {
+          throw RpcRemoteException(
+            'runtime_error',
+            'read events.json for task_id=tvx_output_recovery_123456',
+            details: const {
+              'error_info': {
+                'code': 'runtime_error',
+                'hint_zh': '请查看 events.json 和 task_id 后重试。',
+              },
+            },
+          );
+        }
+        taskStatus = 'DONE';
+        outputPaths = {'ass': r'E:\fixed-output\output-failed.zh-CN.ass'};
+        return {
+          'task_id': 'tvx_output_recovery_123456',
+          'output_paths': outputPaths,
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.taskProcessing,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('选择输出目录'), findsOneWidget);
+    expect(find.text('检查结果目录'), findsNothing);
+    expect(find.text('继续任务'), findsNothing);
+
+    await tester.tap(find.text('选择输出目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(pickerCalls, 1);
+    expect(reexportParams.single, {
+      'task_id': 'tvx_output_recovery_123456',
+      'output_format': 'ass',
+      'output_dir': r'E:\fixed-output',
+      'bilingual': true,
+      'subtitle_bilingual_order': 'source_target',
+      'subtitle_prefer_single_line': false,
+    });
+    expect(find.textContaining('任务运行失败，可以先重试'), findsOneWidget);
+    expect(find.textContaining('events.json'), findsNothing);
+    expect(find.textContaining('task_id'), findsNothing);
+    expect(find.text('选择输出目录'), findsOneWidget);
+
+    await tester.tap(find.text('选择输出目录'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(pickerCalls, 2);
+    expect(reexportParams, hasLength(2));
+    expect(find.text('字幕已重新导出到新目录。'), findsOneWidget);
+    expect(find.text('编辑字幕'), findsOneWidget);
+    expect(find.text('选择输出目录'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('task processing re-exports a missing result in place', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1040, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? reexportParams;
+    var taskStatus = 'FAILED';
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'tasks.list') {
+        return [
+          _task(
+            taskId: 'tvx_result_recovery_123456',
+            status: taskStatus,
+            inputFile: r'D:\media\result-missing.mp4',
+            taskDir: r'D:\artifacts\tvx_result_recovery_123456',
+            outputPaths: taskStatus == 'DONE'
+                ? {'srt': r'D:\media\result-missing.zh-CN.srt'}
+                : const {},
+            errorInfo: taskStatus == 'FAILED'
+                ? {
+                    'code': 'result_missing',
+                    'stage': 'EXPORT',
+                    'hint_zh': '字幕输出文件已被移动。',
+                  }
+                : const {},
+            runtime: {'state': 'terminal'},
+            settings: {'output_format': 'srt'},
+          ),
+        ];
+      }
+      if (method == 'tasks.events') {
+        return {
+          'task_id': 'tvx_result_recovery_123456',
+          'events': const [],
+          'cursor': 0,
+          'next_cursor': 0,
+          'has_more': false,
+        };
+      }
+      if (method == 'result.reexport') {
+        reexportParams = Map<String, Object?>.from(params);
+        taskStatus = 'DONE';
+        return {
+          'task_id': 'tvx_result_recovery_123456',
+          'output_paths': {'srt': r'D:\media\result-missing.zh-CN.srt'},
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.taskProcessing,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('重新导出'), findsOneWidget);
+    expect(find.text('选择输出目录'), findsNothing);
+
+    await tester.tap(find.text('重新导出'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(reexportParams, {
+      'task_id': 'tvx_result_recovery_123456',
+      'output_format': 'srt',
+      'bilingual': true,
+    });
+    expect(find.text('字幕已重新导出。'), findsOneWidget);
+    expect(find.text('编辑字幕'), findsOneWidget);
+    expectNoFlutterException();
+  });
 }
 
 void expectNoFlutterException() {
@@ -4090,6 +4307,7 @@ Map<String, Object?> _task({
   Map<String, String> outputPaths = const {},
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
+  Map<String, Object?> settings = const {},
   String? inputType,
 }) {
   return {
@@ -4108,6 +4326,7 @@ Map<String, Object?> _task({
     if (outputPaths.isNotEmpty) 'output_paths': outputPaths,
     if (errorInfo.isNotEmpty) 'error_info': errorInfo,
     if (runtime.isNotEmpty) 'runtime': runtime,
+    if (settings.isNotEmpty) 'settings': settings,
   };
 }
 

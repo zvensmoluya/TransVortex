@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
@@ -104,6 +105,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _loadingMoreEvents = false;
   bool _resuming = false;
   String? _retranslatingTaskId;
+  String? _reexportingTaskId;
   String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
   String? _editingTaskId;
@@ -742,6 +744,75 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
   }
 
+  Future<void> _recoverTaskOutput(
+    TaskSummary task, {
+    required bool chooseDirectory,
+  }) async {
+    if (_reexportingTaskId != null) return;
+    final recovery = taskFailurePresentation(
+      error: task.error,
+      errorInfo: task.errorInfo,
+      canResume: task.canResume,
+    );
+    if (recovery.target != TaskFailureRecoveryTarget.outputDirectory &&
+        recovery.target != TaskFailureRecoveryTarget.reexport) {
+      return;
+    }
+
+    String? outputDirectory;
+    if (chooseDirectory) {
+      try {
+        outputDirectory = await FilePicker.platform.getDirectoryPath(
+          dialogTitle: '选择新的字幕输出目录',
+          initialDirectory: _outputDirectoryFor(task),
+        );
+      } on Object {
+        if (!mounted) return;
+        setState(() {
+          _message = null;
+          _error = '打开目录选择器失败，请稍后重试。';
+        });
+        return;
+      }
+      if (!mounted || outputDirectory == null) return;
+    }
+
+    setState(() {
+      _reexportingTaskId = task.taskId;
+      _message = chooseDirectory ? '正在写入新的输出目录…' : '正在重新导出字幕…';
+      _error = null;
+    });
+    try {
+      final subtitleStyle = _stringMap(task.settings['subtitle_ass_style']);
+      await _client.resultReexport(
+        task.taskId,
+        outputFormat: _taskOutputFormat(task),
+        outputDir: outputDirectory,
+        bilingual: task.bilingual,
+        subtitleBilingualOrder: _stringValue(subtitleStyle['bilingual_order']),
+        subtitlePreferSingleLine: _firstDiagnosticBool(subtitleStyle, const [
+          'prefer_single_line',
+        ]),
+      );
+      if (!mounted) return;
+      await _loadTasks();
+      if (!mounted) return;
+      setState(() {
+        _reexportingTaskId = null;
+        if (_error == null) {
+          _message = chooseDirectory ? '字幕已重新导出到新目录。' : '字幕已重新导出。';
+        }
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _reexportingTaskId = null;
+        _message = null;
+        _error = '重新导出失败：${_friendlyTaskProcessingError(error)}';
+      });
+    }
+  }
+
   Future<void> _openFailureRecoverySettings(TaskSummary task) async {
     final recovery = taskFailurePresentation(
       error: task.error,
@@ -800,7 +871,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     );
     if (_smokeScenario == 'edit') {
       await _runSmokeEditFlow(selected);
-    } else if (_smokeScenario == 'failure') {
+    } else if (_smokeScenario == 'failure' ||
+        _smokeScenario == 'outputFailure') {
       return;
     } else if (_smokeScenario == 'resume') {
       await _runSmokeResumeFlow(selected);
@@ -1014,6 +1086,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   eventsHasMore: selectedEventsPage?.hasMore == true,
                   resuming: _resuming,
                   retranslatingTaskId: _retranslatingTaskId,
+                  reexportingTaskId: _reexportingTaskId,
                   cancellingTaskId: _cancellingTaskId,
                   checkingOutputDirectory: _checkingOutputDirectory,
                   onRefresh: _loadTasks,
@@ -1033,6 +1106,12 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onCancel: (task) => unawaited(_cancelTask(task)),
                   onOpenFailureRecovery: (task) =>
                       unawaited(_openFailureRecoverySettings(task)),
+                  onReexport: (task) => unawaited(
+                    _recoverTaskOutput(task, chooseDirectory: false),
+                  ),
+                  onChooseOutputDirectory: (task) => unawaited(
+                    _recoverTaskOutput(task, chooseDirectory: true),
+                  ),
                   onOpenTaskDirectory: (task) =>
                       unawaited(_openTaskDirectory(task)),
                   onOpenOutputDirectory: (task) =>
@@ -1051,6 +1130,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String _statusText(TaskSummary? selected) {
     if (_loadingTasks) return '读取任务中';
     if (_resuming) return '继续任务中';
+    if (_reexportingTaskId != null) return '重新导出中';
     if (_checkingOutputDirectory) return '检查结果目录中';
     if (_error != null) return '任务处理暂不可用';
     if (selected == null) return '任务片列';
@@ -1080,6 +1160,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.eventsHasMore,
     required this.resuming,
     required this.retranslatingTaskId,
+    required this.reexportingTaskId,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onRefresh,
@@ -1095,6 +1176,8 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onRetranslate,
     required this.onCancel,
     required this.onOpenFailureRecovery,
+    required this.onReexport,
+    required this.onChooseOutputDirectory,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -1120,6 +1203,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final bool eventsHasMore;
   final bool resuming;
   final String? retranslatingTaskId;
+  final String? reexportingTaskId;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback onRefresh;
@@ -1135,6 +1219,8 @@ class _TaskProcessingBody extends StatelessWidget {
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenFailureRecovery;
+  final ValueChanged<TaskSummary> onReexport;
+  final ValueChanged<TaskSummary> onChooseOutputDirectory;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -1179,6 +1265,7 @@ class _TaskProcessingBody extends StatelessWidget {
             eventsHasMore: eventsHasMore,
             resuming: resuming,
             retranslatingTaskId: retranslatingTaskId,
+            reexportingTaskId: reexportingTaskId,
             cancellingTaskId: cancellingTaskId,
             checkingOutputDirectory: checkingOutputDirectory,
             onLoadMoreEvents: onLoadMoreEvents,
@@ -1190,6 +1277,8 @@ class _TaskProcessingBody extends StatelessWidget {
             onRetranslate: onRetranslate,
             onCancel: onCancel,
             onOpenFailureRecovery: onOpenFailureRecovery,
+            onReexport: onReexport,
+            onChooseOutputDirectory: onChooseOutputDirectory,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
             onCheckOutputDirectory: onCheckOutputDirectory,
@@ -1598,6 +1687,7 @@ class _TaskPreview extends StatelessWidget {
     required this.eventsHasMore,
     required this.resuming,
     required this.retranslatingTaskId,
+    required this.reexportingTaskId,
     required this.cancellingTaskId,
     required this.checkingOutputDirectory,
     required this.onLoadMoreEvents,
@@ -1609,6 +1699,8 @@ class _TaskPreview extends StatelessWidget {
     required this.onRetranslate,
     required this.onCancel,
     required this.onOpenFailureRecovery,
+    required this.onReexport,
+    required this.onChooseOutputDirectory,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -1628,6 +1720,7 @@ class _TaskPreview extends StatelessWidget {
   final bool eventsHasMore;
   final bool resuming;
   final String? retranslatingTaskId;
+  final String? reexportingTaskId;
   final String? cancellingTaskId;
   final bool checkingOutputDirectory;
   final VoidCallback? onLoadMoreEvents;
@@ -1639,6 +1732,8 @@ class _TaskPreview extends StatelessWidget {
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
   final ValueChanged<TaskSummary> onOpenFailureRecovery;
+  final ValueChanged<TaskSummary> onReexport;
+  final ValueChanged<TaskSummary> onChooseOutputDirectory;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -1683,6 +1778,7 @@ class _TaskPreview extends StatelessWidget {
     final outputDir = _outputDirectoryFor(task);
     final cancelling = cancellingTaskId == task.taskId;
     final retranslating = retranslatingTaskId == task.taskId;
+    final reexporting = reexportingTaskId == task.taskId;
     final eventSearchQuery = eventSearchController.text.trim();
     final visibleEvents = events
         .where(
@@ -1699,6 +1795,11 @@ class _TaskPreview extends StatelessWidget {
         (task.isFailed || task.isRuntimeStale) &&
         (recovery.target == TaskFailureRecoveryTarget.translationSettings ||
             recovery.target == TaskFailureRecoveryTarget.asrSettings);
+    final hasOutputRecovery =
+        (task.isFailed || task.isRuntimeStale) &&
+        (recovery.target == TaskFailureRecoveryTarget.outputDirectory ||
+            recovery.target == TaskFailureRecoveryTarget.reexport);
+    final hasPrimaryFailureRecovery = hasSettingsRecovery || hasOutputRecovery;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1741,10 +1842,21 @@ class _TaskPreview extends StatelessWidget {
                 strong: true,
                 onTap: () => onOpenFailureRecovery(task),
               ),
+            if (hasOutputRecovery)
+              _TaskActionButton(
+                label: reexporting ? '导出中' : recovery.actionLabel,
+                strong: true,
+                onTap: reexportingTaskId != null
+                    ? null
+                    : recovery.target ==
+                          TaskFailureRecoveryTarget.outputDirectory
+                    ? () => onChooseOutputDirectory(task)
+                    : () => onReexport(task),
+              ),
             if (task.canResume)
               _TaskActionButton(
                 label: resuming ? '继续中' : '继续任务',
-                strong: !hasSettingsRecovery,
+                strong: !hasPrimaryFailureRecovery,
                 onTap: resuming ? null : () => onResume(task),
               ),
             if (task.canCancel)
@@ -1758,17 +1870,17 @@ class _TaskPreview extends StatelessWidget {
                 label: '结果目录',
                 onTap: () => onOpenOutputDirectory(task),
               ),
-            if (task.taskDir.trim().isNotEmpty)
-              _TaskActionButton(
-                label: '任务目录',
-                onTap: () => onOpenTaskDirectory(task),
-              ),
-            if (error != null && outputDir != null)
+            if (hasOutputRecovery && outputDir != null)
               _TaskActionButton(
                 label: checkingOutputDirectory ? '检查中' : '检查结果目录',
                 onTap: checkingOutputDirectory
                     ? null
                     : () => onCheckOutputDirectory(task),
+              ),
+            if (task.taskDir.trim().isNotEmpty)
+              _TaskActionButton(
+                label: '任务目录',
+                onTap: () => onOpenTaskDirectory(task),
               ),
           ],
         ),
@@ -2332,6 +2444,10 @@ String _taskActionabilityLabel(TaskSummary task) {
       recovery.target == TaskFailureRecoveryTarget.asrSettings) {
     return recovery.actionLabel;
   }
+  if (recovery.target == TaskFailureRecoveryTarget.outputDirectory ||
+      recovery.target == TaskFailureRecoveryTarget.reexport) {
+    return recovery.actionLabel;
+  }
   if (task.canResume) return '可继续任务';
   if (task.canCancel) return '可取消任务';
   if (task.isDone) return '可编辑结果';
@@ -2353,6 +2469,12 @@ String _taskActionHint(TaskSummary task) {
     return task.canResume
         ? '先${recovery.actionLabel}，修好后可以继续已有进度。'
         : recovery.reason;
+  }
+  if (recovery.target == TaskFailureRecoveryTarget.outputDirectory) {
+    return '选择一个可写目录后，会直接重新导出已有字幕结果。';
+  }
+  if (recovery.target == TaskFailureRecoveryTarget.reexport) {
+    return '字幕结果需要重新写出，不必重新制作整项任务。';
   }
   if (task.canResume) return '这个任务可以从已有进度继续。';
   if (task.canCancel) return '任务仍在制作中，需要时可以取消。';
@@ -2570,10 +2692,27 @@ String _dirname(String path) {
   return trimmed.substring(0, lastSlash);
 }
 
+String _taskOutputFormat(TaskSummary task) {
+  final saved = (_stringValue(task.settings['output_format']) ?? '')
+      .toLowerCase();
+  if (saved == 'webvtt') return 'vtt';
+  if (const {'srt', 'ass', 'vtt', 'lrc', 'both'}.contains(saved)) return saved;
+
+  final formats = task.outputPaths.keys
+      .map((value) => value.trim().toLowerCase())
+      .toSet();
+  if (formats.contains('srt') && formats.contains('ass')) return 'both';
+  for (final format in const ['srt', 'ass', 'vtt', 'lrc']) {
+    if (formats.contains(format)) return format;
+  }
+  return 'srt';
+}
+
 String _normalizedSmokeScenario(String? value) {
   return switch ((value ?? '').trim().toLowerCase()) {
     'edit' => 'edit',
     'failure' => 'failure',
+    'outputfailure' => 'outputFailure',
     'resume' => 'resume',
     'cancel' => 'cancel',
     _ => 'browse',
@@ -2648,9 +2787,15 @@ bool _eventMatchesSearch(Map<String, Object?> event, String searchQuery) {
 
 String _friendlyTaskProcessingError(Object error) {
   if (error is RpcRemoteException) {
-    final message = error.message.trim();
-    if (message.isNotEmpty) return message;
-    return '任务处理失败：${error.code}';
+    final details = _stringMap(error.details);
+    final errorInfo = _stringMap(details['error_info']);
+    return taskFailurePresentation(
+      error: error.message,
+      errorInfo: {
+        ...errorInfo,
+        if ((_stringValue(errorInfo['code']) ?? '').isEmpty) 'code': error.code,
+      },
+    ).reason;
   }
-  return '任务处理失败：$error';
+  return taskFailurePresentation(error: '$error').reason;
 }
