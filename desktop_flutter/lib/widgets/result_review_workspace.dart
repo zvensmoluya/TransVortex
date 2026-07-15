@@ -13,11 +13,13 @@ class ResultReviewWorkspace extends StatefulWidget {
     required this.taskId,
     required this.bridge,
     this.transportOverride,
+    this.onDirtyChanged,
   });
 
   final String? taskId;
   final WindowStateBridge bridge;
   final AppServiceTransport? transportOverride;
+  final ValueChanged<bool>? onDirtyChanged;
 
   @override
   State<ResultReviewWorkspace> createState() => _ResultReviewWorkspaceState();
@@ -68,7 +70,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _loading = false;
       _saving = false;
       _reexporting = false;
-      _dirty = false;
+      _updateDirty(false);
       _notice = '';
       _selectedOutputFormat = null;
       _selectedBilingual = null;
@@ -114,7 +116,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _selectedOutputFormat ??= _outputFormatFor(result);
         _selectedBilingual ??= result.task.bilingual;
         _loading = false;
-        _dirty = false;
+        _updateDirty(false);
         _notice = '';
       });
     } on Object catch (error) {
@@ -172,8 +174,16 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _filter == _SegmentFilter.modified;
     if (!shouldRebuild) return;
     setState(() {
-      _dirty = dirty;
+      _updateDirty(dirty);
       if (dirty) _notice = '';
+    });
+  }
+
+  void _updateDirty(bool value) {
+    if (_dirty == value) return;
+    _dirty = value;
+    scheduleMicrotask(() {
+      if (mounted) widget.onDirtyChanged?.call(value);
     });
   }
 
@@ -187,7 +197,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       }
     }
     setState(() {
-      _dirty = false;
+      _updateDirty(false);
       _notice = '已放弃未保存修改';
       _error = null;
     });
@@ -201,7 +211,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     controller.text = segment.targetText;
     final dirty = _hasModifiedSegments(result);
     setState(() {
-      _dirty = dirty;
+      _updateDirty(dirty);
       _notice = dirty ? '' : '已还原片段修改';
       _error = null;
     });
@@ -233,7 +243,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _syncSegmentControllers(saved);
       setState(() {
         _result = saved;
-        _dirty = false;
+        _updateDirty(false);
         _saving = false;
         _notice = '已保存修改';
       });
@@ -277,7 +287,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _syncSegmentControllers(refreshed);
       setState(() {
         _result = refreshed;
-        _dirty = false;
+        _updateDirty(false);
         _reexporting = false;
         _notice = '已重新导出字幕';
       });
@@ -573,7 +583,7 @@ class _ResultHeader extends StatelessWidget {
                   label: loading ? '刷新中' : '刷新',
                   icon: Icons.refresh,
                   onTap: onRefresh,
-                  enabled: !loading && !saving && !reexporting,
+                  enabled: !dirty && !loading && !saving && !reexporting,
                 ),
                 _ReviewButton(
                   label: saving ? '保存中' : '保存修改',

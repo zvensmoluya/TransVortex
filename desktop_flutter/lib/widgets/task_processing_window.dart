@@ -105,6 +105,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
   String? _editingTaskId;
+  bool _resultEditorDirty = false;
   String _smokeScenario = 'browse';
   int _smokeResultSegmentCount = 0;
   int _smokeResultIssueCount = 0;
@@ -231,10 +232,12 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (args.type != AppWindowType.taskProcessing) return;
     final taskId = args.taskId?.trim();
     if (taskId != null && taskId.isNotEmpty) {
+      if (taskId != _editingTaskId && !await _leaveResultEditor()) return;
       _setTaskSearchTextSilently('');
       _setEventSearchTextSilently('');
       _selectedTaskId = taskId;
       _editingTaskId = taskId;
+      _resultEditorDirty = false;
       _taskFilter = _TaskFilter.all;
     }
     await _loadTasks();
@@ -283,6 +286,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   Future<void> _setTaskFilter(_TaskFilter filter) async {
     if (_taskFilter == filter) return;
+    if (!await _leaveResultEditor()) return;
     final visibleTasks = _visibleTasksFor(
       _tasks,
       filter,
@@ -294,6 +298,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       _taskFilter = filter;
       _selectedTaskId = selected?.taskId;
       _editingTaskId = null;
+      _resultEditorDirty = false;
       if (previousTaskId != selected?.taskId) {
         _setEventSearchTextSilently('');
       }
@@ -307,6 +312,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   void _handleTaskSearchChanged() {
     if (!mounted) return;
+    if (_resultEditorDirty) return;
     final visibleTasks = _visibleTasksFor(
       _tasks,
       _taskFilter,
@@ -349,9 +355,11 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (_selectedTaskId == task.taskId && _eventsPage?.taskId == task.taskId) {
       return;
     }
+    if (!await _leaveResultEditor()) return;
     setState(() {
       _selectedTaskId = task.taskId;
       _editingTaskId = null;
+      _resultEditorDirty = false;
       _setEventSearchTextSilently('');
       _message = null;
       _error = null;
@@ -419,9 +427,44 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (!task.isDone) return;
     setState(() {
       _editingTaskId = task.taskId;
+      _resultEditorDirty = false;
       _message = '正在处理字幕结果。';
       _error = null;
     });
+  }
+
+  Future<bool> _leaveResultEditor() async {
+    if (_editingTaskId == null) return true;
+    if (_resultEditorDirty) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('放弃未保存修改？'),
+          content: const Text('字幕修改尚未保存，离开后这些修改会丢失。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('继续编辑'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('放弃修改'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true || !mounted) return false;
+    }
+    setState(() {
+      _editingTaskId = null;
+      _resultEditorDirty = false;
+    });
+    return true;
+  }
+
+  void _handleResultDirtyChanged(bool dirty) {
+    if (!mounted || _resultEditorDirty == dirty) return;
+    setState(() => _resultEditorDirty = dirty);
   }
 
   Future<void> _resumeTask(TaskSummary task) async {
@@ -819,6 +862,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   editingTaskId: editingTaskId == selected?.taskId
                       ? editingTaskId
                       : null,
+                  resultEditorDirty: _resultEditorDirty,
                   bridge: widget.bridge,
                   resultTransportOverride: _embeddedResultTransport,
                   message: _message,
@@ -841,7 +885,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                       : () => unawaited(_loadMoreEvents(selected.taskId)),
                   onClearEventSearch: _eventSearchController.clear,
                   onOpenResult: (task) => unawaited(_openResult(task)),
-                  onCloseEditor: () => setState(() => _editingTaskId = null),
+                  onCloseEditor: () => unawaited(_leaveResultEditor()),
+                  onResultDirtyChanged: _handleResultDirtyChanged,
                   onResume: (task) => unawaited(_resumeTask(task)),
                   onRetranslate: (task) => unawaited(_retranslateTask(task)),
                   onCancel: (task) => unawaited(_cancelTask(task)),
@@ -881,6 +926,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.events,
     required this.eventSearchController,
     required this.editingTaskId,
+    required this.resultEditorDirty,
     required this.bridge,
     required this.resultTransportOverride,
     required this.message,
@@ -901,6 +947,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onClearEventSearch,
     required this.onOpenResult,
     required this.onCloseEditor,
+    required this.onResultDirtyChanged,
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
@@ -918,6 +965,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final List<Object?> events;
   final TextEditingController eventSearchController;
   final String? editingTaskId;
+  final bool resultEditorDirty;
   final WindowStateBridge bridge;
   final AppServiceTransport resultTransportOverride;
   final String? message;
@@ -938,6 +986,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final VoidCallback onClearEventSearch;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
+  final ValueChanged<bool> onResultDirtyChanged;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
@@ -959,6 +1008,7 @@ class _TaskProcessingBody extends StatelessWidget {
             searchController: searchController,
             selectedTaskId: selected?.taskId,
             loading: loadingTasks,
+            passiveControlsEnabled: !resultEditorDirty,
             onRefresh: onRefresh,
             onFilterChanged: onFilterChanged,
             onClearSearch: onClearSearch,
@@ -990,6 +1040,7 @@ class _TaskProcessingBody extends StatelessWidget {
             onClearEventSearch: onClearEventSearch,
             onOpenResult: onOpenResult,
             onCloseEditor: onCloseEditor,
+            onResultDirtyChanged: onResultDirtyChanged,
             onResume: onResume,
             onRetranslate: onRetranslate,
             onCancel: onCancel,
@@ -1012,6 +1063,7 @@ class _TaskStripList extends StatelessWidget {
     required this.searchController,
     required this.selectedTaskId,
     required this.loading,
+    required this.passiveControlsEnabled,
     required this.onRefresh,
     required this.onFilterChanged,
     required this.onClearSearch,
@@ -1025,6 +1077,7 @@ class _TaskStripList extends StatelessWidget {
   final TextEditingController searchController;
   final String? selectedTaskId;
   final bool loading;
+  final bool passiveControlsEnabled;
   final VoidCallback onRefresh;
   final ValueChanged<_TaskFilter> onFilterChanged;
   final VoidCallback onClearSearch;
@@ -1048,7 +1101,7 @@ class _TaskStripList extends StatelessWidget {
             Expanded(child: Text('任务片列', style: T.tFilename)),
             _TaskActionButton(
               label: loading ? '刷新中' : '刷新',
-              onTap: loading ? null : onRefresh,
+              onTap: loading || !passiveControlsEnabled ? null : onRefresh,
             ),
           ],
         ),
@@ -1066,7 +1119,7 @@ class _TaskStripList extends StatelessWidget {
             const SizedBox(height: T.s12),
             _TaskSearchField(
               controller: searchController,
-              enabled: !loading,
+              enabled: !loading && passiveControlsEnabled,
               onClear: onClearSearch,
             ),
           ],
@@ -1405,6 +1458,7 @@ class _TaskPreview extends StatelessWidget {
     required this.onClearEventSearch,
     required this.onOpenResult,
     required this.onCloseEditor,
+    required this.onResultDirtyChanged,
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
@@ -1433,6 +1487,7 @@ class _TaskPreview extends StatelessWidget {
   final VoidCallback onClearEventSearch;
   final ValueChanged<TaskSummary> onOpenResult;
   final VoidCallback onCloseEditor;
+  final ValueChanged<bool> onResultDirtyChanged;
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
@@ -1471,6 +1526,7 @@ class _TaskPreview extends StatelessWidget {
               taskId: task.taskId,
               bridge: bridge,
               transportOverride: resultTransportOverride,
+              onDirtyChanged: onResultDirtyChanged,
             ),
           ),
         ],

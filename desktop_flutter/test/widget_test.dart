@@ -3190,6 +3190,7 @@ void main() {
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
     final paramsByMethod = <String, Map<String, Object?>>{};
+    final dirtyStates = <bool>[];
     var targetText = '早上好。';
 
     Map<String, Object?> resultPayload() => {
@@ -3238,6 +3239,7 @@ void main() {
           body: ResultReviewWorkspace(
             taskId: 'tvx_review_edit_123456',
             bridge: bridge,
+            onDirtyChanged: dirtyStates.add,
           ),
         ),
       ),
@@ -3251,6 +3253,17 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('有未保存修改'), findsOneWidget);
+    expect(dirtyStates.last, isTrue);
+
+    final openCallsBeforeRefresh = calls
+        .where((method) => method == 'result.open')
+        .length;
+    await tester.tap(find.text('刷新'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      calls.where((method) => method == 'result.open').length,
+      openCallsBeforeRefresh,
+    );
 
     await tester.tap(find.text('放弃修改'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3274,6 +3287,7 @@ void main() {
     final savedFirst = savedSegments.first as Map<Object?, Object?>;
     expect(savedFirst['text_tgt'], '早上好，欢迎回来。');
     expect(find.text('已保存修改'), findsOneWidget);
+    expect(dirtyStates.last, isFalse);
 
     expect(find.text('导出格式'), findsOneWidget);
     await tester.tap(find.text('ASS'));
@@ -3480,8 +3494,28 @@ void main() {
     expect(calls, contains('result.open'));
     expect(opened, isEmpty);
 
+    await tester.enterText(
+      find.widgetWithText(TextField, '输入译文').first,
+      '这是未保存修改。',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    final lockedTaskSearch = find.widgetWithText(TextField, '搜索任务');
+    expect(tester.widget<TextField>(lockedTaskSearch).enabled, isFalse);
+
     await tester.tap(find.text('返回概览'));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('放弃未保存修改？'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '继续编辑'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('字幕编辑'), findsOneWidget);
+    expect(find.text('这是未保存修改。'), findsOneWidget);
+
+    await tester.tap(find.text('返回概览'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.widgetWithText(FilledButton, '放弃修改'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('字幕编辑'), findsNothing);
+
     expect(find.text('创建 2026-07-06 08:00:00'), findsOneWidget);
     expect(find.text('更新 2026-07-06 09:30:00'), findsOneWidget);
     expect(find.text('运行记录 已结束'), findsOneWidget);
