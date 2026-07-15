@@ -742,6 +742,38 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     }
   }
 
+  Future<void> _openFailureRecoverySettings(TaskSummary task) async {
+    final recovery = taskFailurePresentation(
+      error: task.error,
+      errorInfo: task.errorInfo,
+      canResume: task.canResume,
+    );
+    final type = switch (recovery.target) {
+      TaskFailureRecoveryTarget.translationSettings =>
+        AppWindowType.translationSettings,
+      TaskFailureRecoveryTarget.asrSettings => AppWindowType.asrSettings,
+      _ => null,
+    };
+    if (type == null) return;
+    setState(() {
+      _message = '正在打开${type.title}…';
+      _error = null;
+    });
+    try {
+      await widget.bridge.openToolWindow(type);
+      if (!mounted) return;
+      setState(() {
+        _message = '已打开${type.title}，修好后可以回来继续任务。';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = null;
+        _error = '打开${type.title}失败：$error';
+      });
+    }
+  }
+
   Future<void> _openDirectory(
     String path, {
     required String successMessage,
@@ -999,6 +1031,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                   onResume: (task) => unawaited(_resumeTask(task)),
                   onRetranslate: (task) => unawaited(_retranslateTask(task)),
                   onCancel: (task) => unawaited(_cancelTask(task)),
+                  onOpenFailureRecovery: (task) =>
+                      unawaited(_openFailureRecoverySettings(task)),
                   onOpenTaskDirectory: (task) =>
                       unawaited(_openTaskDirectory(task)),
                   onOpenOutputDirectory: (task) =>
@@ -1060,6 +1094,7 @@ class _TaskProcessingBody extends StatelessWidget {
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
+    required this.onOpenFailureRecovery,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -1099,6 +1134,7 @@ class _TaskProcessingBody extends StatelessWidget {
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
+  final ValueChanged<TaskSummary> onOpenFailureRecovery;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -1153,6 +1189,7 @@ class _TaskProcessingBody extends StatelessWidget {
             onResume: onResume,
             onRetranslate: onRetranslate,
             onCancel: onCancel,
+            onOpenFailureRecovery: onOpenFailureRecovery,
             onOpenTaskDirectory: onOpenTaskDirectory,
             onOpenOutputDirectory: onOpenOutputDirectory,
             onCheckOutputDirectory: onCheckOutputDirectory,
@@ -1571,6 +1608,7 @@ class _TaskPreview extends StatelessWidget {
     required this.onResume,
     required this.onRetranslate,
     required this.onCancel,
+    required this.onOpenFailureRecovery,
     required this.onOpenTaskDirectory,
     required this.onOpenOutputDirectory,
     required this.onCheckOutputDirectory,
@@ -1600,6 +1638,7 @@ class _TaskPreview extends StatelessWidget {
   final ValueChanged<TaskSummary> onResume;
   final ValueChanged<TaskSummary> onRetranslate;
   final ValueChanged<TaskSummary> onCancel;
+  final ValueChanged<TaskSummary> onOpenFailureRecovery;
   final ValueChanged<TaskSummary> onOpenTaskDirectory;
   final ValueChanged<TaskSummary> onOpenOutputDirectory;
   final ValueChanged<TaskSummary> onCheckOutputDirectory;
@@ -1651,6 +1690,15 @@ class _TaskPreview extends StatelessWidget {
         )
         .toList(growable: false);
     final diagnosticClues = _taskDiagnosticClues(task);
+    final recovery = taskFailurePresentation(
+      error: task.error,
+      errorInfo: task.errorInfo,
+      canResume: task.canResume,
+    );
+    final hasSettingsRecovery =
+        (task.isFailed || task.isRuntimeStale) &&
+        (recovery.target == TaskFailureRecoveryTarget.translationSettings ||
+            recovery.target == TaskFailureRecoveryTarget.asrSettings);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1687,10 +1735,16 @@ class _TaskPreview extends StatelessWidget {
                     ? () => onRetranslate(task)
                     : null,
               ),
+            if (hasSettingsRecovery)
+              _TaskActionButton(
+                label: recovery.actionLabel,
+                strong: true,
+                onTap: () => onOpenFailureRecovery(task),
+              ),
             if (task.canResume)
               _TaskActionButton(
                 label: resuming ? '继续中' : '继续任务',
-                strong: true,
+                strong: !hasSettingsRecovery,
                 onTap: resuming ? null : () => onResume(task),
               ),
             if (task.canCancel)
@@ -1950,32 +2004,76 @@ class _TaskDiagnosticsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.only(left: T.s12),
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: T.danger, width: 2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: T.tSection),
-          const SizedBox(height: T.s8),
-          Wrap(
-            spacing: T.s24,
-            runSpacing: T.s12,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(top: T.s4),
+          padding: const EdgeInsets.all(T.s12),
+          decoration: BoxDecoration(
+            color: T.lilacSoft.withValues(alpha: 0.62),
+            border: Border.all(color: T.line),
+            borderRadius: BorderRadius.circular(T.rSm),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (final clue in clues)
-                _InfoPill(
-                  label: clue.label,
-                  value: clue.value,
-                  danger: clue.danger,
-                  maxLines: clue.maxLines,
+              Container(
+                width: 3,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: T.danger,
+                  borderRadius: BorderRadius.circular(2),
                 ),
+              ),
+              const SizedBox(width: T.s12),
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.handyman_rounded, size: 18, color: T.danger),
+              ),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: T.tSection),
+                    const SizedBox(height: T.s8),
+                    Wrap(
+                      spacing: T.s24,
+                      runSpacing: T.s8,
+                      children: [
+                        for (final clue in clues)
+                          _InfoPill(
+                            label: clue.label,
+                            value: clue.value,
+                            danger: clue.danger,
+                            maxLines: clue.maxLines,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-        ],
-      ),
+        ),
+        Positioned(
+          top: 0,
+          left: T.s24,
+          child: IgnorePointer(
+            child: Container(
+              width: 46,
+              height: 8,
+              decoration: BoxDecoration(
+                color: T.accentSoft,
+                border: Border.all(color: T.accent.withValues(alpha: 0.42)),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2225,6 +2323,15 @@ String _runtimeStateLabel(String state) {
 }
 
 String _taskActionabilityLabel(TaskSummary task) {
+  final recovery = taskFailurePresentation(
+    error: task.error,
+    errorInfo: task.errorInfo,
+    canResume: task.canResume,
+  );
+  if (recovery.target == TaskFailureRecoveryTarget.translationSettings ||
+      recovery.target == TaskFailureRecoveryTarget.asrSettings) {
+    return recovery.actionLabel;
+  }
   if (task.canResume) return '可继续任务';
   if (task.canCancel) return '可取消任务';
   if (task.isDone) return '可编辑结果';
@@ -2236,6 +2343,17 @@ String _taskActionabilityLabel(TaskSummary task) {
 
 String _taskActionHint(TaskSummary task) {
   if (task.isDone) return '结果已经生成，可以进入字幕编辑或打开结果目录。';
+  final recovery = taskFailurePresentation(
+    error: task.error,
+    errorInfo: task.errorInfo,
+    canResume: task.canResume,
+  );
+  if (recovery.target == TaskFailureRecoveryTarget.translationSettings ||
+      recovery.target == TaskFailureRecoveryTarget.asrSettings) {
+    return task.canResume
+        ? '先${recovery.actionLabel}，修好后可以继续已有进度。'
+        : recovery.reason;
+  }
   if (task.canResume) return '这个任务可以从已有进度继续。';
   if (task.canCancel) return '任务仍在制作中，需要时可以取消。';
   if (task.isFailed || task.isRuntimeStale) {
@@ -2304,6 +2422,8 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
       'task_processing_diagnostic_runtime_state_label': '',
       'task_processing_diagnostic_can_resume': false,
       'task_processing_diagnostic_recovery': '',
+      'task_processing_recovery_target': '',
+      'task_processing_recovery_action': '',
     };
   }
   final visibleClues = _taskDiagnosticClues(task);
@@ -2313,6 +2433,11 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
     'last_stage',
   ]);
   final runtimeState = task.runtimeState;
+  final recovery = taskFailurePresentation(
+    error: task.error,
+    errorInfo: task.errorInfo,
+    canResume: task.canResume,
+  );
   return <String, Object?>{
     'task_processing_diagnostic_title': visibleClues.isEmpty
         ? ''
@@ -2342,13 +2467,9 @@ Map<String, Object?> _taskDiagnosticSmokeFields(TaskSummary? task) {
       runtimeState,
     ),
     'task_processing_diagnostic_can_resume': task.canResume,
-    'task_processing_diagnostic_recovery': task.canResume
-        ? '可继续任务'
-        : task.isFailed || task.isRuntimeStale
-        ? '暂无可用恢复动作'
-        : task.isCancelled
-        ? '任务已结束'
-        : '',
+    'task_processing_diagnostic_recovery': recovery.actionLabel,
+    'task_processing_recovery_target': recovery.target.name,
+    'task_processing_recovery_action': recovery.actionLabel,
   };
 }
 

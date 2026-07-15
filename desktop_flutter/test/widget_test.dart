@@ -3348,10 +3348,10 @@ void main() {
             inputFile: r'D:\media\processing-failed.mp4',
             taskDir: r'D:\artifacts\tvx_processing_failed_123456',
             errorInfo: {
-              'hint_zh': '可以继续任务。',
-              'code': 'provider_connection_failed',
-              'stage': 'TRANSLATE',
-              'retryable': true,
+              'hint_zh': '缺少必要环境变量，请在 .env 或 env_key 中配置。',
+              'code': 'missing_env',
+              'stage': 'ASR',
+              'retryable': false,
             },
             runtime: {'can_resume': true, 'state': 'stale'},
             createdAt: '2026-07-05T08:00:00',
@@ -3614,11 +3614,18 @@ void main() {
     expect(find.text('取消任务'), findsNothing);
     expect(find.text('结果目录'), findsNothing);
     expect(find.text('失败线索'), findsOneWidget);
-    expect(find.text('提示 可以继续任务。'), findsOneWidget);
-    expect(find.text('阶段 翻译字幕'), findsOneWidget);
-    expect(find.textContaining('provider_connection_failed'), findsNothing);
+    expect(find.textContaining('语音识别凭据还没有配置'), findsOneWidget);
+    expect(find.text('阶段 识别语音'), findsOneWidget);
+    expect(find.textContaining('.env'), findsNothing);
+    expect(find.textContaining('env_key'), findsNothing);
     expect(find.text('重试性 可重试'), findsNothing);
     expect(find.text('运行状态 记录过期'), findsNothing);
+
+    await tester.tap(find.text('检查识别设置'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(opened, hasLength(1));
+    expect(opened.single.type, AppWindowType.asrSettings);
+    expect(find.textContaining('修好后可以回来继续任务'), findsOneWidget);
 
     await tester.tap(find.text('继续任务'));
     await tester.pump(const Duration(milliseconds: 100));

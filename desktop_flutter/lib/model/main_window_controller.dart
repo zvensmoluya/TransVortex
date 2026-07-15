@@ -11,6 +11,7 @@ import 'task_labels.dart';
 
 enum MainRecoveryTarget {
   retry,
+  cancel,
   resume,
   translationSettings,
   asrSettings,
@@ -18,6 +19,7 @@ enum MainRecoveryTarget {
   outputDirectory,
   reexport,
   reexportDirectory,
+  taskProcessing,
 }
 
 @immutable
@@ -553,7 +555,12 @@ class MainWindowController extends ChangeNotifier {
       await refreshSnapshot();
     } on Object catch (error) {
       _canceling = false;
-      _failure = _failureFromError(error, fallbackAction: '重试取消');
+      _failure = _failureFromError(
+        error,
+        fallbackAction: '重试取消',
+        fallbackTarget: MainRecoveryTarget.cancel,
+        forceFallback: true,
+      );
       _publish();
     }
   }
@@ -755,14 +762,24 @@ class MainWindowController extends ChangeNotifier {
     } on Object catch (error) {
       _completed = false;
       _running = false;
-      final failure = _failureFromError(error, fallbackAction: '重新导出');
-      _failure = failure.target == MainRecoveryTarget.outputDirectory
-          ? MainFailureView(
-              reason: failure.reason,
-              actionLabel: failure.actionLabel,
-              target: MainRecoveryTarget.reexportDirectory,
-            )
-          : failure;
+      final failure = _failureFromError(
+        error,
+        fallbackAction: '重新导出',
+        fallbackTarget: MainRecoveryTarget.reexport,
+      );
+      _failure = switch (failure.target) {
+        MainRecoveryTarget.outputDirectory => MainFailureView(
+          reason: failure.reason,
+          actionLabel: failure.actionLabel,
+          target: MainRecoveryTarget.reexportDirectory,
+        ),
+        MainRecoveryTarget.reexport => failure,
+        _ => MainFailureView(
+          reason: failure.reason,
+          actionLabel: '重新导出',
+          target: MainRecoveryTarget.reexport,
+        ),
+      };
       _publish();
       rethrow;
     }
@@ -999,10 +1016,13 @@ class MainWindowController extends ChangeNotifier {
   }
 
   String _homeTaskReminderReason(TaskSummary task) {
-    final hint = '${task.errorInfo['hint_zh'] ?? ''}'.trim();
-    if (hint.isNotEmpty) return _userFacingFailureReason(hint);
-    final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
-    if (message.isNotEmpty) return _userFacingFailureReason(message);
+    if (task.errorInfo.isNotEmpty || (task.error ?? '').trim().isNotEmpty) {
+      return taskFailurePresentation(
+        error: task.error,
+        errorInfo: task.errorInfo,
+        canResume: task.canResume,
+      ).reason;
+    }
     if (task.status == 'INTERRUPTED') return '上次任务中断，可以继续。';
     if (task.status == 'CANCELLED') return '上次任务已取消，可以继续。';
     return '上次任务未完成，可以继续。';
@@ -1085,15 +1105,15 @@ class MainWindowController extends ChangeNotifier {
       }
       _publish();
       return inspection.available;
-    } on Object catch (error) {
+    } on Object catch (_) {
       if (_source?.path != source.path ||
           generation != _sourceInspectionGeneration ||
           sourceLanguage != _sourceLang) {
         return false;
       }
       if (showFailure) {
-        _failure = MainFailureView(
-          reason: '无法检查视频字幕轨：${_userFacingFailureReason('$error')}',
+        _failure = const MainFailureView(
+          reason: '无法检查视频字幕轨，请重试；如果仍失败，可以换一个文件。',
           actionLabel: '重试',
           target: MainRecoveryTarget.retry,
         );
@@ -1442,115 +1462,69 @@ class MainWindowController extends ChangeNotifier {
   }
 
   MainFailureView _failureFromTask(TaskSummary task) {
-    final hint = '${task.errorInfo['hint_zh'] ?? ''}'.trim();
-    final code = '${task.errorInfo['code'] ?? ''}'.trim();
-    final message = '${task.errorInfo['message'] ?? task.error ?? ''}'.trim();
-    final reason = hint.isNotEmpty
-        ? _userFacingFailureReason(hint)
-        : (message.isNotEmpty
-              ? _userFacingFailureReason(message)
-              : _latestEventMessage(_recentEvents) ?? '制作失败');
-    final mapped = _recoveryForCode(code, task: task);
+    final taskError = (task.error ?? '').trim();
+    final infoMessage = '${task.errorInfo['message'] ?? ''}'.trim();
+    final presentation = taskFailurePresentation(
+      error: taskError.isNotEmpty
+          ? taskError
+          : infoMessage.isNotEmpty
+          ? infoMessage
+          : _latestEventMessage(_recentEvents),
+      errorInfo: task.errorInfo,
+      canResume: task.canResume,
+    );
     return MainFailureView(
-      reason: reason,
-      actionLabel: mapped.$1,
-      target: mapped.$2,
+      reason: presentation.reason,
+      actionLabel: presentation.actionLabel,
+      target: _mainRecoveryTarget(presentation.target),
     );
   }
 
   MainFailureView _failureFromError(
     Object error, {
     String fallbackAction = '重试',
+    MainRecoveryTarget fallbackTarget = MainRecoveryTarget.retry,
+    bool forceFallback = false,
   }) {
+    TaskFailurePresentation presentation;
     if (error is RpcRemoteException) {
       final details = _asStringMap(error.details);
       final info = _asStringMap(details['error_info']);
-      final hint = '${info['hint_zh'] ?? ''}'.trim();
-      final code = '${info['code'] ?? error.code}'.trim();
-      final mapped = _recoveryForCode(code);
-      return MainFailureView(
-        reason: _userFacingFailureReason(
-          hint.isNotEmpty ? hint : error.message,
-        ),
-        actionLabel: mapped.$1,
-        target: mapped.$2,
+      presentation = taskFailurePresentation(
+        error: error.message,
+        errorInfo: {
+          ...info,
+          if ('${info['code'] ?? ''}'.trim().isEmpty) 'code': error.code,
+        },
       );
+    } else {
+      presentation = taskFailurePresentation(error: '$error');
     }
+    final useFallback =
+        forceFallback || presentation.target == TaskFailureRecoveryTarget.retry;
     return MainFailureView(
-      reason: _userFacingFailureReason('$error'),
-      actionLabel: fallbackAction,
-      target: MainRecoveryTarget.retry,
+      reason: presentation.reason,
+      actionLabel: useFallback ? fallbackAction : presentation.actionLabel,
+      target: useFallback
+          ? fallbackTarget
+          : _mainRecoveryTarget(presentation.target),
     );
   }
 
-  String _userFacingFailureReason(String raw) {
-    final text = raw.trim();
-    if (text.isEmpty) return '制作失败';
-    final lower = text.toLowerCase();
-    if (lower.contains('events.json') || lower.contains('stderr')) {
-      return '任务运行失败，请在任务处理中查看失败线索后重试。';
-    }
-    if (lower.contains('ffmpeg') ||
-        lower.contains('returned non-zero exit status')) {
-      return '音频处理失败，请确认片源能正常播放，或换一个文件重试。';
-    }
-    return text;
-  }
-
-  (String, MainRecoveryTarget) _recoveryForCode(
-    String code, {
-    TaskSummary? task,
-  }) {
-    final lower = code.toLowerCase();
-    if (lower.contains('asr') || lower.contains('whisper')) {
-      return ('去配置识别', MainRecoveryTarget.asrSettings);
-    }
-    if (_isTranslationConfigurationFailure(lower) ||
-        lower.contains('credential') ||
-        lower.contains('missing_env') ||
-        lower.contains('env_key') ||
-        lower.contains('api_key') ||
-        lower.contains('key')) {
-      return ('去配置翻译', MainRecoveryTarget.translationSettings);
-    }
-    if (lower.contains('result') ||
-        lower.contains('export') ||
-        lower.contains('moved') ||
-        lower.contains('deleted')) {
-      return ('重新导出', MainRecoveryTarget.reexport);
-    }
-    if (lower == 'input_not_found' ||
-        lower == 'no_segments' ||
-        lower == 'media_processing_failed') {
-      return ('重新选择片源', MainRecoveryTarget.pickSource);
-    }
-    if (lower.contains('permission') ||
-        lower.contains('output') ||
-        lower.contains('writable')) {
-      return ('选择输出目录', MainRecoveryTarget.outputDirectory);
-    }
-    if (task?.canResume == true || lower.contains('interrupt')) {
-      return ('继续任务', MainRecoveryTarget.resume);
-    }
-    return ('重试', MainRecoveryTarget.retry);
-  }
-
-  static bool _isTranslationConfigurationFailure(String code) {
-    if (code.contains('routing')) return true;
-    if (!code.contains('provider')) return false;
-    return const {
-      'auth',
-      'config',
-      'credential',
-      'invalid',
-      'key',
-      'mapping',
-      'missing',
-      'model',
-      'not_found',
-      'preflight',
-      'protocol',
-    }.any(code.contains);
+  MainRecoveryTarget _mainRecoveryTarget(TaskFailureRecoveryTarget target) {
+    return switch (target) {
+      TaskFailureRecoveryTarget.none || TaskFailureRecoveryTarget.taskDetails =>
+        MainRecoveryTarget.taskProcessing,
+      TaskFailureRecoveryTarget.retry => MainRecoveryTarget.retry,
+      TaskFailureRecoveryTarget.resume => MainRecoveryTarget.resume,
+      TaskFailureRecoveryTarget.translationSettings =>
+        MainRecoveryTarget.translationSettings,
+      TaskFailureRecoveryTarget.asrSettings => MainRecoveryTarget.asrSettings,
+      TaskFailureRecoveryTarget.pickSource => MainRecoveryTarget.pickSource,
+      TaskFailureRecoveryTarget.outputDirectory =>
+        MainRecoveryTarget.outputDirectory,
+      TaskFailureRecoveryTarget.reexport => MainRecoveryTarget.reexport,
+    };
   }
 
   Future<String?> _existingPrimaryResultPath() async {

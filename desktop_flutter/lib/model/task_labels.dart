@@ -1,3 +1,7 @@
+import 'task_failure_presentation.dart';
+
+export 'task_failure_presentation.dart';
+
 String taskStatusLabel(String status, {String fallback = ''}) {
   final raw = status.trim();
   final label = switch (raw.toUpperCase()) {
@@ -120,20 +124,7 @@ bool looksInternalTaskEventMessage(String value) {
 }
 
 String taskErrorLabel(String? error, Map<String, Object?> errorInfo) {
-  final hint = errorInfo['hint_zh'] ?? errorInfo['hint'];
-  if (hint != null && '$hint'.trim().isNotEmpty) return '$hint'.trim();
-  final text = (error ?? '').trim();
-  if (text.isEmpty) return '任务失败，等待处理';
-  final lower = text.toLowerCase();
-  if (lower.startsWith('smoke ') ||
-      lower == 'task failed' ||
-      lower == 'task error') {
-    return '任务失败，等待处理';
-  }
-  if (lower.contains('connection refused') || lower.contains('timeout')) {
-    return '服务暂时连不上，请检查配置和网络。';
-  }
-  return text;
+  return taskFailurePresentation(error: error, errorInfo: errorInfo).reason;
 }
 
 String taskTimestampLabel(String value) {

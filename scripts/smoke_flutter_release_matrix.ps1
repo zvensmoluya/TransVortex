@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ExePath = "",
     [int]$TimeoutSeconds = 60,
     [string]$OutputDir = "",
@@ -146,6 +146,8 @@ foreach ($case in $cases) {
         translation_scenario = $case.translation_scenario
         task_processing_scenario = if ($report.PSObject.Properties.Name -contains "task_processing_scenario") { $report.task_processing_scenario } elseif ($case.window_type -eq "taskProcessing") { $case.task_processing_scenario } else { "" }
         controller_state = if ($report.PSObject.Properties.Name -contains "controller_state") { $report.controller_state } else { "" }
+        failure_action = if ($report.PSObject.Properties.Name -contains "failure_action") { $report.failure_action } else { "" }
+        failure_target = if ($report.PSObject.Properties.Name -contains "failure_target") { $report.failure_target } else { "" }
         status = $report.status
         task_status = if ($report.PSObject.Properties.Name -contains "task_status") { $report.task_status } else { "" }
         selected_provider_model_count = if ($report.PSObject.Properties.Name -contains "selected_provider_model_count") { $report.selected_provider_model_count } else { "" }
@@ -166,6 +168,8 @@ foreach ($case in $cases) {
         task_processing_diagnostic_retryable = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_retryable") { $report.task_processing_diagnostic_retryable } else { "" }
         task_processing_diagnostic_runtime_state = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_runtime_state") { $report.task_processing_diagnostic_runtime_state } else { "" }
         task_processing_diagnostic_can_resume = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_can_resume") { $report.task_processing_diagnostic_can_resume } else { "" }
+        task_processing_recovery_target = if ($report.PSObject.Properties.Name -contains "task_processing_recovery_target") { $report.task_processing_recovery_target } else { "" }
+        task_processing_recovery_action = if ($report.PSObject.Properties.Name -contains "task_processing_recovery_action") { $report.task_processing_recovery_action } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }

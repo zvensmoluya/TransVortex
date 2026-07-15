@@ -681,6 +681,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           'window_type': 'main',
           'main_phase': smoke.mainPhase.id,
           'controller_state': _controller.view.state.name,
+          'failure_action': _controller.view.failure?.actionLabel ?? '',
+          'failure_target': _controller.view.failure?.target.name ?? '',
+          'failure_reason': _controller.view.failure?.reason ?? '',
           'translation_label': _controller.view.translationLabel,
           'asr_label': _controller.view.asrLabel,
           'started_at': startedAt.toIso8601String(),
@@ -973,8 +976,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             status: 'FAILED',
             error: '翻译服务连不上。',
             errorInfo: const {
+              'code': 'provider_preflight_failed',
+              'stage': 'TRANSLATE',
               'hint_zh': '翻译服务暂时连不上，请检查服务地址、模型名和凭据后继续任务。',
-              'recoverable': true,
+              'retryable': false,
             },
           ),
         );
@@ -2197,6 +2202,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       case MainRecoveryTarget.retry:
         unawaited(_controller.retryRun());
         break;
+      case MainRecoveryTarget.cancel:
+        unawaited(_controller.cancelRun());
+        break;
       case MainRecoveryTarget.outputDirectory:
         await _pickOutputDirectoryAndRetry();
         break;
@@ -2205,6 +2213,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         break;
       case MainRecoveryTarget.reexport:
         unawaited(_reexportResult());
+        break;
+      case MainRecoveryTarget.taskProcessing:
+        await _openToolWindow(
+          AppWindowType.taskProcessing,
+          taskId: _controller.view.taskId,
+        );
         break;
     }
   }
@@ -2960,36 +2974,80 @@ class _RepairStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 430),
-      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFBE4E0),
-        borderRadius: BorderRadius.circular(T.rSm),
-        border: Border.all(color: T.danger, width: 1.2),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              failure?.reason ?? '制作失败',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: T.tCaption.copyWith(color: T.ink),
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          constraints: const BoxConstraints(maxWidth: 440),
+          margin: const EdgeInsets.only(top: T.s4),
+          padding: const EdgeInsets.symmetric(
+            horizontal: T.s12,
+            vertical: T.s8,
+          ),
+          decoration: BoxDecoration(
+            color: T.lilacSoft,
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(color: T.line, width: 1.2),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 3,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: T.danger,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: T.s8),
+              Icon(_repairIcon(failure?.target), size: 18, color: T.danger),
+              const SizedBox(width: T.s8),
+              Flexible(
+                child: Text(
+                  failure?.reason ?? '制作失败',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption.copyWith(color: T.ink),
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              _Chip(label: failure?.actionLabel ?? '重试', onTap: onTap),
+            ],
+          ),
+        ),
+        Positioned(
+          top: 0,
+          left: T.s24,
+          child: IgnorePointer(
+            child: Container(
+              width: 42,
+              height: 8,
+              decoration: BoxDecoration(
+                color: T.accentSoft.withValues(alpha: 0.92),
+                border: Border.all(color: T.accent.withValues(alpha: 0.42)),
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
-          const SizedBox(width: T.s12),
-          _Chip(
-            label: failure?.actionLabel ?? '重试',
-            danger: true,
-            onTap: onTap,
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
+
+IconData _repairIcon(MainRecoveryTarget? target) => switch (target) {
+  MainRecoveryTarget.translationSettings => Icons.translate_rounded,
+  MainRecoveryTarget.asrSettings => Icons.graphic_eq_rounded,
+  MainRecoveryTarget.pickSource => Icons.video_file_rounded,
+  MainRecoveryTarget.outputDirectory ||
+  MainRecoveryTarget.reexportDirectory ||
+  MainRecoveryTarget.reexport => Icons.folder_copy_rounded,
+  MainRecoveryTarget.resume => Icons.play_arrow_rounded,
+  MainRecoveryTarget.cancel => Icons.stop_circle_outlined,
+  MainRecoveryTarget.taskProcessing => Icons.receipt_long_rounded,
+  MainRecoveryTarget.retry || null => Icons.refresh_rounded,
+};
 
 class _TextAction extends StatefulWidget {
   const _TextAction({required this.label, required this.onTap});
@@ -3032,10 +3090,9 @@ class _TextActionState extends State<_TextAction> {
 }
 
 class _Chip extends StatefulWidget {
-  const _Chip({required this.label, required this.onTap, this.danger = false});
+  const _Chip({required this.label, required this.onTap});
   final String label;
   final VoidCallback onTap;
-  final bool danger;
 
   @override
   State<_Chip> createState() => _ChipState();
@@ -3046,7 +3103,7 @@ class _ChipState extends State<_Chip> {
 
   @override
   Widget build(BuildContext context) {
-    final c = widget.danger ? T.danger : T.accentStrong;
+    const color = T.accentStrong;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -3056,15 +3113,13 @@ class _ChipState extends State<_Chip> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 7),
           decoration: BoxDecoration(
-            color: _hover
-                ? (widget.danger ? const Color(0xFFFFF7F1) : T.accentSoft)
-                : const Color(0x00000000),
+            color: _hover ? T.accentSoft : const Color(0x00000000),
             borderRadius: BorderRadius.circular(T.rMd),
-            border: Border.all(color: c, width: 1.4),
+            border: Border.all(color: color, width: 1.4),
           ),
           child: Text(
             widget.label,
-            style: T.tBody.copyWith(color: c, fontWeight: T.wMedium),
+            style: T.tBody.copyWith(color: color, fontWeight: T.wMedium),
           ),
         ),
       ),

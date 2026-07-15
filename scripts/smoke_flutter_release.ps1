@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ExePath = "",
     [int]$TimeoutSeconds = 60,
     [string]$ScreenshotPath = "",
@@ -873,6 +873,9 @@ try {
             if ($report.main_phase -ne $MainPhase -or $report.controller_state -ne $expectedControllerState) {
                 throw "Release main phase smoke rendered the wrong state: $($report | ConvertTo-Json -Compress -Depth 5)"
             }
+            if ($MainPhase -eq "failed" -and ($report.failure_action -ne "检查翻译设置" -or $report.failure_target -ne "translationSettings" -or [string]::IsNullOrWhiteSpace([string]$report.failure_reason) -or [string]$report.failure_reason -match "\.env|env_key|task_id|stderr")) {
+                throw "Release main failure smoke did not expose a safe recovery action: $($report | ConvertTo-Json -Compress -Depth 5)"
+            }
         } else {
             if ($report.task_status -ne "DONE" -or $report.task_output_ok -ne $true -or $report.task_done_event -ne $true) {
                 throw "Release smoke did not complete a real task: $($report | ConvertTo-Json -Compress -Depth 5)"
@@ -963,7 +966,7 @@ try {
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_editor_visible -ne $true -or $report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $false)) {
             throw "Release task processing edit smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
-        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false -or $report.task_processing_diagnostic_clue_count -lt 2 -or $report.task_processing_diagnostic_code -ne $fixtureErrorCode -or $report.task_processing_diagnostic_stage -ne $fixtureErrorStage -or $report.task_processing_diagnostic_retryable -ne $true -or $report.task_processing_diagnostic_can_resume -ne $true)) {
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false -or $report.task_processing_diagnostic_clue_count -lt 2 -or $report.task_processing_diagnostic_code -ne $fixtureErrorCode -or $report.task_processing_diagnostic_stage -ne $fixtureErrorStage -or $report.task_processing_diagnostic_retryable -ne $true -or $report.task_processing_diagnostic_can_resume -ne $true -or $report.task_processing_recovery_target -ne "resume" -or $report.task_processing_recovery_action -ne "继续任务")) {
             throw "Release task processing failure smoke did not stay on the failed task with diagnostic clues: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {

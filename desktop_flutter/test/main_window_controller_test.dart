@@ -471,6 +471,40 @@ void main() {
     },
   );
 
+  test('controller retries a generic re-export failure as re-export', () async {
+    final handle = _FakeHandle(
+      _desktopSnapshot(),
+      resultReexportError: RpcRemoteException(
+        'invalid_request',
+        'temporary invalid result request',
+        details: const {
+          'error_info': {'code': 'invalid_request', 'hint_zh': '结果请求暂时无法处理。'},
+        },
+      ),
+    );
+    final controller = MainWindowController(
+      service: _readyController(handle: handle),
+    );
+    await controller.startService();
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'DONE',
+          inputFile: r'D:\movie.mp4',
+          outputPaths: const {'srt': r'D:\movie.srt'},
+        ),
+      ),
+    );
+
+    await expectLater(
+      controller.reexportResult(),
+      throwsA(isA<RpcRemoteException>()),
+    );
+
+    expect(controller.view.failure?.actionLabel, '重新导出');
+    expect(controller.view.failure?.target, MainRecoveryTarget.reexport);
+  });
+
   test(
     'controller reexports failed task to selected output directory',
     () async {
@@ -860,12 +894,37 @@ void main() {
       ),
     );
 
-    expect(controller.view.failure?.reason, '缺少 API key。');
-    expect(controller.view.failure?.actionLabel, '去配置翻译');
+    expect(controller.view.failure?.reason, contains('翻译模型凭据'));
+    expect(controller.view.failure?.actionLabel, '检查翻译设置');
     expect(
       controller.view.failure?.target,
       MainRecoveryTarget.translationSettings,
     );
+  });
+
+  test('controller routes ASR credentials without exposing env internals', () {
+    final controller = MainWindowController(service: _readyController());
+
+    controller.pickSource(r'D:\voice.wav');
+    controller.applyFailureForTesting(
+      RpcRemoteException(
+        'missing_env',
+        'missing environment variable OPENAI_API_KEY',
+        details: const {
+          'error_info': {
+            'code': 'missing_env',
+            'stage': 'ASR',
+            'hint_zh': '缺少必要环境变量，请在 .env 或 env_key 中配置。',
+          },
+        },
+      ),
+    );
+
+    expect(controller.view.failure?.actionLabel, '检查识别设置');
+    expect(controller.view.failure?.target, MainRecoveryTarget.asrSettings);
+    expect(controller.view.failure?.reason, contains('语音识别凭据'));
+    expect(controller.view.failure?.reason, isNot(contains('.env')));
+    expect(controller.view.failure?.reason, isNot(contains('env_key')));
   });
 
   test('controller maps missing input to picking a new source', () {
@@ -882,7 +941,7 @@ void main() {
       ),
     );
 
-    expect(controller.view.failure?.reason, '找不到片源文件。');
+    expect(controller.view.failure?.reason, contains('原片源'));
     expect(controller.view.failure?.actionLabel, '重新选择片源');
     expect(controller.view.failure?.target, MainRecoveryTarget.pickSource);
   });
@@ -921,7 +980,10 @@ void main() {
         ),
       );
 
-      expect(controller.view.failure?.reason, '任务运行失败，请在任务处理中查看失败线索后重试。');
+      expect(
+        controller.view.failure?.reason,
+        '任务运行失败，可以先重试；如果仍失败，请在任务处理中查看失败线索。',
+      );
       expect(controller.view.failure?.reason, isNot(contains('events.json')));
       expect(controller.view.failure?.reason, isNot(contains('stderr')));
     },
@@ -1118,6 +1180,41 @@ void main() {
     expect(controller.view.runProgress?.activity, isEmpty);
   });
 
+  test('controller retries a failed cancel with cancel again', () async {
+    final handle = _FakeHandle(
+      _desktopSnapshot(),
+      runtimeCancelError: RpcRemoteException(
+        'task_not_found',
+        'task not found while cancelling',
+        details: const {
+          'error_info': {
+            'code': 'task_not_found',
+            'hint_zh': '取消时暂时找不到任务。',
+            'retryable': false,
+          },
+        },
+      ),
+    );
+    final controller = MainWindowController(
+      service: _readyController(handle: handle),
+    );
+    await controller.startService();
+    controller.applySmokeTask(
+      TaskSummary.fromJson(
+        _task(
+          status: 'RUNNING',
+          inputFile: r'D:\movie.mp4',
+          runtime: {'state': 'running', 'can_cancel': true},
+        ),
+      ),
+    );
+
+    await controller.cancelRun();
+
+    expect(controller.view.failure?.actionLabel, '重试取消');
+    expect(controller.view.failure?.target, MainRecoveryTarget.cancel);
+  });
+
   test(
     'controller resumes home task reminder through runtime.submitResume',
     () async {
@@ -1302,6 +1399,7 @@ class _FakeHandle implements LocalServiceHandle {
     Map<String, Object?>? resultOpen,
     Map<String, Object?>? mediaInspection,
     RpcRemoteException? resultReexportError,
+    RpcRemoteException? runtimeCancelError,
   }) : transport = _FakeTransport(
          {
            'service.info': {
@@ -1363,7 +1461,10 @@ class _FakeHandle implements LocalServiceHandle {
            },
            'result.open': resultOpen,
          },
-         failures: {'result.reexport': ?resultReexportError},
+         failures: {
+           'result.reexport': ?resultReexportError,
+           'runtime.cancel': ?runtimeCancelError,
+         },
          sequences: {
            'desktop.snapshot': ?snapshotAfterReexport == null
                ? null
