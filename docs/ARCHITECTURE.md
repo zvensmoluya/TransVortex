@@ -9,12 +9,16 @@ owning package directly.
 TransVortex is an agent-callable headless worker with multiple frontends:
 
 - CLI and agent commands call the Python worker directly.
-- The Tauri desktop app starts the same worker and consumes JSONL events.
+- The Flutter desktop app starts the packaged Python Local Service and uses its
+  typed JSON-RPC contract to manage workers, tasks, and results.
+- The frozen Tauri app is a reference implementation, not a compatibility
+  target or a second product frontend.
 - Artifacts and task records are the stable contract between core, CLI, agents,
   and desktop UI.
 
-Business logic must stay in Python core modules. Desktop Rust commands should
-only host processes, open files, and bridge events.
+Business logic must stay in Python core modules. Desktop host code should only
+own application lifecycle, windows, system integration, process supervision,
+and typed service transport.
 
 The desktop App direction is now documented separately in
 `docs/DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`. That document defines the

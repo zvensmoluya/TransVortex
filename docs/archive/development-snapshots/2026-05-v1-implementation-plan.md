@@ -1,4 +1,6 @@
-# TransVortex V1.x 实施计划（当前开发快照）
+# TransVortex V1.x 实施计划（2026-05 历史快照）
+
+> **文档状态：历史快照。** 本文记录 2026-05 阶段的实现和判断，不再代表当前桌面端、凭据、安装包或短期优先级。当前统一待办见 [`CURRENT_BACKLOG.md`](../../CURRENT_BACKLOG.md)，文档入口见 [`README.md`](../../README.md)。
 
 ## 版本与日期
 - 版本：v1.x-dev

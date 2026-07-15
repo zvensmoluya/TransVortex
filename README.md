@@ -187,6 +187,8 @@ python -m transvortex.cli --root . export --segments samples\subtitle_delivery\s
 
 ## 参考文档
 
+- `docs/README.md`：当前文档导航和有效性说明
+- `docs/CURRENT_BACKLOG.md`：仓库级当前待办、状态和优先级
 - `docs/CONFIG_GUIDE.md`：配置、凭据和 provider 约定
 - `docs/运行与测试指南.md`：运行、验证和桌面端的简化说明
 - `docs/PRODUCT_DIRECTION.md`：长期产品方向
