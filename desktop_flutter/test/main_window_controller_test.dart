@@ -1095,30 +1095,15 @@ void main() {
       final request =
           handle.transport.lastParams['runtime.submitResume']!['request']
               as Map<String, Object?>;
-      final overrides = request['overrides'] as Map<String, Object?>;
-      final routing = request['routing'] as Map<String, Object?>;
-      final primary = routing['primary'] as Map<String, Object?>;
-      final fallback = routing['fallback'] as List<Object?>;
-      expect(request['task_id'], 'tvx_controller_FAILED');
-      expect(primary['provider'], 'RealProvider');
-      expect(primary['model'], 'resume-model');
-      expect(
-        (fallback.first as Map<String, Object?>)['model'],
-        'fallback-model',
-      );
-      expect(request.containsKey('provider'), isFalse);
-      expect(request.containsKey('model'), isFalse);
-      expect(overrides['output_format'], 'both');
-      expect(overrides['allowSystemSuggestions'], isTrue);
-      expect(overrides['memory_enabled'], isTrue);
-      expect(overrides['memory_bootstrap_enabled'], isTrue);
-      expect(overrides['memory_patch_enabled'], isTrue);
-      expect(overrides['memory_patch_window_chunks'], 3);
+      expect(request, {
+        'request_version': 1,
+        'task_id': 'tvx_controller_FAILED',
+      });
     },
   );
 
   test(
-    'controller disables only memory generation through home reminder resume payload',
+    'controller keeps the original task snapshot when resuming from home',
     () async {
       final handle = _FakeHandle(
         _desktopSnapshot(
@@ -1143,12 +1128,10 @@ void main() {
       final request =
           handle.transport.lastParams['runtime.submitResume']!['request']
               as Map<String, Object?>;
-      final overrides = request['overrides'] as Map<String, Object?>;
-      expect(overrides['allowSystemSuggestions'], isFalse);
-      expect(overrides.containsKey('memory_enabled'), isFalse);
-      expect(overrides['memory_bootstrap_enabled'], isFalse);
-      expect(overrides['memory_patch_enabled'], isFalse);
-      expect(overrides.containsKey('memory_patch_window_chunks'), isFalse);
+      expect(request, {
+        'request_version': 1,
+        'task_id': 'tvx_controller_FAILED',
+      });
     },
   );
 }

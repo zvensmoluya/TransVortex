@@ -1050,16 +1050,7 @@ void main() {
 
     final resumeParams = transport.lastParams['runtime.submitResume'];
     final request = resumeParams?['request'] as Map<String, Object?>?;
-    final overrides = request?['overrides'] as Map<String, Object?>?;
-    final routing = request?['routing'] as Map<String, Object?>?;
-    final primary = routing?['primary'] as Map<String, Object?>?;
-    expect(request?['task_id'], 'tvx_resumable_failed');
-    expect(primary?['provider'], 'RealProvider');
-    expect(primary?['model'], 'real-model');
-    expect(request?.containsKey('provider'), isFalse);
-    expect(request?.containsKey('model'), isFalse);
-    expect(overrides?['output_format'], 'both');
-    expect(overrides?['memory_enabled'], isTrue);
+    expect(request, {'request_version': 1, 'task_id': 'tvx_resumable_failed'});
     expectNoFlutterException();
   });
 

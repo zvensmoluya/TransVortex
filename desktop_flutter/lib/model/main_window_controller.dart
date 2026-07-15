@@ -821,33 +821,7 @@ class MainWindowController extends ChangeNotifier {
     if (taskId == null || taskId.isEmpty) {
       throw StateError('还没有可继续的任务');
     }
-    final snapshot = service.snapshot.desktopSnapshot;
-    final translation = _effectiveTranslationChoice(snapshot);
-    final asr = _effectiveAsrOption(snapshot);
-    final requiresAsr = _requestRequiresAsr;
-    final overrides = <String, Object?>{
-      'output_format': outputFormatValue(_formats),
-      'subtitle_quality_mode': 'balanced',
-      ..._memoryGenerationOverrides(),
-      if (requiresAsr && asr.provider != null && asr.provider!.isNotEmpty)
-        'asr_provider': asr.provider,
-      if (requiresAsr && asr.model != null && asr.model!.isNotEmpty)
-        'asr_model': asr.model,
-    };
-    return {
-      'request_version': 1,
-      'task_id': taskId,
-      if (translation.routing.isNotEmpty) 'routing': translation.routing,
-      if (translation.routing.isEmpty &&
-          translation.provider != null &&
-          translation.provider!.isNotEmpty)
-        'provider': translation.provider,
-      if (translation.routing.isEmpty &&
-          translation.model != null &&
-          translation.model!.isNotEmpty)
-        'model': translation.model,
-      'overrides': overrides,
-    };
+    return {'request_version': 1, 'task_id': taskId};
   }
 
   Map<String, Object?> _memoryGenerationOverrides() => {
