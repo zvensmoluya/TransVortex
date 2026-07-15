@@ -8,12 +8,12 @@ import 'package:flutter/widgets.dart';
 class T {
   T._();
 
-  // —— 第一层 chrome（大面积·暖中性·画廊白墙）——
-  static const bg = Color(0xFFFFF7F1); // 暖白主体底（≥70% 画面）
-  static const surface = Color(0xFFFFFCF6); // 轻分区底（非卡片）
+  // —— 第一层 chrome（大面积·瓷白中性·纸张工作面）——
+  static const bg = Color(0xFFFAF8FC); // 淡紫瓷白主体底
+  static const surface = Color(0xFFFFFDFF); // 清透纸面（非卡片）
   static const ink = Color(0xFF2E2A33); // 柔墨字
   static const muted = Color(0xFF6F6573); // 次要文字
-  static const line = Color(0xFFECDFE6); // 分隔线 / 描边
+  static const line = Color(0xFFE7E0EB); // 分隔线 / 描边
 
   // —— 第二层 主色家族（草莓粉，只点焦点 CTA / 激活态）——
   static const accent = Color(0xFFF2698E); // 草莓主色（描边 / 激活）
@@ -23,6 +23,8 @@ class T {
   // —— 第三层 罕用语义色（不作色灯，只强化「已有形状 + 文字」的状态件）——
   static const warn = Color(0xFFF2B33D); // 需配置 / 注意
   static const sky = Color(0xFF4FB6CE); // 次要交互
+  static const skySoft = Color(0xFFE7F7FA); // 纸签 / 胶带的冷色材质
+  static const lilacSoft = Color(0xFFF2EDF8); // 修理贴 / 次级纸面
   static const ok = Color(0xFF5FB888); // 成功（极少用）
   static const danger = Color(0xFFD74F3E); // 失败（极少用，暖砖红，远离主色粉）
 

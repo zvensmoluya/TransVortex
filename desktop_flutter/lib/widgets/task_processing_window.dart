@@ -965,7 +965,9 @@ class _TaskProcessingBody extends StatelessWidget {
             onSelect: onSelectTask,
           ),
         ),
-        const SizedBox(width: T.s24),
+        const SizedBox(width: T.s8),
+        Container(width: 1, color: T.line),
+        const SizedBox(width: T.s8),
         Expanded(
           child: _TaskPreview(
             task: selected,

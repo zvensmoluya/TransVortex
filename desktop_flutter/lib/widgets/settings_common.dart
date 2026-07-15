@@ -36,12 +36,16 @@ class DefaultBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 58,
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: T.line, width: 1)),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12),
+      decoration: BoxDecoration(
+        color: T.surface.withValues(alpha: 0.68),
+        border: const Border(bottom: BorderSide(color: T.line, width: 1)),
       ),
       alignment: Alignment.centerLeft,
       child: Row(
         children: [
+          const _TapeMarker(width: 16, height: 18),
+          const SizedBox(width: T.s12),
           Expanded(child: Text(text, style: T.tSection)),
           if (busy) Text('同步中…', style: T.tCaption),
           if (!busy && error != null)
@@ -89,7 +93,20 @@ class SettingsSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: T.tCaption.copyWith(fontWeight: T.wBold)),
+          Row(
+            children: [
+              const _TapeMarker(width: 10, height: 15),
+              const SizedBox(width: T.s8),
+              Text(title, style: T.tSection),
+              const SizedBox(width: T.s12),
+              Expanded(
+                child: Container(
+                  height: 1,
+                  color: T.line.withValues(alpha: 0.78),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: T.s8),
           ...children,
           if (divider) ...[
@@ -100,6 +117,54 @@ class SettingsSection extends StatelessWidget {
       ),
     );
   }
+}
+
+class _TapeMarker extends StatelessWidget {
+  const _TapeMarker({required this.width, required this.height});
+
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      height: height,
+      child: const CustomPaint(painter: _TapeMarkerPainter()),
+    );
+  }
+}
+
+class _TapeMarkerPainter extends CustomPainter {
+  const _TapeMarkerPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final tape = Path()
+      ..moveTo(1, 1)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width - 1, size.height - 2)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(tape, Paint()..color = T.skySoft);
+    canvas.drawPath(
+      tape,
+      Paint()
+        ..color = T.sky.withValues(alpha: 0.72)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    canvas.drawLine(
+      Offset(size.width * 0.56, 2),
+      Offset(size.width * 0.44, size.height - 2),
+      Paint()
+        ..color = T.accent.withValues(alpha: 0.64)
+        ..strokeWidth = 1.2,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_TapeMarkerPainter oldDelegate) => false;
 }
 
 class ProviderList extends StatelessWidget {
@@ -244,8 +309,15 @@ class ToolPanel extends StatelessWidget {
         Expanded(
           child: ListView(padding: EdgeInsets.zero, children: children),
         ),
-        const SizedBox(height: T.s12),
-        Wrap(spacing: T.s12, runSpacing: T.s8, children: footer),
+        if (footer.isNotEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.only(top: T.s12),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: T.line, width: 1)),
+            ),
+            child: Wrap(spacing: T.s12, runSpacing: T.s8, children: footer),
+          ),
         if (footnote != null && footnote!.isNotEmpty) ...[
           const SizedBox(height: T.s8),
           Text(

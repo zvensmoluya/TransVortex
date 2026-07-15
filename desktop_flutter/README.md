@@ -38,6 +38,7 @@ flutter build windows
 从仓库根运行 release 验证：
 
 ```powershell
+.\scripts\build_brand_assets.ps1
 .\scripts\smoke_flutter_release.ps1 -ScreenshotPath "$env:TEMP\transvortex-main.png"
 .\scripts\smoke_flutter_release.ps1 -CheckNotifications -CheckAppIdentity
 .\scripts\smoke_flutter_release.ps1 -MainPhase empty -CheckTray

@@ -25,8 +25,12 @@ class TitleBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final statusText = status.trim();
-    return SizedBox(
-      height: 44,
+    return Container(
+      height: 46,
+      decoration: BoxDecoration(
+        color: T.surface.withValues(alpha: 0.76),
+        border: const Border(bottom: BorderSide(color: T.line, width: 1)),
+      ),
       child: Row(
         children: [
           // 左侧品牌区整体作为拖拽区。
@@ -36,9 +40,15 @@ class TitleBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: T.s16),
                 child: Row(
                   children: [
+                    const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CustomPaint(painter: _BrandSealPainter()),
+                    ),
+                    const SizedBox(width: T.s8),
                     Text(
                       title,
-                      style: T.tSection.copyWith(
+                      style: T.tBrand.copyWith(
                         color: T.ink.withValues(alpha: 0.86),
                       ),
                     ),
@@ -119,7 +129,7 @@ class _ChromeButtonState extends State<_ChromeButton> {
         onTap: widget.onTap,
         child: Container(
           width: 44,
-          height: 44,
+          height: 46,
           color: _hover
               ? (widget.danger ? hoverBg : hoverBg.withValues(alpha: 0.9))
               : const Color(0x00000000),
@@ -133,6 +143,46 @@ class _ChromeButtonState extends State<_ChromeButton> {
       ),
     );
   }
+}
+
+class _BrandSealPainter extends CustomPainter {
+  const _BrandSealPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final body = RRect.fromRectAndRadius(
+      Rect.fromLTWH(1.5, 3.5, size.width - 3, size.height - 6),
+      const Radius.circular(4),
+    );
+    canvas.drawRRect(body, Paint()..color = T.accentSoft);
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..color = T.inkLine
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.25,
+    );
+    final fold = Path()
+      ..moveTo(3, 7)
+      ..lineTo(size.width / 2, 12.5)
+      ..lineTo(size.width - 3, 7);
+    canvas.drawPath(
+      fold,
+      Paint()
+        ..color = T.accentStrong
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.35
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(size.width - 6.5, 1.5, 4, 5),
+      Paint()..color = T.sky,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_BrandSealPainter oldDelegate) => false;
 }
 
 class _GlyphPainter extends CustomPainter {

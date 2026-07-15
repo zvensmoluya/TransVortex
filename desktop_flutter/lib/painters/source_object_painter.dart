@@ -76,7 +76,7 @@ class SourceObjectPainter extends CustomPainter {
         _drawCheckBadge(canvas, body);
         break;
       case MainState.failed:
-        _drawEnvelope(canvas, body, tint: const Color(0xFFF1EAEC), dim: true);
+        _drawEnvelope(canvas, body, tint: T.lilacSoft, dim: true);
         _drawJammedTape(canvas, body);
         _drawRepairPatch(canvas, body);
         break;

@@ -172,6 +172,28 @@ class TransVortexApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: T.accent,
           brightness: Brightness.light,
+        ).copyWith(surface: T.surface, onSurface: T.ink, error: T.danger),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: T.surface,
+          hintStyle: T.tCaption,
+          labelStyle: T.tCaption,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rMd),
+            borderSide: const BorderSide(color: T.line),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rMd),
+            borderSide: const BorderSide(color: T.line, width: 1.1),
+          ),
+          disabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rMd),
+            borderSide: BorderSide(color: T.line.withValues(alpha: 0.72)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rMd),
+            borderSide: const BorderSide(color: T.accent, width: 1.5),
+          ),
         ),
       ),
       home: switch (windowType) {
@@ -1595,31 +1617,12 @@ class _MainScreenState extends State<MainScreen>
       );
     }
     final detail = run.activity.isNotEmpty ? run.activity : run.detail;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(run.title, style: T.tSection.copyWith(color: T.accentStrong)),
-            if (run.counter.isNotEmpty) ...[
-              const SizedBox(width: T.s8),
-              Text(run.counter, style: T.tCaption),
-            ],
-          ],
-        ),
-        const SizedBox(height: 2),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 390),
-          child: Text(
-            detail,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: T.tCaption,
-          ),
-        ),
-      ],
+    return _RunningStatusSlip(
+      title: run.title,
+      counter: run.counter,
+      detail: detail,
+      progress: view.progress,
+      canceling: view.canceling,
     );
   }
 
@@ -2187,6 +2190,146 @@ class _MainScreenState extends State<MainScreen>
           duration: const Duration(seconds: 2),
         ),
       );
+  }
+}
+
+class _RunningStatusSlip extends StatelessWidget {
+  const _RunningStatusSlip({
+    required this.title,
+    required this.counter,
+    required this.detail,
+    required this.progress,
+    required this.canceling,
+  });
+
+  final String title;
+  final String counter;
+  final String detail;
+  final double progress;
+  final bool canceling;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 390,
+      height: 58,
+      child: CustomPaint(
+        painter: _RunningStatusSlipPainter(
+          progress: progress,
+          canceling: canceling,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(T.s16, 9, T.s16, 10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tSection.copyWith(
+                        color: canceling ? T.danger : T.accentStrong,
+                        fontWeight: T.wBold,
+                      ),
+                    ),
+                  ),
+                  if (counter.isNotEmpty) ...[
+                    const SizedBox(width: T.s12),
+                    Text(counter, style: T.tCaption),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 2),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.tCaption,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RunningStatusSlipPainter extends CustomPainter {
+  const _RunningStatusSlipPainter({
+    required this.progress,
+    required this.canceling,
+  });
+
+  final double progress;
+  final bool canceling;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paper = Path()
+      ..moveTo(5, 2)
+      ..lineTo(size.width - 9, 0)
+      ..lineTo(size.width, 7)
+      ..lineTo(size.width - 3, size.height - 4)
+      ..lineTo(8, size.height)
+      ..lineTo(0, size.height - 7)
+      ..close();
+    canvas.drawPath(paper, Paint()..color = T.surface);
+    canvas.drawPath(
+      paper,
+      Paint()
+        ..color = T.inkLine.withValues(alpha: 0.42)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.1
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    final tape = Path()
+      ..moveTo(18, 0)
+      ..lineTo(68, 0)
+      ..lineTo(64, 7)
+      ..lineTo(15, 8)
+      ..close();
+    canvas.drawPath(tape, Paint()..color = T.skySoft);
+    canvas.drawLine(
+      Offset(18, 7.5),
+      Offset(64, 6.5),
+      Paint()
+        ..color = T.sky.withValues(alpha: 0.62)
+        ..strokeWidth = 1,
+    );
+
+    final left = 14.0;
+    final right = size.width - 14;
+    final y = size.height - 6;
+    canvas.drawLine(
+      Offset(left, y),
+      Offset(right, y),
+      Paint()
+        ..color = T.line
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round,
+    );
+    final fraction = progress.clamp(0.0, 1.0);
+    canvas.drawLine(
+      Offset(left, y),
+      Offset(left + (right - left) * fraction, y),
+      Paint()
+        ..color = canceling ? T.danger : T.accent
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RunningStatusSlipPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.canceling != canceling;
   }
 }
 

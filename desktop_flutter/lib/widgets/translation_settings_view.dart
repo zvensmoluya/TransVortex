@@ -198,7 +198,9 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
             onCreate: c.startCreate,
           ),
         ),
-        const SizedBox(width: T.s32),
+        const SizedBox(width: T.s8),
+        Container(width: 1, color: T.line),
+        const SizedBox(width: T.s24),
         Expanded(child: _connectionDetail()),
       ],
     );
@@ -631,7 +633,9 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(width: 210, child: _profileList(busy)),
-        const SizedBox(width: T.s32),
+        const SizedBox(width: T.s8),
+        Container(width: 1, color: T.line),
+        const SizedBox(width: T.s24),
         Expanded(
           child: ToolPanel(
             footer: const [],
