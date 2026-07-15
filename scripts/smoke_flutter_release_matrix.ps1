@@ -52,7 +52,7 @@ foreach ($windowType in @("translationSettings", "asrSettings", "diagnostics", "
         check_notifications = $false
     })
 }
-foreach ($scenario in @("edit", "failure", "outputFailure", "resume", "cancel")) {
+foreach ($scenario in @("edit", "failure", "outputFailure", "review", "resume", "cancel")) {
     $cases.Add([ordered]@{
         name = "taskProcessing_$scenario"
         window_type = "taskProcessing"
@@ -170,6 +170,9 @@ foreach ($case in $cases) {
         task_processing_diagnostic_can_resume = if ($report.PSObject.Properties.Name -contains "task_processing_diagnostic_can_resume") { $report.task_processing_diagnostic_can_resume } else { "" }
         task_processing_recovery_target = if ($report.PSObject.Properties.Name -contains "task_processing_recovery_target") { $report.task_processing_recovery_target } else { "" }
         task_processing_recovery_action = if ($report.PSObject.Properties.Name -contains "task_processing_recovery_action") { $report.task_processing_recovery_action } else { "" }
+        task_processing_review_task_count = if ($report.PSObject.Properties.Name -contains "task_processing_review_task_count") { $report.task_processing_review_task_count } else { "" }
+        task_processing_selected_needs_review = if ($report.PSObject.Properties.Name -contains "task_processing_selected_needs_review") { $report.task_processing_selected_needs_review } else { "" }
+        task_processing_selected_review_issue_count = if ($report.PSObject.Properties.Name -contains "task_processing_selected_review_issue_count") { $report.task_processing_selected_review_issue_count } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }

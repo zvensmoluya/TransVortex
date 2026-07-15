@@ -3665,6 +3665,149 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('task processing screens review and cancelled tasks', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1040, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'tasks.list') {
+        return [
+          _task(
+            taskId: 'tvx_review_needed_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\review-me.mp4',
+            taskDir: r'D:\artifacts\tvx_review_needed_123456',
+            outputPaths: {'srt': r'D:\media\review-me.zh-CN.srt'},
+            runtime: {'state': 'terminal'},
+            progressDetail: {
+              'quality_status': 'WARN',
+              'quality_residual_counts': {'cps_too_high': 2},
+              'delivery_status': 'WARN',
+              'delivery_issue_counts': {
+                'srt': {'line_too_long': 1},
+              },
+            },
+          ),
+          _task(
+            taskId: 'tvx_review_clean_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\clean.mp4',
+            taskDir: r'D:\artifacts\tvx_review_clean_123456',
+            outputPaths: {'srt': r'D:\media\clean.zh-CN.srt'},
+            runtime: {'state': 'terminal'},
+            progressDetail: {
+              'quality_status': 'PASS',
+              'quality_issue_counts': {'repaired': 12},
+              'quality_residual_counts': {'cps_too_high': 0},
+              'delivery_status': 'PASS',
+            },
+          ),
+          _task(
+            taskId: 'tvx_review_cancelled_123456',
+            status: 'CANCELLED',
+            inputFile: r'D:\media\cancelled.mp4',
+            taskDir: r'D:\artifacts\tvx_review_cancelled_123456',
+            runtime: {'state': 'terminal', 'can_resume': false},
+          ),
+        ];
+      }
+      if (method == 'tasks.events') {
+        return {
+          'task_id': params['task_id'],
+          'events': const [],
+          'cursor': 0,
+          'next_cursor': 0,
+          'has_more': false,
+        };
+      }
+      if (method == 'result.open') {
+        expect(params['task_id'], 'tvx_review_needed_123456');
+        return {
+          'task': _task(
+            taskId: 'tvx_review_needed_123456',
+            status: 'DONE',
+            inputFile: r'D:\media\review-me.mp4',
+            outputPaths: {'srt': r'D:\media\review-me.zh-CN.srt'},
+          ),
+          'segments': [
+            {
+              'id': 1,
+              'start': 0.0,
+              'end': 0.8,
+              'text_src': 'Needs review.',
+              'text_tgt': '需要校对。',
+              'issues': ['字幕阅读速度偏快'],
+            },
+            {
+              'id': 2,
+              'start': 1.0,
+              'end': 2.0,
+              'text_src': 'Already clean.',
+              'text_tgt': '已经通过。',
+            },
+          ],
+          'output_paths': {'srt': r'D:\media\review-me.zh-CN.srt'},
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.taskProcessing,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('全部 3'), findsOneWidget);
+    expect(find.text('制作中 0'), findsOneWidget);
+    expect(find.text('待处理 0'), findsOneWidget);
+    expect(find.text('待校对 1'), findsOneWidget);
+    expect(find.text('已完成 2'), findsOneWidget);
+    expect(find.text('已取消 1'), findsOneWidget);
+    expect(find.text('还有字幕值得再看一眼'), findsOneWidget);
+    expect(find.textContaining('3 条质量或交付提示'), findsOneWidget);
+    expect(find.text('质量检查 有提醒'), findsOneWidget);
+    expect(find.text('交付检查 有提醒'), findsOneWidget);
+
+    await tester.tap(find.text('待校对 1'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('review-me.mp4'), findsWidgets);
+    expect(find.text('clean.mp4'), findsNothing);
+    expect(find.text('cancelled.mp4'), findsNothing);
+
+    await tester.tap(find.text('编辑字幕'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Needs review.'), findsOneWidget);
+    expect(find.text('Already clean.'), findsNothing);
+    expect(find.text('字幕阅读速度偏快'), findsOneWidget);
+
+    await tester.tap(find.text('返回概览'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('已取消 1'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('cancelled.mp4'), findsWidgets);
+    expect(find.text('review-me.mp4'), findsNothing);
+    expect(find.text('继续任务'), findsNothing);
+
+    await tester.tap(find.text('已完成 2'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('review-me.mp4'), findsWidgets);
+    expect(find.text('clean.mp4'), findsOneWidget);
+    expect(find.text('cancelled.mp4'), findsNothing);
+    expectNoFlutterException();
+  });
+
   testWidgets('task processing repairs an output failure in a new directory', (
     tester,
   ) async {
@@ -4308,6 +4451,7 @@ Map<String, Object?> _task({
   Map<String, Object?> errorInfo = const {},
   Map<String, Object?> runtime = const {},
   Map<String, Object?> settings = const {},
+  Map<String, Object?> progressDetail = const {},
   String? inputType,
 }) {
   return {
@@ -4327,6 +4471,7 @@ Map<String, Object?> _task({
     if (errorInfo.isNotEmpty) 'error_info': errorInfo,
     if (runtime.isNotEmpty) 'runtime': runtime,
     if (settings.isNotEmpty) 'settings': settings,
+    if (progressDetail.isNotEmpty) 'progress_detail': progressDetail,
   };
 }
 

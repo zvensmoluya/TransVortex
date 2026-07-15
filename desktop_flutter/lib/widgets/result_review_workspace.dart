@@ -14,12 +14,14 @@ class ResultReviewWorkspace extends StatefulWidget {
     required this.bridge,
     this.transportOverride,
     this.onDirtyChanged,
+    this.focusIssuesInitially = false,
   });
 
   final String? taskId;
   final WindowStateBridge bridge;
   final AppServiceTransport? transportOverride;
   final ValueChanged<bool>? onDirtyChanged;
+  final bool focusIssuesInitially;
 
   @override
   State<ResultReviewWorkspace> createState() => _ResultReviewWorkspaceState();
@@ -39,6 +41,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   String? _selectedOutputFormat;
   bool? _selectedBilingual;
   _SegmentFilter _filter = _SegmentFilter.all;
+  bool _filterInitialized = false;
 
   String get _taskId => widget.taskId?.trim() ?? '';
 
@@ -75,6 +78,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _selectedOutputFormat = null;
       _selectedBilingual = null;
       _filter = _SegmentFilter.all;
+      _filterInitialized = false;
     });
     unawaited(_loadResult());
   }
@@ -115,6 +119,12 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         _result = result;
         _selectedOutputFormat ??= _outputFormatFor(result);
         _selectedBilingual ??= result.task.bilingual;
+        if (!_filterInitialized) {
+          _filter = widget.focusIssuesInitially && result.issueCount > 0
+              ? _SegmentFilter.issues
+              : _SegmentFilter.all;
+          _filterInitialized = true;
+        }
         _loading = false;
         _updateDirty(false);
         _notice = '';
@@ -380,7 +390,10 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onSave: _saveEdits,
       onOutputFormatChanged: _setOutputFormat,
       onBilingualChanged: _setBilingual,
-      onFilterChanged: (filter) => setState(() => _filter = filter),
+      onFilterChanged: (filter) => setState(() {
+        _filter = filter;
+        _filterInitialized = true;
+      }),
       onClearSearch: _searchController.clear,
       onDiscardEdits: _discardEdits,
       onRestoreSegment: _restoreSegment,

@@ -9,7 +9,7 @@
     [string]$MainPhase = "normal",
     [ValidateSet("normal", "longModels")]
     [string]$TranslationScenario = "normal",
-    [ValidateSet("browse", "edit", "failure", "outputFailure", "resume", "cancel")]
+    [ValidateSet("browse", "edit", "failure", "outputFailure", "review", "resume", "cancel")]
     [string]$TaskProcessingScenario = "browse",
     [switch]$CheckNotifications,
     [switch]$CheckTray,
@@ -350,6 +350,7 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
         $taskOutputPaths = @{srt = $diagnosticOutputPath}
     }
     $isTaskProcessingOutputFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "outputFailure"
+    $isTaskProcessingReview = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "review"
     $isTaskProcessingFailure = $WindowType -eq "taskProcessing" -and $TaskProcessingScenario -in @("failure", "outputFailure", "resume")
     $contextStatus = if ($isTaskProcessingFailure) {
         "FAILED"
@@ -420,6 +421,18 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
                 batch_recovery = 1
             }
         }
+        if ($isTaskProcessingReview) {
+            $contextFixtureArgs.Checkpoint.quality_status = "WARN"
+            $contextFixtureArgs.Checkpoint.quality_residual_counts = @{
+                cps_too_high = 2
+            }
+            $contextFixtureArgs.Checkpoint.delivery_status = "WARN"
+            $contextFixtureArgs.Checkpoint.delivery_issue_counts = @{
+                srt = @{
+                    line_too_long = 1
+                }
+            }
+        }
     }
     $taskDir = Write-SmokeTaskFixture @contextFixtureArgs
     Write-SmokeTaskEvent -TaskDir $taskDir -Type "task_created" -Stage "QUEUED" -Message "Task created"
@@ -459,6 +472,24 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
             ($segments | ConvertTo-Json -Depth 8),
             $utf8NoBom
         )
+    }
+    if ($isTaskProcessingReview) {
+        $cleanTaskId = "${smokeContextTaskId}_clean"
+        $cleanOutputPath = Join-Path $fixtureRoot "review-clean.zh-CN.srt"
+        [System.IO.File]::WriteAllText($cleanOutputPath, "1`n00:00:00,000 --> 00:00:01,000`nClean review task`n", $utf8NoBom)
+        $cleanTaskDir = Write-SmokeTaskFixture `
+            -TaskId $cleanTaskId `
+            -InputFile (Join-Path $fixtureRoot "sample-review-clean.mp4") `
+            -Status "DONE" `
+            -OutputPaths @{srt = $cleanOutputPath} `
+            -Checkpoint @{
+                status = "DONE"
+                quality_status = "PASS"
+                quality_residual_counts = @{cps_too_high = 0}
+                delivery_status = "PASS"
+                delivery_issue_counts = @{srt = @{line_too_long = 0}}
+            }
+        Write-SmokeTaskEvent -TaskDir $cleanTaskDir -Type "done" -Stage "DONE" -Message "Clean task done" -Progress 1.0
     }
 }
 
@@ -980,6 +1011,9 @@ try {
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "outputFailure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_diagnostic_code -ne "output_not_writable" -or $report.task_processing_diagnostic_stage -ne "EXPORT" -or $report.task_processing_recovery_target -ne "outputDirectory" -or $report.task_processing_recovery_action -ne "选择输出目录")) {
             throw "Release task processing output failure smoke did not expose directory recovery: $($report | ConvertTo-Json -Compress -Depth 5)"
+        }
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "review" -and ($report.task_processing_task_count -lt 2 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "DONE" -or $report.task_processing_review_task_count -ne 1 -or $report.task_processing_selected_needs_review -ne $true -or $report.task_processing_selected_review_issue_count -ne 3 -or $report.task_processing_selected_quality_status -ne "WARN" -or $report.task_processing_selected_delivery_status -ne "WARN" -or $report.task_processing_editor_visible -ne $false)) {
+            throw "Release task processing review smoke did not isolate the review task: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "resume" -and ($report.task_processing_resume_attempted -ne $true -or $report.task_processing_resume_ok -ne $true -or $report.task_processing_selected_status -ne "QUEUED")) {
             throw "Release task processing resume smoke did not resume the failed task: $($report | ConvertTo-Json -Compress -Depth 5)"

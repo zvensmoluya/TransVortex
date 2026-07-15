@@ -1478,6 +1478,50 @@ routing:
     expect(task.outputPaths['srt'], r'D:\out.srt');
   });
 
+  test('TaskSummary identifies completed work that still needs review', () {
+    final review = TaskSummary.fromJson({
+      'task_id': 'tvx_review',
+      'status': 'DONE',
+      'progress_detail': {
+        'quality_status': 'WARN',
+        'quality_issue_counts': {'repaired': 12},
+        'quality_residual_counts': {'cps_too_high': 2},
+        'delivery_status': 'FAIL',
+        'delivery_issue_counts': {
+          'srt': {'empty_target': 1},
+          'ass': {'line_too_long': 2},
+        },
+      },
+    });
+    final clean = TaskSummary.fromJson({
+      'task_id': 'tvx_clean',
+      'status': 'DONE',
+      'progress_detail': {
+        'quality_status': 'PASS',
+        'quality_issue_counts': {'repaired': 99},
+        'quality_residual_counts': {'cps_too_high': 0},
+        'delivery_status': 'PASS',
+        'delivery_issue_counts': {
+          'srt': {'empty_target': 0},
+        },
+      },
+    });
+    final failed = TaskSummary.fromJson({
+      'task_id': 'tvx_failed',
+      'status': 'FAILED',
+      'progress_detail': {'quality_status': 'WARN'},
+    });
+
+    expect(review.qualityStatus, 'WARN');
+    expect(review.deliveryStatus, 'FAIL');
+    expect(review.qualityResidualIssueCount, 2);
+    expect(review.deliveryIssueCount, 3);
+    expect(review.reviewIssueCount, 5);
+    expect(review.needsReview, isTrue);
+    expect(clean.needsReview, isFalse);
+    expect(failed.needsReview, isFalse);
+  });
+
   test('TaskSummary does not infer task type from legacy file extension', () {
     final task = TaskSummary.fromJson({
       'task_id': 'tvx_jsonl',

@@ -63,7 +63,7 @@ class _TaskProcessingClientTransport implements AppServiceTransport {
   Future<void> close() async {}
 }
 
-enum _TaskFilter { all, active, needsAction, done }
+enum _TaskFilter { all, active, needsAction, review, done, cancelled }
 
 class TaskProcessingWindow extends StatefulWidget {
   const TaskProcessingWindow({
@@ -218,7 +218,15 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
         var reportSelected = selected;
         if (selected != null) {
           await _runSmokeScenario(selected);
-          if (_smokeScenario == 'resume' || _smokeScenario == 'cancel') {
+          if (_smokeScenario == 'review') {
+            reportSelected = _selectedTask(
+              _visibleTasksFor(
+                reportTasks,
+                _taskFilter,
+                _taskSearchController.text,
+              ),
+            );
+          } else if (_smokeScenario == 'resume' || _smokeScenario == 'cancel') {
             reportTasks = await _client.taskList();
             reportSelected = _selectedTask(reportTasks);
             if (mounted) {
@@ -871,6 +879,21 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     );
     if (_smokeScenario == 'edit') {
       await _runSmokeEditFlow(selected);
+    } else if (_smokeScenario == 'review') {
+      TaskSummary? reviewTask;
+      for (final task in _tasks) {
+        if (task.needsReview) {
+          reviewTask = task;
+          break;
+        }
+      }
+      if (reviewTask != null && mounted) {
+        setState(() {
+          _taskFilter = _TaskFilter.review;
+          _selectedTaskId = reviewTask?.taskId;
+          _editingTaskId = null;
+        });
+      }
     } else if (_smokeScenario == 'failure' ||
         _smokeScenario == 'outputFailure') {
       return;
@@ -984,6 +1007,15 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_task_count': tasks.length,
       'task_processing_selected_task_id': selected?.taskId ?? '',
       'task_processing_selected_status': selected?.status ?? '',
+      'task_processing_review_task_count': tasks
+          .where((task) => task.needsReview)
+          .length,
+      'task_processing_selected_needs_review': selected?.needsReview ?? false,
+      'task_processing_selected_review_issue_count':
+          selected?.reviewIssueCount ?? 0,
+      'task_processing_selected_quality_status': selected?.qualityStatus ?? '',
+      'task_processing_selected_delivery_status':
+          selected?.deliveryStatus ?? '',
       'task_processing_editor_visible':
           selected?.isDone == true && _editingTaskId == selected?.taskId,
       'task_processing_model_request_count': selected?.modelRequestCount ?? 0,
@@ -1612,6 +1644,7 @@ class _TaskStripTile extends StatelessWidget {
     final color = _taskStatusColor(task);
     final name = task.displayName;
     final outputs = subtitleFormatListLabel(task.outputPaths.keys);
+    final reviewSummary = task.needsReview ? _taskReviewSummary(task) : '';
     final subtitle = [
       taskStatusLabel(task.status),
       if (task.targetLang.isNotEmpty) languageLabel(task.targetLang),
@@ -1657,6 +1690,29 @@ class _TaskStripTile extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: T.tCaption.copyWith(color: T.danger),
+                        ),
+                      ] else if (reviewSummary.isNotEmpty) ...[
+                        const SizedBox(height: T.s4),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.rate_review_rounded,
+                              size: 14,
+                              color: T.warn,
+                            ),
+                            const SizedBox(width: T.s4),
+                            Expanded(
+                              child: Text(
+                                reviewSummary,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: T.tCaption.copyWith(
+                                  color: T.warn,
+                                  fontWeight: T.wMedium,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ],
@@ -1769,6 +1825,7 @@ class _TaskPreview extends StatelessWidget {
               taskId: task.taskId,
               bridge: bridge,
               transportOverride: resultTransportOverride,
+              focusIssuesInitially: task.needsReview,
               onDirtyChanged: onResultDirtyChanged,
             ),
           ),
@@ -1893,6 +1950,10 @@ class _TaskPreview extends StatelessWidget {
           Text(_taskActionHint(task), style: T.tCaption),
         const SizedBox(height: T.s16),
         _TaskSummaryPanel(task: task),
+        if (task.needsReview) ...[
+          const SizedBox(height: T.s12),
+          _TaskReviewNote(task: task),
+        ],
         if (diagnosticClues.isNotEmpty) ...[
           const SizedBox(height: T.s12),
           _TaskDiagnosticsPanel(
@@ -2063,8 +2124,95 @@ class _TaskSummaryPanel extends StatelessWidget {
             _InfoPill(label: '术语请求', value: '$memoryRequests 次'),
           if (qualityRequests > 0)
             _InfoPill(label: '质量请求', value: '$qualityRequests 次'),
+          if (task.qualityStatus.isNotEmpty)
+            _InfoPill(
+              label: '质量检查',
+              value: _reviewCheckStatusLabel(task.qualityStatus),
+              warn: task.needsReview,
+            ),
+          if (task.deliveryStatus.isNotEmpty)
+            _InfoPill(
+              label: '交付检查',
+              value: _reviewCheckStatusLabel(task.deliveryStatus),
+              warn: task.needsReview,
+            ),
+          if (task.reviewIssueCount > 0)
+            _InfoPill(
+              label: '待校对',
+              value: '${task.reviewIssueCount} 条',
+              warn: true,
+            ),
         ],
       ),
+    );
+  }
+}
+
+class _TaskReviewNote extends StatelessWidget {
+  const _TaskReviewNote({required this.task});
+
+  final TaskSummary task;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(top: T.s4),
+          padding: const EdgeInsets.all(T.s12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF8E3),
+            border: Border.all(color: T.warn.withValues(alpha: 0.48)),
+            borderRadius: BorderRadius.circular(T.rSm),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 3,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: T.warn,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.rate_review_rounded, size: 18, color: T.warn),
+              ),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('还有字幕值得再看一眼', style: T.tSection),
+                    const SizedBox(height: T.s4),
+                    Text(_taskReviewDetail(task), style: T.tCaption),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          top: 0,
+          right: T.s24,
+          child: IgnorePointer(
+            child: Container(
+              width: 46,
+              height: 8,
+              decoration: BoxDecoration(
+                color: T.skySoft,
+                border: Border.all(color: T.sky.withValues(alpha: 0.42)),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2083,12 +2231,14 @@ class _InfoPill extends StatelessWidget {
     required this.label,
     required this.value,
     this.danger = false,
+    this.warn = false,
     this.maxLines = 1,
   });
 
   final String label;
   final String value;
   final bool danger;
+  final bool warn;
   final int maxLines;
 
   @override
@@ -2100,8 +2250,12 @@ class _InfoPill extends StatelessWidget {
         maxLines: maxLines,
         overflow: TextOverflow.ellipsis,
         style: T.tCaption.copyWith(
-          color: danger ? T.danger : T.ink,
-          fontWeight: danger ? T.wMedium : T.wRegular,
+          color: danger
+              ? T.danger
+              : warn
+              ? T.warn
+              : T.ink,
+          fontWeight: danger || warn ? T.wMedium : T.wRegular,
         ),
       ),
     );
@@ -2358,6 +2512,7 @@ class _TaskActionButtonState extends State<_TaskActionButton> {
 }
 
 Color _taskStatusColor(TaskSummary task) {
+  if (task.needsReview) return T.warn;
   if (task.isDone) return T.ok;
   if (task.isFailed) return T.danger;
   if (task.isActive) return T.sky;
@@ -2372,9 +2527,11 @@ bool _taskMatchesFilter(TaskSummary task, _TaskFilter filter) {
     _TaskFilter.needsAction =>
       task.canResume ||
           task.isFailed ||
-          task.isCancelled ||
+          task.status == 'INTERRUPTED' ||
           task.isRuntimeStale,
+    _TaskFilter.review => task.needsReview,
     _TaskFilter.done => task.isDone,
+    _TaskFilter.cancelled => task.status == 'CANCELLED',
   };
 }
 
@@ -2396,6 +2553,10 @@ bool _taskMatchesSearch(TaskSummary task, String searchQuery) {
     taskStatusLabel(task.displayStatus),
     _runtimeStateLabel(task.runtimeState),
     _taskActionabilityLabel(task),
+    if (task.needsReview) '待校对',
+    if (task.needsReview) _taskReviewSummary(task),
+    _reviewCheckStatusLabel(task.qualityStatus),
+    _reviewCheckStatusLabel(task.deliveryStatus),
     task.sourceLang,
     task.targetLang,
     languageLabel(task.sourceLang),
@@ -2450,6 +2611,7 @@ String _taskActionabilityLabel(TaskSummary task) {
   }
   if (task.canResume) return '可继续任务';
   if (task.canCancel) return '可取消任务';
+  if (task.needsReview) return '待校对';
   if (task.isDone) return '可编辑结果';
   if (task.isFailed || task.isRuntimeStale) return '无可用恢复动作';
   if (task.isCancelled) return '已结束';
@@ -2458,6 +2620,9 @@ String _taskActionabilityLabel(TaskSummary task) {
 }
 
 String _taskActionHint(TaskSummary task) {
+  if (task.needsReview) {
+    return '结果已经生成，但质量或交付检查仍有提醒，建议先校对再交付。';
+  }
   if (task.isDone) return '结果已经生成，可以进入字幕编辑或打开结果目录。';
   final recovery = taskFailurePresentation(
     error: task.error,
@@ -2630,7 +2795,9 @@ String _taskFilterLabel(_TaskFilter filter) {
     _TaskFilter.all => '全部',
     _TaskFilter.active => '制作中',
     _TaskFilter.needsAction => '待处理',
+    _TaskFilter.review => '待校对',
     _TaskFilter.done => '已完成',
+    _TaskFilter.cancelled => '已取消',
   };
 }
 
@@ -2639,7 +2806,9 @@ String _taskFilterEmptyText(_TaskFilter filter) {
     _TaskFilter.all => '还没有任务记录。',
     _TaskFilter.active => '没有正在制作的任务。',
     _TaskFilter.needsAction => '没有需要处理的失败或中断任务。',
+    _TaskFilter.review => '没有需要继续校对的完成任务。',
     _TaskFilter.done => '还没有完成的任务。',
+    _TaskFilter.cancelled => '还没有已取消的任务。',
   };
 }
 
@@ -2658,6 +2827,28 @@ String _taskSubtitle(TaskSummary task) {
     task.bilingual ? '双语字幕' : '单语字幕',
     if (outputs.isNotEmpty) outputs,
   ].join(' · ');
+}
+
+String _taskReviewSummary(TaskSummary task) {
+  final count = task.reviewIssueCount;
+  return count > 0 ? '待校对 · $count 条提示' : '待校对 · 有检查提醒';
+}
+
+String _taskReviewDetail(TaskSummary task) {
+  final count = task.reviewIssueCount;
+  if (count > 0) {
+    return '还有 $count 条质量或交付提示，打开字幕会先显示有问题的片段。';
+  }
+  return '质量或交付检查留下了提醒，打开字幕后建议逐条确认。';
+}
+
+String _reviewCheckStatusLabel(String status) {
+  return switch (status.trim().toUpperCase()) {
+    'PASS' => '已通过',
+    'WARN' => '有提醒',
+    'FAIL' => '需校对',
+    _ => '',
+  };
 }
 
 String _basename(String path) {
@@ -2713,6 +2904,7 @@ String _normalizedSmokeScenario(String? value) {
     'edit' => 'edit',
     'failure' => 'failure',
     'outputfailure' => 'outputFailure',
+    'review' => 'review',
     'resume' => 'resume',
     'cancel' => 'cancel',
     _ => 'browse',

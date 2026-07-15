@@ -2163,6 +2163,20 @@ class TaskSummary {
   Map<String, int> get modelRequestCounts => _stringMap(
     progressDetail['model_request_counts'],
   ).map((key, value) => MapEntry(key, _intValue(value) ?? 0));
+  String get qualityStatus =>
+      (_stringValue(progressDetail['quality_status']) ?? '').toUpperCase();
+  String get deliveryStatus =>
+      (_stringValue(progressDetail['delivery_status']) ?? '').toUpperCase();
+  int get qualityResidualIssueCount =>
+      _sumNumericLeaves(progressDetail['quality_residual_counts']);
+  int get deliveryIssueCount =>
+      _sumNumericLeaves(progressDetail['delivery_issue_counts']);
+  int get reviewIssueCount => qualityResidualIssueCount + deliveryIssueCount;
+  bool get needsReview =>
+      isDone &&
+      ({'WARN', 'FAIL'}.contains(qualityStatus) ||
+          {'WARN', 'FAIL'}.contains(deliveryStatus) ||
+          reviewIssueCount > 0);
 
   double? get latestProgress {
     final progress = _numValue(raw['progress']);
@@ -2344,6 +2358,21 @@ int? _intValue(Object? value) {
   if (value is num) return value.toInt();
   if (value is String) return int.tryParse(value);
   return null;
+}
+
+int _sumNumericLeaves(Object? value) {
+  final direct = _intValue(value);
+  if (direct != null) return direct < 0 ? 0 : direct;
+  if (value is Map) {
+    return value.values.fold<int>(
+      0,
+      (total, item) => total + _sumNumericLeaves(item),
+    );
+  }
+  if (value is Iterable) {
+    return value.fold<int>(0, (total, item) => total + _sumNumericLeaves(item));
+  }
+  return 0;
 }
 
 num? _numValue(Object? value) {
