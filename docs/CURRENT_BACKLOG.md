@@ -44,7 +44,6 @@
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
 | 失败恢复矩阵 | 待验收 | 配置、凭据、识别、目录和任务失败都有真实可执行的恢复动作 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
-| 完整任务恢复与结果处理 | 待实现 | 补齐历史恢复矩阵、跨任务筛查、完整结果编辑和高级导出复核 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
 | 术语能力归位 | 待决策 | 区分生成术语建议、使用术语和维护术语，并明确回流与优先级语义 | [`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
 | 高级翻译与识别设置 | 待实现 | 补齐 fallback routing、mapping、识别高级参数和诊断修复联动 | [`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
 | 安装器视觉定制 | 待决策 | 最终图标确定后，再决定 NSIS 欢迎图、顶部图、文案和品牌化程度；不改变现有安全安装逻辑 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |

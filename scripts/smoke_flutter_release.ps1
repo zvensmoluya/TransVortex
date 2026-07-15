@@ -460,8 +460,8 @@ if ($WindowType -eq "diagnostics" -or $WindowType -eq "taskProcessing") {
             },
             [ordered]@{
                 id = 2
-                start = 1.6
-                end = 3.0
+                start = 1.4
+                end = 1.7
                 text_src = $reviewSourceTwo
                 text_tgt = ""
                 meta = @{}
@@ -1003,7 +1003,7 @@ try {
         if ($WindowType -eq "taskProcessing" -and ($TaskProcessingScenario -in @("browse", "edit")) -and ($report.task_processing_output_dir_checked -ne $true -or $report.task_processing_output_dir_writable -ne $true -or [string]::IsNullOrWhiteSpace($report.task_processing_output_dir_path))) {
             throw "Release task processing smoke did not verify the selected task output directory: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
-        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_editor_visible -ne $true -or $report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $true -or $report.task_processing_reexport_bilingual_order -ne "source_target" -or $report.task_processing_reexport_prefer_single_line -ne $false -or $report.task_processing_reexport_style_applied -ne $true -or $report.task_processing_reexport_output_uses_requested_order -ne $true -or $report.task_processing_review_task_count -ne 1 -or $report.task_processing_selected_needs_review -ne $true -or $report.task_processing_selected_review_issue_count -lt 1 -or $report.task_processing_selected_quality_status -ne "FAIL")) {
+        if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "edit" -and ($report.task_processing_editor_visible -ne $true -or $report.task_processing_result_segment_count -lt 1 -or $report.task_processing_result_issue_count -lt 1 -or $report.task_processing_edit_saved -ne $true -or $report.task_processing_timing_saved -ne $true -or $report.task_processing_reexported -ne $true -or $report.task_processing_reexport_output_contains_edit -ne $true -or $report.task_processing_reexport_output_uses_requested_timing -ne $true -or $report.task_processing_reexport_format -ne "ass" -or $report.task_processing_reexport_bilingual -ne $true -or $report.task_processing_reexport_bilingual_order -ne "source_target" -or $report.task_processing_reexport_prefer_single_line -ne $false -or $report.task_processing_reexport_style_applied -ne $true -or $report.task_processing_reexport_output_uses_requested_order -ne $true -or $report.task_processing_review_task_count -ne 1 -or $report.task_processing_selected_needs_review -ne $true -or $report.task_processing_selected_review_issue_count -lt 1 -or $report.task_processing_selected_quality_status -ne "FAIL")) {
             throw "Release task processing edit smoke did not save edits and re-export edited subtitles: $($report | ConvertTo-Json -Compress -Depth 5)"
         }
         if ($WindowType -eq "taskProcessing" -and $TaskProcessingScenario -eq "failure" -and ($report.task_processing_task_count -lt 1 -or $report.task_processing_selected_task_id -ne $smokeContextTaskId -or $report.task_processing_selected_status -ne "FAILED" -or $report.task_processing_resume_attempted -ne $false -or $report.task_processing_diagnostic_clue_count -lt 2 -or $report.task_processing_diagnostic_code -ne $fixtureErrorCode -or $report.task_processing_diagnostic_stage -ne $fixtureErrorStage -or $report.task_processing_diagnostic_retryable -ne $true -or $report.task_processing_diagnostic_can_resume -ne $true -or $report.task_processing_recovery_target -ne "resume" -or $report.task_processing_recovery_action -ne "继续任务")) {

@@ -177,6 +177,8 @@ foreach ($case in $cases) {
         task_processing_reexport_prefer_single_line = if ($report.PSObject.Properties.Name -contains "task_processing_reexport_prefer_single_line") { $report.task_processing_reexport_prefer_single_line } else { "" }
         task_processing_reexport_style_applied = if ($report.PSObject.Properties.Name -contains "task_processing_reexport_style_applied") { $report.task_processing_reexport_style_applied } else { "" }
         task_processing_reexport_output_uses_requested_order = if ($report.PSObject.Properties.Name -contains "task_processing_reexport_output_uses_requested_order") { $report.task_processing_reexport_output_uses_requested_order } else { "" }
+        task_processing_timing_saved = if ($report.PSObject.Properties.Name -contains "task_processing_timing_saved") { $report.task_processing_timing_saved } else { "" }
+        task_processing_reexport_output_uses_requested_timing = if ($report.PSObject.Properties.Name -contains "task_processing_reexport_output_uses_requested_timing") { $report.task_processing_reexport_output_uses_requested_timing } else { "" }
         result_issue_count = if ($report.PSObject.Properties.Name -contains "result_issue_count") { $report.result_issue_count } else { "" }
         notification_check_ok = if ($report.PSObject.Properties.Name -contains "notification_check_ok") { $report.notification_check_ok } else { "" }
         notification_show_calls = if ($report.PSObject.Properties.Name -contains "notification_show_calls") { $report.notification_show_calls } else { "" }

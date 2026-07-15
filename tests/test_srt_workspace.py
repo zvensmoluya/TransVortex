@@ -244,6 +244,42 @@ World
     repaired_checkpoint = store.load_checkpoint(task_id)
     assert not any(repaired_checkpoint["quality_residual_counts"].values())
 
+    overlapping = saved_repaired["segments"]
+    overlapping[1]["start"] = 1.9
+    saved_overlapping = save_task_segments(
+        root_dir=root,
+        task_id=task_id,
+        segments_payload=overlapping,
+    )
+    assert saved_overlapping["quality"]["status"] == "FAIL"
+    assert saved_overlapping["quality"]["segments_with_issues"] == 1
+    overlapping_checkpoint = store.load_checkpoint(task_id)
+    assert overlapping_checkpoint["quality_residual_counts"]["timeline_overlap"] == 1
+
+    timing_repaired = saved_overlapping["segments"]
+    timing_repaired[1]["start"] = 2.05
+    saved_timing_repaired = save_task_segments(
+        root_dir=root,
+        task_id=task_id,
+        segments_payload=timing_repaired,
+    )
+    assert saved_timing_repaired["quality"]["status"] == "PASS"
+    timing_checkpoint = store.load_checkpoint(task_id)
+    assert not any(timing_checkpoint["quality_residual_counts"].values())
+    timing_export = reexport_task(
+        root_dir=root,
+        task_id=task_id,
+        output_format="srt",
+        bilingual=False,
+    )
+    timing_body = Path(timing_export["output_paths"]["srt"]).read_text(encoding="utf-8")
+    assert "00:00:02,050 --> 00:00:04,000" in timing_body
+    timing_task = store.load_task(task_id)
+    assert (
+        timing_task.settings["result_export_revision"]
+        == timing_task.settings["result_revision"]
+    )
+
 
 def test_srt_translate_can_export_lrc_on_first_run(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path

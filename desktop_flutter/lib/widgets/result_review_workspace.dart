@@ -34,10 +34,12 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   late final AppServiceClient _client;
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _segmentScrollController = ScrollController();
-  final Map<int, TextEditingController> _segmentControllers = {};
+  final Map<int, _SegmentDraft> _segmentDrafts = {};
   final Map<int, FocusNode> _segmentFocusNodes = {};
   final Map<int, GlobalKey> _segmentKeys = {};
+  final Set<int> _expandedTimingSegmentIds = {};
   TaskResultWorkspace? _result;
+  _TimingProblem? _timingProblem;
   String? _error;
   String? _actionError;
   _FailedReviewAction? _failedAction;
@@ -46,6 +48,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   bool _reexporting = false;
   bool _dirty = false;
   bool _exportedInSession = false;
+  bool _syncingSegmentDrafts = false;
   String _notice = '';
   String? _selectedOutputFormat;
   bool? _selectedBilingual;
@@ -73,20 +76,22 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void didUpdateWidget(ResultReviewWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
     if ((oldWidget.taskId ?? '').trim() == _taskId) return;
-    for (final controller in _segmentControllers.values) {
-      controller.dispose();
+    for (final draft in _segmentDrafts.values) {
+      draft.dispose();
     }
     for (final focusNode in _segmentFocusNodes.values) {
       focusNode.dispose();
     }
-    _segmentControllers.clear();
+    _segmentDrafts.clear();
     _segmentFocusNodes.clear();
     _segmentKeys.clear();
+    _expandedTimingSegmentIds.clear();
     if (_searchController.text.isNotEmpty) {
       _searchController.clear();
     }
     setState(() {
       _result = null;
+      _timingProblem = null;
       _error = null;
       _actionError = null;
       _failedAction = null;
@@ -112,8 +117,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void dispose() {
     _searchController.dispose();
     _segmentScrollController.dispose();
-    for (final controller in _segmentControllers.values) {
-      controller.dispose();
+    for (final draft in _segmentDrafts.values) {
+      draft.dispose();
     }
     for (final focusNode in _segmentFocusNodes.values) {
       focusNode.dispose();
@@ -145,7 +150,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     try {
       final result = await _client.openTaskResult(taskId);
       if (!mounted) return;
-      _syncSegmentControllers(result);
+      _syncSegmentDrafts(result, force: true);
       _initializeExportSelection(result);
       setState(() {
         _result = result;
@@ -158,6 +163,14 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         if (_selectedSegmentId == null && _filter == _SegmentFilter.issues) {
           final issues = _issueSegments(result);
           if (issues.isNotEmpty) _selectedSegmentId = issues.first.id;
+        }
+        final selected = _segmentById(result.segments, _selectedSegmentId);
+        if (selected != null && _segmentHasTimingIssue(selected)) {
+          _expandedTimingSegmentIds.add(selected.id);
+        }
+        final timingProblem = _timingProblem;
+        if (timingProblem != null) {
+          _expandedTimingSegmentIds.add(timingProblem.segmentId);
         }
         _loading = false;
         _updateDirty(false);
@@ -181,34 +194,43 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     }
   }
 
-  void _syncSegmentControllers(TaskResultWorkspace result) {
+  void _syncSegmentDrafts(TaskResultWorkspace result, {bool force = false}) {
     final seen = <int>{};
-    for (final segment in result.segments) {
-      seen.add(segment.id);
-      final existing = _segmentControllers[segment.id];
-      if (existing == null) {
-        final controller = TextEditingController(text: segment.targetText);
-        controller.addListener(_handleSegmentTextChanged);
-        _segmentControllers[segment.id] = controller;
-      } else if (!_dirty && existing.text != segment.targetText) {
-        existing.text = segment.targetText;
+    _syncingSegmentDrafts = true;
+    try {
+      for (final segment in result.segments) {
+        seen.add(segment.id);
+        final existing = _segmentDrafts[segment.id];
+        if (existing == null) {
+          _segmentDrafts[segment.id] = _SegmentDraft(
+            segment: segment,
+            onChanged: _handleSegmentDraftChanged,
+          );
+        } else if (force || !_dirty) {
+          existing.sync(segment);
+        }
       }
+      final stale = _segmentDrafts.keys
+          .where((id) => !seen.contains(id))
+          .toList();
+      for (final id in stale) {
+        _segmentDrafts.remove(id)?.dispose();
+        _segmentFocusNodes.remove(id)?.dispose();
+        _segmentKeys.remove(id);
+        _expandedTimingSegmentIds.remove(id);
+      }
+    } finally {
+      _syncingSegmentDrafts = false;
     }
-    final stale = _segmentControllers.keys
-        .where((id) => !seen.contains(id))
-        .toList();
-    for (final id in stale) {
-      _segmentControllers.remove(id)?.dispose();
-      _segmentFocusNodes.remove(id)?.dispose();
-      _segmentKeys.remove(id);
-    }
+    _timingProblem = _firstTimingProblem(result);
   }
 
-  TextEditingController _controllerFor(ResultSegment segment) {
-    return _segmentControllers.putIfAbsent(segment.id, () {
-      final controller = TextEditingController(text: segment.targetText);
-      controller.addListener(_handleSegmentTextChanged);
-      return controller;
+  _SegmentDraft _draftFor(ResultSegment segment) {
+    return _segmentDrafts.putIfAbsent(segment.id, () {
+      return _SegmentDraft(
+        segment: segment,
+        onChanged: _handleSegmentDraftChanged,
+      );
     });
   }
 
@@ -228,21 +250,31 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
 
   bool _hasModifiedSegments(TaskResultWorkspace result) {
     return result.segments.any(
-      (segment) => _controllerFor(segment).text != segment.targetText,
+      (segment) => _draftFor(segment).isModified(segment),
     );
   }
 
-  void _handleSegmentTextChanged() {
-    if (!mounted) return;
+  void _handleSegmentDraftChanged() {
+    if (!mounted || _syncingSegmentDrafts) return;
     final result = _result;
     if (result == null) return;
     final dirty = _hasModifiedSegments(result);
+    final timingProblem = _firstTimingProblem(result);
+    final timingProblemChanged = !_sameTimingProblem(
+      _timingProblem,
+      timingProblem,
+    );
     final shouldRebuild =
         _dirty != dirty ||
+        timingProblemChanged ||
         _notice.isNotEmpty ||
-        _filter == _SegmentFilter.modified;
+        _actionError != null ||
+        _failedAction != null ||
+        _filter == _SegmentFilter.modified ||
+        _filter == _SegmentFilter.emptyTarget;
     if (!shouldRebuild) return;
     setState(() {
+      _timingProblem = timingProblem;
       _updateDirty(dirty);
       if (dirty) {
         _notice = '';
@@ -264,13 +296,16 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void _discardEdits() {
     final result = _result;
     if (result == null || !_dirty || _saving || _reexporting) return;
-    for (final segment in result.segments) {
-      final controller = _controllerFor(segment);
-      if (controller.text != segment.targetText) {
-        controller.text = segment.targetText;
+    _syncingSegmentDrafts = true;
+    try {
+      for (final segment in result.segments) {
+        _draftFor(segment).sync(segment);
       }
+    } finally {
+      _syncingSegmentDrafts = false;
     }
     setState(() {
+      _timingProblem = _firstTimingProblem(result);
       _updateDirty(false);
       _notice = '已放弃未保存修改';
       _actionError = null;
@@ -281,11 +316,17 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   void _restoreSegment(ResultSegment segment) {
     final result = _result;
     if (result == null || _saving || _reexporting) return;
-    final controller = _controllerFor(segment);
-    if (controller.text == segment.targetText) return;
-    controller.text = segment.targetText;
+    final draft = _draftFor(segment);
+    if (!draft.isModified(segment)) return;
+    _syncingSegmentDrafts = true;
+    try {
+      draft.sync(segment);
+    } finally {
+      _syncingSegmentDrafts = false;
+    }
     final dirty = _hasModifiedSegments(result);
     setState(() {
+      _timingProblem = _firstTimingProblem(result);
       _updateDirty(dirty);
       _notice = dirty ? '' : '已还原片段修改';
       _actionError = null;
@@ -296,6 +337,11 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   Future<TaskResultWorkspace?> _saveEdits() async {
     final result = _result;
     if (result == null || _saving) return result;
+    final timingProblem = _firstTimingProblem(result);
+    if (timingProblem != null) {
+      _revealTimingProblem(result, timingProblem);
+      return null;
+    }
     setState(() {
       _saving = true;
       _actionError = null;
@@ -303,23 +349,29 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _notice = '';
     });
     try {
-      final payload = result.segments
-          .map(
-            (segment) => <String, Object?>{
-              ...segment.raw,
-              'id': segment.id,
-              'start': segment.start,
-              'end': segment.end,
-              'text_src': segment.sourceText,
-              'text_tgt': _controllerFor(segment).text,
-            },
-          )
-          .toList();
+      final payload = result.segments.map((segment) {
+        final draft = _draftFor(segment);
+        final timing = _timingDraftValues(draft);
+        return <String, Object?>{
+          ...segment.raw,
+          'id': segment.id,
+          'start': timing.start,
+          'end': timing.end,
+          'text_src': segment.sourceText,
+          'text_tgt': draft.targetController.text,
+        };
+      }).toList();
       final saved = await _client.resultSegmentsSave(_taskId, payload);
       if (!mounted) return saved;
-      _syncSegmentControllers(saved);
+      _syncSegmentDrafts(saved, force: true);
+      final filterHasSegments = saved.segments.any(
+        (segment) => _matchesFilter(segment, _filter, _draftFor),
+      );
       setState(() {
         _result = saved;
+        if (_filter != _SegmentFilter.all && !filterHasSegments) {
+          _filter = _SegmentFilter.all;
+        }
         _updateDirty(false);
         _saving = false;
         _exportedInSession = false;
@@ -341,6 +393,11 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   Future<Map<String, Object?>?> _reexport() async {
     var result = _result;
     if (result == null || _reexporting) return null;
+    final timingProblem = _firstTimingProblem(result);
+    if (timingProblem != null) {
+      _revealTimingProblem(result, timingProblem);
+      return null;
+    }
     setState(() {
       _reexporting = true;
       _actionError = null;
@@ -367,7 +424,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       );
       final refreshed = await _client.openTaskResult(_taskId);
       if (!mounted) return reexported;
-      _syncSegmentControllers(refreshed);
+      _syncSegmentDrafts(refreshed, force: true);
       setState(() {
         _result = refreshed;
         _updateDirty(false);
@@ -466,6 +523,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     if (_reexporting) return _ReviewFlowState.exporting;
     if (_saving) return _ReviewFlowState.saving;
     if (_actionError != null) return _ReviewFlowState.failed;
+    if (_timingProblem != null) return _ReviewFlowState.invalid;
     if (_dirty) return _ReviewFlowState.dirty;
     if (result.task.hasSavedResultPendingExport ||
         _hasExportSelectionChanges(result)) {
@@ -487,6 +545,8 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _ReviewFlowState.exporting => '正在生成新的字幕文件…',
       _ReviewFlowState.exported => '字幕文件已更新',
       _ReviewFlowState.failed => _actionError ?? '操作没有完成，请重试。',
+      _ReviewFlowState.invalid =>
+        '片段 #${_timingProblem?.segmentId ?? ''}：${_timingProblem?.message ?? '时间码需要修正'}',
     };
   }
 
@@ -544,6 +604,94 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
     setState(() => _selectedSegmentId = segment.id);
   }
 
+  void _toggleTimingEditor(ResultSegment segment) {
+    if (_saving || _reexporting) return;
+    setState(() {
+      _selectedSegmentId = segment.id;
+      if (!_expandedTimingSegmentIds.add(segment.id)) {
+        _expandedTimingSegmentIds.remove(segment.id);
+      }
+    });
+  }
+
+  void _nudgeTiming(
+    ResultSegment segment,
+    _TimingField field,
+    int milliseconds,
+  ) {
+    if (_saving || _reexporting) return;
+    final draft = _draftFor(segment);
+    final controller = field == _TimingField.start
+        ? draft.startController
+        : draft.endController;
+    final original = field == _TimingField.start ? segment.start : segment.end;
+    final current = _parseTimecode(controller.text) ?? original;
+    final next = (current + milliseconds / 1000).clamp(0.0, double.infinity);
+    final nextText = _formatTimecode(next);
+    controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+    if (!_expandedTimingSegmentIds.contains(segment.id)) {
+      setState(() => _expandedTimingSegmentIds.add(segment.id));
+    }
+  }
+
+  void _normalizeTiming(ResultSegment segment, _TimingField field) {
+    final draft = _draftFor(segment);
+    final controller = field == _TimingField.start
+        ? draft.startController
+        : draft.endController;
+    final parsed = _parseTimecode(controller.text);
+    if (parsed == null) return;
+    final normalized = _formatTimecode(parsed);
+    if (controller.text == normalized) return;
+    controller.value = TextEditingValue(
+      text: normalized,
+      selection: TextSelection.collapsed(offset: normalized.length),
+    );
+  }
+
+  _TimingProblem? _firstTimingProblem(TaskResultWorkspace result) {
+    for (final segment in result.segments) {
+      final timing = _timingDraftValues(_draftFor(segment));
+      if (timing.message != null) {
+        return _TimingProblem(
+          segmentId: segment.id,
+          message: timing.message!,
+          field: timing.errorField,
+        );
+      }
+    }
+    return null;
+  }
+
+  void _revealTimingProblem(
+    TaskResultWorkspace result,
+    _TimingProblem problem,
+  ) {
+    final segment = _segmentById(result.segments, problem.segmentId);
+    if (segment == null) return;
+    if (_searchController.text.isNotEmpty) _searchController.clear();
+    setState(() {
+      _timingProblem = problem;
+      _filter = _SegmentFilter.all;
+      _filterInitialized = true;
+      _selectedSegmentId = segment.id;
+      _expandedTimingSegmentIds.add(segment.id);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(
+        _revealSegment(
+          segment,
+          result.segments.indexOf(segment),
+          result.segments.length,
+          focusTarget: false,
+        ),
+      );
+    });
+  }
+
   void _navigateIssue(int direction) {
     final result = _result;
     if (result == null || _saving || _reexporting) return;
@@ -564,6 +712,9 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       _filter = _SegmentFilter.issues;
       _filterInitialized = true;
       _selectedSegmentId = target.id;
+      if (_segmentHasTimingIssue(target)) {
+        _expandedTimingSegmentIds.add(target.id);
+      }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_revealSegment(target, normalizedIndex, issues.length));
@@ -573,8 +724,9 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
   Future<void> _revealSegment(
     ResultSegment target,
     int index,
-    int itemCount,
-  ) async {
+    int itemCount, {
+    bool focusTarget = true,
+  }) async {
     if (!mounted) return;
     final initialContext = _keyFor(target).currentContext;
     if (initialContext == null && _segmentScrollController.hasClients) {
@@ -599,7 +751,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
         alignment: 0.18,
       );
     }
-    if (mounted) _focusNodeFor(target).requestFocus();
+    if (mounted && focusTarget) _focusNodeFor(target).requestFocus();
   }
 
   @override
@@ -656,9 +808,10 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       selectedSegmentId: _selectedSegmentId,
       searchController: _searchController,
       segmentScrollController: _segmentScrollController,
-      controllerFor: _controllerFor,
+      draftFor: _draftFor,
       focusNodeFor: _focusNodeFor,
       keyFor: _keyFor,
+      expandedTimingSegmentIds: _expandedTimingSegmentIds,
       onRefresh: _loadResult,
       onSave: _saveEdits,
       onOutputFormatChanged: _setOutputFormat,
@@ -673,6 +826,9 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onDiscardEdits: _discardEdits,
       onRestoreSegment: _restoreSegment,
       onSelectSegment: _selectSegment,
+      onToggleTiming: _toggleTimingEditor,
+      onNudgeTiming: _nudgeTiming,
+      onNormalizeTiming: _normalizeTiming,
       onPreviousIssue: () => _navigateIssue(-1),
       onNextIssue: () => _navigateIssue(1),
       onReexport: () => unawaited(_reexport()),
@@ -690,6 +846,7 @@ typedef _ExportSelection = ({
 enum _ReviewFlowState {
   synced,
   dirty,
+  invalid,
   saving,
   savedPendingExport,
   exporting,
@@ -700,6 +857,90 @@ enum _ReviewFlowState {
 enum _FailedReviewAction { refresh, save, reexport }
 
 enum _SegmentFilter { all, issues, emptyTarget, modified }
+
+enum _TimingField { start, end }
+
+class _TimingProblem {
+  const _TimingProblem({
+    required this.segmentId,
+    required this.message,
+    required this.field,
+  });
+
+  final int segmentId;
+  final String message;
+  final _TimingField? field;
+}
+
+class _TimingDraftValues {
+  const _TimingDraftValues({
+    required this.start,
+    required this.end,
+    this.message,
+    this.errorField,
+  });
+
+  final double? start;
+  final double? end;
+  final String? message;
+  final _TimingField? errorField;
+}
+
+class _SegmentDraft {
+  _SegmentDraft({
+    required ResultSegment segment,
+    required VoidCallback onChanged,
+  }) : targetController = TextEditingController(text: segment.targetText),
+       startController = TextEditingController(
+         text: _formatTimecode(segment.start),
+       ),
+       endController = TextEditingController(
+         text: _formatTimecode(segment.end),
+       ) {
+    targetController.addListener(onChanged);
+    startController.addListener(onChanged);
+    endController.addListener(onChanged);
+  }
+
+  final TextEditingController targetController;
+  final TextEditingController startController;
+  final TextEditingController endController;
+  late final Listenable listenable = Listenable.merge([
+    targetController,
+    startController,
+    endController,
+  ]);
+
+  void sync(ResultSegment segment) {
+    final start = _formatTimecode(segment.start);
+    final end = _formatTimecode(segment.end);
+    if (targetController.text != segment.targetText) {
+      targetController.text = segment.targetText;
+    }
+    if (startController.text != start) startController.text = start;
+    if (endController.text != end) endController.text = end;
+  }
+
+  bool hasTimingChanges(ResultSegment segment) {
+    final start = _parseTimecode(startController.text);
+    final end = _parseTimecode(endController.text);
+    return start == null ||
+        end == null ||
+        !_sameTimestamp(start, segment.start) ||
+        !_sameTimestamp(end, segment.end);
+  }
+
+  bool isModified(ResultSegment segment) {
+    return targetController.text != segment.targetText ||
+        hasTimingChanges(segment);
+  }
+
+  void dispose() {
+    targetController.dispose();
+    startController.dispose();
+    endController.dispose();
+  }
+}
 
 class _ResultReviewBody extends StatelessWidget {
   const _ResultReviewBody({
@@ -719,9 +960,10 @@ class _ResultReviewBody extends StatelessWidget {
     required this.selectedSegmentId,
     required this.searchController,
     required this.segmentScrollController,
-    required this.controllerFor,
+    required this.draftFor,
     required this.focusNodeFor,
     required this.keyFor,
+    required this.expandedTimingSegmentIds,
     required this.onRefresh,
     required this.onSave,
     required this.onOutputFormatChanged,
@@ -733,6 +975,9 @@ class _ResultReviewBody extends StatelessWidget {
     required this.onDiscardEdits,
     required this.onRestoreSegment,
     required this.onSelectSegment,
+    required this.onToggleTiming,
+    required this.onNudgeTiming,
+    required this.onNormalizeTiming,
     required this.onPreviousIssue,
     required this.onNextIssue,
     required this.onReexport,
@@ -754,9 +999,10 @@ class _ResultReviewBody extends StatelessWidget {
   final int? selectedSegmentId;
   final TextEditingController searchController;
   final ScrollController segmentScrollController;
-  final TextEditingController Function(ResultSegment segment) controllerFor;
+  final _SegmentDraft Function(ResultSegment segment) draftFor;
   final FocusNode Function(ResultSegment segment) focusNodeFor;
   final GlobalKey Function(ResultSegment segment) keyFor;
+  final Set<int> expandedTimingSegmentIds;
   final VoidCallback onRefresh;
   final Future<TaskResultWorkspace?> Function() onSave;
   final ValueChanged<String> onOutputFormatChanged;
@@ -768,6 +1014,15 @@ class _ResultReviewBody extends StatelessWidget {
   final VoidCallback onDiscardEdits;
   final ValueChanged<ResultSegment> onRestoreSegment;
   final ValueChanged<ResultSegment> onSelectSegment;
+  final ValueChanged<ResultSegment> onToggleTiming;
+  final void Function(
+    ResultSegment segment,
+    _TimingField field,
+    int milliseconds,
+  )
+  onNudgeTiming;
+  final void Function(ResultSegment segment, _TimingField field)
+  onNormalizeTiming;
   final VoidCallback onPreviousIssue;
   final VoidCallback onNextIssue;
   final VoidCallback onReexport;
@@ -777,8 +1032,8 @@ class _ResultReviewBody extends StatelessWidget {
     final segments = result.segments;
     final searchQuery = searchController.text;
     final filteredSegments = segments
-        .where((segment) => _matchesFilter(segment, filter, controllerFor))
-        .where((segment) => _matchesSearch(segment, searchQuery, controllerFor))
+        .where((segment) => _matchesFilter(segment, filter, draftFor))
+        .where((segment) => _matchesSearch(segment, searchQuery, draftFor))
         .toList();
     final issueSegments = segments
         .where(
@@ -842,12 +1097,24 @@ class _ResultReviewBody extends StatelessWidget {
                   itemBuilder: (context, index) => _SegmentRow(
                     key: keyFor(filteredSegments[index]),
                     segment: filteredSegments[index],
-                    controller: controllerFor(filteredSegments[index]),
+                    draft: draftFor(filteredSegments[index]),
                     focusNode: focusNodeFor(filteredSegments[index]),
                     selected: filteredSegments[index].id == selectedSegmentId,
+                    timingExpanded: expandedTimingSegmentIds.contains(
+                      filteredSegments[index].id,
+                    ),
                     enabled: !saving && !reexporting,
                     onSelect: () => onSelectSegment(filteredSegments[index]),
                     onRestore: () => onRestoreSegment(filteredSegments[index]),
+                    onToggleTiming: () =>
+                        onToggleTiming(filteredSegments[index]),
+                    onNudgeTiming: (field, milliseconds) => onNudgeTiming(
+                      filteredSegments[index],
+                      field,
+                      milliseconds,
+                    ),
+                    onNormalizeTiming: (field) =>
+                        onNormalizeTiming(filteredSegments[index], field),
                   ),
                 ),
         ),
@@ -1065,12 +1332,13 @@ class _ReviewStatusStrip extends StatelessWidget {
     final color = switch (state) {
       _ReviewFlowState.dirty || _ReviewFlowState.savedPendingExport => T.warn,
       _ReviewFlowState.exported => T.ok,
-      _ReviewFlowState.failed => T.danger,
+      _ReviewFlowState.invalid || _ReviewFlowState.failed => T.danger,
       _ => T.sky,
     };
     final icon = switch (state) {
       _ReviewFlowState.synced => Icons.check_circle_outline_rounded,
       _ReviewFlowState.dirty => Icons.edit_note_rounded,
+      _ReviewFlowState.invalid => Icons.schedule_rounded,
       _ReviewFlowState.saving => Icons.sync_rounded,
       _ReviewFlowState.savedPendingExport => Icons.inventory_2_outlined,
       _ReviewFlowState.exporting => Icons.ios_share_rounded,
@@ -1159,21 +1427,29 @@ class _SegmentRow extends StatelessWidget {
   const _SegmentRow({
     super.key,
     required this.segment,
-    required this.controller,
+    required this.draft,
     required this.focusNode,
     required this.selected,
+    required this.timingExpanded,
     required this.enabled,
     required this.onSelect,
     required this.onRestore,
+    required this.onToggleTiming,
+    required this.onNudgeTiming,
+    required this.onNormalizeTiming,
   });
 
   final ResultSegment segment;
-  final TextEditingController controller;
+  final _SegmentDraft draft;
   final FocusNode focusNode;
   final bool selected;
+  final bool timingExpanded;
   final bool enabled;
   final VoidCallback onSelect;
   final VoidCallback onRestore;
+  final VoidCallback onToggleTiming;
+  final void Function(_TimingField field, int milliseconds) onNudgeTiming;
+  final ValueChanged<_TimingField> onNormalizeTiming;
 
   @override
   Widget build(BuildContext context) {
@@ -1186,9 +1462,11 @@ class _SegmentRow extends StatelessWidget {
       segment.model,
     ].where((part) => part.trim().isNotEmpty).join(' · ');
     return AnimatedBuilder(
-      animation: controller,
+      animation: draft.listenable,
       builder: (context, _) {
-        final modified = controller.text != segment.targetText;
+        final timing = _timingDraftValues(draft);
+        final modified = draft.isModified(segment);
+        final timingModified = draft.hasTimingChanges(segment);
         return AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
@@ -1222,14 +1500,31 @@ class _SegmentRow extends StatelessWidget {
                           ),
                           const SizedBox(width: T.s4),
                         ],
-                        Text('#${segment.id}', style: T.tSection),
+                        Expanded(
+                          child: Text('#${segment.id}', style: T.tSection),
+                        ),
+                        _CompactIconButton(
+                          tooltip: timingExpanded ? '收起时间码' : '编辑时间码',
+                          icon: timingExpanded
+                              ? Icons.schedule_rounded
+                              : Icons.more_time_rounded,
+                          onTap: enabled ? onToggleTiming : null,
+                        ),
                       ],
                     ),
-                    const SizedBox(height: T.s4),
                     Text(
-                      segment.timeRangeLabel.replaceFirst(' - ', '\n'),
+                      '${draft.startController.text}\n${draft.endController.text}',
                       maxLines: 2,
-                      style: T.tCaption,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption.copyWith(
+                        color: timing.message != null
+                            ? T.danger
+                            : timingModified
+                            ? T.accentStrong
+                            : T.muted,
+                        fontWeight: timingModified ? T.wMedium : T.wRegular,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ],
                 ),
@@ -1248,8 +1543,20 @@ class _SegmentRow extends StatelessWidget {
                       ),
                       const SizedBox(height: T.s8),
                     ],
+                    if (timingExpanded) ...[
+                      _TimingEditor(
+                        segmentId: segment.id,
+                        draft: draft,
+                        timing: timing,
+                        enabled: enabled,
+                        onTap: onSelect,
+                        onNudge: onNudgeTiming,
+                        onNormalize: onNormalizeTiming,
+                      ),
+                      const SizedBox(height: T.s8),
+                    ],
                     TextField(
-                      controller: controller,
+                      controller: draft.targetController,
                       focusNode: focusNode,
                       onTap: onSelect,
                       enabled: enabled,
@@ -1312,6 +1619,215 @@ class _SegmentRow extends StatelessWidget {
   }
 }
 
+class _TimingEditor extends StatelessWidget {
+  const _TimingEditor({
+    required this.segmentId,
+    required this.draft,
+    required this.timing,
+    required this.enabled,
+    required this.onTap,
+    required this.onNudge,
+    required this.onNormalize,
+  });
+
+  final int segmentId;
+  final _SegmentDraft draft;
+  final _TimingDraftValues timing;
+  final bool enabled;
+  final VoidCallback onTap;
+  final void Function(_TimingField field, int milliseconds) onNudge;
+  final ValueChanged<_TimingField> onNormalize;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasError = timing.message != null;
+    final color = hasError ? T.danger : T.sky;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: hasError ? 0.06 : 0.08),
+        border: Border(
+          left: BorderSide(color: color, width: 2),
+          top: BorderSide(color: color.withValues(alpha: 0.3)),
+          bottom: BorderSide(color: color.withValues(alpha: 0.3)),
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final groupWidth = constraints.maxWidth >= 468
+              ? (constraints.maxWidth - T.s12) / 2
+              : constraints.maxWidth;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: T.s12,
+                runSpacing: T.s8,
+                children: [
+                  SizedBox(
+                    width: groupWidth,
+                    child: _TimecodeGroup(
+                      fieldKey: ValueKey('result-time-start-$segmentId'),
+                      label: '开始',
+                      controller: draft.startController,
+                      enabled: enabled,
+                      hasError: timing.errorField == _TimingField.start,
+                      onTap: onTap,
+                      onDecrease: () => onNudge(_TimingField.start, -100),
+                      onIncrease: () => onNudge(_TimingField.start, 100),
+                      onNormalize: () => onNormalize(_TimingField.start),
+                    ),
+                  ),
+                  SizedBox(
+                    width: groupWidth,
+                    child: _TimecodeGroup(
+                      fieldKey: ValueKey('result-time-end-$segmentId'),
+                      label: '结束',
+                      controller: draft.endController,
+                      enabled: enabled,
+                      hasError: timing.errorField == _TimingField.end,
+                      onTap: onTap,
+                      onDecrease: () => onNudge(_TimingField.end, -100),
+                      onIncrease: () => onNudge(_TimingField.end, 100),
+                      onNormalize: () => onNormalize(_TimingField.end),
+                    ),
+                  ),
+                ],
+              ),
+              if (timing.message != null) ...[
+                const SizedBox(height: T.s4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.error_outline_rounded,
+                      size: 14,
+                      color: T.danger,
+                    ),
+                    const SizedBox(width: T.s4),
+                    Expanded(
+                      child: Text(
+                        timing.message!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tCaption.copyWith(
+                          color: T.danger,
+                          fontWeight: T.wMedium,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TimecodeGroup extends StatelessWidget {
+  const _TimecodeGroup({
+    required this.fieldKey,
+    required this.label,
+    required this.controller,
+    required this.enabled,
+    required this.hasError,
+    required this.onTap,
+    required this.onDecrease,
+    required this.onIncrease,
+    required this.onNormalize,
+  });
+
+  final Key fieldKey;
+  final String label;
+  final TextEditingController controller;
+  final bool enabled;
+  final bool hasError;
+  final VoidCallback onTap;
+  final VoidCallback onDecrease;
+  final VoidCallback onIncrease;
+  final VoidCallback onNormalize;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = hasError ? T.danger : T.line;
+    return Row(
+      children: [
+        SizedBox(
+          width: 34,
+          child: Text(label, style: T.tCaption.copyWith(color: T.ink)),
+        ),
+        Expanded(
+          child: SizedBox(
+            height: 34,
+            child: TextField(
+              key: fieldKey,
+              controller: controller,
+              enabled: enabled,
+              onTap: onTap,
+              onEditingComplete: () {
+                onNormalize();
+                FocusScope.of(context).unfocus();
+              },
+              keyboardType: TextInputType.datetime,
+              textInputAction: TextInputAction.done,
+              textAlign: TextAlign.center,
+              autocorrect: false,
+              enableSuggestions: false,
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9:.,-]')),
+                LengthLimitingTextInputFormatter(13),
+              ],
+              style: T.tCaption.copyWith(
+                color: T.ink,
+                fontWeight: T.wMedium,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: T.surface,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: T.s8,
+                  vertical: T.s8,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(T.rSm),
+                  borderSide: BorderSide(color: borderColor),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(T.rSm),
+                  borderSide: BorderSide(color: borderColor),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(T.rSm),
+                  borderSide: BorderSide(
+                    color: hasError ? T.danger : T.accentStrong,
+                    width: 1.4,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        _CompactIconButton(
+          tooltip: '$label提前 0.1 秒',
+          icon: Icons.remove_rounded,
+          onTap: enabled ? onDecrease : null,
+        ),
+        _CompactIconButton(
+          tooltip: '$label延后 0.1 秒',
+          icon: Icons.add_rounded,
+          onTap: enabled ? onIncrease : null,
+        ),
+      ],
+    );
+  }
+}
+
 class _ExportControls extends StatelessWidget {
   const _ExportControls({
     required this.selectedOutputFormat,
@@ -1342,45 +1858,10 @@ class _ExportControls extends StatelessWidget {
       runSpacing: T.s8,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('导出格式', style: T.tCaption),
-            const SizedBox(width: T.s8),
-            SegmentedButton<String>(
-              showSelectedIcon: false,
-              selected: {selectedOutputFormat},
-              segments: const [
-                ButtonSegment(value: 'srt', label: Text('SRT')),
-                ButtonSegment(value: 'ass', label: Text('ASS')),
-                ButtonSegment(value: 'both', label: Text('SRT+ASS')),
-                ButtonSegment(value: 'vtt', label: Text('VTT')),
-                ButtonSegment(value: 'lrc', label: Text('LRC')),
-              ],
-              onSelectionChanged: enabled
-                  ? (selection) {
-                      final next = selection.isEmpty ? null : selection.first;
-                      if (next != null) onOutputFormatChanged(next);
-                    }
-                  : null,
-              style: ButtonStyle(
-                visualDensity: VisualDensity.compact,
-                foregroundColor: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.disabled)) return T.muted;
-                  if (states.contains(WidgetState.selected)) {
-                    return T.accentStrong;
-                  }
-                  return T.ink;
-                }),
-                side: WidgetStateProperty.resolveWith((states) {
-                  final color = states.contains(WidgetState.selected)
-                      ? T.accentStrong
-                      : T.line;
-                  return BorderSide(color: color, width: 1.2);
-                }),
-              ),
-            ),
-          ],
+        _ExportFormatSelector(
+          selected: selectedOutputFormat,
+          enabled: enabled,
+          onChanged: onOutputFormatChanged,
         ),
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -1430,6 +1911,79 @@ class _ExportControls extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _ExportFormatSelector extends StatelessWidget {
+  const _ExportFormatSelector({
+    required this.selected,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String selected;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  static const _primarySegments = [
+    ButtonSegment(value: 'srt', label: Text('SRT')),
+    ButtonSegment(value: 'ass', label: Text('ASS')),
+    ButtonSegment(value: 'both', label: Text('SRT+ASS')),
+  ];
+  static const _secondarySegments = [
+    ButtonSegment(value: 'vtt', label: Text('VTT')),
+    ButtonSegment(value: 'lrc', label: Text('LRC')),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 680) {
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('导出格式', style: T.tCaption),
+              const SizedBox(width: T.s8),
+              _selector([..._primarySegments, ..._secondarySegments]),
+            ],
+          );
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('导出格式', style: T.tCaption),
+            const SizedBox(height: T.s4),
+            Wrap(
+              spacing: T.s8,
+              runSpacing: T.s4,
+              children: [
+                _selector(_primarySegments),
+                _selector(_secondarySegments),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _selector(List<ButtonSegment<String>> segments) {
+    final values = segments.map((segment) => segment.value).toSet();
+    return SegmentedButton<String>(
+      showSelectedIcon: false,
+      emptySelectionAllowed: true,
+      selected: values.contains(selected) ? {selected} : const <String>{},
+      segments: segments,
+      onSelectionChanged: enabled
+          ? (selection) {
+              final next = selection.isEmpty ? null : selection.first;
+              if (next != null) onChanged(next);
+            }
+          : null,
+      style: _compactSegmentedStyle(),
     );
   }
 }
@@ -2033,6 +2587,7 @@ String _qualityIssueLabel(Map<String, Object?> issue) {
     'too_many_lines' => '字幕行数过多',
     'line_too_wide' || 'line_too_long' => '字幕单行过长',
     'empty_target' => '译文为空',
+    'invalid_timing' => '时间码区间无效',
     'overlap' || 'timeline_overlap' => '时间轴发生重叠',
     _ => '',
   };
@@ -2086,34 +2641,190 @@ List<String> _plannedExportFormats(String value) {
 bool _matchesFilter(
   ResultSegment segment,
   _SegmentFilter filter,
-  TextEditingController Function(ResultSegment segment) controllerFor,
+  _SegmentDraft Function(ResultSegment segment) draftFor,
 ) {
+  final draft = draftFor(segment);
   return switch (filter) {
     _SegmentFilter.all => true,
     _SegmentFilter.issues =>
       segment.issues.isNotEmpty || segment.qualityIssues.isNotEmpty,
-    _SegmentFilter.emptyTarget => controllerFor(segment).text.trim().isEmpty,
-    _SegmentFilter.modified =>
-      controllerFor(segment).text != segment.targetText,
+    _SegmentFilter.emptyTarget =>
+      draft.targetController.text.trim().isEmpty || draft.isModified(segment),
+    _SegmentFilter.modified => draft.isModified(segment),
   };
 }
 
 bool _matchesSearch(
   ResultSegment segment,
   String query,
-  TextEditingController Function(ResultSegment segment) controllerFor,
+  _SegmentDraft Function(ResultSegment segment) draftFor,
 ) {
   final needle = query.trim().toLowerCase();
   if (needle.isEmpty) return true;
+  final draft = draftFor(segment);
   final haystack = [
     segment.sourceText,
-    controllerFor(segment).text,
+    draft.targetController.text,
+    draft.startController.text,
+    draft.endController.text,
     segment.provider,
     segment.model,
     ...segment.issues,
     for (final issue in segment.qualityIssues) ..._issueSearchTerms(issue),
   ].join('\n').toLowerCase();
   return haystack.contains(needle);
+}
+
+_TimingDraftValues _timingDraftValues(_SegmentDraft draft) {
+  final startText = draft.startController.text.trim();
+  final endText = draft.endController.text.trim();
+  final start = _parseTimecode(startText);
+  final end = _parseTimecode(endText);
+  if (startText.isEmpty) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '开始时间不能为空',
+      errorField: _TimingField.start,
+    );
+  }
+  if (startText.startsWith('-')) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '开始时间不能小于 0',
+      errorField: _TimingField.start,
+    );
+  }
+  if (start == null) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '开始时间格式不正确',
+      errorField: _TimingField.start,
+    );
+  }
+  if (endText.isEmpty) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '结束时间不能为空',
+      errorField: _TimingField.end,
+    );
+  }
+  if (endText.startsWith('-')) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '结束时间不能小于 0',
+      errorField: _TimingField.end,
+    );
+  }
+  if (end == null) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '结束时间格式不正确',
+      errorField: _TimingField.end,
+    );
+  }
+  if (end <= start) {
+    return _TimingDraftValues(
+      start: start,
+      end: end,
+      message: '结束时间需要晚于开始时间',
+      errorField: _TimingField.end,
+    );
+  }
+  return _TimingDraftValues(start: start, end: end);
+}
+
+double? _parseTimecode(String value) {
+  final normalized = value.trim().replaceAll(',', '.');
+  if (normalized.isEmpty) return null;
+  final parts = normalized.split(':');
+  if (parts.length > 3 || parts.any((part) => part.isEmpty)) return null;
+
+  double? total;
+  if (parts.length == 1) {
+    total = double.tryParse(parts[0]);
+  } else if (parts.length == 2) {
+    final minutes = int.tryParse(parts[0]);
+    final seconds = double.tryParse(parts[1]);
+    if (minutes == null || seconds == null || seconds >= 60) return null;
+    total = minutes * 60 + seconds;
+  } else {
+    final hours = int.tryParse(parts[0]);
+    final minutes = int.tryParse(parts[1]);
+    final seconds = double.tryParse(parts[2]);
+    if (hours == null ||
+        minutes == null ||
+        minutes >= 60 ||
+        seconds == null ||
+        seconds >= 60) {
+      return null;
+    }
+    total = hours * 3600 + minutes * 60 + seconds;
+  }
+  if (total == null || !total.isFinite || total < 0) return null;
+  return (total * 1000).round() / 1000;
+}
+
+String _formatTimecode(double seconds) {
+  final safeSeconds = seconds.isFinite
+      ? seconds.clamp(0.0, double.infinity).toDouble()
+      : 0.0;
+  final millis = (safeSeconds * 1000).round();
+  final duration = Duration(milliseconds: millis);
+  final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final secs = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = duration.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  final hours = duration.inHours;
+  return hours > 0
+      ? '${hours.toString().padLeft(2, '0')}:$minutes:$secs.$ms'
+      : '$minutes:$secs.$ms';
+}
+
+bool _sameTimestamp(double left, double right) {
+  return (left - right).abs() < 0.0005;
+}
+
+bool _sameTimingProblem(_TimingProblem? left, _TimingProblem? right) {
+  return left?.segmentId == right?.segmentId &&
+      left?.message == right?.message &&
+      left?.field == right?.field;
+}
+
+ResultSegment? _segmentById(List<ResultSegment> segments, int? id) {
+  if (id == null) return null;
+  for (final segment in segments) {
+    if (segment.id == id) return segment;
+  }
+  return null;
+}
+
+bool _segmentHasTimingIssue(ResultSegment segment) {
+  for (final issue in segment.issues) {
+    final normalized = issue.toLowerCase();
+    if (normalized.contains('时间轴') ||
+        normalized.contains('结束时间') ||
+        normalized.contains('显示时间')) {
+      return true;
+    }
+  }
+  const timingCodes = {
+    'invalid_timing',
+    'timeline_overlap',
+    'overlap',
+    'duration_too_short',
+    'under_min_duration',
+    'over_max_duration',
+  };
+  for (final issue in segment.qualityIssues) {
+    final code = _stringValue(issue['code'])?.trim().toLowerCase();
+    if (code != null && timingCodes.contains(code)) return true;
+  }
+  return false;
 }
 
 Iterable<String> _issueSearchTerms(Map<String, Object?> issue) sync* {

@@ -121,6 +121,10 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   bool _smokeReexported = false;
   bool _smokeOutputContainsEdit = false;
   String _smokeEditedText = '';
+  double _smokeEditedStart = 0;
+  double _smokeEditedEnd = 0;
+  bool _smokeTimingSaved = false;
+  bool _smokeOutputUsesRequestedTiming = false;
   String _smokeReexportFormat = '';
   bool? _smokeReexportBilingual;
   String _smokeReexportBilingualOrder = '';
@@ -943,13 +947,15 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     if (result.segments.isEmpty) return;
     final first = result.segments.first;
     _smokeEditedText = '已校对的字幕译文';
+    _smokeEditedStart = 0.1;
+    _smokeEditedEnd = 1.3;
     final payload = result.segments
         .map(
           (segment) => <String, Object?>{
             ...segment.raw,
             'id': segment.id,
-            'start': segment.start,
-            'end': segment.end,
+            'start': segment.id == first.id ? _smokeEditedStart : segment.start,
+            'end': segment.id == first.id ? _smokeEditedEnd : segment.end,
             'text_src': segment.sourceText,
             'text_tgt': segment.id == first.id
                 ? _smokeEditedText
@@ -958,9 +964,15 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
         )
         .toList();
     final saved = await _client.resultSegmentsSave(task.taskId, payload);
-    _smokeEditSaved = saved.segments.any(
-      (segment) => segment.targetText == _smokeEditedText,
+    _smokeTimingSaved = saved.segments.any(
+      (segment) =>
+          segment.id == first.id &&
+          (segment.start - _smokeEditedStart).abs() < 0.0005 &&
+          (segment.end - _smokeEditedEnd).abs() < 0.0005,
     );
+    _smokeEditSaved =
+        _smokeTimingSaved &&
+        saved.segments.any((segment) => segment.targetText == _smokeEditedText);
     _smokeResultSegmentCount = saved.segments.length;
     _smokeResultIssueCount = saved.issueCount;
     _smokeReexportFormat = 'ass';
@@ -991,6 +1003,9 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       if (await output.exists()) {
         final text = await output.readAsString(encoding: utf8);
         _smokeOutputContainsEdit = text.contains(_smokeEditedText);
+        _smokeOutputUsesRequestedTiming = text.contains(
+          'Dialogue: 1,0:00:00.10,0:00:01.30,Target',
+        );
         final sourceIndex = text.indexOf(first.sourceText);
         final targetIndex = text.indexOf(_smokeEditedText);
         _smokeReexportOutputUsesRequestedOrder =
@@ -1068,6 +1083,11 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_reexported': _smokeReexported,
       'task_processing_reexport_output_contains_edit': _smokeOutputContainsEdit,
       'task_processing_edited_text': _smokeEditedText,
+      'task_processing_edited_start': _smokeEditedStart,
+      'task_processing_edited_end': _smokeEditedEnd,
+      'task_processing_timing_saved': _smokeTimingSaved,
+      'task_processing_reexport_output_uses_requested_timing':
+          _smokeOutputUsesRequestedTiming,
       'task_processing_reexport_format': _smokeReexportFormat,
       'task_processing_reexport_bilingual': _smokeReexportBilingual,
       'task_processing_reexport_bilingual_order': _smokeReexportBilingualOrder,

@@ -3157,11 +3157,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Good morning.'), findsNothing);
     expect(find.text('Welcome back.'), findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextField, '输入译文'), '欢迎回来。');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Welcome back.'), findsOneWidget);
+    expect(find.text('欢迎回来。'), findsOneWidget);
 
     await tester.tap(find.text('全部'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Good morning.'), findsOneWidget);
     expect(find.text('Welcome back.'), findsOneWidget);
+    await tester.tap(find.text('还原片段'));
+    await tester.pump(const Duration(milliseconds: 100));
 
     await tester.tap(find.text('已修改'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3352,6 +3358,140 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('result review edits and validates subtitle timing', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final paramsByMethod = <String, Map<String, Object?>>{};
+    var start = 1.5;
+    var end = 3.0;
+    var hasTimingIssue = true;
+    var resultRevision = 0;
+
+    Map<String, Object?> resultPayload() => {
+      'task': _task(
+        taskId: 'tvx_review_timing_123456',
+        status: 'DONE',
+        inputFile: r'D:\media\review-timing.mp4',
+        outputPaths: {'srt': r'D:\media\review-timing.zh-CN.srt'},
+        settings: {
+          'result_revision': resultRevision,
+          'result_export_revision': 0,
+        },
+      ),
+      'segments': [
+        {
+          'id': 2,
+          'start': start,
+          'end': end,
+          'text_src': 'Check the timing.',
+          'text_tgt': '检查时间码。',
+          'issues': hasTimingIssue ? ['时间轴与上一条重叠'] : <String>[],
+          'quality_issues': hasTimingIssue
+              ? [
+                  {
+                    'code': 'timeline_overlap',
+                    'message': 'overlap with previous cue',
+                  },
+                ]
+              : <Map<String, Object?>>[],
+        },
+      ],
+      'output_paths': {'srt': r'D:\media\review-timing.zh-CN.srt'},
+    };
+
+    bridge.attachServiceCaller((method, params) async {
+      paramsByMethod[method] = params;
+      if (method == 'result.open') return resultPayload();
+      if (method == 'result.segments.save') {
+        final segments = params['segments'] as List<Object?>;
+        final segment = segments.single as Map<Object?, Object?>;
+        start = (segment['start'] as num).toDouble();
+        end = (segment['end'] as num).toDouble();
+        hasTimingIssue = false;
+        resultRevision += 1;
+        return resultPayload();
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 560,
+              height: 640,
+              child: ResultReviewWorkspace(
+                taskId: 'tvx_review_timing_123456',
+                bridge: bridge,
+                focusIssuesInitially: true,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final startField = find.byKey(const ValueKey('result-time-start-2'));
+    final endField = find.byKey(const ValueKey('result-time-end-2'));
+    expect(startField, findsOneWidget);
+    expect(endField, findsOneWidget);
+    expect(find.byTooltip('收起时间码'), findsOneWidget);
+    expect(find.text('问题 1 / 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('开始延后 0.1 秒'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.widget<TextField>(startField).controller?.text, '00:01.600');
+    expect(find.text('还原片段'), findsOneWidget);
+    await tester.ensureVisible(find.text('还原片段'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('还原片段'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.widget<TextField>(startField).controller?.text, '00:01.500');
+
+    await tester.enterText(startField, '-0.1');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('开始时间不能小于 0'), findsOneWidget);
+    await tester.enterText(startField, '00:01.500');
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.enterText(endField, '00:01.400');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('结束时间需要晚于开始时间'), findsOneWidget);
+    expect(find.textContaining('片段 #2：结束时间需要晚于开始时间'), findsOneWidget);
+
+    await tester.tap(find.text('保存修改'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(paramsByMethod.containsKey('result.segments.save'), isFalse);
+
+    await tester.enterText(endField, '00:02,500');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('结束时间需要晚于开始时间'), findsNothing);
+    await tester.ensureVisible(find.byTooltip('结束提前 0.1 秒'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('结束提前 0.1 秒'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect((tester.widget<TextField>(endField).controller?.text), '00:02.400');
+
+    await tester.tap(find.text('保存修改'));
+    await tester.pumpAndSettle();
+
+    final savedSegments =
+        paramsByMethod['result.segments.save']?['segments'] as List<Object?>;
+    final savedSegment = savedSegments.single as Map<Object?, Object?>;
+    expect(savedSegment['start'], 1.5);
+    expect(savedSegment['end'], 2.4);
+    expect(find.text('修改已保存，字幕文件尚未更新'), findsOneWidget);
+    expect(find.text('全部'), findsOneWidget);
+    expect(find.text('Check the timing.'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets(
     'result review keeps the workspace available after action failures',
     (tester) async {
@@ -3440,7 +3580,16 @@ void main() {
       expect(find.text('Good morning.'), findsOneWidget);
       expect(find.text('早上好，已经校对。'), findsOneWidget);
 
-      await tester.tap(find.text('重试保存'));
+      await tester.enterText(
+        find.widgetWithText(TextField, '输入译文'),
+        '早上好，二次校对。',
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('字幕修改暂时无法保存。'), findsNothing);
+      expect(find.text('重试保存'), findsNothing);
+      expect(find.text('有未保存修改'), findsOneWidget);
+
+      await tester.tap(find.text('保存修改'));
       await tester.pumpAndSettle();
       expect(find.text('修改已保存，字幕文件尚未更新'), findsOneWidget);
 
