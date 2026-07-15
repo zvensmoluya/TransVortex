@@ -774,6 +774,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
       'task_processing_task_count': tasks.length,
       'task_processing_selected_task_id': selected?.taskId ?? '',
       'task_processing_selected_status': selected?.status ?? '',
+      'task_processing_editor_visible':
+          selected?.isDone == true && _editingTaskId == selected?.taskId,
       'task_processing_model_request_count': selected?.modelRequestCount ?? 0,
       'task_processing_model_request_counts':
           selected?.modelRequestCounts ?? const <String, int>{},

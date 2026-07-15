@@ -154,6 +154,7 @@ foreach ($case in $cases) {
         diagnostic_output_dir_writable = if ($report.PSObject.Properties.Name -contains "diagnostic_output_dir_writable") { $report.diagnostic_output_dir_writable } else { "" }
         task_processing_task_count = if ($report.PSObject.Properties.Name -contains "task_processing_task_count") { $report.task_processing_task_count } else { "" }
         task_processing_selected_status = if ($report.PSObject.Properties.Name -contains "task_processing_selected_status") { $report.task_processing_selected_status } else { "" }
+        task_processing_editor_visible = if ($report.PSObject.Properties.Name -contains "task_processing_editor_visible") { $report.task_processing_editor_visible } else { "" }
         task_processing_edit_saved = if ($report.PSObject.Properties.Name -contains "task_processing_edit_saved") { $report.task_processing_edit_saved } else { "" }
         task_processing_reexported = if ($report.PSObject.Properties.Name -contains "task_processing_reexported") { $report.task_processing_reexported } else { "" }
         task_processing_resume_ok = if ($report.PSObject.Properties.Name -contains "task_processing_resume_ok") { $report.task_processing_resume_ok } else { "" }
