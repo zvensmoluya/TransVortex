@@ -4,7 +4,7 @@
 
 首个 Windows x64 安装版本默认选择本机 Whisper，但基础包不包含 faster-whisper、CTranslate2、CUDA 或模型。未安装时后端返回 `needs_action`，Flutter 显示对应安装动作，不把 `auth.type=none` 当成可用。
 
-FunASR、本机 Whisper 和云端识别互不回退。本机 Whisper 任务由 Worker 启动独立 JSONL 子进程，模型在一个任务内只加载一次；Worker 退出或被强制取消时，Windows Job Object 负责结束子进程并释放显存。旧的进程内实现只保留给 CLI 和开发实验。
+FunASR、本机 Whisper 和 OpenAI Whisper 互不回退。本机 Whisper 任务由 Worker 启动独立 JSONL 子进程，模型在一个任务内只加载一次；Worker 退出或被强制取消时，Windows Job Object 负责结束子进程并释放显存。旧的进程内实现只保留给 CLI 和开发实验。
 
 ## 用户数据目录
 
@@ -18,7 +18,9 @@ FunASR、本机 Whisper 和云端识别互不回退。本机 Whisper 任务由 W
   Config\asr_runtime_state.json
 ```
 
-模型与运行组件分开安装和删除。外部 Python 环境只在用户选择并探测成功后记录解释器路径、探测结果和模型路径；不会修改 `PYTHONPATH`、执行 `pip install` 或升级用户环境。
+模型与运行组件分开安装和删除。Flutter 始终使用 TransVortex 管理的隔离运行组件，不要求用户选择 `python.exe`，也不会在用户环境中执行 `pip install` 或升级依赖。
+
+“使用已有模型”只复用兼容的 faster-whisper / CTranslate2 模型目录。应用会用受管运行组件加载模型并完成最小转录，验证成功后只登记模型规格、原目录和文件指纹；不会复制、移动、删除或重新下载该目录。目录不可访问或关键文件发生变化后必须重新验证。外部 Python 环境仅保留给 CLI 和开发兼容路径，不进入 Flutter 产品界面。
 
 ## 受信下载清单
 

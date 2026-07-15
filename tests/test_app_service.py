@@ -289,6 +289,43 @@ def test_app_service_exposes_registered_asr_environments(tmp_path: Path, monkeyp
     assert response["result"]["environments"][0]["id"] == "external:test"
 
 
+def test_app_service_validates_existing_model_with_managed_runtime(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    captured = {}
+
+    def fake_probe(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "model": {
+                "model_id": "large-v3",
+                "model_path": str(kwargs["model_path"]),
+            },
+        }
+
+    monkeypatch.setattr("transvortex.app.desktop_api.probe_managed_model", fake_probe)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.model.probe",
+            {
+                "model_path": str(tmp_path / "large-v3"),
+                "device": "cpu",
+                "compute_type": "int8",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["ok"] is True
+    assert captured["root_dir"] == tmp_path
+    assert captured["model_path"] == tmp_path / "large-v3"
+    assert captured["device"] == "cpu"
+    assert captured["compute_type"] == "int8"
+
+
 def test_app_service_runs_asr_provider_test_for_saved_provider(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(

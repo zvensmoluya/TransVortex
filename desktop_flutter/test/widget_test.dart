@@ -20,6 +20,7 @@ import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
 import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
+import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
 
 void main() {
   test('window argument parser falls back to CLI args when window args empty', () {
@@ -2470,7 +2471,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('保存识别默认'));
+    await tester.tap(find.text('保存并设为默认'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -2505,13 +2506,48 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('当前识别：'), findsOneWidget);
+    expect(find.textContaining('默认识别：'), findsOneWidget);
     expect(find.textContaining('large-v3'), findsWidgets);
     expect(find.text('Whisper Large v3'), findsWidgets);
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings window explains empty saved schemes', (
+  testWidgets(
+    'ASR settings window keeps one engine selector without saved list',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(760, 560));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') {
+          return _desktopSnapshot(withAsrProviders: false).raw;
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.asrSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.textContaining('默认识别：本机'), findsOneWidget);
+      expect(find.text('本机 Whisper'), findsWidgets);
+      expect(find.text('OpenAI Whisper'), findsOneWidget);
+      expect(find.text('FunASR'), findsOneWidget);
+      expect(find.text('已保存方案'), findsNothing);
+      expect(find.text('保存并设为默认'), findsOneWidget);
+      expect(find.textContaining('method_not_found'), findsNothing);
+      expectNoFlutterException();
+    },
+  );
+
+  testWidgets('ASR settings shows unsaved state for edited OpenAI draft', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
@@ -2519,8 +2555,69 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('OpenAI Whisper'));
+    await tester.pump();
+
+    final baseUrlInput = find.widgetWithText(Input, '服务地址 (Base URL)');
+    final modelInput = find.widgetWithText(Input, '模型');
+    expect(
+      tester.widget<Input>(baseUrlInput).controller.text,
+      'https://api.openai.com/v1',
+    );
+    expect(tester.widget<Input>(modelInput).controller.text, 'whisper-1');
+    expect(find.text('接口路径 (Endpoint)'), findsNothing);
+
+    await tester.enterText(
+      find.descendant(of: baseUrlInput, matching: find.byType(TextField)),
+      'https://api.openai.com/v1/',
+    );
+    await tester.pump();
+
+    expect(find.text('尚未保存'), findsOneWidget);
+    expect(find.textContaining('默认识别：本机'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings reuses a model without exposing external Python', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedDraft;
+    bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
-        return _desktopSnapshot(withAsrProviders: false).raw;
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModelSource: 'external',
+          localModelPath: r'D:\Models\faster-whisper-large-v3',
+        ).raw;
+      }
+      if (method == 'asr.model.probe') {
+        return {
+          'ok': true,
+          'code': 'ready',
+          'model': {'model_id': 'large-v3', 'model_path': params['model_path']},
+        };
+      }
+      if (method == 'asr.provider.save') {
+        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
+        return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -2535,10 +2632,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('当前识别：本机'), findsOneWidget);
-    expect(find.text('保存后会出现在这里'), findsOneWidget);
-    expect(find.text('保存识别默认'), findsOneWidget);
-    expect(find.textContaining('method_not_found'), findsNothing);
+    expect(find.text('自动准备'), findsOneWidget);
+    expect(find.text('使用已有模型'), findsOneWidget);
+    expect(find.text('Python'), findsNothing);
+    expect(find.textContaining('python.exe'), findsNothing);
+    expect(find.text('查找登记环境'), findsNothing);
+    expect(find.text('Whisper Large v3 · 文件完整'), findsOneWidget);
+
+    await tester.tap(find.text('验证并使用'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final local = Map<String, Object?>.from(savedDraft?['local'] as Map);
+    final runtime = Map<String, Object?>.from(savedDraft?['runtime'] as Map);
+    expect(local['model_source'], 'external');
+    expect(local['model_path'], r'D:\Models\faster-whisper-large-v3');
+    expect(runtime, {'source': 'managed', 'id': 'managed:faster-whisper'});
+    expect(find.textContaining('已有 Whisper Large v3 已验证'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -3588,6 +3698,8 @@ DesktopSnapshot _desktopSnapshot({
   bool withProviders = true,
   bool withAsrProviders = true,
   bool managedAsr = false,
+  String localModelSource = 'managed',
+  String localModelPath = '',
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
   bool withRoutingFallback = false,
@@ -3853,7 +3965,11 @@ DesktopSnapshot _desktopSnapshot({
                 'kind': managedAsr ? 'local_worker' : 'local_inprocess',
                 'protocol': 'faster_whisper',
                 if (!localModelSizeOnly) 'model': 'large-v3',
-                if (localModelSizeOnly) 'local': {'model_size': 'large-v3'},
+                'local': {
+                  if (localModelSizeOnly) 'model_size': 'large-v3',
+                  'model_source': localModelSource,
+                  if (localModelPath.isNotEmpty) 'model_path': localModelPath,
+                },
                 'has_key': true,
                 if (managedAsr)
                   'runtime': {
@@ -3862,10 +3978,14 @@ DesktopSnapshot _desktopSnapshot({
                   },
                 if (managedAsr)
                   'readiness': {
-                    'state': 'checking',
-                    'code': 'model_installing',
-                    'can_run': false,
-                    'primary_action': 'cancel_install',
+                    'state': localModelPath.isEmpty ? 'checking' : 'ready',
+                    'code': localModelPath.isEmpty
+                        ? 'model_installing'
+                        : 'ready',
+                    'can_run': localModelPath.isNotEmpty,
+                    'primary_action': localModelPath.isEmpty
+                        ? 'cancel_install'
+                        : '',
                   },
               },
             }

@@ -33,7 +33,7 @@ ASR_PROVIDER_DEFAULTS = {
         "name": "openai_whisper",
         "protocol": "openai_transcriptions",
         "model": "whisper-1",
-        "base_url": "https://api.openai.com",
+        "base_url": "https://api.openai.com/v1",
     },
 }
 
@@ -139,7 +139,12 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
     }
 
     if kind in {"local_server", "remote"}:
-        row["base_url"] = _text(draft, "base_url", "baseUrl", default=str(defaults.get("base_url", "https://api.openai.com"))).rstrip("/")
+        row["base_url"] = _text(
+            draft,
+            "base_url",
+            "baseUrl",
+            default=str(defaults.get("base_url", "https://api.openai.com/v1")),
+        ).rstrip("/")
         row["endpoint"] = _text(draft, "endpoint", default="/v1/audio/transcriptions")
 
     auth = _as_dict(draft.get("auth"))

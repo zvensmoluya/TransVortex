@@ -613,7 +613,7 @@ Copy-RequiredDirectory -Source (Join-Path $repoRoot "prompts") -Destination (Joi
 if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
     Copy-RequiredDirectory -Source (Join-Path $repoRoot "memory\presets") -Destination (Join-Path $packageRoot "memory\presets")
 }
-Copy-RequiredFile -Source (Join-Path $repoRoot "pipeline.yaml") -Destination (Join-Path $packageRoot "pipeline.yaml")
+Copy-RequiredFile -Source (Join-Path $repoRoot "pipeline.desktop.yaml") -Destination (Join-Path $packageRoot "pipeline.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.example.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")

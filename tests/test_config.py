@@ -57,6 +57,27 @@ def test_external_whisper_draft_does_not_inherit_managed_runtime_id() -> None:
     assert provider.runtime.id == ""
 
 
+def test_local_whisper_model_source_is_independent_from_runtime() -> None:
+    provider = draft_to_asr_provider_config(
+        {
+            "name": "local_whisper",
+            "kind": "local_worker",
+            "protocol": "faster_whisper",
+            "model": "large-v3",
+            "runtime": {"source": "managed", "id": "managed:faster-whisper"},
+            "local": {
+                "model_source": "external",
+                "model_path": r"D:\Models\faster-whisper-large-v3",
+                "device": "auto",
+            },
+        }
+    )
+
+    assert provider.runtime.source == "managed"
+    assert provider.local.model_source == "external"
+    assert provider.local.model_path == r"D:\Models\faster-whisper-large-v3"
+
+
 def test_artifacts_directory_environment_overrides_workspace_yaml(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -491,6 +512,39 @@ routing:
     assert provider.chunking.short_audio_seconds == 120
     assert provider.chunking.max_upload_mb == 64
     assert provider.chunking.fuzzy_dedupe is False
+
+
+def test_desktop_product_default_uses_official_openai_whisper(tmp_path: Path) -> None:
+    providers_file = tmp_path / "providers.yaml"
+    providers_file.write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    pipeline_file = Path(__file__).resolve().parents[1] / "pipeline.desktop.yaml"
+
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        providers_file=providers_file,
+        pipeline_file=pipeline_file,
+    )
+    provider = cfg.asr_providers["openai_whisper"]
+
+    assert provider.kind == "remote"
+    assert provider.protocol == "openai_transcriptions"
+    assert provider.base_url == "https://api.openai.com/v1"
+    assert provider.endpoint == "/v1/audio/transcriptions"
+    assert provider.model == "whisper-1"
+    assert provider.env_key == "OPENAI_API_KEY"
+    assert provider.credential_id == "openai_whisper"
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:

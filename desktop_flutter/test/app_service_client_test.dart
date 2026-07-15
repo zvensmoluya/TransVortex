@@ -234,7 +234,7 @@ void main() {
       expect(snapshot.configReadiness.translationConfigured, isTrue);
       expect(snapshot.configReadiness.translationLabel, 'p1');
       expect(snapshot.configReadiness.asrConfigured, isFalse);
-      expect(snapshot.configReadiness.asrLabel, '云端');
+      expect(snapshot.configReadiness.asrLabel, 'OpenAI Whisper');
     },
   );
 
@@ -313,7 +313,7 @@ void main() {
     };
     expect(byName['local']?.displayLabel, '本机 Whisper');
     expect(byName['funasr_sensevoice_local']?.displayLabel, 'FunASR');
-    expect(byName['openai_whisper']?.displayLabel, '云端');
+    expect(byName['openai_whisper']?.displayLabel, 'OpenAI Whisper');
     expect(snapshot.asrLabel, 'FunASR');
   });
 
@@ -707,6 +707,12 @@ routing:
         encoding: utf8,
       );
       File(
+        '${repoRoot.path}${Platform.pathSeparator}pipeline.desktop.yaml',
+      ).writeAsStringSync(
+        'artifacts_dir: desktop-artifacts\nsource_mode: asr\n',
+        encoding: utf8,
+      );
+      File(
         '${repoRoot.path}${Platform.pathSeparator}providers.yaml',
       ).writeAsStringSync('providers: []\n', encoding: utf8);
       await Directory(
@@ -760,7 +766,7 @@ routing:
         File(
           '${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml',
         ).readAsStringSync(encoding: utf8),
-        'artifacts_dir: artifacts\nsource_mode: asr\n',
+        'artifacts_dir: desktop-artifacts\nsource_mode: asr\n',
       );
       expect(
         File(
@@ -1361,6 +1367,35 @@ routing:
       'size': 4,
     });
   });
+
+  test(
+    'AppServiceClient validates an existing model with managed runtime',
+    () async {
+      final transport = _RecordingTransport({
+        'asr.model.probe': {
+          'ok': true,
+          'model': {
+            'model_id': 'large-v3',
+            'model_path': r'D:\Models\large-v3',
+          },
+        },
+      });
+      final client = AppServiceClient(transport);
+
+      final result = await client.probeManagedAsrModel(
+        modelPath: r'D:\Models\large-v3',
+        device: 'cpu',
+      );
+
+      expect(result['ok'], isTrue);
+      expect(transport.calls.single.method, 'asr.model.probe');
+      expect(transport.calls.single.params, {
+        'model_path': r'D:\Models\large-v3',
+        'device': 'cpu',
+        'compute_type': 'auto',
+      });
+    },
+  );
 
   test('TaskSummary parses status, runtime, progress, and errors', () {
     final task = TaskSummary.fromJson({

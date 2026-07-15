@@ -127,7 +127,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
   final _device = TextEditingController(text: 'auto');
-  final _pythonExecutable = TextEditingController();
   final _externalModelPath = TextEditingController();
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
@@ -154,11 +153,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
-  bool _discoveringAsrEnvironments = false;
-  bool _probingAsrEnvironment = false;
-  String _asrRuntimeSource = 'managed';
-  String _selectedAsrEnvironmentId = '';
-  List<PythonEnvironmentOption> _discoveredAsrEnvironments = const [];
+  bool _probingAsrModel = false;
+  bool _asrDraftDirty = false;
+  String _asrModelSource = 'managed';
+  String _detectedExternalModelId = '';
   AsrOperationStatus? _activeAsrOperation;
   Timer? _asrOperationPoll;
   bool _loadingDiagnosticTasks = false;
@@ -201,7 +199,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _key.dispose();
     _endpoint.dispose();
     _device.dispose();
-    _pythonExecutable.dispose();
     _externalModelPath.dispose();
     _asrOperationPoll?.cancel();
     super.dispose();
@@ -454,13 +451,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Widget _asrBody() {
-    final snapshot = _snapshot;
-    final selected = _selectedAsrProvider;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DefaultBar(
-          text: '当前识别：${_asrHeaderLabel(selected)}',
+          text: _savedAsrHeaderLabel(),
           busy: _loading || _savingAsr,
           error: _error,
           message: _message,
@@ -471,23 +466,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           onPick: _pickAsrProvider,
         ),
         const SizedBox(height: T.s24),
-        Expanded(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 210,
-                child: _AsrSummaryList(
-                  providers: snapshot?.asrProviders ?? const [],
-                  selected: selected,
-                  onPick: _pickAsrProvider,
-                ),
-              ),
-              const SizedBox(width: T.s32),
-              Expanded(child: _asrDetails()),
-            ],
-          ),
-        ),
+        Expanded(child: _asrDetails()),
       ],
     );
   }
@@ -498,16 +477,13 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final provider = _selectedAsrOption();
     return ToolPanel(
       footer: [
-        ActionButton(
-          label: _savingAsr ? '保存中' : '保存识别默认',
-          strong: true,
-          onTap: _savingAsr ? null : _saveAsrProvider,
-        ),
-        ActionButton(
-          label: _loading ? '刷新中' : '刷新配置',
-          onTap: _loading ? null : _loadConfig,
-        ),
-        if (kind == 'local_server')
+        if (kind != 'local_worker' || _asrModelSource == 'managed')
+          ActionButton(
+            label: _savingAsr ? '保存中' : '保存并设为默认',
+            strong: true,
+            onTap: _savingAsr ? null : _saveAsrProvider,
+          ),
+        if (kind == 'local_server' || kind == 'remote')
           ActionButton(
             label: _testingAsr ? '测试中' : '测试连接',
             onTap: _testingAsr ? null : _testAsrProvider,
@@ -518,7 +494,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
         Row(
           children: [
             Expanded(child: Text(_asrLabelForDraft(draft), style: T.tSection)),
-            _AsrStatusText(readiness: provider?.readiness),
+            _AsrStatusText(
+              readiness: provider?.readiness,
+              draftDirty: _asrDraftDirty,
+            ),
           ],
         ),
         const SizedBox(height: T.s12),
@@ -528,11 +507,19 @@ class _SettingsWindowState extends State<SettingsWindow> {
           Row(
             children: [
               Expanded(
-                child: Input(label: '模型规格', controller: _model),
+                child: Input(
+                  label: '模型规格',
+                  controller: _model,
+                  onChanged: (_) => _markAsrDraftDirty(),
+                ),
               ),
               const SizedBox(width: T.s12),
               Expanded(
-                child: Input(label: '运算设备', controller: _device),
+                child: Input(
+                  label: '运算设备',
+                  controller: _device,
+                  onChanged: (_) => _markAsrDraftDirty(),
+                ),
               ),
             ],
           ),
@@ -543,32 +530,28 @@ class _SettingsWindowState extends State<SettingsWindow> {
                 child: Input(
                   label: kind == 'local_server' ? '本地服务地址' : '服务地址 (Base URL)',
                   controller: _baseUrl,
+                  onChanged: (_) => _markAsrDraftDirty(),
                 ),
               ),
               const SizedBox(width: T.s12),
               Expanded(
-                child: Input(label: '模型', controller: _model),
+                child: Input(
+                  label: '模型',
+                  controller: _model,
+                  onChanged: (_) => _markAsrDraftDirty(),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: T.s12),
-          Row(
-            children: [
-              Expanded(
-                child: Input(label: '接口路径 (Endpoint)', controller: _endpoint),
-              ),
-              const SizedBox(width: T.s12),
-              Expanded(
-                child: kind == 'remote'
-                    ? Input(
-                        label: '密钥 (API key，留空则沿用)',
-                        controller: _key,
-                        obscure: true,
-                      )
-                    : const ReadonlyRow(label: '密钥', value: '本地服务不需要密钥'),
-              ),
-            ],
-          ),
+          if (kind == 'remote') ...[
+            const SizedBox(height: T.s12),
+            Input(
+              label: 'OpenAI API key（留空则沿用已保存密钥）',
+              controller: _key,
+              obscure: true,
+              onChanged: (_) => _markAsrDraftDirty(),
+            ),
+          ],
         ],
       ],
     );
@@ -585,26 +568,42 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text('模型来源', style: T.tCaption),
+        const SizedBox(height: T.s8),
         Row(
           children: [
-            Expanded(
-              child: _AsrSelect(
-                label: '运行来源',
-                value: _asrRuntimeSource,
-                items: const {
-                  'managed': '由 TransVortex 管理',
-                  'external': '使用已有 Python',
-                },
-                onChanged: (value) {
-                  setState(() {
-                    _asrRuntimeSource = value;
-                    _message = null;
-                    _error = null;
-                  });
-                },
-              ),
+            SegmentButton(
+              label: '自动准备',
+              detail: '下载并校验模型',
+              selected: _asrModelSource == 'managed',
+              onTap: () => _setAsrModelSource('managed'),
             ),
             const SizedBox(width: T.s12),
+            SegmentButton(
+              label: '使用已有模型',
+              detail: '直接使用当前位置',
+              selected: _asrModelSource == 'external',
+              onTap: () => _setAsrModelSource('external'),
+            ),
+          ],
+        ),
+        const SizedBox(height: T.s16),
+        if (_asrModelSource == 'managed')
+          _managedWhisperModelSettings(modelIds, selectedModel)
+        else
+          _externalWhisperModelSettings(selectedModel),
+      ],
+    );
+  }
+
+  Widget _managedWhisperModelSettings(
+    List<String> modelIds,
+    String selectedModel,
+  ) {
+    return Column(
+      children: [
+        Row(
+          children: [
             Expanded(
               child: _AsrSelect(
                 label: 'Whisper 模型',
@@ -614,28 +613,85 @@ class _SettingsWindowState extends State<SettingsWindow> {
               ),
             ),
             const SizedBox(width: T.s12),
-            Expanded(
-              child: _AsrSelect(
-                label: '运算设备',
-                value: const {'auto', 'cpu', 'cuda'}.contains(_device.text)
-                    ? _device.text
-                    : 'auto',
-                items: const {'auto': '自动', 'cpu': 'CPU', 'cuda': 'NVIDIA'},
-                onChanged: (value) => setState(() => _device.text = value),
-              ),
-            ),
+            Expanded(child: _asrDeviceSelect()),
           ],
         ),
         const SizedBox(height: T.s16),
-        if (_asrRuntimeSource == 'managed')
-          _managedWhisperComponents(selectedModel)
-        else
-          _externalWhisperEnvironment(selectedModel),
+        _managedWhisperComponents(selectedModel, includeModel: true),
       ],
     );
   }
 
-  Widget _managedWhisperComponents(String selectedModel) {
+  Widget _externalWhisperModelSettings(String selectedModel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: ReadonlyRow(
+                label: '模型目录',
+                value: _externalModelPath.text.isEmpty
+                    ? '尚未选择'
+                    : _externalModelPath.text,
+              ),
+            ),
+            const SizedBox(width: T.s12),
+            ActionButton(label: '选择目录', onTap: _pickExternalModelPath),
+          ],
+        ),
+        if (_detectedExternalModelId.isNotEmpty) ...[
+          const SizedBox(height: T.s8),
+          ReadonlyRow(
+            label: '识别结果',
+            value: '${_asrModelLabel(_detectedExternalModelId)} · 文件完整',
+          ),
+        ],
+        const SizedBox(height: T.s12),
+        SizedBox(width: 220, child: _asrDeviceSelect()),
+        const SizedBox(height: T.s16),
+        _managedWhisperComponents(selectedModel, includeModel: false),
+        const SizedBox(height: T.s16),
+        ActionButton(
+          label: _probingAsrModel ? '验证中' : '验证并使用',
+          strong: true,
+          onTap: _probingAsrModel || _externalModelPath.text.isEmpty
+              ? null
+              : _probeManagedAsrModel,
+        ),
+      ],
+    );
+  }
+
+  Widget _asrDeviceSelect() {
+    return _AsrSelect(
+      label: '运算方式',
+      value: const {'auto', 'cpu', 'cuda'}.contains(_device.text)
+          ? _device.text
+          : 'auto',
+      items: const {'auto': '自动', 'cpu': 'CPU', 'cuda': 'NVIDIA'},
+      onChanged: (value) => setState(() {
+        _device.text = value;
+        _asrDraftDirty = true;
+      }),
+    );
+  }
+
+  void _setAsrModelSource(String source) {
+    if (_asrModelSource == source) return;
+    setState(() {
+      _asrModelSource = source;
+      _asrDraftDirty = true;
+      _message = null;
+      _error = null;
+      if (source == 'managed') _detectedExternalModelId = '';
+    });
+  }
+
+  Widget _managedWhisperComponents(
+    String selectedModel, {
+    required bool includeModel,
+  }) {
     final snapshot = _snapshot;
     final runtime = snapshot?.asrRuntime;
     final model = snapshot?.asrModels.firstWhere(
@@ -659,16 +715,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
               ? null
               : () => _startAsrInstall('runtime'),
         ),
-        _AsrComponentRow(
-          label: _asrModelLabel(selectedModel),
-          detail: model?.installed == true
-              ? '已安装 · ${_formatBytes(model!.size)}'
-              : '未安装 · ${_formatBytes(model?.size ?? 0)}',
-          installed: model?.installed ?? false,
-          onInstall: model?.installed == true
-              ? null
-              : () => _startAsrInstall('model', itemId: selectedModel),
-        ),
+        if (includeModel)
+          _AsrComponentRow(
+            label: _asrModelLabel(selectedModel),
+            detail: model?.installed == true
+                ? '已安装 · ${_formatBytes(model!.size)}'
+                : '未安装 · ${_formatBytes(model?.size ?? 0)}',
+            installed: model?.installed ?? false,
+            onInstall: model?.installed == true
+                ? null
+                : () => _startAsrInstall('model', itemId: selectedModel),
+          ),
         if (accelerator != null)
           _AsrComponentRow(
             label: 'NVIDIA 加速包',
@@ -699,105 +756,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
   void _selectLocalWhisperModel(String modelId) {
     setState(() {
       _model.text = modelId;
-      if (_asrRuntimeSource != 'external') return;
-      final environment = _snapshot?.asrEnvironments.firstWhere(
-        (item) => item.id == _selectedAsrEnvironmentId,
-        orElse: () =>
-            const PythonEnvironmentOption(id: '', pythonExecutable: ''),
-      );
-      final savedPath = '${environment?.modelPaths[modelId] ?? ''}';
-      if (savedPath.isNotEmpty) {
-        _externalModelPath.text = savedPath;
-        return;
-      }
-      final managed = _snapshot?.asrModels.firstWhere(
-        (item) => item.id == modelId && item.installed,
-        orElse: () => const AsrComponentOption(id: '', kind: 'model'),
-      );
-      _externalModelPath.text = managed?.path ?? '';
+      _asrDraftDirty = true;
     });
-  }
-
-  Widget _externalWhisperEnvironment(String selectedModel) {
-    final options = <PythonEnvironmentOption>[
-      ...?_snapshot?.asrEnvironments,
-      ..._discoveredAsrEnvironments,
-    ];
-    final unique = <String, PythonEnvironmentOption>{
-      for (final item in options) item.pythonExecutable.toLowerCase(): item,
-    }.values.toList(growable: false);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            ActionButton(
-              label: _discoveringAsrEnvironments ? '查找中' : '查找登记环境',
-              onTap: _discoveringAsrEnvironments
-                  ? null
-                  : _discoverAsrEnvironments,
-            ),
-            const SizedBox(width: T.s12),
-            ActionButton(label: '选择 python.exe', onTap: _pickPythonExecutable),
-            const SizedBox(width: T.s12),
-            ActionButton(label: '选择模型目录', onTap: _pickExternalModelPath),
-          ],
-        ),
-        if (unique.isNotEmpty) ...[
-          const SizedBox(height: T.s12),
-          _AsrSelect(
-            label: '已发现环境',
-            value:
-                unique.any(
-                  (item) => item.pythonExecutable == _pythonExecutable.text,
-                )
-                ? _pythonExecutable.text
-                : unique.first.pythonExecutable,
-            items: {
-              for (final item in unique)
-                item.pythonExecutable:
-                    '${item.source} · ${item.pythonExecutable}',
-            },
-            onChanged: (value) {
-              final environment = unique.firstWhere(
-                (item) => item.pythonExecutable == value,
-              );
-              setState(() {
-                _pythonExecutable.text = value;
-                _selectedAsrEnvironmentId = environment.id;
-                _externalModelPath.text =
-                    '${environment.modelPaths[selectedModel] ?? ''}';
-              });
-            },
-          ),
-        ],
-        const SizedBox(height: T.s12),
-        ReadonlyRow(
-          label: 'Python',
-          value: _pythonExecutable.text.isEmpty
-              ? '未选择'
-              : _pythonExecutable.text,
-        ),
-        const SizedBox(height: T.s8),
-        ReadonlyRow(
-          label: '模型目录',
-          value: _externalModelPath.text.isEmpty
-              ? '未选择'
-              : _externalModelPath.text,
-        ),
-        const SizedBox(height: T.s12),
-        ActionButton(
-          label: _probingAsrEnvironment ? '验证中' : '验证环境与最小转录',
-          strong: true,
-          onTap:
-              _probingAsrEnvironment ||
-                  _pythonExecutable.text.isEmpty ||
-                  _externalModelPath.text.isEmpty
-              ? null
-              : () => _probeAsrEnvironment(selectedModel),
-        ),
-      ],
-    );
   }
 
   Widget _diagnosticsBody() {
@@ -879,26 +839,42 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final local = _stringMap(draft['local']);
     _device.text = '${local['device'] ?? 'auto'}';
     final runtime = _stringMap(draft['runtime']);
-    _asrRuntimeSource = '${runtime['source'] ?? 'managed'}';
-    _selectedAsrEnvironmentId = '${runtime['id'] ?? ''}';
-    final savedEnvironment = _snapshot?.asrEnvironments.firstWhere(
-      (item) => item.id == _selectedAsrEnvironmentId,
-      orElse: () => const PythonEnvironmentOption(id: '', pythonExecutable: ''),
-    );
-    _pythonExecutable.text = savedEnvironment?.pythonExecutable ?? '';
-    _externalModelPath.text =
-        '${savedEnvironment?.modelPaths[_model.text.trim()] ?? ''}';
-    if (_externalModelPath.text.isEmpty) {
-      final managedModel = _snapshot?.asrModels.firstWhere(
-        (item) => item.id == _model.text.trim() && item.installed,
-        orElse: () => const AsrComponentOption(id: '', kind: 'model'),
+    final runtimeSource = '${runtime['source'] ?? 'managed'}';
+    _asrModelSource = '${local['model_source'] ?? ''}' == 'external'
+        ? 'external'
+        : runtimeSource == 'external'
+        ? 'external'
+        : 'managed';
+    _externalModelPath.text = '${local['model_path'] ?? ''}';
+    if (_externalModelPath.text.isEmpty && runtimeSource == 'external') {
+      final environmentId = '${runtime['id'] ?? ''}';
+      final savedEnvironment = _snapshot?.asrEnvironments.firstWhere(
+        (item) => item.id == environmentId,
+        orElse: () =>
+            const PythonEnvironmentOption(id: '', pythonExecutable: ''),
       );
-      _externalModelPath.text = managedModel?.path ?? '';
+      _externalModelPath.text =
+          '${savedEnvironment?.modelPaths[_model.text.trim()] ?? ''}';
     }
+    final readiness = _selectedAsrOption()?.readiness;
+    _detectedExternalModelId =
+        _asrModelSource == 'external' && readiness?.canRun == true
+        ? _model.text.trim()
+        : '';
     _key.clear();
+    _asrDraftDirty = false;
   }
 
-  Future<void> _saveAsrProvider() async {
+  void _markAsrDraftDirty() {
+    if (_asrDraftDirty) return;
+    setState(() {
+      _asrDraftDirty = true;
+      _message = null;
+      _error = null;
+    });
+  }
+
+  Future<void> _saveAsrProvider({String? successMessage}) async {
     final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
     setState(() {
       _savingAsr = true;
@@ -926,7 +902,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
       );
       await widget.bridge.refreshServiceSnapshot();
       if (!mounted) return;
-      setState(() => _message = '识别默认已保存：${_asrLabelForDraft(draft)}。');
+      setState(
+        () =>
+            _message = successMessage ?? '识别默认已保存：${_asrLabelForDraft(draft)}。',
+      );
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -1040,47 +1019,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
     }
   }
 
-  Future<void> _discoverAsrEnvironments() async {
-    setState(() {
-      _discoveringAsrEnvironments = true;
-      _error = null;
-      _message = null;
-    });
-    try {
-      final environments = await _client.discoverAsrEnvironments();
-      if (!mounted) return;
-      setState(() {
-        _discoveredAsrEnvironments = environments;
-        if (_pythonExecutable.text.isEmpty && environments.isNotEmpty) {
-          _pythonExecutable.text = environments.first.pythonExecutable;
-          _selectedAsrEnvironmentId = environments.first.id;
-        }
-        _message = '找到 ${environments.length} 个登记的 Python 环境。';
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _error = _friendlySettingsError(error));
-    } finally {
-      if (mounted) setState(() => _discoveringAsrEnvironments = false);
-    }
-  }
-
-  Future<void> _pickPythonExecutable() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['exe'],
-      allowMultiple: false,
-    );
-    final path = result?.files.single.path;
-    if (path == null || path.isEmpty || !mounted) return;
-    setState(() {
-      _pythonExecutable.text = path;
-      _selectedAsrEnvironmentId = '';
-      _message = null;
-      _error = null;
-    });
-  }
-
   Future<void> _pickExternalModelPath() async {
     final path = await FilePicker.platform.getDirectoryPath(
       dialogTitle: '选择 faster-whisper 模型目录',
@@ -1088,42 +1026,54 @@ class _SettingsWindowState extends State<SettingsWindow> {
     if (path == null || path.isEmpty || !mounted) return;
     setState(() {
       _externalModelPath.text = path;
+      _asrModelSource = 'external';
+      _detectedExternalModelId = '';
+      _asrDraftDirty = true;
       _message = null;
       _error = null;
     });
   }
 
-  Future<void> _probeAsrEnvironment(String modelId) async {
+  Future<void> _probeManagedAsrModel() async {
     setState(() {
-      _probingAsrEnvironment = true;
+      _probingAsrModel = true;
       _error = null;
       _message = null;
     });
     try {
-      final result = await _client.probeAsrEnvironment(
-        pythonExecutable: _pythonExecutable.text,
-        modelId: modelId,
+      final result = await _client.probeManagedAsrModel(
         modelPath: _externalModelPath.text,
         device: _device.text,
       );
-      final probe = _stringMap(result['probe']);
-      final environment = _stringMap(result['environment']);
       if (!mounted) return;
-      setState(() {
-        if (probe['ok'] == true && environment.isNotEmpty) {
-          _selectedAsrEnvironmentId = '${environment['id'] ?? ''}';
-          _message = '环境验证通过，最小转录已完成。';
+      if (result['ok'] == true) {
+        final model = _stringMap(result['model']);
+        final modelId = '${model['model_id'] ?? ''}'.trim();
+        if (modelId.isEmpty) {
+          setState(() => _error = '无法识别这个模型目录。');
         } else {
-          final code = '${probe['code'] ?? 'environment_probe_failed'}';
-          final message = '${probe['message'] ?? ''}'.trim();
-          _error = message.isEmpty ? '环境验证失败：$code' : message;
+          setState(() {
+            _detectedExternalModelId = modelId;
+            _model.text = modelId;
+            _asrModelSource = 'external';
+            _asrDraftDirty = true;
+          });
+          await _saveAsrProvider(
+            successMessage: '已有 ${_asrModelLabel(modelId)} 已验证并设为默认。',
+          );
         }
-      });
+      } else {
+        final code = '${result['code'] ?? 'model_probe_failed'}';
+        final message = '${result['message'] ?? ''}'.trim();
+        setState(() {
+          _error = _friendlyAsrModelProbeError(code, message);
+        });
+      }
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
     } finally {
-      if (mounted) setState(() => _probingAsrEnvironment = false);
+      if (mounted) setState(() => _probingAsrModel = false);
     }
   }
 
@@ -1148,7 +1098,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
               : message;
         }
       });
-      if (result['ok'] == true) await _loadConfig();
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -1193,17 +1142,21 @@ class _SettingsWindowState extends State<SettingsWindow> {
         ? Map<String, Object?>.from(_stringMap(existing.raw['local']))
         : <String, Object?>{};
     local['model_size'] = model;
+    if (kind == 'local_worker' && useEditedFields) {
+      local['model_source'] = _asrModelSource;
+      local['model_path'] = _asrModelSource == 'external'
+          ? _externalModelPath.text.trim()
+          : '';
+    }
     local['device'] = _device.text.trim().isEmpty
         ? 'auto'
         : _device.text.trim();
     final runtime = hasExisting
         ? Map<String, Object?>.from(_stringMap(existing.raw['runtime']))
         : <String, Object?>{};
-    if (kind == 'local_worker') {
-      runtime['source'] = _asrRuntimeSource;
-      runtime['id'] = _asrRuntimeSource == 'managed'
-          ? 'managed:faster-whisper'
-          : _selectedAsrEnvironmentId;
+    if (kind == 'local_worker' && useEditedFields) {
+      runtime['source'] = 'managed';
+      runtime['id'] = 'managed:faster-whisper';
     }
     return {
       if (hasExisting) ...existing.raw,
@@ -1319,7 +1272,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     if (kind == 'local_server' || protocol == 'funasr_openai') {
       return 'http://127.0.0.1:8899';
     }
-    return 'https://api.openai.com';
+    return 'https://api.openai.com/v1';
   }
 
   String _asrLabelForDraft(Map<String, Object?> draft) {
@@ -1327,7 +1280,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       'local_worker' || 'local_inprocess' => '本机 Whisper',
       'local_server' =>
         draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
-      'remote' => '云端',
+      'remote' => 'OpenAI Whisper',
       _ => '${draft['name']}',
     };
   }
@@ -1335,6 +1288,14 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String _asrHeaderLabel(String providerName) {
     final draft = _asrDraft(providerName, useEditedFields: false);
     return '${_asrLabelForDraft(draft)} · ${draft['model']}';
+  }
+
+  String _savedAsrHeaderLabel() {
+    final snapshot = _snapshot;
+    if (snapshot == null) return '默认识别：正在读取';
+    final providerName = snapshot.asrProviderName;
+    if (providerName == null || providerName.isEmpty) return '默认识别：尚未设置';
+    return '默认识别：${_asrHeaderLabel(providerName)}';
   }
 
   String? _keyTextOrNull() {
@@ -2007,9 +1968,9 @@ class _SegmentedEngines extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const items = [
-      ('faster_whisper_large_v3', '本机识别', 'faster-whisper'),
+      ('faster_whisper_large_v3', '本机 Whisper', '本机运行'),
+      ('openai_whisper', 'OpenAI Whisper', '云端识别'),
       ('funasr_sensevoice_local', 'FunASR', '本地服务'),
-      ('openai_whisper', '云端识别', 'OpenAI Whisper'),
     ];
     return Row(
       children: [
@@ -2076,12 +2037,19 @@ class _AsrSelect extends StatelessWidget {
 }
 
 class _AsrStatusText extends StatelessWidget {
-  const _AsrStatusText({this.readiness});
+  const _AsrStatusText({this.readiness, this.draftDirty = false});
 
   final AsrReadiness? readiness;
+  final bool draftDirty;
 
   @override
   Widget build(BuildContext context) {
+    if (draftDirty) {
+      return Text(
+        '尚未保存',
+        style: T.tCaption.copyWith(color: T.accentStrong, fontWeight: T.wBold),
+      );
+    }
     final value = readiness;
     final state = value?.state ?? 'unavailable';
     final color = switch (state) {
@@ -2188,48 +2156,6 @@ class _AsrOperationProgress extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ],
-      ],
-    );
-  }
-}
-
-class _AsrSummaryList extends StatelessWidget {
-  const _AsrSummaryList({
-    required this.providers,
-    required this.selected,
-    required this.onPick,
-  });
-
-  final List<AsrProviderOption> providers;
-  final String selected;
-  final ValueChanged<String> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('已保存方案', style: T.tSection),
-        const SizedBox(height: T.s12),
-        if (providers.isEmpty)
-          const Text('保存后会出现在这里', style: T.tCaption)
-        else
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                for (final provider in providers)
-                  ChoiceRow(
-                    label: provider.displayLabel,
-                    detail:
-                        '${provider.model} · ${provider.readiness.statusLabel}',
-                    selected: provider.name == selected,
-                    warn: !provider.canRun,
-                    onTap: () => onPick(provider.name),
-                  ),
-              ],
-            ),
-          ),
       ],
     );
   }
@@ -3001,3 +2927,22 @@ String? _stringValue(Object? value) {
 }
 
 String _friendlySettingsError(Object error) => friendlySettingsError(error);
+
+String _friendlyAsrModelProbeError(String code, String message) {
+  return switch (code) {
+    'runtime_missing' => '请先安装 Whisper 运行组件。',
+    'runtime_unpublished' => '当前版本的 Whisper 运行组件尚未发布。',
+    'model_path_unavailable' => '模型目录不存在或当前无法访问。',
+    'model_changed' => '验证期间模型文件发生了变化，请等待文件写入完成后重试。',
+    'unsupported_model_directory' =>
+      '无法识别这个模型目录；请选择兼容的 Whisper Small、Medium 或 Large v3 模型。',
+    'file_not_found' => '模型文件不完整，请重新选择完整的 faster-whisper 模型目录。',
+    'environment_probe_failed' ||
+    'environment_probe_invalid_json' ||
+    'environment_probe_invalid_payload' => 'Whisper 运行组件未能完成模型验证，请重试。',
+    'runtime_error' => '当前 Whisper 运行组件无法加载这个模型。',
+    'unsupported_device' => '请选择自动、CPU 或 NVIDIA 运算方式。',
+    'unsupported_compute_type' => '当前运算方式与这个运行环境不兼容。',
+    _ => message.isEmpty ? '模型验证失败，请检查目录内容。' : message,
+  };
+}

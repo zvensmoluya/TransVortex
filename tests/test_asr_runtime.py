@@ -17,7 +17,11 @@ from transvortex.app.asr_runtime import (
     asr_provider_readiness,
     asr_runtime_paths,
     discover_python_environments,
+    load_asr_runtime_state,
+    probe_managed_model,
     probe_python_environment,
+    resolve_whisper_runtime,
+    save_asr_runtime_state,
     save_external_environment,
 )
 from transvortex.app.media_inspect import inspect_media_source
@@ -454,6 +458,77 @@ def test_external_environment_readiness_requires_matching_host_protocol(tmp_path
         },
     )
     assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "environment_protocol_incompatible"
+
+
+def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, monkeypatch) -> None:
+    config_bytes = b'{"model_type":"whisper"}'
+    catalog = _catalog()
+    catalog["models"][0]["files"].append(
+        {
+            "path": "config.json",
+            "size": len(config_bytes),
+            "sha256": hashlib.sha256(config_bytes).hexdigest(),
+        }
+    )
+    catalog_path = tmp_path / "catalog.json"
+    write_json(catalog_path, catalog)
+    monkeypatch.setenv("TRANSVORTEX_ASR_CATALOG", str(catalog_path))
+    paths = asr_runtime_paths(tmp_path)
+    runtime_root = paths.components_root / "faster-whisper" / "1.0.0"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "python.exe").write_bytes(b"")
+    write_json(
+        runtime_root / "component.json",
+        {
+            "id": "managed:faster-whisper",
+            "version": "1.0.0",
+            "python": "python.exe",
+            "protocol_version": 1,
+        },
+    )
+    model_root = tmp_path / "existing-small"
+    model_root.mkdir()
+    (model_root / "config.json").write_bytes(config_bytes)
+    (model_root / "model.bin").write_bytes(b"existing-model")
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.probe_python_environment",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "protocol_version": 1,
+            "model": {"loaded": True},
+            "transcription": {"ok": True},
+        },
+    )
+
+    result = probe_managed_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+    provider = AsrProviderConfig(
+        name="whisper",
+        kind="local_worker",
+        protocol="faster_whisper",
+        model="small",
+        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        local=AsrLocalConfig(
+            model_size="small",
+            model_source="external",
+            model_path=str(model_root),
+            device="cpu",
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["model"]["model_id"] == "small"
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
+    runtime = resolve_whisper_runtime(provider, root_dir=tmp_path)
+    assert runtime["python_executable"] == str(runtime_root / "python.exe")
+    assert runtime["model_path"] == str(model_root.resolve())
+
+    (model_root / "model.bin").write_bytes(b"changed-model")
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "model_changed"
+
+    state = load_asr_runtime_state(paths)
+    state["models"][result["model"]["id"]]["probe"] = "invalid"
+    save_asr_runtime_state(paths, state)
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "model_unverified"
 
 
 def test_media_inspection_only_requires_asr_when_video_has_no_selected_subtitle(

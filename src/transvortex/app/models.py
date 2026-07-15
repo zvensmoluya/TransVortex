@@ -261,6 +261,8 @@ class AsrExecutionConfig:
 @dataclass
 class AsrLocalConfig:
     model_size: str = "large-v3"
+    model_source: str = "managed"  # managed | external
+    model_path: str = ""
     device: str = "auto"
     compute_type: str = "auto"
     max_initial_timestamp: float = 30.0
@@ -327,7 +329,7 @@ class AsrProviderConfig:
     name: str
     kind: str = "remote"  # local_inprocess | local_worker | local_server | remote
     protocol: str = "openai_transcriptions"
-    base_url: str = "https://api.openai.com"
+    base_url: str = "https://api.openai.com/v1"
     endpoint: str = "/v1/audio/transcriptions"
     model: str = "whisper-1"
     auth: AsrAuthConfig = field(default_factory=AsrAuthConfig)

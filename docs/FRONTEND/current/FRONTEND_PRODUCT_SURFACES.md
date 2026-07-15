@@ -40,13 +40,13 @@
 
 只负责准备默认识别方案及其必要参数。三套方案保持独立，不自动切换：
 
-- 本机 Whisper：默认使用 TransVortex 管理的隔离运行组件，也可由用户明确选择已有的 faster-whisper / CTranslate2 Python 环境。
+- 本机 Whisper：始终使用 TransVortex 管理的隔离运行组件；模型既可由应用自动准备，也可由用户明确选择已有的兼容模型目录。
 - FunASR：连接用户提供的服务，并通过最小音频请求确认可用。
-- 云端识别：独立读取用户级凭据。
+- OpenAI Whisper：使用官方 Transcriptions 地址并独立读取用户级凭据。
 
 受管本机 Whisper 分开显示运行组件、`small` / `medium` / `large-v3` 模型和可选 NVIDIA 加速包。下载过程提供进度、取消和失败重试；NVIDIA 包安装后必须实际检查 CUDA，明确选择 NVIDIA 时不得静默降级到 CPU。基础安装包携带通用媒体读写工具 FFmpeg，但不携带本机 Whisper runtime、模型或 NVIDIA / CUDA 包；后三者仍只在用户明确操作后按需下载。
 
-已有 Python 只从 PATH、Windows Python Launcher 和 Conda 登记列表发现；选择前不执行候选解释器，也不扫描整台电脑。用户选择后才验证依赖、硬件、模型和最小转录，不修改或升级该环境。
+“使用已有模型”通过系统目录选择器指定位置。应用使用受管运行组件检测模型规格并完成最小转录，只登记原目录和文件指纹，不复制、移动、删除或重新下载模型；目录失效或关键文件变化后要求重新验证。普通界面不发现或选择外部 Python，也不要求用户理解 Python、CTranslate2 或解释器路径。
 
 进程内 `faster-whisper` 仍保留给 CLI 和开发实验，但 Flutter 全新配置不会创建该入口。环境缺失时给出与当前方案对应的修复动作，不展开完整 doctor 报告。
 

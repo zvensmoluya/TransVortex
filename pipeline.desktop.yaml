@@ -170,42 +170,6 @@ asr_providers:
     preprocessing:
       trim_silence:
         enabled: false
-  - name: funasr_sensevoice_local
-    kind: local_server
-    protocol: funasr_openai
-    base_url: http://127.0.0.1:8899
-    endpoint: /v1/audio/transcriptions
-    model: sensevoice
-    auth:
-      type: none
-    http2: false
-    request:
-      response_format: verbose_json
-      send_temperature: false
-      send_timestamp_granularities: false
-      send_prompt: false
-      array_format: repeat
-    execution:
-      concurrency: 1
-      timeout_seconds: 300
-      retry: 1
-    chunking:
-      mode: fixed
-      window_seconds: 120
-      max_window_seconds: 120
-      min_window_seconds: 1
-      overlap_seconds: 0
-      short_audio_seconds: 120
-      max_upload_mb: 64
-      silence:
-        noise_db: -35
-        min_silence_seconds: 0.25
-        cut_padding_seconds: 0.15
-        fallback_mode: hard_cut
-      fuzzy_dedupe: false
-    preprocessing:
-      trim_silence:
-        enabled: false
   - name: openai_whisper
     kind: remote
     protocol: openai_transcriptions
@@ -256,3 +220,39 @@ asr_providers:
       include: []
       array_format: brackets
       extra_form_fields: {}
+  - name: funasr_sensevoice_local
+    kind: local_server
+    protocol: funasr_openai
+    base_url: http://127.0.0.1:8899
+    endpoint: /v1/audio/transcriptions
+    model: sensevoice
+    auth:
+      type: none
+    http2: false
+    request:
+      response_format: verbose_json
+      send_temperature: false
+      send_timestamp_granularities: false
+      send_prompt: false
+      array_format: repeat
+    execution:
+      concurrency: 1
+      timeout_seconds: 300
+      retry: 1
+    chunking:
+      mode: fixed
+      window_seconds: 120
+      max_window_seconds: 120
+      min_window_seconds: 1
+      overlap_seconds: 0
+      short_audio_seconds: 120
+      max_upload_mb: 64
+      silence:
+        noise_db: -35
+        min_silence_seconds: 0.25
+        cut_padding_seconds: 0.15
+        fallback_mode: hard_cut
+      fuzzy_dedupe: false
+    preprocessing:
+      trim_silence:
+        enabled: false

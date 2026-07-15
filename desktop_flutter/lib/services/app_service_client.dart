@@ -348,7 +348,7 @@ class LocalServiceSupervisor {
       await runtimeRoot.create(recursive: true);
     }
     await _copyConfigIfMissing(
-      source: File('${repoRoot.path}${Platform.pathSeparator}pipeline.yaml'),
+      source: _desktopPipelineSeed(repoRoot),
       target: File('${runtimeRoot.path}${Platform.pathSeparator}pipeline.yaml'),
       fallback: 'artifacts_dir: artifacts\n',
     );
@@ -362,6 +362,14 @@ class LocalServiceSupervisor {
       ),
     );
     return runtimeRoot;
+  }
+
+  static File _desktopPipelineSeed(Directory repoRoot) {
+    final productSeed = File(
+      '${repoRoot.path}${Platform.pathSeparator}pipeline.desktop.yaml',
+    );
+    if (productSeed.existsSync()) return productSeed;
+    return File('${repoRoot.path}${Platform.pathSeparator}pipeline.yaml');
   }
 
   static Future<void> _copyConfigIfMissing({
@@ -766,6 +774,18 @@ class AppServiceClient {
 
   Future<Map<String, Object?>> probeAsrHardware() {
     return call('asr.hardware.probe').then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> probeManagedAsrModel({
+    required String modelPath,
+    String device = 'auto',
+    String computeType = 'auto',
+  }) {
+    return call('asr.model.probe', {
+      'model_path': modelPath,
+      'device': device,
+      'compute_type': computeType,
+    }, const Duration(minutes: 3)).then(_stringMap);
   }
 
   Future<List<PythonEnvironmentOption>> discoverAsrEnvironments() async {
@@ -1606,7 +1626,8 @@ class AsrProviderOption {
     return switch (kind) {
       'local_worker' || 'local_inprocess' => '本机 Whisper',
       'local_server' => protocol == 'funasr_openai' ? 'FunASR' : '本地服务',
-      'remote' => '云端',
+      'remote' =>
+        protocol == 'openai_transcriptions' ? 'OpenAI Whisper' : '云端识别',
       _ => displayName.isNotEmpty ? displayName : name,
     };
   }
@@ -1864,6 +1885,11 @@ String _asrReadinessCodeLabel(String code) {
     'runtime_installing' => '正在安装组件',
     'model_missing' => '模型未安装',
     'model_installing' => '正在下载模型',
+    'model_path_missing' => '需要选择模型目录',
+    'model_path_unavailable' => '模型位置不可用',
+    'model_unverified' => '已有模型尚未验证',
+    'model_changed' => '模型文件发生变化',
+    'model_mismatch' => '模型规格不匹配',
     'device_unavailable' => '加速组件不可用',
     'hardware_untested' => '需要检查 NVIDIA 硬件',
     'hardware_incompatible' => 'NVIDIA 硬件不兼容',

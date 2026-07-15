@@ -549,6 +549,7 @@ ASR_PROVIDER_KINDS = {"local_inprocess", "local_worker", "local_server", "remote
 ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions", "funasr_openai"}
 ASR_AUTH_TYPES = {"none", "bearer"}
 ASR_RUNTIME_SOURCES = {"inprocess", "managed", "external"}
+ASR_MODEL_SOURCES = {"managed", "external"}
 LEGACY_ASR_FIELDS = {
     "mode",
     "local",
@@ -633,8 +634,13 @@ def _parse_asr_auth(raw: Any, *, kind: str) -> AsrAuthConfig:
 
 def _parse_asr_local(raw: Any, *, model: str) -> AsrLocalConfig:
     local_raw = raw if isinstance(raw, dict) else {}
+    model_source = _to_str(local_raw.get("model_source"), "managed").strip().lower()
+    if model_source not in ASR_MODEL_SOURCES:
+        raise ValueError(f"Unsupported ASR local.model_source: {model_source}")
     return AsrLocalConfig(
         model_size=_to_str(local_raw.get("model_size"), model),
+        model_source=model_source,
+        model_path=_to_str(local_raw.get("model_path"), ""),
         device=_to_str(local_raw.get("device"), "auto"),
         compute_type=_to_str(local_raw.get("compute_type"), "auto"),
         max_initial_timestamp=_to_float(local_raw.get("max_initial_timestamp"), 30.0),
@@ -775,7 +781,7 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         name=name,
         kind=kind,
         protocol=protocol,
-        base_url=_to_str(row.get("base_url"), "https://api.openai.com").rstrip("/"),
+        base_url=_to_str(row.get("base_url"), "https://api.openai.com/v1").rstrip("/"),
         endpoint=_to_str(row.get("endpoint"), "/v1/audio/transcriptions"),
         model=model,
         auth=_parse_asr_auth(row.get("auth"), kind=kind),

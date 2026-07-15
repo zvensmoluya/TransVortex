@@ -37,6 +37,7 @@ from .asr_runtime import (
     asr_provider_readiness,
     asr_runtime_snapshot,
     discover_python_environments,
+    probe_managed_model,
     probe_python_environment,
     save_external_environment,
 )
@@ -66,6 +67,7 @@ SERVICE_CAPABILITIES = [
     "provider_admin",
     "asr_provider_admin",
     "asr_component_manager",
+    "asr_model_probe",
     "asr_environment_probe",
     "media_inspection",
     "result_workspace",
@@ -136,6 +138,7 @@ class DesktopApi:
             "asr.operation.get": self.asr_operation_get,
             "asr.operation.cancel": self.asr_operation_cancel,
             "asr.hardware.probe": self.asr_hardware_probe,
+            "asr.model.probe": self.asr_model_probe,
             "asr.environment.discover": self.asr_environment_discover,
             "asr.environment.probe": self.asr_environment_probe,
             "media.inspect": self.media_inspect,
@@ -428,6 +431,15 @@ class DesktopApi:
             return self._asr_operation_manager.probe_hardware()
         except AsrOperationError as exc:
             raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_model_probe(self, params: dict[str, Any]) -> dict[str, Any]:
+        return probe_managed_model(
+            root_dir=self.root_dir,
+            model_path=Path(_required_text(params, "model_path", "modelPath")),
+            device=_optional_text(params, "device") or "auto",
+            compute_type=_optional_text(params, "compute_type", "computeType") or "auto",
+            timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
+        )
 
     def asr_environment_discover(self, _params: dict[str, Any]) -> dict[str, Any]:
         return {"environments": discover_python_environments()}

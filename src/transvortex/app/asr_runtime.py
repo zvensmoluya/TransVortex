@@ -82,8 +82,9 @@ def load_asr_runtime_state(paths: AsrRuntimePaths) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return _empty_runtime_state()
     payload.setdefault("schema_version", ASR_RUNTIME_STATE_VERSION)
-    payload.setdefault("environments", {})
-    payload.setdefault("provider_tests", {})
+    for key in ("environments", "models", "provider_tests"):
+        if not isinstance(payload.get(key), dict):
+            payload[key] = {}
     return payload
 
 
@@ -94,7 +95,12 @@ def save_asr_runtime_state(paths: AsrRuntimePaths, state: dict[str, Any]) -> Non
 
 
 def _empty_runtime_state() -> dict[str, Any]:
-    return {"schema_version": ASR_RUNTIME_STATE_VERSION, "environments": {}, "provider_tests": {}}
+    return {
+        "schema_version": ASR_RUNTIME_STATE_VERSION,
+        "environments": {},
+        "models": {},
+        "provider_tests": {},
+    }
 
 
 def asr_runtime_snapshot(
@@ -134,6 +140,10 @@ def asr_runtime_snapshot(
         "runtime": runtime,
         "accelerators": accelerator_rows,
         "models": model_rows,
+        "registered_models": sorted(
+            [dict(value, id=key) for key, value in (state.get("models") or {}).items() if isinstance(value, dict)],
+            key=lambda item: str(item.get("model_path") or "").lower(),
+        ),
         "environments": sorted(
             [dict(value, id=key) for key, value in (state.get("environments") or {}).items() if isinstance(value, dict)],
             key=lambda item: str(item.get("python_executable") or "").lower(),
@@ -185,14 +195,34 @@ def _worker_readiness(
             artifact = (catalog.get("runtime") or {}).get("artifact") or {}
             code = "runtime_missing" if artifact.get("published") else "runtime_unpublished"
             return _readiness("needs_action", code, False, "install_runtime")
-        model = model_catalog_entry(catalog, provider.model)
-        if model is None:
-            return _readiness("unavailable", "unsupported_model", False, "choose_model")
-        model_path = managed_model_path(paths, model)
-        if not _model_install_valid(model_path, model):
-            if _active_operation(paths, "model", provider.model):
-                return _readiness("checking", "model_installing", False, "cancel_install")
-            return _readiness("needs_action", "model_missing", False, "install_model")
+        if provider.local.model_source == "external":
+            raw_model_path = str(provider.local.model_path or "").strip()
+            if not raw_model_path:
+                return _readiness("needs_action", "model_path_missing", False, "choose_model")
+            try:
+                model_path = Path(raw_model_path).expanduser().resolve()
+            except OSError:
+                return _readiness("unavailable", "model_path_unavailable", False, "choose_model")
+            if not model_path.is_dir():
+                return _readiness("unavailable", "model_path_unavailable", False, "choose_model")
+            record = _registered_model_record(paths, model_path)
+            probe = record.get("probe") if isinstance(record, dict) else None
+            if not isinstance(probe, dict) or probe.get("ok") is not True:
+                return _readiness("needs_action", "model_unverified", False, "validate_model")
+            if str(record.get("model_id") or "") != provider.model:
+                return _readiness("unavailable", "model_mismatch", False, "validate_model")
+            current_signature = _external_model_signature(model_path)
+            if not current_signature or str(record.get("signature") or "") != current_signature:
+                return _readiness("needs_action", "model_changed", False, "validate_model")
+        else:
+            model = model_catalog_entry(catalog, provider.model)
+            if model is None:
+                return _readiness("unavailable", "unsupported_model", False, "choose_model")
+            model_path = managed_model_path(paths, model)
+            if not _model_install_valid(model_path, model):
+                if _active_operation(paths, "model", provider.model):
+                    return _readiness("checking", "model_installing", False, "cancel_install")
+                return _readiness("needs_action", "model_missing", False, "install_model")
         accelerator = _accelerator_marker_by_id(paths, catalog, "nvidia-cuda12")
         if provider.local.device == "cuda" or (provider.local.device == "auto" and accelerator is not None):
             if accelerator is None:
@@ -229,6 +259,7 @@ def _worker_readiness(
             details={
                 "runtime_source": "managed",
                 "runtime_version": str(marker.get("version") or ""),
+                "model_source": provider.local.model_source,
                 "model": provider.model,
                 "model_path": str(model_path),
             },
@@ -481,6 +512,106 @@ def save_external_environment(
     return dict(record, id=environment_id)
 
 
+def probe_managed_model(
+    *,
+    root_dir: Path,
+    model_path: Path,
+    device: str = "auto",
+    compute_type: str = "auto",
+    timeout_seconds: float = 120.0,
+    app_data_root: Path | None = None,
+) -> dict[str, Any]:
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    catalog = load_asr_catalog()
+    try:
+        resolved_model = Path(model_path).expanduser().resolve()
+    except OSError as exc:
+        return {
+            "ok": False,
+            "code": "model_path_unavailable",
+            "message": str(exc),
+        }
+    if not resolved_model.is_dir():
+        return {
+            "ok": False,
+            "code": "model_path_unavailable",
+            "message": f"Model directory not found: {resolved_model}",
+        }
+    try:
+        model_id = _detect_external_model_id(resolved_model, catalog)
+        initial_signature = _external_model_signature(resolved_model)
+    except OSError as exc:
+        return {
+            "ok": False,
+            "code": "model_path_unavailable",
+            "message": str(exc),
+            "model_path": str(resolved_model),
+        }
+    if not model_id:
+        return {
+            "ok": False,
+            "code": "unsupported_model_directory",
+            "message": "The directory is not a supported faster-whisper Small, Medium, or Large v3 model.",
+        }
+    if not initial_signature:
+        return {
+            "ok": False,
+            "code": "model_path_unavailable",
+            "message": "The model directory cannot be read.",
+            "model_id": model_id,
+            "model_path": str(resolved_model),
+        }
+    marker = _managed_runtime_marker(paths, catalog)
+    if marker is None:
+        artifact = (catalog.get("runtime") or {}).get("artifact") or {}
+        code = "runtime_missing" if artifact.get("published") else "runtime_unpublished"
+        return {
+            "ok": False,
+            "code": code,
+            "message": "The managed Whisper runtime must be installed before validating a model.",
+            "model_id": model_id,
+            "model_path": str(resolved_model),
+        }
+    runtime_root = paths.components_root / "faster-whisper" / str(marker.get("version") or "")
+    executable = runtime_root / str(marker.get("python") or "python.exe")
+    accelerator_root = _managed_accelerator_root(paths, catalog, "nvidia-cuda12")
+    probe = probe_python_environment(
+        executable,
+        model_id=model_id,
+        model_path=resolved_model,
+        device=device,
+        compute_type=compute_type,
+        accelerator_root=accelerator_root,
+        timeout_seconds=timeout_seconds,
+    )
+    if probe.get("ok") is not True:
+        return {
+            "ok": False,
+            "code": str(probe.get("code") or "model_probe_failed"),
+            "message": str(probe.get("message") or "Model validation failed"),
+            "model_id": model_id,
+            "model_path": str(resolved_model),
+            "probe": probe,
+        }
+    final_signature = _external_model_signature(resolved_model)
+    if not final_signature or final_signature != initial_signature:
+        return {
+            "ok": False,
+            "code": "model_changed",
+            "message": "The model directory changed while it was being validated.",
+            "model_id": model_id,
+            "model_path": str(resolved_model),
+        }
+    record = _save_registered_model(
+        paths,
+        model_id=model_id,
+        model_path=resolved_model,
+        probe=probe,
+        signature=final_signature,
+    )
+    return {"ok": True, "code": "ready", "model": record, "probe": probe}
+
+
 def probe_python_environment(
     python_executable: Path,
     *,
@@ -488,6 +619,7 @@ def probe_python_environment(
     model_path: Path | None = None,
     device: str = "auto",
     compute_type: str = "auto",
+    accelerator_root: Path | None = None,
     timeout_seconds: float = 120.0,
 ) -> dict[str, Any]:
     executable = Path(python_executable).expanduser().resolve()
@@ -497,6 +629,8 @@ def probe_python_environment(
     if model_path is not None:
         command.extend(["--model-path", str(Path(model_path).expanduser().resolve())])
     command.extend(["--device", device, "--compute-type", compute_type])
+    if accelerator_root is not None:
+        command.extend(["--accelerator-root", str(Path(accelerator_root).expanduser().resolve())])
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
         completed = subprocess.run(
@@ -529,6 +663,98 @@ def probe_python_environment(
     if model_id and model_path is not None and payload.get("ok") is True:
         payload["model_paths"] = {model_id: str(Path(model_path).expanduser().resolve())}
     return payload
+
+
+def _detect_external_model_id(model_path: Path, catalog: dict[str, Any]) -> str:
+    config_path = model_path / "config.json"
+    model_bin = model_path / "model.bin"
+    if not config_path.is_file() or not model_bin.is_file():
+        return ""
+    config_hash = _file_sha256(config_path)
+    for model in catalog.get("models") or []:
+        if not isinstance(model, dict):
+            continue
+        expected = next(
+            (
+                str(item.get("sha256") or "")
+                for item in model.get("files") or []
+                if isinstance(item, dict) and item.get("path") == "config.json"
+            ),
+            "",
+        )
+        if expected and expected == config_hash:
+            return str(model.get("id") or "")
+    return ""
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _external_model_key(model_path: Path) -> str:
+    normalized = os.path.normcase(str(model_path.expanduser().resolve()))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+
+
+def _external_model_signature(model_path: Path) -> str:
+    rows = []
+    for name in (
+        "config.json",
+        "model.bin",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "vocabulary.json",
+        "vocabulary.txt",
+    ):
+        path = model_path / name
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            return ""
+        rows.append((name, stat.st_size, stat.st_mtime_ns))
+    if not rows:
+        return ""
+    raw = json.dumps(rows, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _registered_model_record(paths: AsrRuntimePaths, model_path: Path) -> dict[str, Any] | None:
+    state = load_asr_runtime_state(paths)
+    models = state.get("models")
+    if not isinstance(models, dict):
+        return None
+    record = models.get(_external_model_key(model_path))
+    return record if isinstance(record, dict) else None
+
+
+def _save_registered_model(
+    paths: AsrRuntimePaths,
+    *,
+    model_id: str,
+    model_path: Path,
+    probe: dict[str, Any],
+    signature: str,
+) -> dict[str, Any]:
+    resolved = model_path.expanduser().resolve()
+    record = {
+        "model_id": model_id,
+        "model_path": str(resolved),
+        "signature": signature,
+        "probe": probe,
+        "updated_at": utc_now_iso(),
+    }
+    paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+    state = load_asr_runtime_state(paths)
+    key = _external_model_key(resolved)
+    state.setdefault("models", {})[key] = record
+    save_asr_runtime_state(paths, state)
+    return dict(record, id=key)
 
 
 def model_catalog_entry(catalog: dict[str, Any], model_id: str) -> dict[str, Any] | None:
@@ -605,6 +831,29 @@ def _accelerator_marker_by_id(
     return _accelerator_marker(paths, accelerator) if accelerator is not None else None
 
 
+def _managed_accelerator_root(
+    paths: AsrRuntimePaths,
+    catalog: dict[str, Any],
+    accelerator_id: str,
+) -> Path | None:
+    accelerator = next(
+        (
+            item
+            for item in catalog.get("accelerators") or []
+            if isinstance(item, dict) and item.get("id") == accelerator_id
+        ),
+        None,
+    )
+    if accelerator is None or _accelerator_marker(paths, accelerator) is None:
+        return None
+    return (
+        paths.components_root
+        / "accelerators"
+        / accelerator_id
+        / str(accelerator.get("version") or "")
+    )
+
+
 def _external_model_path(environment: dict[str, Any], model_id: str) -> Path | None:
     raw = (environment.get("model_paths") or {}).get(model_id)
     if not raw:
@@ -628,8 +877,11 @@ def resolve_whisper_runtime(
         marker = _managed_runtime_marker(paths, catalog) or {}
         component_root = paths.components_root / "faster-whisper" / str(marker.get("version") or "")
         python_executable = component_root / str(marker.get("python") or "python.exe")
-        model = model_catalog_entry(catalog, provider.model) or {}
-        model_path = managed_model_path(paths, model)
+        if provider.local.model_source == "external":
+            model_path = Path(provider.local.model_path).expanduser().resolve()
+        else:
+            model = model_catalog_entry(catalog, provider.model) or {}
+            model_path = managed_model_path(paths, model)
         accelerator = _accelerator_marker_by_id(paths, catalog, "nvidia-cuda12")
         return {
             "python_executable": str(python_executable),

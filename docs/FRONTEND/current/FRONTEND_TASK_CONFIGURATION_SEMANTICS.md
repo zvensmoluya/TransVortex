@@ -54,11 +54,11 @@ ASS、WebVTT 和 LRC 当前能被前端识别为字幕文件，但作为输入�
 Flutter 只使用后端返回的 `readiness.can_run` 判断识别方案能否执行，不再根据“是否需要密钥”推断。状态只使用四类：
 
 - `ready`：当前方案可以执行。
-- `needs_action`：需要安装组件或模型、选择环境、配置凭据或完成连接测试。
+- `needs_action`：需要安装组件或模型、选择并验证已有模型目录、配置凭据或完成连接测试。
 - `checking`：组件下载、模型下载或硬件检查正在进行。
-- `unavailable`：环境失效、服务不可达或硬件 / 计算精度不兼容。
+- `unavailable`：已有模型目录失效、服务不可达或硬件 / 计算精度不兼容。
 
-本机 Whisper、FunASR 和云端识别是三套独立方案，不自动回退。FunASR 需要最小音频连接测试；云端识别独立检查用户凭据；本机 Whisper 分别检查运行组件、模型、所选环境和 NVIDIA 硬件。保存识别设置后，Flutter 会重新读取后端状态再更新主窗口，不做乐观“已配置”。
+本机 Whisper、OpenAI Whisper 和 FunASR 是三套独立方案，不自动回退。FunASR 需要最小音频连接测试；OpenAI Whisper 固定使用官方 Transcriptions 地址并独立检查用户凭据；本机 Whisper 始终使用受管运行组件，并检查模型来源、已有模型目录指纹和 NVIDIA 硬件。保存识别设置后，Flutter 会重新读取后端状态再更新主窗口，不做乐观“已配置”。
 
 ## 6. 待产品决策
 
