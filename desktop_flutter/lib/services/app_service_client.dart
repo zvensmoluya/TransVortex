@@ -658,6 +658,18 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> networkSettingsSave({
+    required String mode,
+    required int proxyPort,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('network.settings.save', {
+      'mode': mode,
+      'proxy_port': proxyPort,
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
+  }
+
   Future<Map<String, Object?>> providerSave({
     required Map<String, Object?> providerDraft,
     String? apiKey,
@@ -973,6 +985,25 @@ class ServiceHealth {
   }
 }
 
+class NetworkSettingsOption {
+  const NetworkSettingsOption({this.mode = 'system', this.proxyPort = 0});
+
+  final String mode;
+  final int proxyPort;
+
+  factory NetworkSettingsOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    final mode = (_stringValue(map['mode']) ?? 'system').trim().toLowerCase();
+    return NetworkSettingsOption(
+      mode: const {'system', 'direct', 'local_proxy'}.contains(mode)
+          ? mode
+          : 'system',
+      proxyPort:
+          _intValue(map['proxy_port']) ?? _intValue(map['proxyPort']) ?? 0,
+    );
+  }
+}
+
 class DesktopSnapshot {
   const DesktopSnapshot({
     required this.config,
@@ -1017,6 +1048,9 @@ class DesktopSnapshot {
   }
 
   ConfigReadiness get configReadiness => ConfigReadiness.fromConfig(config);
+
+  NetworkSettingsOption get networkSettings =>
+      NetworkSettingsOption.fromJson(config['network']);
 
   List<ProviderOption> get providers {
     return _objectList(config['providers'])

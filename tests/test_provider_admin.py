@@ -165,7 +165,7 @@ def test_draft_to_provider_config_uses_template_defaults() -> None:
 
 
 def test_fetch_provider_models_parses_openai_shape(monkeypatch) -> None:
-    def fake_request_json(url, payload, headers, timeout, method="GET"):
+    def fake_request_json(url, payload, headers, timeout, method="GET", network=None):
         assert url == "https://example.com/v1/models"
         assert method == "GET"
         return {"data": [{"id": "model-a"}, {"id": "model-b"}]}
@@ -220,7 +220,7 @@ def test_fetch_provider_models_uses_auth_json(tmp_path: Path, monkeypatch) -> No
 
     write_auth_credential("openai_like", "secret")
 
-    def fake_request_json(url, payload, headers, timeout, method="GET"):
+    def fake_request_json(url, payload, headers, timeout, method="GET", network=None):
         assert headers["Authorization"] == "Bearer secret"
         return {"data": [{"id": "model-a"}]}
 

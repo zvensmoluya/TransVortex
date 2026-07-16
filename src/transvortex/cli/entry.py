@@ -1407,20 +1407,24 @@ def main() -> None:
         return
 
     if args.command == "provider" and args.provider_command == "models":
+        network = load_app_config(root_dir=root, providers_file=providers_file).network
         payload = fetch_provider_models(
             provider_draft=_read_json_arg(args.json_payload),
             api_key=args.api_key,
             root_dir=root,
+            network=network,
         )
         _print_json(payload)
         return
 
     if args.command == "provider" and args.provider_command == "test":
+        network = load_app_config(root_dir=root, providers_file=providers_file).network
         payload = run_provider_connection_test(
             provider_draft=_read_json_arg(args.json_payload),
             model=args.model,
             api_key=args.api_key,
             root_dir=root,
+            network=network,
         )
         _print_json(payload)
         return

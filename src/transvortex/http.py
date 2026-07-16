@@ -79,20 +79,55 @@ def build_http_limits(
     )
 
 
+def _network_value(network: Any | None, key: str, default: Any) -> Any:
+    if isinstance(network, dict):
+        return network.get(key, default)
+    return getattr(network, key, default)
+
+
+def _network_transport_options(
+    network: Any | None,
+    *,
+    trust_env: bool,
+) -> tuple[bool, str | None, tuple[str, int]]:
+    if not trust_env:
+        return False, None, ("bypass", 0)
+    mode = str(_network_value(network, "mode", "system") or "system").strip().lower()
+    try:
+        proxy_port = int(_network_value(network, "proxy_port", 0) or 0)
+    except (TypeError, ValueError):
+        proxy_port = 0
+    if mode == "direct":
+        return False, None, ("direct", 0)
+    if mode == "local_proxy" and 1 <= proxy_port <= 65535:
+        return False, f"http://127.0.0.1:{proxy_port}", ("local_proxy", proxy_port)
+    return True, None, ("system", 0)
+
+
 def build_httpx_client(
     *,
     timeout: httpx.Timeout | float | int,
     limits: httpx.Limits | None = None,
     http2: bool = True,
     trust_env: bool = True,
+    network: Any | None = None,
+    follow_redirects: bool = False,
 ) -> httpx.Client:
+    effective_trust_env, proxy, _network_key = _network_transport_options(
+        network,
+        trust_env=trust_env,
+    )
     kwargs: dict[str, Any] = {
         "timeout": timeout,
         "http2": http2_enabled(http2),
-        "trust_env": bool(trust_env),
+        "trust_env": effective_trust_env,
     }
     if limits is not None:
         kwargs["limits"] = limits
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    if follow_redirects:
+        kwargs["follow_redirects"] = True
     return httpx.Client(**kwargs)
 
 
@@ -103,13 +138,34 @@ def get_shared_httpx_client(
     limits: httpx.Limits | None = None,
     http2: bool = True,
     trust_env: bool = True,
+    network: Any | None = None,
 ) -> httpx.Client:
-    cache_key = (key, http2_enabled(http2), bool(trust_env))
+    _effective_trust_env, _proxy, network_key = _network_transport_options(
+        network,
+        trust_env=trust_env,
+    )
+    cache_key = (key, http2_enabled(http2), network_key)
     client = _CLIENTS.get(cache_key)
     if client is None or client.is_closed:
-        client = build_httpx_client(timeout=timeout, limits=limits, http2=http2, trust_env=trust_env)
+        client = build_httpx_client(
+            timeout=timeout,
+            limits=limits,
+            http2=http2,
+            trust_env=trust_env,
+            network=network,
+        )
         _CLIENTS[cache_key] = client
     return client
+
+
+def close_shared_httpx_clients() -> None:
+    clients = list(_CLIENTS.values())
+    _CLIENTS.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def classify_http_error(exc: Exception) -> str:
@@ -286,11 +342,18 @@ def request_json_with_retry(
     client: httpx.Client | None = None,
     context: str = "upstream",
     trust_env: bool = True,
+    network: Any | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     attempts = max(1, int(retry or 1))
     request_headers = _request_headers(headers, json_body=json_payload is not None)
     owned_client = client is None
-    active_client = client or build_httpx_client(timeout=timeout, limits=limits, http2=http2, trust_env=trust_env)
+    active_client = client or build_httpx_client(
+        timeout=timeout,
+        limits=limits,
+        http2=http2,
+        trust_env=trust_env,
+        network=network,
+    )
     try:
         last_exc: Exception | None = None
         for attempt in range(attempts):

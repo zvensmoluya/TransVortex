@@ -1308,6 +1308,7 @@ void main() {
     expect(find.text('翻译模型设置'), findsOneWidget);
     expect(find.text('连接'), findsWidgets);
     expect(find.text('常用模型'), findsWidgets);
+    expect(find.text('网络'), findsOneWidget);
     expect(find.text('模型连接'), findsNothing);
     expect(find.text('翻译方案'), findsNothing);
     expect(find.text('刷新'), findsNothing);
@@ -1358,6 +1359,61 @@ void main() {
     expect(find.text('最大输入（tokens）'), findsOneWidget);
     expect(find.text('最大输出（tokens）'), findsOneWidget);
     expect(find.text('目标输出预算（tokens）'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('translation settings saves a local proxy port', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 680));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? saved;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'network.settings.save') {
+        saved = Map<String, Object?>.from(params);
+        return {
+          'ok': true,
+          'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+          'pipeline_file_version': {'mtime_ns': 7, 'size': 8},
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.translationSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('网络'));
+    await tester.pumpAndSettle();
+    expect(find.text('跟随系统'), findsWidgets);
+    expect(find.text('直连'), findsOneWidget);
+    expect(find.text('本地代理端口（HTTP / Mixed）'), findsNothing);
+
+    await tester.tap(find.text('本地代理'));
+    await tester.pumpAndSettle();
+    final portField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == '例如 7890',
+    );
+    expect(portField, findsOneWidget);
+    await tester.enterText(portField, '7890');
+    await tester.tap(find.text('保存网络设置'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(saved, {
+      'mode': 'local_proxy',
+      'proxy_port': 7890,
+      'expected_version': {'mtime_ns': 1, 'size': 2},
+    });
+    expect(find.textContaining('127.0.0.1:7890'), findsWidgets);
     expectNoFlutterException();
   });
 
@@ -4518,6 +4574,7 @@ DesktopSnapshot _desktopSnapshot({
       'pipeline': {'asr_provider': 'local'},
       'pipeline_file_version': {'mtime_ns': 1, 'size': 2},
       'providers_file_version': {'mtime_ns': 3, 'size': 4},
+      'network': {'mode': 'system', 'proxy_port': 0},
       'provider_presets': [
         {
           'id': 'deepseek',

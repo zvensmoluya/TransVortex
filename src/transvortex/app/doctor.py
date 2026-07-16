@@ -7,8 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import httpx
-
+from ..http import build_httpx_client
 from .config import load_app_config, resolve_providers_file
 from .credentials import resolve_credential
 from .asr_runtime import asr_provider_readiness
@@ -199,7 +198,12 @@ def _env_key_check(
 
 def _local_server_reachability_check(provider) -> dict[str, Any]:
     try:
-        response = httpx.get(provider.base_url, timeout=2.0, follow_redirects=False)
+        with build_httpx_client(
+            timeout=2.0,
+            http2=False,
+            trust_env=False,
+        ) as client:
+            response = client.get(provider.base_url, follow_redirects=False)
     except Exception as exc:  # noqa: BLE001 - doctor should report availability, not fail hard
         return _check(
             "asr_local_server",

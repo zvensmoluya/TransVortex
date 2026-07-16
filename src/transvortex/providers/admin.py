@@ -24,6 +24,7 @@ from ..app.models import (
     MappingConfig,
     ModelConfig,
     ModelListConfig,
+    NetworkConfig,
     NormalizedRequest,
     ProviderConfig,
     ProviderLimits,
@@ -576,7 +577,11 @@ def _template_for_compat(compat_mode: str) -> dict[str, Any]:
     return dict(PROVIDER_TEMPLATES.get(compat_mode) or PROVIDER_TEMPLATES["openai_chat"])
 
 
-def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
+def draft_to_provider_config(
+    draft: dict[str, Any],
+    *,
+    network: NetworkConfig | None = None,
+) -> ProviderConfig:
     compat_mode = str(draft.get("compat_mode") or draft.get("compatMode") or "openai_chat")
     template = _template_for_compat(compat_mode)
     name = str(draft.get("name") or "custom_provider").strip()
@@ -664,6 +669,7 @@ def draft_to_provider_config(draft: dict[str, Any]) -> ProviderConfig:
             timeout_seconds=int(limits_raw.get("timeout_seconds", limits_raw.get("timeoutSeconds", 30))),
             retry=int(limits_raw.get("retry", 3)),
         ),
+        network=network or NetworkConfig(),
     )
 
 
@@ -1225,8 +1231,9 @@ def fetch_provider_models(
     provider_draft: dict[str, Any],
     api_key: str | None = None,
     root_dir: Path | None = None,
+    network: NetworkConfig | None = None,
 ) -> dict[str, Any]:
-    provider = draft_to_provider_config(provider_draft)
+    provider = draft_to_provider_config(provider_draft, network=network)
     credential = _api_key_for(provider, root_dir=root_dir, override=api_key)
     if not credential.found:
         return {
@@ -1257,7 +1264,14 @@ def fetch_provider_models(
         model_for_path = provider.models[0] if provider.models else "models"
         url, headers = _build_url_and_headers_for_path(provider, credential.key, model_for_path, provider.model_list.path_template)
         headers.update(provider.extra_headers)
-        data = _request_json(url, None, headers, provider.limits.timeout_seconds, provider.model_list.method)
+        data = _request_json(
+            url,
+            None,
+            headers,
+            provider.limits.timeout_seconds,
+            provider.model_list.method,
+            network=provider.network,
+        )
         found: list[str] = []
         for path in provider.model_list.response_paths:
             for raw in _extract_text_by_paths(data, [path]).splitlines():
@@ -1287,11 +1301,15 @@ def run_provider_connection_test(
     model: str,
     api_key: str | None = None,
     root_dir: Path | None = None,
+    network: NetworkConfig | None = None,
 ) -> dict[str, Any]:
     models = [str(item).strip() for item in _as_list(provider_draft.get("models")) if str(item).strip()]
     if model and model not in models:
         models.insert(0, model)
-    provider = draft_to_provider_config({**provider_draft, "models": models})
+    provider = draft_to_provider_config(
+        {**provider_draft, "models": models},
+        network=network,
+    )
     credential = _api_key_for(provider, root_dir=root_dir, override=api_key)
     checks: list[ProviderCheck] = []
     if not credential.found:
@@ -1410,7 +1428,7 @@ def provider_payload(root_dir: Path) -> dict[str, Any]:
                 **{
                     key: value
                     for key, value in to_plain(provider).items()
-                    if key != "credential_root_dir"
+                    if key not in {"credential_root_dir", "network"}
                 },
                 "credential_id": provider_credential_id(provider),
                 "has_key": resolve_provider_credential(provider, root_dir=root_dir).found,

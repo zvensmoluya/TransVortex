@@ -34,10 +34,11 @@ const _batchLineChoices = <_CapacityChoice>[
   _CapacityChoice('1000', '1,000 行 · 仅限大容量模型'),
 ];
 
-/// Translation model settings body. Splits into two segments:
+/// Translation model settings body. Splits into three segments:
 ///  - 连接 (connections): manage provider access and saved model names.
 ///  - 常用模型 (profiles): pick the primary + fallback models for the active
 ///    global default profile.
+///  - 网络 (network): choose the app-wide outbound network policy.
 ///
 /// All state and side effects live in [TranslationSettingsController]; this
 /// widget only renders it and forwards intents. Text fields are owned here and
@@ -64,10 +65,12 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   final _maxOutputTokens = TextEditingController();
   final _targetOutputTokens = TextEditingController();
   final _profileName = TextEditingController();
+  final _proxyPort = TextEditingController();
 
   int _seededDraftRevision = -1;
   String? _seededProfileId;
   String? _seededRuntimeModel;
+  String? _seededNetworkKey;
   final Set<String> _customCapabilityFields = <String>{};
   bool _advancedCapacityExpanded = false;
 
@@ -92,6 +95,7 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     _maxOutputTokens.dispose();
     _targetOutputTokens.dispose();
     _profileName.dispose();
+    _proxyPort.dispose();
     super.dispose();
   }
 
@@ -122,6 +126,11 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
       _seededProfileId = c.activeProfileId;
       _profileName.text = c.activeProfileName;
     }
+    final networkKey = '${c.networkMode}:${c.proxyPort}';
+    if (networkKey != _seededNetworkKey) {
+      _seededNetworkKey = networkKey;
+      _proxyPort.text = c.proxyPort;
+    }
   }
 
   void _syncConnectionDraftFromFields() {
@@ -151,6 +160,11 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     await c.fetchModels();
   }
 
+  Future<void> _saveNetwork() async {
+    c.editProxyPort(_proxyPort.text);
+    await c.saveNetwork();
+  }
+
   void _addModelFromInput() {
     _syncConnectionDraftFromFields();
     c.addModelFromInput();
@@ -173,9 +187,85 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
         _TranslationTabs(selected: c.tab, onPick: c.switchTab),
         const SizedBox(height: T.s24),
         Expanded(
-          child: c.tab == TranslationTab.connections
-              ? _connectionsTab()
-              : _profilesTab(),
+          child: switch (c.tab) {
+            TranslationTab.connections => _connectionsTab(),
+            TranslationTab.profiles => _profilesTab(),
+            TranslationTab.network => _networkTab(),
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _networkTab() {
+    final busy = c.isBusy;
+    return ToolPanel(
+      footer: [
+        FeedbackActionButton(
+          label: '保存网络设置',
+          strong: true,
+          busy: c.busy == TranslationBusy.savingNetwork,
+          onTap: busy ? null : _saveNetwork,
+        ),
+      ],
+      children: [
+        Text('网络连接', style: T.tSection),
+        const SizedBox(height: T.s16),
+        SettingsSection(
+          title: '连接方式',
+          divider: false,
+          children: [
+            Wrap(
+              spacing: T.s8,
+              runSpacing: T.s8,
+              children: [
+                ChoicePill(
+                  label: '跟随系统',
+                  selected: c.networkMode == 'system',
+                  onTap: () => c.selectNetworkMode('system'),
+                  showCheck: true,
+                ),
+                ChoicePill(
+                  label: '直连',
+                  selected: c.networkMode == 'direct',
+                  onTap: () => c.selectNetworkMode('direct'),
+                  showCheck: true,
+                ),
+                ChoicePill(
+                  label: '本地代理',
+                  selected: c.networkMode == 'local_proxy',
+                  onTap: () => c.selectNetworkMode('local_proxy'),
+                  showCheck: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: T.s12),
+            Text(switch (c.networkMode) {
+              'direct' => '忽略 Windows 系统代理和代理环境变量，直接连接模型服务。',
+              'local_proxy' => '连接本机代理软件提供的 HTTP 或 Mixed 端口。',
+              _ => '使用 Windows 系统代理；没有系统代理时自动直连。',
+            }, style: T.tCaption),
+            if (c.networkMode == 'local_proxy') ...[
+              const SizedBox(height: T.s16),
+              SizedBox(
+                width: 260,
+                child: Input(
+                  label: '本地代理端口（HTTP / Mixed）',
+                  controller: _proxyPort,
+                  hintText: '例如 7890',
+                  keyboardType: TextInputType.number,
+                  onChanged: c.editProxyPort,
+                ),
+              ),
+              const SizedBox(height: T.s8),
+              Text(
+                _proxyPort.text.trim().isEmpty
+                    ? '代理地址将使用 127.0.0.1。'
+                    : '代理地址：http://127.0.0.1:${_proxyPort.text.trim()}',
+                style: T.tCaption,
+              ),
+            ],
+          ],
         ),
       ],
     );
@@ -1292,6 +1382,11 @@ class _TranslationTabs extends StatelessWidget {
             label: '常用模型',
             selected: selected == TranslationTab.profiles,
             onTap: () => onPick(TranslationTab.profiles),
+          ),
+          _TranslationTabButton(
+            label: '网络',
+            selected: selected == TranslationTab.network,
+            onTap: () => onPick(TranslationTab.network),
           ),
         ],
       ),

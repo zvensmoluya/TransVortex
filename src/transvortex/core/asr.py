@@ -559,6 +559,7 @@ class OpenAITranscriptionsAsrClient:
             retry=max(1, int(getattr(self.config.execution, "retry", 1) or 1)),
             context="ASR upstream",
             trust_env=self.config.kind != "local_server",
+            network=self.config.network,
         )
         if not isinstance(payload, dict):
             raise RuntimeError("bad_schema: unexpected ASR response")

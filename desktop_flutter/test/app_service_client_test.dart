@@ -1318,6 +1318,10 @@ routing:
         },
       },
       'asr.provider.save': {'ok': true, 'provider': 'openai_whisper'},
+      'network.settings.save': {
+        'ok': true,
+        'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+      },
     });
     final client = AppServiceClient(transport);
 
@@ -1363,6 +1367,11 @@ routing:
       },
       expectedVersion: {'mtime_ns': 3, 'size': 4},
     );
+    await client.networkSettingsSave(
+      mode: 'local_proxy',
+      proxyPort: 7890,
+      expectedVersion: {'mtime_ns': 9, 'size': 10},
+    );
 
     expect(transport.calls.map((call) => call.method), [
       'provider.save',
@@ -1372,6 +1381,7 @@ routing:
       'provider.routing.save',
       'provider.routing.save',
       'asr.provider.save',
+      'network.settings.save',
     ]);
     expect(transport.calls.first.params['api_key'], 'secret');
     expect(transport.calls[3].params['name'], 'p1');
@@ -1398,12 +1408,17 @@ routing:
       'size': 6,
     });
     expect(
-      transport.calls.last.params['provider_draft'],
+      transport.calls[6].params['provider_draft'],
       containsPair('kind', 'remote'),
     );
-    expect(transport.calls.last.params['expected_version'], {
+    expect(transport.calls[6].params['expected_version'], {
       'mtime_ns': 3,
       'size': 4,
+    });
+    expect(transport.calls.last.params, {
+      'mode': 'local_proxy',
+      'proxy_port': 7890,
+      'expected_version': {'mtime_ns': 9, 'size': 10},
     });
   });
 

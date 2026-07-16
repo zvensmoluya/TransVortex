@@ -38,6 +38,7 @@ from .models import (
     MemoryPresetRef,
     ModelConfig,
     ModelListConfig,
+    NetworkConfig,
     PipelineConfig,
     ProviderConfig,
     ProviderLimits,
@@ -64,6 +65,7 @@ ARTIFACTS_DIR_ENV = "TRANSVORTEX_ARTIFACTS_DIR"
 CACHE_DIR_ENV = "TRANSVORTEX_CACHE_DIR"
 MEMORY_INJECT_INTENSITIES = {"low", "auto", "high", "max"}
 MEMORY_PATCH_MODES = {"serial"}
+NETWORK_MODES = {"system", "direct", "local_proxy"}
 LEGACY_MEMORY_INJECT_FIELDS = {
     "strategy",
     "max_entries_per_chunk",
@@ -122,6 +124,21 @@ def _to_bool(value: Any, default: bool) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _parse_network_config(value: Any) -> NetworkConfig:
+    raw = value if isinstance(value, dict) else {}
+    mode = _to_str(raw.get("mode"), "system").strip().lower()
+    if mode not in NETWORK_MODES:
+        raise ValueError(
+            f"Unsupported network mode: {mode}; expected one of: {', '.join(sorted(NETWORK_MODES))}"
+        )
+    proxy_port = _to_int(raw.get("proxy_port", raw.get("proxyPort")), 0)
+    if proxy_port < 0 or proxy_port > 65535:
+        raise ValueError("network.proxy_port must be between 1 and 65535")
+    if mode == "local_proxy" and proxy_port == 0:
+        raise ValueError("network.proxy_port is required for local_proxy mode")
+    return NetworkConfig(mode=mode, proxy_port=proxy_port)
 
 
 def _to_str(value: Any, default: str) -> str:
@@ -847,6 +864,7 @@ def load_app_config(
 
     p_yaml = _read_yaml(providers_file)
     pip_yaml = _read_yaml(pipeline_file)
+    network = _parse_network_config(pip_yaml.get("network"))
     dotenv_values = read_dotenv_values(root_dir)
     prompts_raw = pip_yaml.get("prompts") or {}
 
@@ -872,17 +890,20 @@ def load_app_config(
     if isinstance(asr_provider_rows, list):
         for row in asr_provider_rows:
             if isinstance(row, dict):
-                provider_cfg = _parse_asr_provider(row)
+                provider_cfg = replace(_parse_asr_provider(row), network=network)
                 asr_providers[provider_cfg.name] = provider_cfg
     if not asr_providers:
-        default_provider = _parse_asr_provider(
-            {
-                "name": "faster_whisper_large_v3",
-                "kind": "local_worker",
-                "protocol": "faster_whisper",
-                "model": "large-v3",
-                "runtime": {"source": "managed", "id": "managed:faster-whisper"},
-            }
+        default_provider = replace(
+            _parse_asr_provider(
+                {
+                    "name": "faster_whisper_large_v3",
+                    "kind": "local_worker",
+                    "protocol": "faster_whisper",
+                    "model": "large-v3",
+                    "runtime": {"source": "managed", "id": "managed:faster-whisper"},
+                }
+            ),
+            network=network,
         )
         asr_providers[default_provider.name] = default_provider
     if asr_provider_name not in asr_providers:
@@ -1412,6 +1433,7 @@ def load_app_config(
             model_list=model_list,
             capabilities=capabilities,
             limits=limits,
+            network=network,
         )
         providers[cfg.name] = cfg
 
@@ -1420,6 +1442,7 @@ def load_app_config(
         pipeline=pipeline,
         providers=providers,
         routing=routing,
+        network=network,
         routing_profiles=routing_profiles,
         active_routing_profile=active_routing_profile,
         routing_profile_next_seq=routing_profile_next_seq,

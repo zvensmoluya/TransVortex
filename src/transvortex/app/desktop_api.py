@@ -54,6 +54,7 @@ from .credentials import (
 from .desktop_requests import normalize_input_type, resume_request_from_payload, run_request_from_payload
 from .doctor import doctor_report
 from .media_inspect import inspect_media_source
+from .network_admin import save_network_config
 
 
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
@@ -65,6 +66,7 @@ SERVICE_CAPABILITIES = [
     "runtime_pump",
     "derived_translation",
     "provider_admin",
+    "network_settings",
     "asr_provider_admin",
     "asr_component_manager",
     "asr_model_probe",
@@ -124,6 +126,7 @@ class DesktopApi:
             "runtime.cancel": self.runtime_cancel,
             "auth.list": self.auth_list,
             "auth.set": self.auth_set,
+            "network.settings.save": self.network_settings_save,
             "provider.probe": self.provider_probe,
             "provider.save": self.provider_save,
             "provider.delete": self.provider_delete,
@@ -309,6 +312,14 @@ class DesktopApi:
         path = write_auth_credential(credential_id, api_key)
         return {"ok": True, "credential_id": credential_id, "auth_file": str(path)}
 
+    def network_settings_save(self, params: dict[str, Any]) -> dict[str, Any]:
+        return save_network_config(
+            root_dir=self.root_dir,
+            mode=_required_text(params, "mode"),
+            proxy_port=_optional_int(params, "proxy_port", "proxyPort", default=0),
+            expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
+        )
+
     def provider_probe(self, params: dict[str, Any]) -> dict[str, Any]:
         return probe_provider(
             root_dir=self.root_dir,
@@ -335,18 +346,22 @@ class DesktopApi:
         )
 
     def provider_models(self, params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return fetch_provider_models(
             provider_draft=_dict_param(params, "provider_draft", "providerDraft"),
             api_key=_optional_text(params, "api_key", "apiKey"),
             root_dir=self.root_dir,
+            network=config.network,
         )
 
     def provider_test(self, params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return run_provider_connection_test(
             provider_draft=_dict_param(params, "provider_draft", "providerDraft"),
             model=_required_text(params, "model"),
             api_key=_optional_text(params, "api_key", "apiKey"),
             root_dir=self.root_dir,
+            network=config.network,
         )
 
     def provider_routing_save(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -375,11 +390,11 @@ class DesktopApi:
         }
 
     def asr_provider_test(self, params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         draft = _optional_dict(params, "provider_draft", "providerDraft")
         if draft is not None:
-            provider = draft_to_asr_provider_config(draft)
+            provider = draft_to_asr_provider_config(draft, network=config.network)
         else:
-            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
             provider_name = _optional_text(params, "provider", "provider_name", "providerName")
             provider_name = provider_name or config.pipeline.asr_provider
             provider = config.asr_providers.get(provider_name)
@@ -393,6 +408,8 @@ class DesktopApi:
 
     def asr_component_install(self, params: dict[str, Any]) -> dict[str, Any]:
         try:
+            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+            self._asr_operation_manager.set_network(config.network)
             return self._asr_operation_manager.start_install(
                 _required_text(params, "kind"),
                 _optional_text(params, "item_id", "itemId", "id") or "",
@@ -586,8 +603,10 @@ def config_payload(
             )
             credential_source = credential.source
             has_key = credential.found
+        provider_payload = to_plain(provider)
+        provider_payload.pop("network", None)
         asr_providers[name] = {
-            **to_plain(provider),
+            **provider_payload,
             "credential_source": credential_source,
             "has_key": has_key,
             "readiness": asr_provider_readiness(provider, root_dir=root),
@@ -600,6 +619,7 @@ def config_payload(
         "pipeline_file_version": pipeline_file_version(root / "pipeline.yaml"),
         "artifacts_dir": str(config.pipeline.artifacts_dir),
         "pipeline": to_plain(config.pipeline),
+        "network": to_plain(config.network),
         "routing": to_plain(config.routing),
         "active_routing_profile": config.active_routing_profile,
         "routing_profiles": to_plain(config.routing_profiles),
@@ -630,6 +650,7 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
         providers_raw = {}
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
+    network_raw = pipeline_raw.get("network") if isinstance(pipeline_raw.get("network"), dict) else {}
 
     providers = []
     for row in providers_raw.get("providers") or []:
@@ -709,6 +730,10 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
         "pipeline": {
             "artifacts_dir": str(_fallback_artifacts_dir(root)),
             "asr_provider": asr_provider_name,
+        },
+        "network": {
+            "mode": str(network_raw.get("mode") or "system"),
+            "proxy_port": network_raw.get("proxy_port", network_raw.get("proxyPort", 0)),
         },
         "routing": providers_raw.get("routing") if isinstance(providers_raw.get("routing"), dict) else {},
         "active_routing_profile": "",

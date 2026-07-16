@@ -41,6 +41,43 @@ default_concurrency: 8
     assert cfg.pipeline.chunk_seconds == 30
 
 
+def test_network_config_defaults_to_system_and_loads_local_proxy(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    pipeline = tmp_path / "pipeline.yaml"
+    pipeline.write_text("artifacts_dir: artifacts\n", encoding="utf-8")
+
+    default = load_app_config(root_dir=tmp_path)
+    assert default.network.mode == "system"
+    assert default.network.proxy_port == 0
+
+    pipeline.write_text(
+        "network:\n  mode: local_proxy\n  proxy_port: 7890\n",
+        encoding="utf-8",
+    )
+    configured = load_app_config(root_dir=tmp_path)
+
+    assert configured.network.mode == "local_proxy"
+    assert configured.network.proxy_port == 7890
+    assert all(provider.network == configured.network for provider in configured.providers.values())
+    assert all(provider.network == configured.network for provider in configured.asr_providers.values())
+
+
+@pytest.mark.parametrize(
+    "network_yaml",
+    [
+        "network:\n  mode: unsupported\n",
+        "network:\n  mode: local_proxy\n  proxy_port: 0\n",
+        "network:\n  mode: local_proxy\n  proxy_port: 70000\n",
+    ],
+)
+def test_network_config_rejects_invalid_values(tmp_path: Path, network_yaml: str) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(network_yaml, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="network|Network"):
+        load_app_config(root_dir=tmp_path)
+
+
 def test_external_whisper_draft_does_not_inherit_managed_runtime_id() -> None:
     provider = draft_to_asr_provider_config(
         {

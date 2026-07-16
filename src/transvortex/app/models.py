@@ -74,6 +74,12 @@ class ProviderLimits:
     streaming_enabled: bool = True
 
 
+@dataclass(frozen=True)
+class NetworkConfig:
+    mode: str = "system"  # system | direct | local_proxy
+    proxy_port: int = 0
+
+
 @dataclass
 class ProviderConfig:
     name: str
@@ -93,6 +99,7 @@ class ProviderConfig:
     model_list: ModelListConfig = field(default_factory=ModelListConfig)
     capabilities: CapabilityConfig = field(default_factory=CapabilityConfig)
     limits: ProviderLimits = field(default_factory=ProviderLimits)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
 
     def model_config(self, model: str) -> ModelConfig:
         model_id = str(model or "").strip()
@@ -340,6 +347,7 @@ class AsrProviderConfig:
     preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())
     http2: bool = True
     request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
 
     @property
     def env_key(self) -> str:
@@ -609,6 +617,7 @@ class AppConfig:
     pipeline: PipelineConfig
     providers: dict[str, ProviderConfig]
     routing: RoutingConfig
+    network: NetworkConfig = field(default_factory=NetworkConfig)
     routing_profiles: list[RoutingProfile] = field(default_factory=list)
     active_routing_profile: str = ""
     routing_profile_next_seq: int = 1

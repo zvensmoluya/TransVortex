@@ -204,6 +204,7 @@ def _request_json(
     headers: dict[str, str],
     timeout: int,
     method: str = "POST",
+    network: Any | None = None,
 ) -> dict:
     request_headers = merge_default_headers(headers, **DEFAULT_JSON_HEADERS)
     if payload is not None:
@@ -217,6 +218,7 @@ def _request_json(
         http2=True,
         retry=1,
         context="provider upstream",
+        network=network,
     )
     return data
 
@@ -260,6 +262,7 @@ def _get_provider_client(config: ProviderConfig) -> httpx.Client:
         timeout=_provider_timeout(config),
         limits=_provider_limits(config),
         http2=config.limits.http2,
+        network=config.network,
     )
 
 

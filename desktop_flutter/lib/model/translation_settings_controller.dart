@@ -10,8 +10,8 @@ typedef TranslationLabelSink =
 
 typedef TranslationConfigChangedSink = Future<void> Function();
 
-/// Which half of the translation settings window is showing.
-enum TranslationTab { connections, profiles }
+/// Which page of the translation settings window is showing.
+enum TranslationTab { connections, profiles, network }
 
 /// A single in-flight action. Replaces the ~10 scattered boolean busy flags of
 /// the legacy `_SettingsWindowState`: user interactions are serial, so one
@@ -24,6 +24,7 @@ enum TranslationBusy {
   fetchingModels,
   testingConnection,
   savingProfile,
+  savingNetwork,
 }
 
 @immutable
@@ -223,6 +224,8 @@ class TranslationSettingsController extends ChangeNotifier {
   ConnectionTestResult? _testResult;
   String? _selectedConnection;
   final ConnectionDraft _draft = ConnectionDraft();
+  String _networkMode = 'system';
+  String _proxyPort = '';
 
   // Bumped whenever the draft's text fields are replaced wholesale (selecting a
   // connection, entering/leaving create mode, picking a preset/protocol). The
@@ -240,6 +243,16 @@ class TranslationSettingsController extends ChangeNotifier {
   String? get message => _message;
   String? get error => _error;
   ConnectionTestResult? get testResult => _testResult;
+  String get networkMode => _networkMode;
+  String get proxyPort => _proxyPort;
+  String get networkLabel => switch (_networkMode) {
+    'direct' => '直连',
+    'local_proxy' =>
+      _proxyPort.trim().isEmpty
+          ? '本地代理'
+          : '本地代理 · 127.0.0.1:${_proxyPort.trim()}',
+    _ => '跟随系统',
+  };
   int get draftRevision => _draftRevision;
 
   List<ProviderOption> get connections => _snapshot?.providers ?? const [];
@@ -586,6 +599,7 @@ class TranslationSettingsController extends ChangeNotifier {
 
   /// Header text for the top bar: describes the active profile + primary model.
   String get headerText {
+    if (_tab == TranslationTab.network) return '网络连接 · $networkLabel';
     final profile = activeProfile;
     final ref = primary;
     if (profile == null || ref == null) return '默认模型还没选主模型';
@@ -606,6 +620,7 @@ class TranslationSettingsController extends ChangeNotifier {
     try {
       final snapshot = await _client.desktopSnapshot();
       _snapshot = snapshot;
+      _loadNetworkDraft(snapshot);
       _selectedConnection = _reconcileConnection(snapshot);
       if (!_draft.creating) {
         _loadDraftFromSelection();
@@ -626,6 +641,57 @@ class TranslationSettingsController extends ChangeNotifier {
     _message = null;
     _error = null;
     notifyListeners();
+  }
+
+  void selectNetworkMode(String mode) {
+    if (!const {'system', 'direct', 'local_proxy'}.contains(mode) ||
+        _networkMode == mode) {
+      return;
+    }
+    _networkMode = mode;
+    _message = null;
+    _error = null;
+    notifyListeners();
+  }
+
+  void editProxyPort(String value) => _proxyPort = value;
+
+  Future<void> saveNetwork() async {
+    final snapshot = _snapshot;
+    if (snapshot == null) return;
+    final text = _proxyPort.trim();
+    final parsed = text.isEmpty ? 0 : int.tryParse(text);
+    if (_networkMode == 'local_proxy' &&
+        (parsed == null || parsed < 1 || parsed > 65535)) {
+      _fail('请填写 1 到 65535 之间的本地代理端口。');
+      return;
+    }
+    final retainedPort = parsed ?? snapshot.networkSettings.proxyPort;
+    _begin(TranslationBusy.savingNetwork);
+    try {
+      final result = await _client.networkSettingsSave(
+        mode: _networkMode,
+        proxyPort: retainedPort,
+        expectedVersion: snapshot.pipelineFileVersion,
+      );
+      final network = _map(result['network']);
+      final nextConfig = <String, Object?>{
+        ...snapshot.config,
+        'network': network.isEmpty
+            ? {'mode': _networkMode, 'proxy_port': retainedPort}
+            : network,
+        if (_map(result['pipeline_file_version']).isNotEmpty)
+          'pipeline_file_version': _map(result['pipeline_file_version']),
+      };
+      _snapshot = snapshot.copyWith(config: nextConfig);
+      _loadNetworkDraft(_snapshot!);
+      await _notifyConfigChanged();
+      _message = '网络设置已保存：$networkLabel。';
+    } on Object catch (error) {
+      _error = friendlySettingsError(error);
+    } finally {
+      _end();
+    }
   }
 
   /// Reconcile which connection should be selected after a reload. Explicit
@@ -1839,10 +1905,17 @@ class TranslationSettingsController extends ChangeNotifier {
   Future<void> _reload() async {
     final snapshot = await _client.desktopSnapshot();
     _snapshot = snapshot;
+    _loadNetworkDraft(snapshot);
     _selectedConnection = _reconcileConnection(snapshot);
     if (!_draft.creating) {
       _loadDraftFromSelection();
     }
+  }
+
+  void _loadNetworkDraft(DesktopSnapshot snapshot) {
+    final network = snapshot.networkSettings;
+    _networkMode = network.mode;
+    _proxyPort = network.proxyPort > 0 ? '${network.proxyPort}' : '';
   }
 
   static Map<String, Object?> _map(Object? value) =>

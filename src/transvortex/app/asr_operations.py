@@ -16,7 +16,9 @@ from typing import Any, Callable
 
 import httpx
 
+from ..http import build_httpx_client
 from ..utils import FileLock, read_json, utc_now_iso, write_json
+from .models import NetworkConfig
 from .asr_runtime import (
     AsrRuntimePaths,
     asr_runtime_paths,
@@ -52,10 +54,12 @@ class AsrOperationManager:
         app_data_root: Path | None = None,
         catalog: dict[str, Any] | None = None,
         client_factory: Callable[[], httpx.Client] | None = None,
+        network: NetworkConfig | None = None,
     ) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.paths = asr_runtime_paths(self.root_dir, app_data_root=app_data_root)
         self.catalog = catalog or load_asr_catalog()
+        self.network = network or NetworkConfig()
         self._client_factory = client_factory or self._default_client
         self._lock = threading.RLock()
         self._cancel_events: dict[str, threading.Event] = {}
@@ -813,10 +817,13 @@ class AsrOperationManager:
             return True
         return True
 
-    @staticmethod
-    def _default_client() -> httpx.Client:
-        return httpx.Client(
+    def set_network(self, network: NetworkConfig) -> None:
+        self.network = network
+
+    def _default_client(self) -> httpx.Client:
+        return build_httpx_client(
             follow_redirects=True,
             timeout=httpx.Timeout(connect=20.0, read=60.0, write=30.0, pool=20.0),
-            trust_env=True,
+            http2=False,
+            network=self.network,
         )

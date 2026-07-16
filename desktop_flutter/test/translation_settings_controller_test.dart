@@ -25,6 +25,11 @@ void main() {
           ],
         },
         'provider.routing.save': <String, Object?>{'ok': true},
+        'network.settings.save': <String, Object?>{
+          'ok': true,
+          'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+          'pipeline_file_version': {'mtime_ns': 3, 'size': 4},
+        },
       });
       client = AppServiceClient(transport);
       labelUpdates = [];
@@ -88,6 +93,40 @@ void main() {
       await controller.refresh();
 
       expect(controller.selectedConnection, 'openai');
+    });
+
+    test('saves the global local proxy port independently', () async {
+      await controller.load();
+      controller.switchTab(TranslationTab.network);
+      controller.selectNetworkMode('local_proxy');
+      controller.editProxyPort('7890');
+
+      await controller.saveNetwork();
+
+      final save = transport.calls.firstWhere(
+        (call) => call.method == 'network.settings.save',
+      );
+      expect(save.params['mode'], 'local_proxy');
+      expect(save.params['proxy_port'], 7890);
+      expect(save.params['expected_version'], {'mtime_ns': 2, 'size': 3});
+      expect(controller.networkMode, 'local_proxy');
+      expect(controller.proxyPort, '7890');
+      expect(controller.message, contains('127.0.0.1:7890'));
+      expect(configChangedCount, 1);
+    });
+
+    test('rejects an invalid local proxy port before RPC', () async {
+      await controller.load();
+      controller.selectNetworkMode('local_proxy');
+      controller.editProxyPort('70000');
+
+      await controller.saveNetwork();
+
+      expect(
+        transport.calls.map((call) => call.method),
+        isNot(contains('network.settings.save')),
+      );
+      expect(controller.error, contains('1 到 65535'));
     });
 
     test('saveConnection only writes the provider, never the route', () async {
@@ -617,6 +656,8 @@ Map<String, Object?> _snapshot() {
       'active_routing_profile': 'default',
       'routing_profile_next_seq': 3,
       'providers_file_version': {'mtime': 1, 'size': 2},
+      'pipeline_file_version': {'mtime_ns': 2, 'size': 3},
+      'network': {'mode': 'system', 'proxy_port': 0},
       'routing': {
         'primary': {'provider': 'deepseek', 'model': 'deepseek-v4-pro'},
         'fallback': <Object?>[],

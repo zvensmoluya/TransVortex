@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from transvortex.app.desktop_api import DesktopApi, task_payload
+from transvortex.app.config import load_app_config
 from transvortex.app.models import TaskRecord
 from transvortex.app_service import LocalServicePump, handle_line, serve
 from transvortex.artifacts.runtime import TaskRuntime
@@ -220,6 +221,41 @@ def test_app_service_desktop_snapshot_contains_control_plane_payloads(tmp_path: 
     assert "runtime" in response["result"]
     assert "environment" in response["result"]
     assert response["result"]["config"]["pipeline_file_version"]
+    assert response["result"]["config"]["network"] == {
+        "mode": "system",
+        "proxy_port": 0,
+    }
+
+
+def test_app_service_saves_global_network_settings(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    snapshot = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+    expected_version = snapshot["result"]["config"]["pipeline_file_version"]
+
+    saved = handle_line(
+        service,
+        _request(
+            "network.settings.save",
+            {
+                "mode": "local_proxy",
+                "proxy_port": 7890,
+                "expected_version": expected_version,
+            },
+        ),
+        root_dir=tmp_path,
+    )
+    refreshed = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+    config = load_app_config(root_dir=tmp_path)
+
+    assert saved["result"]["network"] == {
+        "mode": "local_proxy",
+        "proxy_port": 7890,
+    }
+    assert saved["result"]["pipeline_file_version"]
+    assert refreshed["result"]["config"]["network"] == saved["result"]["network"]
+    assert config.network.mode == "local_proxy"
+    assert config.network.proxy_port == 7890
 
 
 def test_app_service_default_local_whisper_is_not_ready_without_component(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from transvortex.app.models import (
     EndpointConfig,
     MappingConfig,
     ModelConfig,
+    NetworkConfig,
     NormalizedRequest,
     ProviderConfig,
     ProviderLimits,
@@ -29,6 +30,61 @@ from transvortex.providers.factory import (
     classify_error,
     response_shape_summary,
 )
+
+
+def test_http_client_direct_mode_ignores_environment_proxy(monkeypatch) -> None:
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("transvortex.http.httpx.Client", FakeClient)
+
+    tvx_http.build_httpx_client(
+        timeout=30,
+        network=NetworkConfig(mode="direct"),
+    )
+
+    assert captured["trust_env"] is False
+    assert "proxy" not in captured
+
+
+def test_http_client_local_proxy_uses_loopback_http_port(monkeypatch) -> None:
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("transvortex.http.httpx.Client", FakeClient)
+
+    tvx_http.build_httpx_client(
+        timeout=30,
+        network=NetworkConfig(mode="local_proxy", proxy_port=7890),
+    )
+
+    assert captured["trust_env"] is False
+    assert captured["proxy"] == "http://127.0.0.1:7890"
+
+
+def test_http_client_explicit_bypass_wins_over_local_proxy(monkeypatch) -> None:
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("transvortex.http.httpx.Client", FakeClient)
+
+    tvx_http.build_httpx_client(
+        timeout=30,
+        trust_env=False,
+        network=NetworkConfig(mode="local_proxy", proxy_port=7890),
+    )
+
+    assert captured["trust_env"] is False
+    assert "proxy" not in captured
 
 
 def test_provider_client_uses_dotenv_fallback(tmp_path, monkeypatch) -> None:

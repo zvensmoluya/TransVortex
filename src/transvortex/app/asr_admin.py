@@ -9,7 +9,7 @@ import yaml
 from ..utils import to_plain
 from .config import _parse_asr_provider
 from .credentials import auth_file_path, resolve_credential, write_auth_credential
-from .models import AsrProviderConfig
+from .models import AsrProviderConfig, NetworkConfig
 
 
 ASR_PROVIDER_DEFAULTS = {
@@ -197,12 +197,19 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def draft_to_asr_provider_config(draft: dict[str, Any]) -> AsrProviderConfig:
-    return _parse_asr_provider(_draft_to_asr_row(draft))
+def draft_to_asr_provider_config(
+    draft: dict[str, Any],
+    *,
+    network: NetworkConfig | None = None,
+) -> AsrProviderConfig:
+    provider = _parse_asr_provider(_draft_to_asr_row(draft))
+    provider.network = network or NetworkConfig()
+    return provider
 
 
 def asr_provider_to_yaml_row(config: AsrProviderConfig) -> dict[str, Any]:
     row = to_plain(config)
+    row.pop("network", None)
     if config.kind in {"local_inprocess", "local_worker"}:
         row.pop("base_url", None)
         row.pop("endpoint", None)
@@ -253,10 +260,12 @@ def save_asr_provider_config(
         credential_source = credential.source
         credential_id = credential.credential_id
 
+    provider_payload = to_plain(provider)
+    provider_payload.pop("network", None)
     return {
         "ok": True,
         "provider": provider.name,
-        "asr_provider": to_plain(provider),
+        "asr_provider": provider_payload,
         "pipeline_file": str(pipeline_file),
         "pipeline_file_version": pipeline_file_version(pipeline_file),
         "auth_file": str(auth_file_path()),

@@ -27,6 +27,22 @@
 
 开发和自动化可使用 `TRANSVORTEX_HOME` 整体覆盖桌面数据根。Local Service 的 `--artifacts-dir` / `--cache-dir` 及内部环境变量 `TRANSVORTEX_ARTIFACTS_DIR` / `TRANSVORTEX_CACHE_DIR` 用于把固定任务目录和缓存目录传给 Python worker，不是普通用户设置。
 
+### 全局网络方式
+
+Flutter 在“翻译模型设置 > 网络”保存应用全局网络方式。配置位于用户级 `pipeline.yaml` 的 `network` 节点，不写入 Provider YAML，也不保存代理账号或密码：
+
+```yaml
+network:
+  mode: local_proxy
+  proxy_port: 7890
+```
+
+- `system`：跟随 Windows 系统代理及进程代理环境；没有代理时直连。这是默认值。
+- `direct`：忽略系统代理和 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`，直接连接远程服务。
+- `local_proxy`：通过 `http://127.0.0.1:<proxy_port>` 连接本机代理软件，应填写 HTTP 或 Mixed 端口，不是 SOCKS 端口。
+
+该策略覆盖翻译请求、Provider 模型列表与连接测试、远程 ASR 和受管组件下载。本地 ASR / FunASR localhost 请求显式绕过代理。Base URL 仍表示远程模型 API 或中转网关地址，与这里的本机网络代理是两个概念。
+
 ## 2. 凭据与 API Key
 
 长期默认凭据文件是用户目录下的 `auth.json`：
