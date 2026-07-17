@@ -1405,6 +1405,8 @@ void main() {
     );
     expect(portField, findsOneWidget);
     await tester.enterText(portField, '7890');
+    await tester.pump();
+    expect(find.text('代理地址：http://127.0.0.1:7890'), findsOneWidget);
     await tester.tap(find.text('保存网络设置'));
     await tester.pump(const Duration(milliseconds: 100));
 

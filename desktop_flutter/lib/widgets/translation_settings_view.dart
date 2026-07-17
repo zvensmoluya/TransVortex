@@ -258,11 +258,17 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                 ),
               ),
               const SizedBox(height: T.s8),
-              Text(
-                _proxyPort.text.trim().isEmpty
-                    ? '代理地址将使用 127.0.0.1。'
-                    : '代理地址：http://127.0.0.1:${_proxyPort.text.trim()}',
-                style: T.tCaption,
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _proxyPort,
+                builder: (context, value, child) {
+                  final port = value.text.trim();
+                  return Text(
+                    port.isEmpty
+                        ? '代理地址将使用 127.0.0.1。'
+                        : '代理地址：http://127.0.0.1:$port',
+                    style: T.tCaption,
+                  );
+                },
               ),
             ],
           ],
