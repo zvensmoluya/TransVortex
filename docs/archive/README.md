@@ -17,6 +17,8 @@
   - 真实日语动画样本的早期全链路测试记录。
 - [`e2e-reports/2026-07-11-mare-postmortem.md`](e2e-reports/2026-07-11-mare-postmortem.md)
   - Mare 任务请求放大问题及后续修正的复盘证据。
+- [`e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md`](e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)
+  - 可见 Flutter Release 使用开发态 external Whisper Worker 完成首阶段人工 APP E2E 的机器证据与体验结论。
 
 ## 设计快照与研究
 

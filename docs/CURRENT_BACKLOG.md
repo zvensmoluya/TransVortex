@@ -16,7 +16,6 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| 真实可见窗口完整任务验收 | 待验收 | 使用确实需要 ASR 的真实片源完成选择、提交、运行和结果审看，并由任务证据确认 `local_worker` 使用独立 `external` Worker；开发桥接不能替代已安装路径和干净系统验收 | [`运行与测试指南.md`](运行与测试指南.md) |
 | 受管 ASR 组件本地暂存验收 | 待实现 | 从本机构建产物生成隔离测试清单和 APP 数据，完成 runtime、NVIDIA 包及模型的安装、readiness、真实 `local_worker` 任务和清理，不依赖公开下载 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | ASR 组件内部发布与下载闭环 | 外部条件 | 发布固定版本资产并写入大小、SHA-256 和 `published` 清单，在全新 APP 数据目录完成下载、校验、安装和真实任务 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | 已安装路径真实任务 | 待验收 | 从正式安装目录完成真实媒体任务，证明 runtime、资源和用户目录协同正常 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
@@ -26,7 +25,7 @@
 | FFmpeg 对应源码托管 | 外部条件 | 公开分发提供与内置 LGPL shared runtime 对应的完整源码地址 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | 可复现的 CI 构建 | 待实现 | 在干净构建执行器生成 runtime、安装包、manifest 和验收结果 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。不要把这些已完成基础重新列为待办；它们也不等于公开发布就绪。
+当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 也已完成第一阶段人工 E2E：真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。不要把这些已完成基础重新列为待办；它们也不等于受管组件、已安装路径或干净系统公开发布就绪。
 
 ## P1：桌面生命周期与数据安全
 
@@ -50,6 +49,15 @@
 | 高级翻译与识别设置 | 待实现 | 补齐 fallback routing、mapping、识别高级参数和诊断修复联动 | [`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
 | 安装器视觉定制 | 待决策 | 最终图标确定后，再决定 NSIS 欢迎图、顶部图、文案和品牌化程度；不改变现有安全安装逻辑 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | 卸载时清理用户数据 | 待决策 | 决定是否提供明确的可选清理入口；默认仍应保留配置、任务、模型和凭据 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
+
+## P2：体验深化
+
+以下事项来自第一阶段真实 APP E2E，不阻断已经通过的主流程功能验收：
+
+| 事项 | 状态 | 完成边界 | 关联文档 |
+| --- | --- | --- | --- |
+| 任务运行态反馈与视觉动效深化 | 待决策 | 在不制造伪进度或视觉噪音的前提下，让长时间识别、翻译和恢复阶段具有更清楚的状态变化、交互反馈和更鲜明的美术风格 | [`FRONTEND_VISUAL_INTERACTION_SPEC.md`](FRONTEND/current/FRONTEND_VISUAL_INTERACTION_SPEC.md) |
+| 结果工作区字幕轴易用性 | 待决策 | 先明确首版字幕轴需要承担的定位、选择、浏览和校时范围，再用真实长字幕编辑任务验收；不以专业 NLE 的极致能力作为首阶段目标 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
 
 ## P2：低优先级验证
 
