@@ -21,11 +21,15 @@ enum TranslationBusy {
   loading,
   savingConnection,
   deletingConnection,
-  fetchingModels,
   testingConnection,
   savingProfile,
   savingNetwork,
 }
+
+/// State of the model catalog discovered from the selected upstream service.
+/// This catalog is deliberately separate from [ConnectionDraft.models], which
+/// contains only models the user has enabled for TransVortex.
+enum ModelDiscoveryStatus { idle, loading, ready, unavailable }
 
 @immutable
 class ConnectionTestResult {
@@ -69,8 +73,9 @@ class ModelRef {
 }
 
 /// Editable state for the connection currently shown in the connections tab.
-/// `models` is a single list — the connection's supported models — which
-/// removes the legacy `_model` ↔ `_selectedModel` dual source entirely.
+/// `models` contains only models explicitly enabled for TransVortex. Models
+/// returned by the upstream list endpoint live in the controller's discovery
+/// state until the user enables them.
 class ConnectionDraft {
   bool creating = false;
   String? presetId;
@@ -195,6 +200,18 @@ class ModelRuntimeDraft {
   }
 }
 
+class _ModelDiscoveryEntry {
+  const _ModelDiscoveryEntry({
+    required this.status,
+    required this.models,
+    required this.hint,
+  });
+
+  final ModelDiscoveryStatus status;
+  final List<String> models;
+  final String hint;
+}
+
 /// Owns all state and side effects for the translation model settings window.
 ///
 /// Compared with the legacy `_SettingsWindowState` this controller:
@@ -224,6 +241,14 @@ class TranslationSettingsController extends ChangeNotifier {
   ConnectionTestResult? _testResult;
   String? _selectedConnection;
   final ConnectionDraft _draft = ConnectionDraft();
+  final Map<String, _ModelDiscoveryEntry> _modelDiscoveryCache = {};
+  List<String> _discoveredModels = const [];
+  ModelDiscoveryStatus _modelDiscoveryStatus = ModelDiscoveryStatus.idle;
+  String _modelDiscoveryHint = '';
+  String _activeModelDiscoveryKey = '';
+  int _modelDiscoveryRequest = 0;
+  int _modelDiscoveryEpoch = 0;
+  bool _disposed = false;
   String _networkMode = 'system';
   String _proxyPort = '';
 
@@ -258,6 +283,12 @@ class TranslationSettingsController extends ChangeNotifier {
   List<ProviderOption> get connections => _snapshot?.providers ?? const [];
   String? get selectedConnection => _selectedConnection;
   ConnectionDraft get draft => _draft;
+  List<String> get discoveredModels => _discoveredModels;
+  ModelDiscoveryStatus get modelDiscoveryStatus => _modelDiscoveryStatus;
+  String get modelDiscoveryHint => _modelDiscoveryHint;
+  String get modelDiscoveryKey => _modelDiscoveryKeyForDraft();
+  bool get isDiscoveringModels =>
+      _modelDiscoveryStatus == ModelDiscoveryStatus.loading;
   String? get selectedModel => _draft.selectedModel;
   ModelRuntimeDraft? get selectedModelConfig {
     final model = _draft.selectedModel;
@@ -764,6 +795,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _message = null;
     _error = null;
     _testResult = null;
+    _activateModelDiscoveryForDraft();
     _bumpDraft();
     notifyListeners();
   }
@@ -785,6 +817,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _message = null;
     _error = null;
     _testResult = null;
+    _activateModelDiscoveryForDraft();
     _bumpDraft();
     notifyListeners();
   }
@@ -932,12 +965,20 @@ class TranslationSettingsController extends ChangeNotifier {
   void addModelFromInput() {
     final model = _draft.modelInput.trim();
     if (model.isEmpty) return;
-    if (!_draft.models.contains(model)) {
-      _draft.models = [..._draft.models, model];
-    }
-    _ensureModelRuntimeDraft(model);
-    _draft.selectedModel = model;
+    _enableModel(model);
     _draft.modelInput = '';
+    _bumpDraft();
+    notifyListeners();
+  }
+
+  void toggleDiscoveredModel(String model) {
+    final normalized = model.trim();
+    if (normalized.isEmpty) return;
+    if (_draft.models.contains(normalized)) {
+      removeModel(normalized);
+      return;
+    }
+    _enableModel(normalized);
     _bumpDraft();
     notifyListeners();
   }
@@ -988,6 +1029,7 @@ class TranslationSettingsController extends ChangeNotifier {
       _draft.creating = false;
       _selectedConnection = name;
       await _reload();
+      _resetModelDiscoveryCache();
       await _notifyConfigChanged();
       _message = '连接已保存。';
     } on Object catch (error) {
@@ -1023,38 +1065,79 @@ class TranslationSettingsController extends ChangeNotifier {
     }
   }
 
-  Future<void> fetchModels() async {
+  Future<void> fetchModels() => ensureModelsDiscovered(force: true);
+
+  /// Fetches the selected connection's upstream model catalog without adding
+  /// anything to the saved model list. Successful and failed attempts are
+  /// cached for this settings-window session; [force] is the explicit refresh
+  /// path and bypasses that cache.
+  Future<void> ensureModelsDiscovered({bool force = false}) async {
+    if (_disposed) return;
     final name = _draftName();
     if (name.isEmpty) {
-      _fail('需要先填写连接名称');
+      if (force) _fail('需要先填写连接名称');
       return;
     }
-    _begin(TranslationBusy.fetchingModels);
+    _activateModelDiscoveryForDraft();
+    final discoveryKey = _activeModelDiscoveryKey;
+    if (discoveryKey.isEmpty) {
+      if (force) _fail('需要先填写服务地址');
+      return;
+    }
+    if (!force &&
+        (_modelDiscoveryStatus == ModelDiscoveryStatus.loading ||
+            _modelDiscoveryCache.containsKey(discoveryKey))) {
+      return;
+    }
+
+    final request = ++_modelDiscoveryRequest;
+    _modelDiscoveryStatus = ModelDiscoveryStatus.loading;
+    _modelDiscoveryHint = '正在从上游服务获取模型列表…';
+    notifyListeners();
     try {
       final result = await _client.providerModels(
-        providerDraft: _connectionPayload(name, _draftModels()),
+        providerDraft: _connectionPayload(name, _draft.models),
         apiKey: _apiKeyOrNull(),
       );
-      final models = _normalized(_strList(result['models']));
-      if (models.isNotEmpty) {
-        _draft.models = _normalized([..._draft.models, ...models]);
-        for (final model in _draft.models) {
-          _ensureModelRuntimeDraft(model);
-        }
-        _draft.selectedModel ??= _draft.models.first;
-        _bumpDraft();
-        final hint = _str(result['hint_zh']);
-        _message = hint == null || hint.isEmpty
-            ? '已拉取到 ${models.length} 个模型，已并入模型清单。'
-            : '$hint 已并入模型清单。';
-      } else {
-        _message = _str(result['hint_zh']) ?? '没有解析到模型，可以手动填写模型名。';
+      if (_disposed ||
+          request != _modelDiscoveryRequest ||
+          discoveryKey != _modelDiscoveryKeyForDraft()) {
+        return;
       }
+      final code = (_str(result['code']) ?? '').trim();
+      final supportsListing = code != 'provider_model_list_unsupported';
+      final models = supportsListing
+          ? _normalized(_strList(result['models']))
+          : const <String>[];
+      final hint = (_str(result['hint_zh']) ?? '').trim();
+      final entry = _ModelDiscoveryEntry(
+        status: models.isNotEmpty
+            ? ModelDiscoveryStatus.ready
+            : ModelDiscoveryStatus.unavailable,
+        models: models,
+        hint: hint.isNotEmpty
+            ? hint
+            : models.isNotEmpty
+            ? '已从上游获取 ${models.length} 个模型。'
+            : '没有获取到上游模型，可以手动添加模型 ID。',
+      );
+      _modelDiscoveryCache[discoveryKey] = entry;
+      _applyModelDiscoveryEntry(entry);
     } on Object catch (error) {
-      _error = friendlySettingsError(error);
-    } finally {
-      _end();
+      if (_disposed ||
+          request != _modelDiscoveryRequest ||
+          discoveryKey != _modelDiscoveryKeyForDraft()) {
+        return;
+      }
+      final entry = _ModelDiscoveryEntry(
+        status: ModelDiscoveryStatus.unavailable,
+        models: const [],
+        hint: '暂时无法获取上游模型：${friendlySettingsError(error)}',
+      );
+      _modelDiscoveryCache[discoveryKey] = entry;
+      _applyModelDiscoveryEntry(entry);
     }
+    if (!_disposed) notifyListeners();
   }
 
   Future<void> testConnection() async {
@@ -1296,6 +1379,7 @@ class TranslationSettingsController extends ChangeNotifier {
       models: _draft.models,
       modelConfigs: provider.modelConfigs,
     );
+    _activateModelDiscoveryForDraft();
     _bumpDraft();
   }
 
@@ -1308,6 +1392,7 @@ class TranslationSettingsController extends ChangeNotifier {
       _draft.modelInput = '';
       _draft.selectedModel = null;
       _draft.modelConfigs = <String, ModelRuntimeDraft>{};
+      _activateModelDiscoveryForDraft();
       return;
     }
     _draft.name = _uniqueProviderName(_providerNameSeed(template));
@@ -1319,6 +1404,7 @@ class TranslationSettingsController extends ChangeNotifier {
       models: _draft.models,
       modelConfigs: template.modelConfigs,
     );
+    _activateModelDiscoveryForDraft();
   }
 
   void _loadModelRuntimeDrafts({
@@ -1361,6 +1447,64 @@ class TranslationSettingsController extends ChangeNotifier {
   void _ensureModelRuntimeDraft(String model) {
     if (_draft.modelConfigs.containsKey(model)) return;
     _draft.modelConfigs[model] = _modelRuntimeDraft(null);
+  }
+
+  void _enableModel(String model) {
+    final normalized = model.trim();
+    if (normalized.isEmpty) return;
+    if (!_draft.models.contains(normalized)) {
+      _draft.models = [..._draft.models, normalized];
+    }
+    _ensureModelRuntimeDraft(normalized);
+    _draft.selectedModel = normalized;
+  }
+
+  String _modelDiscoveryKeyForDraft() {
+    final name = _draftName();
+    final baseUrl = _draft.baseUrl.trim();
+    if (name.isEmpty || baseUrl.isEmpty) return '';
+    return Object.hash(
+      name,
+      baseUrl,
+      _draft.protocolId ?? selectedProviderOption.compatMode,
+      _draft.apiKey.trim().isNotEmpty,
+      _modelDiscoveryEpoch,
+    ).toString();
+  }
+
+  void _activateModelDiscoveryForDraft() {
+    final key = _modelDiscoveryKeyForDraft();
+    if (key == _activeModelDiscoveryKey) return;
+    _activeModelDiscoveryKey = key;
+    _modelDiscoveryRequest += 1;
+    final cached = _modelDiscoveryCache[key];
+    if (cached == null) {
+      _discoveredModels = const [];
+      _modelDiscoveryStatus = ModelDiscoveryStatus.idle;
+      _modelDiscoveryHint = '';
+      return;
+    }
+    _applyModelDiscoveryEntry(cached);
+  }
+
+  void _applyModelDiscoveryEntry(_ModelDiscoveryEntry entry) {
+    _discoveredModels = entry.models;
+    _modelDiscoveryStatus = entry.status;
+    _modelDiscoveryHint = entry.hint;
+  }
+
+  void _resetModelDiscoveryCache() {
+    _modelDiscoveryCache.clear();
+    _modelDiscoveryEpoch += 1;
+    _activeModelDiscoveryKey = '';
+    _activateModelDiscoveryForDraft();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _modelDiscoveryRequest += 1;
+    super.dispose();
   }
 
   Map<String, Object?> _currentProviderCapabilities() {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../model/translation_settings_controller.dart';
@@ -66,11 +68,13 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   final _targetOutputTokens = TextEditingController();
   final _profileName = TextEditingController();
   final _proxyPort = TextEditingController();
+  final _modelSearch = TextEditingController();
 
   int _seededDraftRevision = -1;
   String? _seededProfileId;
   String? _seededRuntimeModel;
   String? _seededNetworkKey;
+  String? _seededModelDiscoveryContext;
   final Set<String> _customCapabilityFields = <String>{};
   bool _advancedCapacityExpanded = false;
 
@@ -96,6 +100,7 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     _targetOutputTokens.dispose();
     _profileName.dispose();
     _proxyPort.dispose();
+    _modelSearch.dispose();
     super.dispose();
   }
 
@@ -130,6 +135,18 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     if (networkKey != _seededNetworkKey) {
       _seededNetworkKey = networkKey;
       _proxyPort.text = c.proxyPort;
+    }
+    final discoveryContext = '${c.creating}:${c.modelDiscoveryKey}';
+    if (!c.isBusy && discoveryContext != _seededModelDiscoveryContext) {
+      _seededModelDiscoveryContext = discoveryContext;
+      _modelSearch.clear();
+      final discoveryKey = c.modelDiscoveryKey;
+      if (!c.creating && discoveryKey.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || c.modelDiscoveryKey != discoveryKey) return;
+          unawaited(c.ensureModelsDiscovered());
+        });
+      }
     }
   }
 
@@ -320,11 +337,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
         busy: c.busy == TranslationBusy.testingConnection,
         onTap: busy ? null : _testConnection,
       ),
-      FeedbackActionButton(
-        label: '拉取模型',
-        busy: c.busy == TranslationBusy.fetchingModels,
-        onTap: busy ? null : _fetchModels,
-      ),
       if (!creating && c.selectedConnection != null)
         FeedbackActionButton(
           label: '删除连接',
@@ -420,8 +432,18 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
               obscure: true,
               onChanged: c.editApiKey,
             ),
-            const SizedBox(height: T.s16),
-            Text('模型', style: T.tCaption.copyWith(fontWeight: T.wBold)),
+          ],
+        ),
+        SettingsSection(
+          title: '已启用模型',
+          divider: false,
+          children: [
+            Text(
+              c.draft.models.isEmpty
+                  ? '还没有启用模型。请从上游列表选择，或手动添加模型 ID。'
+                  : '点击模型可编辑翻译设置；只有这里的模型可以加入常用模型。修改后请保存连接。',
+              style: T.tCaption,
+            ),
             const SizedBox(height: T.s8),
             Wrap(
               spacing: T.s8,
@@ -436,22 +458,28 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                   ),
                 InlineTextField(
                   controller: _modelInput,
-                  hint: c.draft.models.isEmpty ? '填写模型名' : '添加模型名',
+                  hint: '手动填写模型 ID',
                   onChanged: c.editModelInput,
                   onSubmitted: (value) {
                     c.editModelInput(value);
                     _addModelFromInput();
                   },
                 ),
-                ActionButton(label: '添加模型', onTap: _addModelFromInput),
+                ActionButton(label: '启用模型', onTap: _addModelFromInput),
               ],
             ),
-            if (_modelHelp() != null) ...[
-              const SizedBox(height: T.s12),
-              Text(_modelHelp()!, style: T.tCaption, maxLines: 2),
-            ],
-            if (c.selectedModelConfig != null) ...[..._modelRuntimeChildren()],
           ],
+        ),
+        if (c.selectedModelConfig != null)
+          SettingsSection(
+            title: '模型翻译设置 · ${c.selectedModel}',
+            divider: false,
+            children: _modelRuntimeChildren(),
+          ),
+        SettingsSection(
+          title: '上游可用模型',
+          divider: false,
+          children: [_upstreamModelCatalog()],
         ),
       ],
     );
@@ -474,9 +502,108 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     return '自定义厂商';
   }
 
-  String? _modelHelp() {
-    if (c.draft.models.isNotEmpty) return null;
-    return '这个连接还没有模型，填写模型名或点“拉取模型”。';
+  Widget _upstreamModelCatalog() {
+    final status = c.modelDiscoveryStatus;
+    final models = _visibleDiscoveredModels();
+    final total = c.discoveredModels.length;
+    final query = _modelSearch.text.trim();
+    final statusText = switch (status) {
+      ModelDiscoveryStatus.idle =>
+        c.creating ? '保存连接后会自动获取；也可以先填写凭据再刷新。' : '准备自动获取上游模型列表。',
+      ModelDiscoveryStatus.loading => '正在从上游服务获取模型列表…',
+      ModelDiscoveryStatus.ready =>
+        c.modelDiscoveryHint.isEmpty
+            ? '已从上游获取 $total 个模型。'
+            : c.modelDiscoveryHint,
+      ModelDiscoveryStatus.unavailable =>
+        c.modelDiscoveryHint.isEmpty
+            ? '没有获取到上游模型，可以手动添加模型 ID。'
+            : c.modelDiscoveryHint,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (status == ModelDiscoveryStatus.loading) ...[
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 1.6),
+              ),
+              const SizedBox(width: T.s8),
+            ],
+            Expanded(
+              child: Text(
+                statusText,
+                style: T.tCaption.copyWith(
+                  color: status == ModelDiscoveryStatus.unavailable
+                      ? T.warn
+                      : T.muted,
+                ),
+              ),
+            ),
+            const SizedBox(width: T.s8),
+            FeedbackActionButton(
+              label: '刷新列表',
+              busy: c.isDiscoveringModels,
+              onTap: c.isBusy || c.isDiscoveringModels ? null : _fetchModels,
+            ),
+          ],
+        ),
+        if (c.discoveredModels.isNotEmpty) ...[
+          const SizedBox(height: T.s12),
+          SizedBox(
+            width: 320,
+            child: Input(
+              label: '筛选上游模型',
+              controller: _modelSearch,
+              hintText: '输入模型名称',
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(height: T.s12),
+          if (models.isEmpty)
+            const Text('没有匹配的上游模型。', style: T.tCaption)
+          else
+            Wrap(
+              spacing: T.s8,
+              runSpacing: T.s8,
+              children: [
+                for (final model in models)
+                  ChoicePill(
+                    key: ValueKey('discovered-model-$model'),
+                    label: model,
+                    selected: c.draft.models.contains(model),
+                    showCheck: true,
+                    onTap: () {
+                      if (!c.isBusy) c.toggleDiscoveredModel(model);
+                    },
+                  ),
+              ],
+            ),
+          if (models.length <
+              c.discoveredModels
+                  .where(
+                    (model) =>
+                        query.isEmpty ||
+                        model.toLowerCase().contains(query.toLowerCase()),
+                  )
+                  .length) ...[
+            const SizedBox(height: T.s8),
+            const Text('结果较多，请继续输入名称缩小范围。', style: T.tCaption),
+          ],
+        ],
+      ],
+    );
+  }
+
+  List<String> _visibleDiscoveredModels() {
+    final query = _modelSearch.text.trim().toLowerCase();
+    return c.discoveredModels
+        .where((model) => query.isEmpty || model.toLowerCase().contains(query))
+        .take(60)
+        .toList();
   }
 
   List<Widget> _modelRuntimeChildren() {
@@ -484,14 +611,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     final recommendation = c.selectedModelRecommendation;
 
     return [
-      const SizedBox(height: T.s16),
-      const Divider(height: 1, color: T.line),
-      const SizedBox(height: T.s12),
-      Text(
-        '模型翻译设置 · ${c.selectedModel}',
-        style: T.tCaption.copyWith(fontWeight: T.wBold),
-      ),
-      const SizedBox(height: T.s8),
       Wrap(
         spacing: T.s8,
         runSpacing: T.s8,

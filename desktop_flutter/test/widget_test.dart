@@ -1443,6 +1443,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
+    await tester.drag(find.byType(ListView).last, const Offset(0, -240));
+    await tester.pumpAndSettle();
     expect(find.text('模型翻译设置 · gemini-3.5-flash'), findsOneWidget);
     expect(find.text('每批行数上限'), findsOneWidget);
     expect(find.textContaining('规格来源：'), findsNothing);
@@ -1584,7 +1586,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings window fetches models into the draft', (
+  testWidgets('translation settings discovers models before enabling them', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(820, 600));
@@ -1613,13 +1615,31 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('拉取模型'));
     await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.drag(find.byType(ListView).last, const Offset(0, -360));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).last, const Offset(0, -360));
+    await tester.pumpAndSettle();
 
     expect(find.text('model-a'), findsOneWidget);
     expect(find.text('model-b'), findsOneWidget);
-    expect(find.textContaining('并入模型清单'), findsOneWidget);
+    expect(find.byKey(const ValueKey('remove-model-model-b')), findsNothing);
+    expect(find.textContaining('已拉取到 2 个模型'), findsOneWidget);
+
+    final discoveredModel = find.byKey(
+      const ValueKey('discovered-model-model-b'),
+    );
+    await tester.ensureVisible(discoveredModel);
+    await tester.pumpAndSettle();
+    await tester.tap(discoveredModel);
+    await tester.pump();
+    await tester.drag(find.byType(ListView).last, const Offset(0, 360));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).last, const Offset(0, 360));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('remove-model-model-b')), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -1669,7 +1689,8 @@ void main() {
     await tester.enterText(apiKeyField, 'sk-edited');
 
     final modelInput = find.byWidgetPredicate(
-      (widget) => widget is TextField && widget.decoration?.hintText == '添加模型名',
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == '手动填写模型 ID',
     );
     expect(modelInput, findsOneWidget);
     await tester.enterText(modelInput, 'typed-model');

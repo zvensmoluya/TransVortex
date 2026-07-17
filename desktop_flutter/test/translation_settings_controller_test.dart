@@ -475,15 +475,49 @@ void main() {
       expect(controller.error, contains('正在被常用模型使用'));
     });
 
-    test('fetchModels merges results into the draft model list', () async {
-      await controller.load();
-      controller.selectConnection('openai');
-      await controller.fetchModels();
+    test(
+      'fetchModels keeps discovery separate until a model is enabled',
+      () async {
+        await controller.load();
+        controller.selectConnection('openai');
+        await controller.fetchModels();
 
-      expect(controller.draft.models, contains('gpt-4o-mini'));
-      final methods = callsAfterInitialLoad().map((c) => c.method).toList();
-      expect(methods, isNot(contains('provider.routing.save')));
-    });
+        expect(controller.discoveredModels, ['gpt-4o', 'gpt-4o-mini']);
+        expect(controller.draft.models, isNot(contains('gpt-4o-mini')));
+
+        controller.toggleDiscoveredModel('gpt-4o-mini');
+
+        expect(controller.draft.models, contains('gpt-4o-mini'));
+        expect(controller.selectedModel, 'gpt-4o-mini');
+        final methods = callsAfterInitialLoad().map((c) => c.method).toList();
+        expect(methods, isNot(contains('provider.routing.save')));
+      },
+    );
+
+    test(
+      'automatic model discovery caches until the connection is saved',
+      () async {
+        await controller.load();
+        controller.selectConnection('openai');
+
+        await controller.ensureModelsDiscovered();
+        await controller.ensureModelsDiscovered();
+
+        expect(controller.modelDiscoveryStatus, ModelDiscoveryStatus.ready);
+        expect(
+          transport.calls.where((call) => call.method == 'provider.models'),
+          hasLength(1),
+        );
+
+        await controller.saveConnection();
+        await controller.ensureModelsDiscovered();
+
+        expect(
+          transport.calls.where((call) => call.method == 'provider.models'),
+          hasLength(2),
+        );
+      },
+    );
 
     test(
       'removeModel rejects models referenced by a routing profile',
