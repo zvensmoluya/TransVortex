@@ -110,12 +110,15 @@ providers:
     env_key: SMOKE_PROVIDER_KEY
     models:
 __SMOKE_PROVIDER_MODELS__
+    capabilities:
+      reasoning_effort_param: reasoning_effort
+      reasoning_efforts: [none, low, medium, high]
     limits:
       streaming_enabled: false
       retry: 1
       timeout_seconds: 10
 routing:
-  primary: {provider: DemoTranslator, model: __SMOKE_PRIMARY_MODEL__}
+  primary: {provider: DemoTranslator, model: __SMOKE_PRIMARY_MODEL__, reasoning_effort: low}
 "@
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)

@@ -585,14 +585,23 @@ def test_save_provider_routing_writes_named_profiles(tmp_path: Path) -> None:
                 {
                     "id": "route_2",
                     "name": "配置 2",
-                    "primary": {"provider": "p2", "model": "m2"},
-                    "fallback": [{"provider": "p1", "model": "m1"}],
+                    "primary": {
+                        "provider": "p2",
+                        "model": "m2",
+                        "reasoning_effort": "service_default",
+                    },
+                    "fallback": [{"provider": "p1", "model": "m1", "reasoning_effort": "none"}],
                 },
             ],
         },
     )
     assert payload["active_routing_profile"] == "route_2"
-    assert payload["routing"]["primary"] == {"provider": "p2", "model": "m2"}
+    assert payload["routing"]["primary"] == {
+        "provider": "p2",
+        "model": "m2",
+        "reasoning_effort": "service_default",
+    }
+    assert payload["routing"]["fallback"][0]["reasoning_effort"] == "none"
     assert payload["routing_profiles"][1]["name"] == "配置 2"
     raw = (root / "providers.local.yaml").read_text(encoding="utf-8")
     assert "active_profile: route_2" in raw
@@ -621,7 +630,11 @@ def test_save_provider_routing_legacy_payload_updates_default_without_switching_
         },
     )
     assert payload["active_routing_profile"] == "route_2"
-    assert payload["routing"]["primary"] == {"provider": "p2", "model": "m2"}
+    assert payload["routing"]["primary"] == {
+        "provider": "p2",
+        "model": "m2",
+        "reasoning_effort": "auto",
+    }
     default = payload["routing_profiles"][0]
     assert default["id"] == "default"
     assert default["fallback"][0]["model"] == "m2"

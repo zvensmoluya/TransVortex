@@ -155,7 +155,7 @@ routing:
 
 ### 3.1 模型能力预设
 
-正规厂商预设可以通过模型级 `model_configs` 同时提供厂商规格和 TransVortex 的稳定分片建议。Flutter 默认暴露每批行数上限和模型原生推理档位；已知厂商模型可使用“自动（推荐）”或切换到“小批量（120 行）”。“高级容量设置”允许为自定义模型覆盖上下文窗口、最大输入、最大输出和目标输出预算，留空表示继续继承目录或连接配置。
+正规厂商预设可以通过模型级 `model_configs` 提供厂商规格和 TransVortex 的稳定分片建议。Flutter 连接页默认暴露每批行数上限；已知厂商模型可使用“自动（推荐）”或切换到“小批量（120 行）”。“高级容量设置”允许为自定义模型覆盖上下文窗口、最大输入、最大输出和目标输出预算，留空表示继续继承目录或连接配置。
 
 应用还内置一份经过核对的全局模型目录，首批覆盖 OpenAI、Anthropic、Google Gemini 和 DeepSeek 的主流文本模型。目录按精确模型 ID 或显式别名匹配，与连接名称和 Base URL 无关：例如自定义网关中的 `openai/gpt-5.6-terra` 可以继承 GPT-5.6 Terra 的官方容量和翻译建议，但 `gpt-5.6-terra:extended`、`my-gpt-5.6-terra-proxy` 这类未核对变体不会被猜测匹配。模型级用户覆盖具有最高优先级；没有模型级覆盖时，目录规格与连接级渠道限制都视为上限，取两者中较低的已知值。目录只能补齐未知能力，不能把代理商或自定义网关声明的限制放大。
 
@@ -166,6 +166,33 @@ routing:
 模型没有可信规格时，容量字段可以保持未知。运行时优先使用独立的 `max_input_tokens` 规划输入；没有该值时才按上下文窗口和安全比例估算。输入与输出容量仍未知时，运行时会把单批字幕限制在 120 行，不把未知容量解释成无限；用户仅填写很大的行数、但没有同时提供可信容量时，也不会绕过这层保护。
 
 现有配置键 `recommended_output_tokens` 在产品界面中称为“目标输出预算”：它是容量规划使用的软目标，不是模型或渠道的最大输出能力；硬上限仍由 `max_output_tokens` 表达。
+
+### 3.2 推理强度作用域
+
+连接的 `capabilities.reasoning_effort_param` 与 `capabilities.reasoning_efforts` 只声明协议字段和可用档位。用户默认值保存在常用模型的 routing route 上，主模型和每个 fallback 可以分别设置：
+
+```yaml
+routing_profiles:
+  - id: default
+    name: Default
+    primary:
+      provider: zven_openai
+      model: gpt-5.6-terra
+      reasoning_effort: auto
+    fallback:
+      - provider: backup
+        model: gpt-5.5
+        reasoning_effort: service_default
+```
+
+- `auto`：使用模型级兼容覆盖或内置模型目录的推荐值；界面会显示当前解析出的具体档位。
+- `service_default`：不发送推理强度字段；连接 request mapping 中已有的同字段覆盖也会被移除。
+- `none`：明确向支持该值的模型发送“关闭”，与省略字段不同。
+- `minimal`、`low`、`medium`、`high`、`xhigh`、`max`：明确发送对应档位。
+
+主窗口可以在开始任务前从翻译模型菜单内临时覆盖主模型的推理强度。界面把 `auto` 与 `service_default` 作为两种模式，把模型实际支持的 `none`、`low`、`high` 等有序档位放在离散滑杆中；没有声明支持的档位不会被猜测展示。最终值随完整 routing 写入任务快照；fallback 仍使用常用模型中各自保存的值，继续任务也沿用原任务快照。
+
+连接页当前模型旁的“测试请求”思考程度只作用于下一次连接测试，用来验证该模型、协议映射和上游账号是否接受指定档位。测试使用当前选中的已启用模型，而不是固定取列表第一个模型；该临时值会传入 `provider.test`，但不会写入 Provider YAML、`model_configs` 或 routing。旧 Provider `model_configs[].reasoning_effort` 仍作为 `auto` 的兼容来源，但新的桌面配置不再把它当作连接级用户偏好。
 
 ## 4. 翻译策略配置
 

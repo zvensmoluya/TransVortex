@@ -390,12 +390,14 @@ def _base_request(
     source_lang: str,
     target_lang: str,
     model: str,
+    reasoning_effort: str = "auto",
     memory_prompt: str = "",
     protocol_recovery_hint: str = "",
     adaptive_context_hint: str = "",
 ) -> NormalizedRequest:
     return NormalizedRequest(
         model=model,
+        reasoning_effort=reasoning_effort,
         lines=chunk.lines,
         source_lang=source_lang,
         target_lang=target_lang,
@@ -532,6 +534,7 @@ def _recover_rows_in_batches(
     target_lang: str,
     provider_name: str,
     model: str,
+    reasoning_effort: str,
     validation: TranslationValidationResult,
     recovery_ids: list[int],
     memory_prompt: str,
@@ -565,6 +568,7 @@ def _recover_rows_in_batches(
             segment_ids=batch_ids,
             provider=provider_name,
             model=model,
+            reasoning_effort=reasoning_effort,
             batch_index=batch_index + 1,
             batch_total=(len(recovery_ids) + max_batch_lines - 1) // max_batch_lines,
         )
@@ -574,6 +578,7 @@ def _recover_rows_in_batches(
             source_lang=source_lang,
             target_lang=target_lang,
             model=model,
+            reasoning_effort=reasoning_effort,
             memory_prompt=memory_prompt,
             protocol_recovery_hint=_batch_recovery_hint(validation, batch_ids),
         )
@@ -630,6 +635,7 @@ def _repair_row(
     target_lang: str,
     provider_name: str,
     model: str,
+    reasoning_effort: str,
     issue: TranslationValidationIssue,
     current_rows: list[ParsedTranslationRow],
     memory_prompt: str = "",
@@ -659,11 +665,13 @@ def _repair_row(
                 segment_id=seg_id,
                 provider=provider_name,
                 model=model,
+                reasoning_effort=reasoning_effort,
                 attempt=attempt + 1,
                 max_attempts=max_attempts,
             )
             req = NormalizedRequest(
                 model=model,
+                reasoning_effort=reasoning_effort,
                 lines=repair_chunk.lines,
                 source_lang=source_lang,
                 target_lang=target_lang,
@@ -719,6 +727,7 @@ def _repair_rows(
     target_lang: str,
     provider_name: str,
     model: str,
+    reasoning_effort: str,
     validation: TranslationValidationResult,
     memory_prompt: str = "",
     progress_callback: ProgressCallback | None = None,
@@ -749,6 +758,7 @@ def _repair_rows(
             target_lang=target_lang,
             provider_name=provider_name,
             model=model,
+            reasoning_effort=reasoning_effort,
             issue=issue,
             current_rows=rows,
             memory_prompt=memory_prompt,
@@ -845,6 +855,7 @@ def translate_chunk(
                         segment_ids=request_chunk.segment_ids,
                         provider=route.provider,
                         model=route.model,
+                        reasoning_effort=route.reasoning_effort,
                         attempt=attempt + 1,
                         max_attempts=retries,
                         memory_entries=_memory_prompt_entry_count(memory_prompt),
@@ -855,6 +866,7 @@ def translate_chunk(
                         source_lang=source_lang,
                         target_lang=target_lang,
                         model=route.model,
+                        reasoning_effort=route.reasoning_effort,
                         memory_prompt=memory_prompt,
                         protocol_recovery_hint=protocol_hint,
                         adaptive_context_hint=_adaptive_context_hint(request_chunk),
@@ -886,6 +898,7 @@ def translate_chunk(
                             target_lang=target_lang,
                             provider_name=route.provider,
                             model=route.model,
+                            reasoning_effort=route.reasoning_effort,
                             validation=validation,
                             recovery_ids=recovery_ids,
                             memory_prompt=memory_prompt,
@@ -922,6 +935,7 @@ def translate_chunk(
                     target_lang=target_lang,
                     provider_name=route.provider,
                     model=route.model,
+                    reasoning_effort=route.reasoning_effort,
                     validation=validation,
                     memory_prompt=memory_prompt,
                     progress_callback=progress_callback,
@@ -933,6 +947,13 @@ def translate_chunk(
                 provider_meta = dict(response.provider_meta or {})
                 model_config = provider.model_config(route.model)
                 effective_capabilities = provider.capabilities_for_model(route.model)
+                effective_reasoning_effort = (
+                    ""
+                    if route.reasoning_effort == "service_default"
+                    else str(model_config.reasoning_effort or "").strip()
+                    if route.reasoning_effort == "auto"
+                    else route.reasoning_effort
+                )
                 if batch_recovery_artifacts:
                     provider_meta["batch_recovery_requests"] = len(batch_recovery_artifacts)
                     provider_meta["batch_recovered_rows"] = sum(
@@ -983,7 +1004,8 @@ def translate_chunk(
                             "recommended_output_tokens": int(
                                 effective_capabilities.recommended_output_tokens or 0
                             ),
-                            "reasoning_effort": str(model_config.reasoning_effort or ""),
+                            "reasoning_effort": effective_reasoning_effort,
+                            "reasoning_policy": route.reasoning_effort,
                         },
                         "chunk_meta": dict(request_chunk.meta or {}),
                     },

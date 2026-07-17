@@ -39,6 +39,7 @@ from .models import (
     ModelConfig,
     ModelListConfig,
     NetworkConfig,
+    normalize_route_reasoning_effort,
     PipelineConfig,
     ProviderConfig,
     ProviderLimits,
@@ -504,7 +505,14 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 def _route_target(raw: dict[str, Any] | None) -> RouteTarget:
     raw = raw or {}
-    return RouteTarget(provider=str(raw.get("provider", "")), model=str(raw.get("model", "")))
+    reasoning_effort = normalize_route_reasoning_effort(
+        raw.get("reasoning_effort", raw.get("reasoningEffort", "auto"))
+    )
+    return RouteTarget(
+        provider=str(raw.get("provider", "")),
+        model=str(raw.get("model", "")),
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def _route_fallback(raw: Any) -> list[RouteTarget]:

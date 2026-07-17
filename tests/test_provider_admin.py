@@ -307,6 +307,7 @@ def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> 
             "capabilities": {"max_output_tokens": 0},
         },
         model="gpt-5.6-terra",
+        reasoning_effort="high",
         api_key="secret",
     )
 
@@ -316,6 +317,11 @@ def test_provider_connection_uses_same_model_catalog_as_runtime(monkeypatch) -> 
         "sent": True,
         "path": "max_output_tokens",
         "value": 128000,
+    }
+    assert features["reasoning_effort"] == {
+        "sent": True,
+        "path": "reasoning.effort",
+        "value": "high",
     }
 
 

@@ -22,6 +22,7 @@ from transvortex.core.translate import (
 
 class FakeProviderClient:
     calls = 0
+    reasoning_efforts: list[str] = []
 
     def __init__(self, _provider: ProviderConfig) -> None:
         pass
@@ -30,6 +31,7 @@ class FakeProviderClient:
         from transvortex.app.models import NormalizedResponse
 
         FakeProviderClient.calls += 1
+        FakeProviderClient.reasoning_efforts.append(req.reasoning_effort)
         if req.prompt_mode == "repair":
             return NormalizedResponse(numbered_lines=["[1] 你好"], raw_text="[1] 你好")
         return NormalizedResponse(numbered_lines=["[1] "], raw_text="[1] ")
@@ -63,16 +65,20 @@ def test_translate_chunk_repairs_empty_row(monkeypatch, tmp_path) -> None:
     config = AppConfig(
         pipeline=PipelineConfig(artifacts_dir=tmp_path),
         providers={"p1": provider},
-        routing=RoutingConfig(primary=RouteTarget(provider="p1", model="m1")),
+        routing=RoutingConfig(
+            primary=RouteTarget(provider="p1", model="m1", reasoning_effort="high")
+        ),
     )
     chunk = Chunk(chunk_id="c00000", segment_ids=[1], lines=["[1] hello"])
     FakeProviderClient.calls = 0
+    FakeProviderClient.reasoning_efforts = []
     monkeypatch.setattr("transvortex.core.translate.build_provider_client", lambda provider: FakeProviderClient(provider))
     result = translate_chunk(config, chunk, source_lang="en", target_lang="zh-CN")
     assert result["rows"] == [{"id": 1, "text_tgt": "你好"}]
     assert result["repairs"][0]["id"] == 1
     assert result["validation"]["issues"] == []
     assert FakeProviderClient.calls == 2
+    assert FakeProviderClient.reasoning_efforts == ["high", "high"]
 
 
 def test_translate_chunk_passes_memory_prompt_to_repair(monkeypatch, tmp_path) -> None:

@@ -110,6 +110,7 @@ def generate_memory_patch(
             )
             req = NormalizedRequest(
                 model=route.model,
+                reasoning_effort=route.reasoning_effort,
                 lines=[],
                 source_lang=source_lang,
                 target_lang=target_lang,

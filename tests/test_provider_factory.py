@@ -513,6 +513,30 @@ def test_model_runtime_settings_override_provider_payload_defaults() -> None:
     assert payload["max_output_tokens"] == 32000
     assert payload["reasoning"] == {"effort": "low"}
 
+    service_default_payload = _build_payload(
+        cfg,
+        NormalizedRequest(
+            model="m1",
+            lines=["[1] hello"],
+            source_lang="en",
+            target_lang="zh-CN",
+            reasoning_effort="service_default",
+        ),
+    )
+    assert "reasoning" not in service_default_payload
+
+    disabled_payload = _build_payload(
+        cfg,
+        NormalizedRequest(
+            model="m1",
+            lines=["[1] hello"],
+            source_lang="en",
+            target_lang="zh-CN",
+            reasoning_effort="none",
+        ),
+    )
+    assert disabled_payload["reasoning"] == {"effort": "none"}
+
 
 def test_openai_chat_output_token_param_can_override_field_name() -> None:
     cfg = ProviderConfig(

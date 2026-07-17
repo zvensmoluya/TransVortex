@@ -398,6 +398,39 @@ asr_providers:
     assert captured["source_lang"] == "ja"
 
 
+def test_app_service_forwards_reasoning_effort_to_provider_test(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    captured = {}
+
+    def fake_test(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return {"status": "PASS", "checks": []}
+
+    monkeypatch.setattr("transvortex.app.desktop_api.run_provider_connection_test", fake_test)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "provider.test",
+            {
+                "provider_draft": {
+                    "name": "p1",
+                    "base_url": "https://example.com/v1",
+                    "models": ["m1"],
+                },
+                "model": "m1",
+                "reasoning_effort": "high",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["status"] == "PASS"
+    assert captured["model"] == "m1"
+    assert captured["reasoning_effort"] == "high"
+
+
 def test_app_service_desktop_snapshot_preserves_translation_when_asr_config_invalid(
     tmp_path: Path,
     monkeypatch,

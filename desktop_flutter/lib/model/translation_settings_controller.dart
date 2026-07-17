@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../services/app_service_client.dart';
 import '../services/settings_error.dart';
+import 'reasoning_effort.dart';
 
 /// Sink used to mirror the active translation route back onto the main window
 /// label (wired to `WindowStateBridge.setTranslationDefault`).
@@ -49,10 +50,15 @@ class ConnectionTestResult {
 /// model names — a model can only be picked from a saved connection.
 @immutable
 class ModelRef {
-  const ModelRef({required this.connection, required this.model});
+  const ModelRef({
+    required this.connection,
+    required this.model,
+    this.reasoningEffort = reasoningEffortAuto,
+  });
 
   final String connection;
   final String model;
+  final String reasoningEffort;
 
   bool get isEmpty => connection.isEmpty && model.isEmpty;
 
@@ -251,6 +257,7 @@ class TranslationSettingsController extends ChangeNotifier {
   bool _disposed = false;
   String _networkMode = 'system';
   String _proxyPort = '';
+  String _connectionTestReasoningEffort = reasoningEffortAuto;
 
   // Bumped whenever the draft's text fields are replaced wholesale (selecting a
   // connection, entering/leaving create mode, picking a preset/protocol). The
@@ -293,6 +300,37 @@ class TranslationSettingsController extends ChangeNotifier {
   ModelRuntimeDraft? get selectedModelConfig {
     final model = _draft.selectedModel;
     return model == null ? null : _draft.modelConfigs[model];
+  }
+
+  ReasoningEffortSupport get connectionTestReasoningSupport {
+    final model = selectedModel;
+    if (model == null || model.isEmpty) {
+      return const ReasoningEffortSupport.unsupported();
+    }
+    final catalog = selectedModelCatalog;
+    final capabilities = _currentProviderCapabilities();
+    final capabilityEfforts = _strList(
+      capabilities['reasoning_efforts'] ?? capabilities['reasoningEfforts'],
+    );
+    final efforts = catalog == null
+        ? capabilityEfforts
+        : catalog.reasoningEfforts;
+    final configured = selectedModelConfig?.reasoningEffort.trim() ?? '';
+    final recommended =
+        selectedModelRecommendation?.reasoningEffort.trim() ?? '';
+    final automatic = configured.isNotEmpty ? configured : recommended;
+    final parameter =
+        '${capabilities['reasoning_effort_param'] ?? capabilities['reasoningEffortParam'] ?? ''}'
+            .trim();
+    final supported = catalog == null
+        ? parameter.isNotEmpty || efforts.isNotEmpty || automatic.isNotEmpty
+        : efforts.isNotEmpty;
+    return buildReasoningEffortSupport(
+      currentValue: _connectionTestReasoningEffort,
+      automaticEffort: automatic,
+      efforts: efforts,
+      supported: supported,
+    );
   }
 
   ModelRuntimeOption? get selectedModelRecommendation {
@@ -489,8 +527,7 @@ class TranslationSettingsController extends ChangeNotifier {
         number(current.maxContextTokens) == expectedContext &&
         number(current.maxInputTokens) == expectedInput &&
         number(current.maxOutputTokens) == expectedOutput &&
-        number(current.recommendedOutputTokens) == expectedTarget &&
-        current.reasoningEffort == recommended.reasoningEffort;
+        number(current.recommendedOutputTokens) == expectedTarget;
   }
 
   int _effectiveModelLimit(
@@ -512,39 +549,6 @@ class TranslationSettingsController extends ChangeNotifier {
     return known.isEmpty
         ? 0
         : known.reduce((left, right) => left < right ? left : right);
-  }
-
-  List<String> get reasoningEfforts {
-    final capabilities = _currentProviderCapabilities();
-    final configured = _strList(
-      capabilities['reasoning_efforts'] ?? capabilities['reasoningEfforts'],
-    ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
-    final recommendedCapabilities =
-        _recommendedPresetForSelectedModel()?.capabilities ??
-        const <String, Object?>{};
-    final recommended = _strList(
-      recommendedCapabilities['reasoning_efforts'] ??
-          recommendedCapabilities['reasoningEfforts'],
-    ).map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
-    final current = selectedModelConfig?.reasoningEffort.trim() ?? '';
-    final catalogRecommended =
-        selectedModelCatalog?.reasoningEfforts ?? const [];
-    final available = catalogRecommended.isNotEmpty
-        ? catalogRecommended
-        : (recommended.isNotEmpty ? recommended : configured);
-    return _normalized([...available, if (current.isNotEmpty) current]);
-  }
-
-  bool get supportsReasoningEffort {
-    final capabilities = _currentProviderCapabilities();
-    final param =
-        (_str(
-                  capabilities['reasoning_effort_param'] ??
-                      capabilities['reasoningEffortParam'],
-                ) ??
-                '')
-            .trim();
-    return param.isNotEmpty || reasoningEfforts.isNotEmpty;
   }
 
   bool get creating => _draft.creating;
@@ -611,7 +615,11 @@ class TranslationSettingsController extends ChangeNotifier {
     final profile = activeProfile;
     if (profile == null) return null;
     if (profile.provider.isEmpty && profile.model.isEmpty) return null;
-    return ModelRef(connection: profile.provider, model: profile.model);
+    return ModelRef(
+      connection: profile.provider,
+      model: profile.model,
+      reasoningEffort: normalizeReasoningEffort(profile.reasoningEffort),
+    );
   }
 
   List<ModelRef> get fallback {
@@ -623,9 +631,26 @@ class TranslationSettingsController extends ChangeNotifier {
       final provider = (_str(map['provider']) ?? '').trim();
       final model = (_str(map['model']) ?? '').trim();
       if (provider.isEmpty || model.isEmpty) continue;
-      routes.add(ModelRef(connection: provider, model: model));
+      routes.add(
+        ModelRef(
+          connection: provider,
+          model: model,
+          reasoningEffort: normalizeReasoningEffort(
+            map['reasoning_effort'] ?? map['reasoningEffort'],
+          ),
+        ),
+      );
     }
     return routes;
+  }
+
+  ReasoningEffortSupport reasoningSupport(ModelRef ref) {
+    return reasoningEffortSupportFor(
+      _snapshot,
+      providerName: ref.connection,
+      model: ref.model,
+      currentValue: ref.reasoningEffort,
+    );
   }
 
   /// Header text for the top bar: describes the active profile + primary model.
@@ -831,7 +856,17 @@ class TranslationSettingsController extends ChangeNotifier {
     if (!_draft.models.contains(model) || _draft.selectedModel == model) return;
     _draft.selectedModel = model;
     _ensureModelRuntimeDraft(model);
+    _connectionTestReasoningEffort = reasoningEffortAuto;
+    _testResult = null;
     _bumpDraft();
+    notifyListeners();
+  }
+
+  void setConnectionTestReasoningEffort(String value) {
+    final normalized = normalizeReasoningEffort(value);
+    if (_connectionTestReasoningEffort == normalized) return;
+    _connectionTestReasoningEffort = normalized;
+    _testResult = null;
     notifyListeners();
   }
 
@@ -870,13 +905,6 @@ class TranslationSettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setModelReasoningEffort(String value) {
-    final config = selectedModelConfig;
-    if (config == null || config.reasoningEffort == value) return;
-    config.reasoningEffort = value;
-    notifyListeners();
-  }
-
   void applyConservativeBatchLimit() {
     final config = selectedModelConfig;
     if (config == null || config.maxBatchLines == '120') return;
@@ -905,7 +933,6 @@ class TranslationSettingsController extends ChangeNotifier {
       ),
     );
     _applyInheritedCapacity(config, recommended);
-    config.reasoningEffort = recommended.reasoningEffort;
     _bumpDraft();
     notifyListeners();
   }
@@ -1152,7 +1179,8 @@ class TranslationSettingsController extends ChangeNotifier {
     try {
       final result = await _client.providerTest(
         providerDraft: _connectionPayload(name, models),
-        model: models.first,
+        model: selectedModel ?? models.first,
+        reasoningEffort: _connectionTestReasoningEffort,
         apiKey: _apiKeyOrNull(),
       );
       final status = _str(result['status']) ?? 'UNKNOWN';
@@ -1241,6 +1269,9 @@ class TranslationSettingsController extends ChangeNotifier {
         'primary': {
           'provider': current?.provider ?? '',
           'model': current?.model ?? '',
+          'reasoning_effort': normalizeReasoningEffort(
+            current?.reasoningEffort,
+          ),
         },
         'fallback': fallback,
       },
@@ -1292,11 +1323,48 @@ class TranslationSettingsController extends ChangeNotifier {
         profile.id,
         provider: ref.connection,
         model: ref.model,
+        reasoningEffort: ref.reasoningEffort,
       ),
       activeProfile: profile.id,
       nextProfileSeq: snapshot.routingProfileNextSeq,
       messageBuilder: () => '主模型已设为 ${ref.label}。',
       syncLabel: true,
+    );
+  }
+
+  Future<void> setPrimaryReasoningEffort(String value) async {
+    final ref = primary;
+    final snapshot = _snapshot;
+    final profile = activeProfile;
+    if (ref == null || snapshot == null || profile == null) return;
+    final normalized = normalizeReasoningEffort(value);
+    if (normalized == ref.reasoningEffort) return;
+    await _saveProfiles(
+      snapshot: snapshot,
+      profiles: _profilePayloads(
+        snapshot,
+        profile.id,
+        reasoningEffort: normalized,
+      ),
+      activeProfile: profile.id,
+      nextProfileSeq: snapshot.routingProfileNextSeq,
+      messageBuilder: () => '默认推理强度已设为 ${reasoningEffortLabel(normalized)}。',
+    );
+  }
+
+  Future<void> setFallbackReasoningEffort(int index, String value) async {
+    final routes = fallback;
+    if (index < 0 || index >= routes.length) return;
+    final normalized = normalizeReasoningEffort(value);
+    if (routes[index].reasoningEffort == normalized) return;
+    routes[index] = ModelRef(
+      connection: routes[index].connection,
+      model: routes[index].model,
+      reasoningEffort: normalized,
+    );
+    await _saveFallback(
+      routes,
+      message: '备用模型推理强度已设为 ${reasoningEffortLabel(normalized)}。',
     );
   }
 
@@ -1355,7 +1423,11 @@ class TranslationSettingsController extends ChangeNotifier {
         profile.id,
         fallback: [
           for (final ref in routes)
-            {'provider': ref.connection, 'model': ref.model},
+            {
+              'provider': ref.connection,
+              'model': ref.model,
+              'reasoning_effort': ref.reasoningEffort,
+            },
         ],
       ),
       activeProfile: profile.id,
@@ -1404,6 +1476,9 @@ class TranslationSettingsController extends ChangeNotifier {
       models: _draft.models,
       modelConfigs: template.modelConfigs,
     );
+    for (final config in _draft.modelConfigs.values) {
+      config.reasoningEffort = '';
+    }
     _activateModelDiscoveryForDraft();
   }
 
@@ -1419,6 +1494,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.selectedModel = selected != null && models.contains(selected)
         ? selected
         : (models.isEmpty ? null : models.first);
+    _connectionTestReasoningEffort = reasoningEffortAuto;
   }
 
   ModelRuntimeDraft _modelRuntimeDraft(ModelRuntimeOption? model) {
@@ -1645,15 +1721,21 @@ class TranslationSettingsController extends ChangeNotifier {
     String? name,
     String? provider,
     String? model,
+    String? reasoningEffort,
     List<Object?>? fallback,
   }) {
+    final rawPrimary = _map(profile.raw['primary']);
     return {
       ...profile.raw,
       'id': profile.id,
       'name': name ?? profile.displayName,
       'primary': {
+        ...rawPrimary,
         'provider': provider ?? profile.provider,
         'model': model ?? profile.model,
+        'reasoning_effort': normalizeReasoningEffort(
+          reasoningEffort ?? profile.reasoningEffort,
+        ),
       },
       'fallback': fallback ?? profile.fallback,
     };
@@ -1665,6 +1747,7 @@ class TranslationSettingsController extends ChangeNotifier {
     String? name,
     String? provider,
     String? model,
+    String? reasoningEffort,
     List<Object?>? fallback,
   }) {
     return [
@@ -1675,6 +1758,7 @@ class TranslationSettingsController extends ChangeNotifier {
                 name: name,
                 provider: provider,
                 model: model,
+                reasoningEffort: reasoningEffort,
                 fallback: fallback,
               )
             : _profilePayload(profile),

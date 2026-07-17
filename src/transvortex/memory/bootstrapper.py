@@ -123,6 +123,7 @@ def _extract_candidates(
     *,
     client: Any,
     route_model: str,
+    route_reasoning_effort: str,
     config: AppConfig,
     bootstrap_input_text: str,
     source_lang: str,
@@ -130,6 +131,7 @@ def _extract_candidates(
 ) -> tuple[dict[str, Any], str]:
     req = NormalizedRequest(
         model=route_model,
+        reasoning_effort=route_reasoning_effort,
         lines=[],
         source_lang=source_lang,
         target_lang=target_lang,
@@ -150,6 +152,7 @@ def _classify_candidates(
     *,
     client: Any,
     route_model: str,
+    route_reasoning_effort: str,
     config: AppConfig,
     candidates_payload: dict[str, Any],
     evidence: MemoryEvidence,
@@ -158,6 +161,7 @@ def _classify_candidates(
 ) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     req = NormalizedRequest(
         model=route_model,
+        reasoning_effort=route_reasoning_effort,
         lines=[],
         source_lang=source_lang,
         target_lang=target_lang,
@@ -182,6 +186,7 @@ def _single_pass_bootstrap(
     *,
     client: Any,
     route_model: str,
+    route_reasoning_effort: str,
     config: AppConfig,
     bootstrap_input_text: str,
     evidence: MemoryEvidence,
@@ -190,6 +195,7 @@ def _single_pass_bootstrap(
 ) -> tuple[dict[str, Any], str, dict[str, Any], dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
     req = NormalizedRequest(
         model=route_model,
+        reasoning_effort=route_reasoning_effort,
         lines=[],
         source_lang=source_lang,
         target_lang=target_lang,
@@ -268,6 +274,7 @@ def bootstrap_memory(
                 candidates_payload, extract_raw_text = _extract_candidates(
                     client=client,
                     route_model=route.model,
+                    route_reasoning_effort=route.reasoning_effort,
                     config=config,
                     bootstrap_input_text=bootstrap_input_text,
                     source_lang=source_lang,
@@ -287,6 +294,7 @@ def bootstrap_memory(
                 payload, raw_text, usage, provider_meta, rejected_candidates = _classify_candidates(
                     client=client,
                     route_model=route.model,
+                    route_reasoning_effort=route.reasoning_effort,
                     config=config,
                     candidates_payload=candidates_payload,
                     evidence=evidence,
@@ -310,6 +318,7 @@ def bootstrap_memory(
                 payload, raw_text, usage, provider_meta, candidates_payload, rejected_candidates = _single_pass_bootstrap(
                     client=client,
                     route_model=route.model,
+                    route_reasoning_effort=route.reasoning_effort,
                     config=config,
                     bootstrap_input_text=bootstrap_input_text,
                     evidence=evidence,

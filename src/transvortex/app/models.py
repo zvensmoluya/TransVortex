@@ -194,10 +194,33 @@ class ProviderConfig:
         )
 
 
+ROUTE_REASONING_EFFORTS = frozenset(
+    {
+        "auto",
+        "service_default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    }
+)
+
+
+def normalize_route_reasoning_effort(value: Any) -> str:
+    normalized = str(value or "auto").strip().lower()
+    if normalized not in ROUTE_REASONING_EFFORTS:
+        raise ValueError(f"invalid route reasoning_effort: {normalized}")
+    return normalized
+
+
 @dataclass
 class RouteTarget:
     provider: str
     model: str
+    reasoning_effort: str = "auto"
 
 
 @dataclass
@@ -663,6 +686,7 @@ class NormalizedRequest:
     bad_translation: str = ""
     protocol_recovery_hint: str = ""
     adaptive_context_hint: str = ""
+    reasoning_effort: str = "auto"
     temperature: float = 0.1
     system_prompt: str = ""
 

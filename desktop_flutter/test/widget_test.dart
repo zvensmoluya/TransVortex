@@ -457,6 +457,11 @@ void main() {
 
     await tester.tap(find.text('real-model'));
     await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('思考程度'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('translation-reasoning-effort')),
+      findsOneWidget,
+    );
     expect(find.textContaining('配置 1'), findsOneWidget);
     expect(find.text('backup-model'), findsOneWidget);
 
@@ -1324,7 +1329,11 @@ void main() {
     expect(find.textContaining('中文备注'), findsNothing);
     expect(find.text('模型翻译设置 · real-model'), findsOneWidget);
     expect(find.text('每批行数上限'), findsOneWidget);
-    expect(find.text('推理强度'), findsOneWidget);
+    expect(find.text('推理强度'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('connection-test-reasoning-effort')),
+      findsOneWidget,
+    );
     expect(find.text('高级容量设置'), findsOneWidget);
     expect(find.text('上下文窗口（tokens）'), findsNothing);
     expect(find.text('最大输入（tokens）'), findsNothing);
@@ -1811,7 +1820,7 @@ void main() {
       expect(flashConfig?['max_batch_lines'], 240);
       expect(flashConfig?['max_context_tokens'], 1000000);
       expect(flashConfig?['max_output_tokens'], 384000);
-      expect(flashConfig?['reasoning_effort'], 'high');
+      expect(flashConfig?['reasoning_effort'], isNull);
       expect(
         (savedProviderDraft?['endpoint'] as Map?)?['path_template'],
         '/chat/completions',
@@ -2050,6 +2059,35 @@ void main() {
 
     await tester.ensureVisible(find.text('主模型'));
     await tester.pump();
+    expect(find.text('默认推理强度'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('primary-reasoning-effort-button')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('primary-reasoning-effort-button')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('reasoning-effort-picker')),
+      findsOneWidget,
+    );
+    final pickerSize = tester.getSize(
+      find.byKey(const ValueKey('reasoning-effort-picker')),
+    );
+    expect(pickerSize.width, 320);
+    expect(pickerSize.height, lessThan(240));
+    expect(find.byKey(const ValueKey('reasoning-mode-auto')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reasoning-mode-service-default')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reasoning-manual-slider')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('reasoning-mode-auto')));
+    await tester.pumpAndSettle();
     // The primary picker lists connection then model pills; tap the backup
     // model under the RealProvider connection to set it as primary.
     await tester.tap(
@@ -2067,6 +2105,7 @@ void main() {
     expect(active?['primary'], {
       'provider': 'RealProvider',
       'model': 'backup-model',
+      'reasoning_effort': 'auto',
     });
     expect(find.textContaining('主模型已设为'), findsOneWidget);
     expectNoFlutterException();
@@ -2243,6 +2282,7 @@ void main() {
     expect(created?['primary'], {
       'provider': 'RealProvider',
       'model': 'real-model',
+      'reasoning_effort': 'auto',
     });
     expect(find.textContaining('已新建常用模型：常用模型 3'), findsOneWidget);
     expectNoFlutterException();
@@ -2352,7 +2392,11 @@ void main() {
       (item) => item['id'] == 'route_1',
     );
     expect(active?['fallback'], [
-      {'provider': 'RealProvider', 'model': 'backup-model'},
+      {
+        'provider': 'RealProvider',
+        'model': 'backup-model',
+        'reasoning_effort': 'auto',
+      },
     ]);
     expect(savedRouting?['active_profile'], 'route_1');
     expect(find.textContaining('已加入备用模型'), findsOneWidget);
@@ -2464,8 +2508,16 @@ void main() {
       (item) => item['id'] == 'route_1',
     );
     expect(active?['fallback'], [
-      {'provider': 'RealProvider', 'model': 'third-model'},
-      {'provider': 'RealProvider', 'model': 'backup-model'},
+      {
+        'provider': 'RealProvider',
+        'model': 'third-model',
+        'reasoning_effort': 'auto',
+      },
+      {
+        'provider': 'RealProvider',
+        'model': 'backup-model',
+        'reasoning_effort': 'auto',
+      },
     ]);
     expect(calls, contains('provider.routing.save'));
     expect(calls, isNot(contains('provider.save')));

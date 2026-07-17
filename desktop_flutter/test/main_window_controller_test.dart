@@ -593,6 +593,27 @@ void main() {
     expect(overrides['asr_model'], 'large-v3');
   });
 
+  test('controller snapshots a task-level reasoning override', () async {
+    final controller = MainWindowController(service: _readyController());
+    await controller.startService();
+    controller.pickSource(r'D:\movie.mp4');
+
+    expect(controller.view.reasoningConfigurable, isTrue);
+    expect(controller.view.reasoningLabel, '低');
+    expect(controller.view.reasoningDetail, '自动（当前：低）');
+    final disabled = controller.view.reasoningOptions.firstWhere(
+      (option) => option.value == 'none',
+    );
+
+    controller.selectReasoningEffort(disabled);
+
+    final payload = controller.buildRunRequest();
+    final routing = payload['routing'] as Map<String, Object?>;
+    final primary = routing['primary'] as Map<String, Object?>;
+    expect(controller.view.reasoningLabel, '关闭');
+    expect(primary['reasoning_effort'], 'none');
+  });
+
   test('controller sends selected language pair in run payload', () async {
     final controller = MainWindowController(service: _readyController());
     await controller.startService();
@@ -1344,6 +1365,19 @@ DesktopSnapshot _desktopSnapshot({
           'compat_mode': 'openai_chat',
           'credential_id': 'RealProvider',
           'models': models,
+          'capabilities': {
+            'reasoning_effort_param': 'reasoning_effort',
+            'reasoning_efforts': ['none', 'low', 'medium', 'high'],
+          },
+        },
+      ],
+      'model_catalog': [
+        {
+          'id': 'real-model',
+          'label': 'Real Model',
+          'vendor': 'test',
+          'reasoning_efforts': ['none', 'low', 'medium', 'high'],
+          'runtime': {'reasoning_effort': 'low'},
         },
       ],
       'asr_providers': {

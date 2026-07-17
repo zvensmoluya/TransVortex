@@ -342,6 +342,7 @@ class FallbackRouteRow extends StatelessWidget {
     required this.onMoveUp,
     required this.onMoveDown,
     required this.onRemove,
+    this.reasoningControl,
   });
 
   final String provider;
@@ -351,6 +352,7 @@ class FallbackRouteRow extends StatelessWidget {
   final VoidCallback? onMoveUp;
   final VoidCallback? onMoveDown;
   final VoidCallback? onRemove;
+  final Widget? reasoningControl;
 
   @override
   Widget build(BuildContext context) {
@@ -388,6 +390,10 @@ class FallbackRouteRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: T.s8),
+          if (reasoningControl case final control?) ...[
+            control,
+            const SizedBox(width: T.s8),
+          ],
           IconToolButton(
             icon: Icons.arrow_upward_rounded,
             tooltip: '上移备用模型',

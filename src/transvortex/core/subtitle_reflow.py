@@ -252,6 +252,7 @@ def _request_for_batch(
     *,
     config: AppConfig,
     route_model: str,
+    route_reasoning_effort: str,
     windows: list[ReflowWindow],
     rows_by_id: dict[int, dict[str, Any]],
     source_lang: str,
@@ -272,6 +273,7 @@ def _request_for_batch(
     quality_reason = "\n".join(item for window in windows if (item := _quality_reason(window, rows_by_id, config)))
     req = NormalizedRequest(
         model=route_model,
+        reasoning_effort=route_reasoning_effort,
         lines=lines,
         source_lang=source_lang,
         target_lang=target_lang,
@@ -309,6 +311,7 @@ def _batch_requests(
     target_lang: str,
     memory_dir: Path | None,
     route_model: str,
+    route_reasoning_effort: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     reflow_config = config.pipeline.subtitle.reflow
     max_batch = max(1, int(reflow_config.batch_windows or 1))
@@ -326,6 +329,7 @@ def _batch_requests(
             req, memory_entries = _request_for_batch(
                 config=config,
                 route_model=route_model,
+                route_reasoning_effort=route_reasoning_effort,
                 windows=candidate,
                 rows_by_id=rows_by_id,
                 source_lang=source_lang,
@@ -344,6 +348,7 @@ def _batch_requests(
                 shrunk_req, shrunk_memory_entries = _request_for_batch(
                     config=config,
                     route_model=route_model,
+                    route_reasoning_effort=route_reasoning_effort,
                     windows=[shrunken],
                     rows_by_id=rows_by_id,
                     source_lang=source_lang,
@@ -643,11 +648,12 @@ def _run_batch(
             batch_failed = True
             continue
         client = build_provider_client(provider)
-        req = batch["request"]
+        req = replace(batch["request"], reasoning_effort=route.reasoning_effort)
         if req.model != route.model:
             req, memory_entries = _request_for_batch(
                 config=config,
                 route_model=route.model,
+                route_reasoning_effort=route.reasoning_effort,
                 windows=windows,
                 rows_by_id=rows_by_id,
                 source_lang=source_lang,
@@ -718,6 +724,7 @@ def _single_window_batches(
     target_lang: str,
     memory_dir: Path | None,
     route_model: str,
+    route_reasoning_effort: str,
     batch_index_start: int,
 ) -> list[dict[str, Any]]:
     batches: list[dict[str, Any]] = []
@@ -725,6 +732,7 @@ def _single_window_batches(
         req, memory_entries = _request_for_batch(
             config=config,
             route_model=route_model,
+            route_reasoning_effort=route_reasoning_effort,
             windows=[window],
             rows_by_id=rows_by_id,
             source_lang=source_lang,
@@ -781,6 +789,7 @@ def reflow_subtitles(
         target_lang=target_lang,
         memory_dir=memory_dir,
         route_model=primary_model,
+        route_reasoning_effort=config.routing.primary.reasoning_effort,
     )
     artifacts.extend(skipped)
 
@@ -807,6 +816,7 @@ def reflow_subtitles(
             target_lang=target_lang,
             memory_dir=memory_dir,
             route_model=primary_model,
+            route_reasoning_effort=config.routing.primary.reasoning_effort,
             batch_index_start=len(batches) + len(artifacts) + 1,
         )
         for fallback_batch in fallback_batches:

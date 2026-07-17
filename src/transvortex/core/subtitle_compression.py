@@ -55,6 +55,7 @@ def _compress_segment(
     target_lang: str,
     provider_name: str,
     model: str,
+    reasoning_effort: str,
     quality: SubtitleQualityConfig,
     memory_prompt: str = "",
     progress_callback: ProgressCallback | None = None,
@@ -78,6 +79,7 @@ def _compress_segment(
             )
             req = NormalizedRequest(
                 model=model,
+                reasoning_effort=reasoning_effort,
                 lines=[f"[{seg.id}] {seg.text_tgt or seg.text_src}"],
                 source_lang=source_lang,
                 target_lang=target_lang,
@@ -176,6 +178,7 @@ def compress_overlong_subtitles(
                 target_lang=target_lang,
                 provider_name=route.provider,
                 model=route.model,
+                reasoning_effort=route.reasoning_effort,
                 quality=quality,
                 memory_prompt=memory_prompt,
                 progress_callback=progress_callback,

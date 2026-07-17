@@ -72,7 +72,11 @@ def test_runtime_submit_run_saves_routing_snapshot(tmp_path: Path) -> None:
     _write_config(tmp_path)
     runtime = TaskRuntime(tmp_path / "artifacts")
     routing = {
-        "primary": {"provider": "p1", "model": "m2"},
+        "primary": {
+            "provider": "p1",
+            "model": "m2",
+            "reasoning_effort": "service_default",
+        },
         "fallback": [],
     }
     request = RunRequest(

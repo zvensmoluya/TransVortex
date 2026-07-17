@@ -359,6 +359,7 @@ class DesktopApi:
         return run_provider_connection_test(
             provider_draft=_dict_param(params, "provider_draft", "providerDraft"),
             model=_required_text(params, "model"),
+            reasoning_effort=_optional_text(params, "reasoning_effort", "reasoningEffort") or "auto",
             api_key=_optional_text(params, "api_key", "apiKey"),
             root_dir=self.root_dir,
             network=config.network,

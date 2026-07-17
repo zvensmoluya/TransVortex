@@ -430,10 +430,52 @@ def test_request_json_preserves_routing_outside_overrides(tmp_path: Path) -> Non
         }
     )
 
-    assert request.routing == routing
-    assert resume.routing == routing
+    normalized_routing = {
+        "primary": {"provider": "p2", "model": "m2", "reasoning_effort": "auto"},
+        "fallback": [{"provider": "p1", "model": "m1", "reasoning_effort": "auto"}],
+    }
+    assert request.routing == normalized_routing
+    assert resume.routing == normalized_routing
     assert "routing" not in request.overrides
-    assert run_request_to_payload(request)["routing"] == routing
+    assert run_request_to_payload(request)["routing"] == normalized_routing
+
+
+def test_request_json_preserves_reasoning_effort_and_rejects_unknown_value(tmp_path: Path) -> None:
+    request = run_request_from_payload(
+        {
+            "request_version": 1,
+            "input": str(tmp_path / "demo.mp4"),
+            "source_lang": "ja",
+            "target_lang": "zh-CN",
+            "routing": {
+                "primary": {
+                    "provider": "p2",
+                    "model": "m2",
+                    "reasoning_effort": "service_default",
+                },
+                "fallback": [],
+            },
+        }
+    )
+    assert request.routing["primary"]["reasoning_effort"] == "service_default"
+
+    with pytest.raises(RequestValidationError, match="reasoning_effort"):
+        run_request_from_payload(
+            {
+                "request_version": 1,
+                "input": str(tmp_path / "demo.mp4"),
+                "source_lang": "ja",
+                "target_lang": "zh-CN",
+                "routing": {
+                    "primary": {
+                        "provider": "p2",
+                        "model": "m2",
+                        "reasoning_effort": "turbo",
+                    },
+                    "fallback": [],
+                },
+            }
+        )
 
 
 def test_request_json_rejects_incomplete_routing(tmp_path: Path) -> None:

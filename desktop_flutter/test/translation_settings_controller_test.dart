@@ -184,6 +184,37 @@ void main() {
       },
     );
 
+    test(
+      'connection test uses the selected model and a session-only reasoning effort',
+      () async {
+        await controller.load();
+        controller.selectConnection('openai');
+        controller.selectModel('openai/gpt-5.6-terra');
+
+        expect(controller.connectionTestReasoningSupport.supported, isTrue);
+        expect(
+          controller.connectionTestReasoningSupport.compactLabel,
+          '自动 · 低',
+        );
+
+        controller.setConnectionTestReasoningEffort('high');
+        await controller.testConnection();
+
+        final test = transport.calls.lastWhere(
+          (call) => call.method == 'provider.test',
+        );
+        expect(test.params['model'], 'openai/gpt-5.6-terra');
+        expect(test.params['reasoning_effort'], 'high');
+        final draft = test.params['provider_draft'] as Map<String, Object?>;
+        final modelConfigs = draft['model_configs'] as Map<String, Object?>;
+        expect(
+          modelConfigs['openai/gpt-5.6-terra'],
+          isEmpty,
+          reason: 'the test effort must not become a saved model override',
+        );
+      },
+    );
+
     test('model runtime settings are edited and saved per model', () async {
       await controller.load();
       controller.selectConnection('openai');
@@ -191,14 +222,20 @@ void main() {
       expect(controller.selectedModel, 'gpt-4o');
       expect(controller.selectedModelConfig?.maxContextTokens, '128000');
       expect(controller.selectedModelConfig?.reasoningEffort, 'low');
-      expect(controller.supportsReasoningEffort, isTrue);
+      expect(
+        controller
+            .reasoningSupport(
+              const ModelRef(connection: 'openai', model: 'gpt-4o'),
+            )
+            .supported,
+        isTrue,
+      );
 
       controller.editModelMaxBatchLines('180');
       controller.editModelMaxContextTokens('1M');
       controller.editModelMaxInputTokens('900K');
       controller.editModelMaxOutputTokens('64K');
       controller.editModelRecommendedOutputTokens('16k');
-      controller.setModelReasoningEffort('medium');
       await controller.saveConnection();
 
       final save = transport.calls.firstWhere(
@@ -212,7 +249,7 @@ void main() {
       expect(model['max_input_tokens'], 900000);
       expect(model['max_output_tokens'], 64000);
       expect(model['recommended_output_tokens'], 16000);
-      expect(model['reasoning_effort'], 'medium');
+      expect(model['reasoning_effort'], 'low');
     });
 
     test('model capacity notation stays exact in editable fields', () {
@@ -246,7 +283,13 @@ void main() {
           'DeepSeek V4 Pro 官方规格 · 240 行',
         );
         expect(controller.usesSelectedModelRecommendation, isFalse);
-        expect(controller.reasoningEfforts, ['high', 'max']);
+        expect(
+          controller
+              .reasoningSupport(controller.primary!)
+              .choices
+              .map((choice) => choice.value),
+          ['auto', 'service_default', 'high', 'max'],
+        );
 
         controller.applySelectedModelRecommendation();
         expect(controller.usesSelectedModelRecommendation, isTrue);
@@ -264,7 +307,7 @@ void main() {
           controller.selectedModelConfig?.recommendedOutputTokens,
           '32768',
         );
-        expect(controller.selectedModelConfig?.reasoningEffort, 'high');
+        expect(controller.selectedModelConfig?.reasoningEffort, isEmpty);
         expect(controller.usesSelectedModelRecommendation, isTrue);
 
         await controller.saveConnection();
@@ -298,14 +341,27 @@ void main() {
         );
         expect(controller.selectedModelPriceSummary, contains('超过 272K'));
         expect(controller.selectedModelPriceSummary, contains('输入 2×'));
-        expect(controller.reasoningEfforts, [
-          'none',
-          'low',
-          'medium',
-          'high',
-          'xhigh',
-          'max',
-        ]);
+        expect(
+          controller
+              .reasoningSupport(
+                const ModelRef(
+                  connection: 'openai',
+                  model: 'openai/gpt-5.6-terra',
+                ),
+              )
+              .choices
+              .map((choice) => choice.value),
+          [
+            'auto',
+            'service_default',
+            'none',
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
+          ],
+        );
 
         controller.applySelectedModelRecommendation();
         expect(controller.selectedModelConfig?.maxContextTokens, '1050000');
@@ -315,7 +371,7 @@ void main() {
           controller.selectedModelConfig?.recommendedOutputTokens,
           '16384',
         );
-        expect(controller.selectedModelConfig?.reasoningEffort, 'low');
+        expect(controller.selectedModelConfig?.reasoningEffort, isEmpty);
       },
     );
 
@@ -376,6 +432,28 @@ void main() {
       expect(primary['model'], 'gpt-4o');
       expect(labelUpdates, contains('openai · gpt-4o'));
       expect(configChangedCount, 1);
+    });
+
+    test('default reasoning effort is stored on the active route', () async {
+      await controller.load();
+
+      await controller.setPrimaryReasoningEffort('service_default');
+
+      final save = transport.calls.firstWhere(
+        (call) => call.method == 'provider.routing.save',
+      );
+      final profiles = save.params['profiles'] as List<Object?>;
+      final active = profiles
+          .map((item) => item as Map<String, Object?>)
+          .firstWhere((item) => item['id'] == 'default');
+      final primary = active['primary'] as Map<String, Object?>;
+      expect(primary['provider'], 'deepseek');
+      expect(primary['model'], 'deepseek-v4-pro');
+      expect(primary['reasoning_effort'], 'service_default');
+      expect(controller.primary?.reasoningEffort, 'service_default');
+      expect(callsAfterInitialLoad().map((call) => call.method), [
+        'provider.routing.save',
+      ]);
     });
 
     test('addFallback appends a route without touching the provider', () async {

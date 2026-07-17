@@ -627,9 +627,9 @@ routing_profiles:
     fallback: []
   - id: route_2
     name: 配置 2
-    primary: {provider: p1, model: m2}
+    primary: {provider: p1, model: m2, reasoning_effort: service_default}
     fallback:
-      - {provider: p1, model: m1}
+      - {provider: p1, model: m1, reasoning_effort: none}
         """.strip(),
         encoding="utf-8",
     )
@@ -637,7 +637,9 @@ routing_profiles:
     cfg = load_app_config(root_dir=tmp_path)
     assert cfg.active_routing_profile == "route_2"
     assert cfg.routing.primary.model == "m2"
+    assert cfg.routing.primary.reasoning_effort == "service_default"
     assert cfg.routing.fallback[0].model == "m1"
+    assert cfg.routing.fallback[0].reasoning_effort == "none"
     assert [item.name for item in cfg.routing_profiles] == ["配置 1", "配置 2"]
     assert cfg.routing_profile_next_seq == 3
 

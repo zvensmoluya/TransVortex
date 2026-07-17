@@ -5,20 +5,8 @@ import 'package:flutter/material.dart';
 import '../model/translation_settings_controller.dart';
 import '../services/app_service_client.dart';
 import '../theme/tokens.dart';
+import 'reasoning_effort_picker.dart';
 import 'settings_common.dart';
-
-String _reasoningEffortLabel(String effort) {
-  return switch (effort) {
-    'none' => '关闭',
-    'minimal' => '极低',
-    'low' => '低',
-    'medium' => '中',
-    'high' => '高',
-    'xhigh' => '极高',
-    'max' => '最高',
-    _ => effort,
-  };
-}
 
 const _customCapabilityValue = '__custom__';
 
@@ -609,8 +597,26 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   List<Widget> _modelRuntimeChildren() {
     final config = c.selectedModelConfig!;
     final recommendation = c.selectedModelRecommendation;
+    final testReasoning = c.connectionTestReasoningSupport;
 
     return [
+      if (testReasoning.supported) ...[
+        Row(
+          children: [
+            Text('测试请求', style: T.tCaption),
+            const Spacer(),
+            ReasoningEffortButton(
+              support: testReasoning,
+              buttonKey: const ValueKey('connection-test-reasoning-effort'),
+              tooltip: '仅本次连接测试的思考程度',
+              onChanged: c.isBusy ? null : c.setConnectionTestReasoningEffort,
+            ),
+          ],
+        ),
+        const SizedBox(height: T.s12),
+        const Divider(height: 1, color: T.line),
+        const SizedBox(height: T.s12),
+      ],
       Wrap(
         spacing: T.s8,
         runSpacing: T.s8,
@@ -672,29 +678,6 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
           ],
         ),
       ],
-      const SizedBox(height: T.s12),
-      Text('推理强度', style: T.tCaption),
-      const SizedBox(height: T.s4),
-      if (c.supportsReasoningEffort)
-        Wrap(
-          spacing: T.s8,
-          runSpacing: T.s8,
-          children: [
-            ChoicePill(
-              label: '沿用连接',
-              selected: config.reasoningEffort.isEmpty,
-              onTap: () => c.setModelReasoningEffort(''),
-            ),
-            for (final effort in c.reasoningEfforts)
-              ChoicePill(
-                label: _reasoningEffortLabel(effort),
-                selected: config.reasoningEffort == effort,
-                onTap: () => c.setModelReasoningEffort(effort),
-              ),
-          ],
-        )
-      else
-        const Text('当前协议未声明推理强度', style: T.tCaption),
       const SizedBox(height: T.s12),
       TextButton.icon(
         key: const ValueKey('model-advanced-capacity-toggle'),
@@ -860,7 +843,25 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                 title: '主模型',
                 divider: false,
                 children: [
-                  _PrimarySummary(primary: c.primary),
+                  _PrimarySummary(
+                    primary: c.primary,
+                    reasoningControl:
+                        c.primary != null &&
+                            c.reasoningSupport(c.primary!).supported
+                        ? ReasoningEffortButton(
+                            support: c.reasoningSupport(c.primary!),
+                            buttonKey: const ValueKey(
+                              'primary-reasoning-effort-button',
+                            ),
+                            tooltip: '主模型默认思考程度',
+                            onChanged: busy
+                                ? null
+                                : (value) => unawaited(
+                                    c.setPrimaryReasoningEffort(value),
+                                  ),
+                          )
+                        : null,
+                  ),
                   const SizedBox(height: T.s12),
                   _ModelRefPicker(
                     connections: c.connections,
@@ -893,6 +894,26 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
                               ? null
                               : () => c.moveFallback(index, 1),
                           onRemove: busy ? null : () => c.removeFallback(index),
+                          reasoningControl:
+                              c.reasoningSupport(c.fallback[index]).supported
+                              ? ReasoningEffortButton(
+                                  support: c.reasoningSupport(
+                                    c.fallback[index],
+                                  ),
+                                  buttonKey: ValueKey(
+                                    'fallback-reasoning-effort-button-$index',
+                                  ),
+                                  tooltip: '备用模型默认思考程度',
+                                  onChanged: busy
+                                      ? null
+                                      : (value) => unawaited(
+                                          c.setFallbackReasoningEffort(
+                                            index,
+                                            value,
+                                          ),
+                                        ),
+                                )
+                              : null,
                         ),
                       ),
                   const SizedBox(height: T.s12),
@@ -1236,9 +1257,10 @@ class _ProfileListRowState extends State<_ProfileListRow> {
 }
 
 class _PrimarySummary extends StatelessWidget {
-  const _PrimarySummary({required this.primary});
+  const _PrimarySummary({required this.primary, this.reasoningControl});
 
   final ModelRef? primary;
+  final Widget? reasoningControl;
 
   @override
   Widget build(BuildContext context) {
@@ -1285,6 +1307,10 @@ class _PrimarySummary extends StatelessWidget {
               ),
             ),
           ),
+          if (reasoningControl case final control?) ...[
+            const SizedBox(width: T.s8),
+            control,
+          ],
         ],
       ),
     );

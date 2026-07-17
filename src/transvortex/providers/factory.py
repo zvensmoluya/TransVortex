@@ -737,6 +737,26 @@ def _set_nested_payload_value(payload: dict[str, Any], path: list[str], value: A
     current[path[-1]] = value
 
 
+def _delete_nested_payload_value(payload: dict[str, Any], path: list[str]) -> None:
+    if not path:
+        return
+    current: dict[str, Any] = payload
+    parents: list[tuple[dict[str, Any], str]] = []
+    for token in path[:-1]:
+        child = current.get(token)
+        if not isinstance(child, dict):
+            return
+        parents.append((current, token))
+        current = child
+    current.pop(path[-1], None)
+    for parent, token in reversed(parents):
+        child = parent.get(token)
+        if isinstance(child, dict) and not child:
+            parent.pop(token, None)
+        else:
+            break
+
+
 def _output_token_param_path(config: ProviderConfig, style: str) -> list[str]:
     explicit_param = str(config.capabilities.output_token_param or "").strip()
     if explicit_param.lower() in {"none", "omit", "disabled"}:
@@ -814,9 +834,17 @@ def _finalize_model_payload(
         output_path = _output_token_param_path(config, style)
         if output_path:
             _set_nested_payload_value(payload, output_path, int(explicit_model_config.max_output_tokens))
-    model_config = config.model_config(req.model)
-    reasoning_effort = str(model_config.reasoning_effort or "").strip()
     reasoning_path = _reasoning_effort_param_path(config, style)
+    requested_reasoning = str(req.reasoning_effort or "auto").strip().lower()
+    if requested_reasoning == "service_default":
+        _delete_nested_payload_value(payload, reasoning_path)
+        return payload
+    model_config = config.model_config(req.model)
+    reasoning_effort = (
+        str(model_config.reasoning_effort or "").strip()
+        if requested_reasoning == "auto"
+        else requested_reasoning
+    )
     if reasoning_effort and reasoning_path:
         _set_nested_payload_value(payload, reasoning_path, reasoning_effort)
     return payload

@@ -28,6 +28,7 @@ import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
 import 'widgets/job_line.dart';
 import 'widgets/primary_action.dart';
+import 'widgets/reasoning_effort_picker.dart';
 import 'widgets/designed_tooltip.dart';
 import 'widgets/settings_window.dart';
 import 'widgets/task_processing_window.dart';
@@ -1951,6 +1952,13 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   Future<void> _pickTranslation() async {
     final view = _controller.view;
+    final windowSize = MediaQuery.sizeOf(context);
+    final reasoningAnchor = Rect.fromLTWH(
+      windowSize.width <= 336 ? 8 : (windowSize.width - 320) / 2,
+      windowSize.height * 0.42,
+      320,
+      36,
+    );
     final selected = await showMenu<Object>(
       context: context,
       color: T.surface,
@@ -1968,6 +1976,42 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         else
           for (final option in view.translationOptions)
             _translationMenuItem(option),
+        if (view.reasoningConfigurable) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem<Object>(
+            key: const ValueKey('translation-reasoning-effort'),
+            value: _menuReasoningEffort,
+            child: SizedBox(
+              width: 300,
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.bolt_rounded,
+                    size: 17,
+                    color: T.accentStrong,
+                  ),
+                  const SizedBox(width: T.s8),
+                  Text('思考程度', style: T.tBody),
+                  const Spacer(),
+                  Flexible(
+                    child: Text(
+                      view.reasoningSupport.compactLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tCaption,
+                    ),
+                  ),
+                  const SizedBox(width: T.s4),
+                  const Icon(
+                    Icons.keyboard_arrow_right_rounded,
+                    size: 17,
+                    color: T.muted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         const PopupMenuDivider(),
         PopupMenuItem<Object>(
           key: const ValueKey('translation-more-models'),
@@ -1991,6 +2035,12 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       await Future<void>.delayed(const Duration(milliseconds: 220));
       if (!mounted) return;
       await _selectDirectTranslation();
+      return;
+    }
+    if (identical(selected, _menuReasoningEffort)) {
+      await Future<void>.delayed(const Duration(milliseconds: 140));
+      if (!mounted) return;
+      await _pickReasoningEffort(anchorRect: reasoningAnchor);
       return;
     }
     if (selected is TranslationRuntimeChoice) {
@@ -2051,6 +2101,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       labelOf: (option) => option.label,
     );
     if (selected != null) _controller.selectAsr(selected);
+  }
+
+  Future<void> _pickReasoningEffort({Rect? anchorRect}) async {
+    final view = _controller.view;
+    final selected = await showReasoningEffortPicker(
+      context,
+      support: view.reasoningSupport,
+      anchorRect: anchorRect,
+    );
+    if (selected != null) _controller.selectReasoningEffortValue(selected);
   }
 
   Future<void> _pickSourceLanguage() async {
@@ -2506,10 +2566,11 @@ class _RunningStatusSlipPainter extends CustomPainter {
   }
 }
 
-enum _MenuAction { footer, moreTranslationModels }
+enum _MenuAction { footer, moreTranslationModels, reasoningEffort }
 
 const Object _menuFooter = _MenuAction.footer;
 const Object _menuMoreTranslationModels = _MenuAction.moreTranslationModels;
+const Object _menuReasoningEffort = _MenuAction.reasoningEffort;
 
 class _TypeTag extends StatelessWidget {
   const _TypeTag({required this.kind});

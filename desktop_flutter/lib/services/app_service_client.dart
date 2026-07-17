@@ -705,11 +705,13 @@ class AppServiceClient {
   Future<Map<String, Object?>> providerTest({
     required Map<String, Object?> providerDraft,
     required String model,
+    String reasoningEffort = 'auto',
     String? apiKey,
   }) {
     return call('provider.test', {
       'provider_draft': providerDraft,
       'model': model,
+      'reasoning_effort': reasoningEffort,
       'api_key': ?apiKey,
     }).then(_stringMap);
   }
@@ -1198,6 +1200,10 @@ class DesktopSnapshot {
     final primary = _stringMap(routing['primary']);
     final provider = _stringValue(primary['provider']) ?? '';
     final model = _stringValue(primary['model']) ?? '';
+    final reasoningEffort =
+        _stringValue(primary['reasoning_effort']) ??
+        _stringValue(primary['reasoningEffort']) ??
+        'auto';
     if (provider.isEmpty && model.isEmpty) {
       return const <RoutingProfileOption>[];
     }
@@ -1207,11 +1213,16 @@ class DesktopSnapshot {
         name: 'Default',
         provider: provider,
         model: model,
+        reasoningEffort: reasoningEffort,
         fallback: _objectList(routing['fallback']),
         raw: {
           'id': 'default',
           'name': 'Default',
-          'primary': {'provider': provider, 'model': model},
+          'primary': {
+            'provider': provider,
+            'model': model,
+            'reasoning_effort': reasoningEffort,
+          },
           'fallback': _objectList(routing['fallback']),
         },
       ),
@@ -1322,6 +1333,7 @@ class RoutingProfileOption {
     required this.name,
     required this.provider,
     required this.model,
+    this.reasoningEffort = 'auto',
     this.fallback = const <Object?>[],
     this.raw = const <String, Object?>{},
   });
@@ -1330,6 +1342,7 @@ class RoutingProfileOption {
   final String name;
   final String provider;
   final String model;
+  final String reasoningEffort;
   final List<Object?> fallback;
   final Map<String, Object?> raw;
 
@@ -1342,6 +1355,10 @@ class RoutingProfileOption {
       name: _stringValue(map['name']) ?? id,
       provider: _stringValue(primary['provider']) ?? '',
       model: _stringValue(primary['model']) ?? '',
+      reasoningEffort:
+          _stringValue(primary['reasoning_effort']) ??
+          _stringValue(primary['reasoningEffort']) ??
+          'auto',
       fallback: _objectList(map['fallback']),
       raw: map,
     );

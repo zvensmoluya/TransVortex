@@ -1333,7 +1333,11 @@ routing:
       apiKey: 'secret',
     );
     await client.providerModels(providerDraft: {'name': 'p1'});
-    await client.providerTest(providerDraft: {'name': 'p1'}, model: 'model-a');
+    await client.providerTest(
+      providerDraft: {'name': 'p1'},
+      model: 'model-a',
+      reasoningEffort: 'high',
+    );
     await client.providerDelete(
       name: 'p1',
       expectedVersion: {'mtime_ns': 7, 'size': 8},
@@ -1384,6 +1388,7 @@ routing:
       'network.settings.save',
     ]);
     expect(transport.calls.first.params['api_key'], 'secret');
+    expect(transport.calls[2].params['reasoning_effort'], 'high');
     expect(transport.calls[3].params['name'], 'p1');
     expect(transport.calls[3].params['expected_version'], {
       'mtime_ns': 7,

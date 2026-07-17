@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .models import normalize_route_reasoning_effort
 from ..utils import read_json
 
 
@@ -249,12 +250,21 @@ def _route_payload(
     route = {
         "provider": _optional_text(_first(value, "provider", default="")),
         "model": _optional_text(_first(value, "model", default="")),
+        "reasoning_effort": _reasoning_effort(value, field),
     }
     if required and (not route["provider"] or not route["model"]):
         raise RequestValidationError(
             f"{field}.provider and {field}.model are required"
         )
     return route
+
+
+def _reasoning_effort(value: dict[str, Any], field: str) -> str:
+    raw = _first(value, "reasoning_effort", "reasoningEffort", default="auto")
+    try:
+        return normalize_route_reasoning_effort(raw)
+    except ValueError as exc:
+        raise RequestValidationError(f"{field}.reasoning_effort is invalid: {raw}") from exc
 
 
 def _first(payload: dict[str, Any], *keys: str, default: Any = _UNSET) -> Any:

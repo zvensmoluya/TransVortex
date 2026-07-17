@@ -25,6 +25,7 @@ from ..app.models import (
     ModelConfig,
     ModelListConfig,
     NetworkConfig,
+    normalize_route_reasoning_effort,
     NormalizedRequest,
     ProviderConfig,
     ProviderLimits,
@@ -710,7 +711,14 @@ def provider_config_to_yaml_row(config: ProviderConfig) -> dict[str, Any]:
 
 def _route_row(raw: Any) -> dict[str, str]:
     raw = _as_dict(raw)
-    return {"provider": str(raw.get("provider", "")), "model": str(raw.get("model", ""))}
+    reasoning_effort = normalize_route_reasoning_effort(
+        raw.get("reasoning_effort", raw.get("reasoningEffort", "auto"))
+    )
+    return {
+        "provider": str(raw.get("provider", "")),
+        "model": str(raw.get("model", "")),
+        "reasoning_effort": reasoning_effort,
+    }
 
 
 def _fallback_rows(raw: Any) -> list[dict[str, str]]:
@@ -1299,6 +1307,7 @@ def run_provider_connection_test(
     *,
     provider_draft: dict[str, Any],
     model: str,
+    reasoning_effort: str = "auto",
     api_key: str | None = None,
     root_dir: Path | None = None,
     network: NetworkConfig | None = None,
@@ -1349,6 +1358,7 @@ def run_provider_connection_test(
                 lines=["[1] ping"],
                 source_lang="en",
                 target_lang="zh-CN",
+                reasoning_effort=normalize_route_reasoning_effort(reasoning_effort),
             )
             payload = _build_payload(provider, req)
             request_features = _connection_request_features(provider, payload)

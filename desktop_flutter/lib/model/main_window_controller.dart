@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../services/app_service_client.dart';
 import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
+import 'reasoning_effort.dart';
 import 'session.dart';
 import 'task_labels.dart';
 
@@ -200,6 +201,11 @@ class MainWindowViewModel {
     this.sourceInspectionPending = false,
     this.runProgress,
     this.completionNotice,
+    this.reasoningLabel = '服务默认',
+    this.reasoningDetail = '',
+    this.reasoningConfigurable = false,
+    this.reasoningOptions = const <ReasoningEffortChoice>[],
+    this.reasoningSupport = const ReasoningEffortSupport.unsupported(),
   });
 
   final MainState state;
@@ -231,6 +237,11 @@ class MainWindowViewModel {
   final bool sourceInspectionPending;
   final MainRunProgress? runProgress;
   final String? completionNotice;
+  final String reasoningLabel;
+  final String reasoningDetail;
+  final bool reasoningConfigurable;
+  final List<ReasoningEffortChoice> reasoningOptions;
+  final ReasoningEffortSupport reasoningSupport;
 
   bool get hasSource => source != null;
   bool get requiresAsr => sourceNeedsAsr ?? source?.kind != SourceKind.subtitle;
@@ -271,6 +282,7 @@ class MainWindowController extends ChangeNotifier {
   int _eventCursor = 0;
   List<Map<String, Object?>> _recentEvents = const [];
   TranslationRuntimeChoice? _selectedTranslation;
+  String? _selectedReasoningEffort;
   TaskOption? _selectedAsr;
   MediaInspection? _sourceInspection;
   String? _sourceInspectionLanguage;
@@ -426,6 +438,16 @@ class MainWindowController extends ChangeNotifier {
 
   void selectTranslation(TranslationRuntimeChoice option) {
     _selectedTranslation = option;
+    _selectedReasoningEffort = null;
+    _publish();
+  }
+
+  void selectReasoningEffort(ReasoningEffortChoice option) {
+    selectReasoningEffortValue(option.value);
+  }
+
+  void selectReasoningEffortValue(String value) {
+    _selectedReasoningEffort = normalizeReasoningEffort(value);
     _publish();
   }
 
@@ -793,6 +815,7 @@ class MainWindowController extends ChangeNotifier {
     }
     final snapshot = service.snapshot.desktopSnapshot;
     final translation = _effectiveTranslationChoice(snapshot);
+    final routing = _routingWithReasoningSelection(translation.routing);
     final asr = _effectiveAsrOption(snapshot);
     final requiresAsr = _requestRequiresAsr;
     final outputDirectory = _effectiveOutputDirectory(source);
@@ -820,12 +843,12 @@ class MainWindowController extends ChangeNotifier {
       'bilingual': _bilingual,
       if (outputDirectory != null && outputDirectory.isNotEmpty)
         'output_dir': outputDirectory,
-      if (translation.routing.isNotEmpty) 'routing': translation.routing,
-      if (translation.routing.isEmpty &&
+      if (routing.isNotEmpty) 'routing': routing,
+      if (routing.isEmpty &&
           translation.provider != null &&
           translation.provider!.isNotEmpty)
         'provider': translation.provider,
-      if (translation.routing.isEmpty &&
+      if (routing.isEmpty &&
           translation.model != null &&
           translation.model!.isNotEmpty)
         'model': translation.model,
@@ -948,6 +971,7 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final readiness = snapshot?.configReadiness;
     final translation = _effectiveTranslationChoice(snapshot);
+    final reasoning = _reasoningSupport(snapshot, translation);
     final asr = _effectiveAsrOption(snapshot);
     final state = _deriveState(readiness, translation, asr);
     return MainWindowViewModel(
@@ -982,6 +1006,11 @@ class MainWindowController extends ChangeNotifier {
       sourceInspectionPending: _sourceInspectionPending,
       runProgress: _runProgress,
       completionNotice: _completionNotice,
+      reasoningLabel: reasoning.displayLabel,
+      reasoningDetail: reasoning.detailLabel,
+      reasoningConfigurable: reasoning.supported,
+      reasoningOptions: reasoning.choices,
+      reasoningSupport: reasoning,
     );
   }
 
@@ -1217,6 +1246,39 @@ class MainWindowController extends ChangeNotifier {
     );
   }
 
+  ReasoningEffortSupport _reasoningSupport(
+    DesktopSnapshot? snapshot,
+    TranslationRuntimeChoice translation,
+  ) {
+    final primary = _asStringMap(translation.routing['primary']);
+    return reasoningEffortSupportFor(
+      snapshot,
+      providerName: '${primary['provider'] ?? translation.provider ?? ''}',
+      model: '${primary['model'] ?? translation.model ?? ''}',
+      currentValue:
+          _selectedReasoningEffort ??
+          primary['reasoning_effort'] ??
+          primary['reasoningEffort'],
+    );
+  }
+
+  Map<String, Object?> _routingWithReasoningSelection(
+    Map<String, Object?> routing,
+  ) {
+    final normalized = _normalizedRouting(routing);
+    if (normalized.isEmpty || _selectedReasoningEffort == null) {
+      return normalized;
+    }
+    final primary = _asStringMap(normalized['primary']);
+    return {
+      ...normalized,
+      'primary': {
+        ...primary,
+        'reasoning_effort': normalizeReasoningEffort(_selectedReasoningEffort),
+      },
+    };
+  }
+
   TranslationRuntimeChoice? _taskRoutingChoice(DesktopSnapshot? snapshot) {
     final task = _taskFromSnapshot(snapshot);
     if (task == null) return null;
@@ -1287,6 +1349,7 @@ class MainWindowController extends ChangeNotifier {
             final routing = _routingPayload(
               provider: provider.name,
               model: model,
+              reasoningEffort: reasoningEffortAuto,
               fallback: const [],
             );
             return TranslationRuntimeChoice(
@@ -1308,7 +1371,11 @@ class MainWindowController extends ChangeNotifier {
     RoutingProfileOption profile,
   ) {
     final routing = _normalizedRouting({
-      'primary': {'provider': profile.provider, 'model': profile.model},
+      'primary': {
+        'provider': profile.provider,
+        'model': profile.model,
+        'reasoning_effort': profile.reasoningEffort,
+      },
       'fallback': profile.fallback,
     });
     return _choiceFromRouting(
@@ -1328,6 +1395,9 @@ class MainWindowController extends ChangeNotifier {
     final primary = _asStringMap(routing['primary']);
     final provider = '${primary['provider'] ?? ''}'.trim();
     final model = '${primary['model'] ?? ''}'.trim();
+    final reasoningEffort = normalizeReasoningEffort(
+      primary['reasoning_effort'] ?? primary['reasoningEffort'],
+    );
     if (provider.isEmpty || model.isEmpty) return null;
     final fallback = _routeList(routing['fallback']);
     final label = _modelLabel(model, provider);
@@ -1345,6 +1415,7 @@ class MainWindowController extends ChangeNotifier {
       routing: _routingPayload(
         provider: provider,
         model: model,
+        reasoningEffort: reasoningEffort,
         fallback: fallback,
       ),
       source: source,
@@ -1423,10 +1494,14 @@ class MainWindowController extends ChangeNotifier {
     final primary = _asStringMap(raw['primary']);
     final provider = '${primary['provider'] ?? ''}'.trim();
     final model = '${primary['model'] ?? ''}'.trim();
+    final reasoningEffort = normalizeReasoningEffort(
+      primary['reasoning_effort'] ?? primary['reasoningEffort'],
+    );
     if (provider.isEmpty && model.isEmpty) return const {};
     return _routingPayload(
       provider: provider,
       model: model,
+      reasoningEffort: reasoningEffort,
       fallback: _routeList(raw['fallback']),
     );
   }
@@ -1439,7 +1514,13 @@ class MainWindowController extends ChangeNotifier {
       final provider = '${route['provider'] ?? ''}'.trim();
       final model = '${route['model'] ?? ''}'.trim();
       if (provider.isEmpty || model.isEmpty) continue;
-      routes.add({'provider': provider, 'model': model});
+      routes.add({
+        'provider': provider,
+        'model': model,
+        'reasoning_effort': normalizeReasoningEffort(
+          route['reasoning_effort'] ?? route['reasoningEffort'],
+        ),
+      });
     }
     return routes;
   }
@@ -1447,15 +1528,23 @@ class MainWindowController extends ChangeNotifier {
   static Map<String, Object?> _routingPayload({
     required String provider,
     required String model,
+    String reasoningEffort = reasoningEffortAuto,
     required List<Map<String, Object?>> fallback,
   }) {
     return {
-      'primary': {'provider': provider.trim(), 'model': model.trim()},
+      'primary': {
+        'provider': provider.trim(),
+        'model': model.trim(),
+        'reasoning_effort': normalizeReasoningEffort(reasoningEffort),
+      },
       'fallback': [
         for (final route in fallback)
           {
             'provider': '${route['provider'] ?? ''}'.trim(),
             'model': '${route['model'] ?? ''}'.trim(),
+            'reasoning_effort': normalizeReasoningEffort(
+              route['reasoning_effort'] ?? route['reasoningEffort'],
+            ),
           },
       ],
     };
