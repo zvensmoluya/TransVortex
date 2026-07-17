@@ -210,6 +210,10 @@ class FasterWhisperProcessAsrAdapter:
             meta["provider"] = self.config.name
             meta["protocol"] = "faster_whisper"
             meta["runtime_source"] = self.config.runtime.source
+            meta["runtime_id"] = self.config.runtime.id
+            meta["transport"] = "stdio_jsonl"
+            meta["device"] = result.get("device")
+            meta["compute_type"] = result.get("compute_type")
         transport_meta = {
             "transport": "stdio_jsonl",
             "runtime_source": self.config.runtime.source,

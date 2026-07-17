@@ -93,6 +93,21 @@ function Save-ManualScreenshot {
     [TransVortexManualCapture]::CaptureWindow($Process.MainWindowHandle, $Path)
 }
 
+function Save-ManualReport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Report,
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    $payload = $Report | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText(
+        $Path,
+        $payload,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+}
+
 function Read-ManualStep {
     param(
         [Parameter(Mandatory = $true)]
@@ -247,7 +262,7 @@ if ($PlanOnly) {
         }
     }
     $report.ended_at = (Get-Date).ToString("o")
-    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8
+    Save-ManualReport -Report $report -Path $reportPath
     if ($Json) {
         $report | ConvertTo-Json -Depth 8
     } else {
@@ -281,7 +296,7 @@ try {
         $report.ok = $true
         $report.ended_at = (Get-Date).ToString("o")
         $report.completion_claim = "Launch check only; this does not prove the manual visible end-to-end acceptance."
-        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8
+        Save-ManualReport -Report $report -Path $reportPath
         if (-not $process.HasExited) {
             $process.CloseMainWindow() | Out-Null
             if (-not $process.WaitForExit(5000)) {
@@ -316,7 +331,7 @@ try {
     $report.manual_visible_e2e_ok = $missing.Count -eq 0
     $report.ok = $report.manual_visible_e2e_ok
     $report.ended_at = (Get-Date).ToString("o")
-    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8
+    Save-ManualReport -Report $report -Path $reportPath
 
     Write-Host ""
     Write-Host "Manual acceptance report: $reportPath"

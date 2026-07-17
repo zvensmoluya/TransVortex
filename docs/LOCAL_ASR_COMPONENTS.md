@@ -6,6 +6,14 @@
 
 FunASR、本机 Whisper 和 OpenAI Whisper 互不回退。本机 Whisper 任务由 Worker 启动独立 JSONL 子进程，模型在一个任务内只加载一次；Worker 退出或被强制取消时，Windows Job Object 负责结束子进程并释放显存。旧的进程内实现只保留给 CLI 和开发实验。
 
+## 开发态 APP E2E 桥接
+
+`scripts/run_flutter_app_e2e.ps1` 可以在隔离的 APP 数据目录中，把已验证的本机 Python 和 faster-whisper 模型登记为 `external` runtime，供可见 Flutter APP 的端到端验收使用。任务仍必须由 `local_worker` 启动独立 JSONL Whisper Host；它不是旧的进程内 ASR 路径。
+
+该能力只面向开发和验收，不在产品界面暴露 Python 选择器，也不改变 Flutter 正式版本只使用受管运行组件的产品边界。语音识别设置保存时会恢复受管策略，因此开发桥接会话中不应保存该页配置。
+
+开发桥接通过不等于受管组件闭环通过。受管 runtime/NVIDIA 组件的构建、清单发布、下载校验、安装、正式安装目录和干净系统仍需分别验收。
+
 ## 用户数据目录
 
 ```text

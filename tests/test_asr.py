@@ -618,7 +618,12 @@ def test_local_asr_uses_selected_language_and_initial_timestamp(tmp_path) -> Non
     ]
 
 
-def test_local_worker_uses_one_jsonl_host_and_loads_model_once(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("runtime_source", ["managed", "external"])
+def test_local_worker_uses_one_jsonl_host_and_loads_model_once(
+    tmp_path,
+    monkeypatch,
+    runtime_source: str,
+) -> None:
     host = tmp_path / "fake_whisper_host.py"
     log = tmp_path / "methods.log"
     model = tmp_path / "model"
@@ -663,7 +668,7 @@ for raw in sys.stdin:
             "python_executable": __import__("sys").executable,
             "model_path": str(model),
             "accelerator_root": "",
-            "runtime_source": "managed",
+            "runtime_source": runtime_source,
         },
     )
     provider = AsrProviderConfig(
@@ -671,7 +676,7 @@ for raw in sys.stdin:
         kind="local_worker",
         protocol="faster_whisper",
         model="small",
-        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        runtime=AsrRuntimeConfig(source=runtime_source, id=f"{runtime_source}:faster-whisper"),
         local=AsrLocalConfig(device="cpu", compute_type="int8"),
     )
     engine = AsrEngine(asr_provider=provider, source_lang="en", root_dir=tmp_path)
@@ -683,6 +688,12 @@ for raw in sys.stdin:
 
     assert first[0]["start"] == 1
     assert second[0]["start"] == 11
+    assert first[0]["meta"]["protocol"] == "faster_whisper"
+    assert first[0]["meta"]["runtime_source"] == runtime_source
+    assert first[0]["meta"]["runtime_id"] == f"{runtime_source}:faster-whisper"
+    assert first[0]["meta"]["transport"] == "stdio_jsonl"
+    assert first[0]["meta"]["device"] == "cpu"
+    assert first[0]["meta"]["compute_type"] == "int8"
     assert process is not None and process.poll() is not None
     methods = log.read_text(encoding="utf-8").splitlines()
     assert methods.count("runtime.info") == 1
