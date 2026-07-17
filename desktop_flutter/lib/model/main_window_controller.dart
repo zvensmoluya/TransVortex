@@ -201,7 +201,7 @@ class MainWindowViewModel {
     this.sourceInspectionPending = false,
     this.runProgress,
     this.completionNotice,
-    this.reasoningLabel = '服务默认',
+    this.reasoningLabel = '由服务决定',
     this.reasoningDetail = '',
     this.reasoningConfigurable = false,
     this.reasoningOptions = const <ReasoningEffortChoice>[],

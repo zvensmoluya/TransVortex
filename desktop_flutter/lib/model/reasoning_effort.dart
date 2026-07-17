@@ -101,7 +101,7 @@ String normalizeReasoningEffort(Object? value) {
 String reasoningEffortLabel(String value) {
   return switch (normalizeReasoningEffort(value)) {
     reasoningEffortAuto => '自动',
-    reasoningEffortServiceDefault => '服务默认',
+    reasoningEffortServiceDefault => '由服务决定',
     'none' => '关闭',
     'minimal' => '最低',
     'low' => '低',

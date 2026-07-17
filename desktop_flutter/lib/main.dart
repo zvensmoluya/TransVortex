@@ -1955,7 +1955,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     final windowSize = MediaQuery.sizeOf(context);
     final reasoningAnchor = Rect.fromLTWH(
       windowSize.width <= 336 ? 8 : (windowSize.width - 320) / 2,
-      windowSize.height * 0.42,
+      windowSize.height * 0.28,
       320,
       36,
     );

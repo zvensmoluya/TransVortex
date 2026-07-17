@@ -2078,12 +2078,49 @@ void main() {
     expect(pickerSize.width, 320);
     expect(pickerSize.height, lessThan(240));
     expect(find.byKey(const ValueKey('reasoning-mode-auto')), findsOneWidget);
+    expect(find.byKey(const ValueKey('reasoning-mode-manual')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('reasoning-mode-service-default')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('reasoning-manual-slider')), findsNothing);
+
+    final collapsedHeight = pickerSize.height;
+    await tester.tap(find.byKey(const ValueKey('reasoning-mode-manual')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 90));
+    final midHeight = tester
+        .getSize(find.byKey(const ValueKey('reasoning-effort-picker')))
+        .height;
+    expect(midHeight, greaterThan(collapsedHeight));
+    await tester.pumpAndSettle();
+    final expandedHeight = tester
+        .getSize(find.byKey(const ValueKey('reasoning-effort-picker')))
+        .height;
+    expect(expandedHeight, greaterThan(midHeight));
+    expect(
+      find.byKey(const ValueKey('reasoning-manual-slider')),
       findsOneWidget,
     );
     expect(
+      find.byKey(const ValueKey('reasoning-manual-apply')),
+      findsOneWidget,
+    );
+    await tester.drag(
       find.byKey(const ValueKey('reasoning-manual-slider')),
+      const Offset(80, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('reasoning-effort-picker')),
+      findsOneWidget,
+    );
+    expect(calls, isNot(contains('provider.routing.save')));
+
+    await tester.tap(find.byKey(const ValueKey('reasoning-advanced-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('reasoning-mode-service-default')),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('reasoning-mode-auto')));
