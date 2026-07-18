@@ -36,6 +36,8 @@ FunASR、本机 Whisper 和 OpenAI Whisper 互不回退。本机 Whisper 任务�
 
 下载写入 `.part` 文件并使用 HTTP Range 续传；取消后保留部分文件，重新点击安装即继续。最终目录只有在所有文件校验完成后才替换。
 
+完整 `.part` 缓存会先按期望大小和 SHA-256 验证。验证通过时直接安装，无需创建 HTTP 客户端；不匹配时才会丢弃缓存并按受信 HTTPS 地址重新下载。这一规则同时支撑断点续传和零网络的本地暂存验收。
+
 ## 构建与发布
 
 构建运行组件：
@@ -45,6 +47,52 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_whisper_compon
 ```
 
 该脚本构建隔离的 CPython 3.13 Windows x64 运行组件和单独的 NVIDIA 包，输出资产哈希与 `asr_components_build.json`，不下载模型，也不修改产品清单。
+
+## 本地暂存与机器验收
+
+公开发布资产尚未就绪时，可以把已验证的构建产物和模型文件暂存到隔离 APP 数据目录：
+
+```powershell
+$sessionRoot = Join-Path $env:TEMP "transvortex-managed-asr-e2e-large-v3"
+$modelRoot = "C:\path\to\verified\faster-whisper-large-v3"
+
+.\scripts\stage_managed_asr_e2e.ps1 `
+  -BuildManifest .\dist\asr-components\1.0.0\asr_components_build.json `
+  -ModelId large-v3 `
+  -ModelPath $modelRoot `
+  -SessionRoot $sessionRoot `
+  -Json
+```
+
+脚本会重新校验构建清单、ZIP 和模型的大小与 SHA-256，生成只在会话内有效的清单副本，并把组件和模型写入受管下载缓存的 `.part` 路径。副本使用 `https://local-staging.invalid/` 占位地址，但安装前会先命中已验证的完整缓存，因此不访问该地址，也不修改 `src/transvortex/resources/asr_components.json`。
+
+默认拒绝覆盖非空目录。仅当目录含有匹配的 TransVortex 会话归属标记时，才允许使用 `-Force` 替换；`-PlanOnly` 只校验输入并返回计划，不写入会话。
+
+随后用 TransVortex API 完成实际安装、硬件探测、readiness 和最小转录：
+
+```powershell
+python .\scripts\accept_managed_asr_staging.py `
+  --stage-report "$sessionRoot\stage_report.json" `
+  --pipeline-seed .\pipeline.desktop.yaml `
+  --providers-seed .\providers.yaml `
+  --output-report "$sessionRoot\managed_asr_acceptance.json" `
+  --source-lang en
+```
+
+成功报告必须同时记录 `readiness.state=ready`、`runtime_source=managed`、`transport=stdio_jsonl`、设备和 compute type，并重新计算安装后模型文件哈希。该机器验收会真实加载模型并转录探测音频，但不代替可见 APP 的完整媒体任务、结果审看或公开下载验收。
+
+从隔离安装目录启动可见 APP、完成确实需要 ASR 的任务并在任务处理窗审看和重新导出后，在卸载前固定安装物、任务、Worker、识别行和输出证据：
+
+```powershell
+& "$installRoot\runtime\python\python.exe" .\scripts\verify_managed_asr_app_e2e.py `
+  --stage-report "$sessionRoot\stage_report.json" `
+  --task-id "tvx_YYYYMMDD_HHMMSS_xxxxxx" `
+  --installer ".\dist\installer\windows\TransVortex-setup-internal.exe" `
+  --install-root $installRoot `
+  --output "$sessionRoot\managed_asr_installed_app_e2e.json"
+```
+
+验收器要求任务与 checkpoint 都为 `DONE`、Python Worker 正常退出并持久化最终事件、所有 ASR 行证明 `managed + stdio_jsonl + cuda + int8_float16`，同时要求 SRT / ASS 非空且在 Worker 结束后重新写出。2026-07-18 的可见安装版验收已满足这些条件，并在无活动 Worker 后静默卸载；程序目录被删除，隔离任务和机器报告保留。该结论仍不覆盖公开 HTTPS 下载和干净 Windows 首启。
 
 上传并启用清单：
 

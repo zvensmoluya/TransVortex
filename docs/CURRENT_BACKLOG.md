@@ -1,6 +1,6 @@
 # TransVortex 当前待办
 
-更新时间：2026-07-17
+更新时间：2026-07-18
 
 本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
 
@@ -16,16 +16,14 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| 受管 ASR 组件本地暂存验收 | 待实现 | 从本机构建产物生成隔离测试清单和 APP 数据，完成 runtime、NVIDIA 包及模型的安装、readiness、真实 `local_worker` 任务和清理，不依赖公开下载 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | ASR 组件内部发布与下载闭环 | 外部条件 | 发布固定版本资产并写入大小、SHA-256 和 `published` 清单，在全新 APP 数据目录完成下载、校验、安装和真实任务 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
-| 已安装路径真实任务 | 待验收 | 从正式安装目录完成真实媒体任务，证明 runtime、资源和用户目录协同正常 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | 干净 Windows 首启与媒体任务 | 待验收 | 在未配置开发环境的干净系统完成安装、首启、配置和真实任务 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 已安装路径通知行为 | 待验收 | 通知中心归属正确，点击通知能够聚焦应用 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | Authenticode 签名 | 外部条件 | 正式安装包和主可执行文件完成签名、时间戳和 Windows 验证 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | FFmpeg 对应源码托管 | 外部条件 | 公开分发提供与内置 LGPL shared runtime 对应的完整源码地址 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | 可复现的 CI 构建 | 待实现 | 在干净构建执行器生成 runtime、安装包、manifest 和验收结果 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 也已完成第一阶段人工 E2E：真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。不要把这些已完成基础重新列为待办；它们也不等于受管组件、已安装路径或干净系统公开发布就绪。
+当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 完成第一阶段人工 E2E，真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。2026-07-18 又完成受管 Whisper runtime、NVIDIA 组件和 `large-v3` 模型的隔离校验安装，并从正式安装目录启动可见 APP，在不依赖工作区 Python 的情况下完成 `managed + stdio_jsonl + cuda + int8_float16` 真实媒体任务、SRT / ASS 审看、重新导出和卸载清理，详见 [`2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。不要把这些已完成基础重新列为待办；它们仍不等于公开组件下载、干净系统发布就绪或通知验收。
 
 ## P1：桌面生命周期与数据安全
 

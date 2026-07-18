@@ -97,6 +97,65 @@ def test_model_install_resumes_and_verifies_trusted_hash(tmp_path: Path) -> None
     assert not part.exists()
 
 
+def test_model_install_reuses_complete_verified_download_without_network(tmp_path: Path) -> None:
+    content = b"trusted-model"
+    catalog = _catalog(content)
+    paths = asr_runtime_paths(tmp_path)
+    part = paths.downloads_root / "models" / "small" / "pinned-revision" / "model.bin.part"
+    part.parent.mkdir(parents=True)
+    part.write_bytes(content)
+    client_factory_calls = 0
+
+    def client_factory() -> httpx.Client:
+        nonlocal client_factory_calls
+        client_factory_calls += 1
+        raise AssertionError("verified download cache must not create an HTTP client")
+
+    manager = AsrOperationManager(
+        root_dir=tmp_path,
+        catalog=catalog,
+        client_factory=client_factory,
+    )
+
+    completed = _wait_terminal(manager, manager.start_install("model", "small")["id"])
+
+    target = paths.models_root / "small" / "pinned-revision"
+    assert completed["state"] == "completed"
+    assert completed["bytes_done"] == len(content)
+    assert client_factory_calls == 0
+    assert (target / "model.bin").read_bytes() == content
+    assert not part.exists()
+
+
+def test_model_install_overwrites_complete_download_with_wrong_hash(tmp_path: Path) -> None:
+    content = b"trusted-model"
+    catalog = _catalog(content)
+    paths = asr_runtime_paths(tmp_path)
+    part = paths.downloads_root / "models" / "small" / "pinned-revision" / "model.bin.part"
+    part.parent.mkdir(parents=True)
+    part.write_bytes(b"x" * len(content))
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, content=content, request=request)
+
+    manager = AsrOperationManager(
+        root_dir=tmp_path,
+        catalog=catalog,
+        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    completed = _wait_terminal(manager, manager.start_install("model", "small")["id"])
+
+    target = paths.models_root / "small" / "pinned-revision"
+    assert completed["state"] == "completed"
+    assert requests == 1
+    assert (target / "model.bin").read_bytes() == content
+    assert not part.exists()
+
+
 def test_model_install_rejects_checksum_mismatch(tmp_path: Path, monkeypatch) -> None:
     catalog = _catalog(b"expected")
 
@@ -233,6 +292,79 @@ def test_install_backup_is_restored_after_interrupted_directory_swap(tmp_path: P
 
     assert target.is_dir()
     assert (target / "model.bin").read_bytes() == b"trusted-model"
+    assert not backup.exists()
+
+
+def test_install_directory_swap_retries_transient_permission_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+    staging = manager.paths.components_root / "faster-whisper" / ".1.0.0.installing"
+    target = manager.paths.components_root / "faster-whisper" / "1.0.0"
+    staging.mkdir(parents=True)
+    (staging / "python.exe").write_bytes(b"runtime")
+    real_replace = __import__("os").replace
+    replace_attempts = 0
+    retry_delays: list[float] = []
+
+    def transient_replace(source, destination):  # noqa: ANN001
+        nonlocal replace_attempts
+        replace_attempts += 1
+        if replace_attempts < 3:
+            raise PermissionError("temporary scanner lock")
+        real_replace(source, destination)
+
+    monkeypatch.setattr("transvortex.app.asr_operations.os.replace", transient_replace)
+    monkeypatch.setattr(
+        "transvortex.app.asr_operations.time.sleep",
+        lambda seconds: retry_delays.append(seconds),
+    )
+
+    manager._replace_directory(staging, target)
+
+    assert replace_attempts == 3
+    assert retry_delays == [0.1, 0.2]
+    assert (target / "python.exe").read_bytes() == b"runtime"
+    assert not staging.exists()
+
+
+def test_install_directory_swap_retries_backup_cleanup_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+    staging = manager.paths.components_root / "faster-whisper" / ".1.0.0.installing"
+    target = manager.paths.components_root / "faster-whisper" / "1.0.0"
+    backup = target.parent / ".1.0.0.previous"
+    target.mkdir(parents=True)
+    (target / "old.dll").write_bytes(b"old")
+    staging.mkdir(parents=True)
+    (staging / "python.exe").write_bytes(b"runtime")
+
+    real_rmtree = __import__("shutil").rmtree
+    cleanup_attempts = 0
+    retry_delays: list[float] = []
+
+    def transient_rmtree(path, *args, **kwargs):  # noqa: ANN001
+        nonlocal cleanup_attempts
+        if Path(path) == backup:
+            cleanup_attempts += 1
+            if cleanup_attempts < 3:
+                raise PermissionError("temporary scanner lock")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("transvortex.app.asr_operations.shutil.rmtree", transient_rmtree)
+    monkeypatch.setattr(
+        "transvortex.app.asr_operations.time.sleep",
+        lambda seconds: retry_delays.append(seconds),
+    )
+
+    manager._replace_directory(staging, target)
+
+    assert cleanup_attempts == 3
+    assert retry_delays == [0.1, 0.2]
+    assert (target / "python.exe").read_bytes() == b"runtime"
     assert not backup.exists()
 
 

@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $manifestPath = (Resolve-Path -LiteralPath $BuildManifest).Path
+$manifestDirectory = Split-Path -Parent $manifestPath
 $manifest = Get-Content -LiteralPath $manifestPath -Encoding utf8 -Raw | ConvertFrom-Json
 $catalogPath = Join-Path $repoRoot "src\transvortex\resources\asr_components.json"
 $catalog = Get-Content -LiteralPath $catalogPath -Encoding utf8 -Raw | ConvertFrom-Json
@@ -27,7 +28,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 foreach ($asset in @($manifest.assets)) {
-    $assetPath = (Resolve-Path -LiteralPath ([string]$asset.path)).Path
+    $assetPathValue = [string]$asset.path
+    $assetPathCandidate = if ([System.IO.Path]::IsPathRooted($assetPathValue)) {
+        $assetPathValue
+    } else {
+        Join-Path $manifestDirectory $assetPathValue
+    }
+    $assetPath = (Resolve-Path -LiteralPath $assetPathCandidate).Path
     $actualHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $actualSize = (Get-Item -LiteralPath $assetPath).Length
     if ($actualHash -ne [string]$asset.sha256 -or $actualSize -ne [int64]$asset.size) {

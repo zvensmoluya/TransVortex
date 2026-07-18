@@ -34,6 +34,8 @@ DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 DOWNLOAD_ATTEMPTS = 3
 MIN_FREE_SPACE_RESERVE = 256 * 1024 * 1024
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 16 * 1024 * 1024 * 1024
+DIRECTORY_SWAP_ATTEMPTS = 20
+DIRECTORY_SWAP_MAX_RETRY_SECONDS = 1.0
 
 
 class AsrOperationError(RuntimeError):
@@ -234,6 +236,7 @@ class AsrOperationManager:
             cache_file = self.paths.downloads_root / "models" / str(model["id"]) / revision / relative
             part_file = cache_file.with_name(cache_file.name + ".part")
             self._assert_download_target(part_file)
+            self._assert_managed_target(staged_file)
             url = self._model_file_url(repository, revision, relative)
             self._download_verified(
                 url=url,
@@ -404,6 +407,15 @@ class AsrOperationManager:
         progress: Callable[[int], None],
     ) -> None:
         trusted_url = self._trusted_https_url(url)
+        self._check_cancelled(cancel_event)
+        if self._file_valid(
+            destination,
+            expected_size,
+            expected_sha256,
+            cancel_event=cancel_event,
+        ):
+            progress(expected_size)
+            return
         destination.parent.mkdir(parents=True, exist_ok=True)
         last_error: Exception | None = None
         for attempt in range(DOWNLOAD_ATTEMPTS):
@@ -512,18 +524,50 @@ class AsrOperationManager:
         backup = target.parent / f".{target.name}.previous"
         self._assert_managed_target(backup)
         if backup.exists():
-            shutil.rmtree(backup)
+            self._remove_directory_with_retry(backup)
         if target.exists():
-            os.replace(target, backup)
+            self._replace_path(target, backup)
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.replace(staging, target)
+            self._replace_path(staging, target)
         except Exception:
             if backup.exists() and not target.exists():
-                os.replace(backup, target)
+                self._replace_path(backup, target)
             raise
         if backup.exists():
-            shutil.rmtree(backup)
+            try:
+                self._remove_directory_with_retry(backup)
+            except OSError:
+                # The new target is already active. Leave the old backup for the
+                # next startup recovery rather than reporting a false install failure.
+                pass
+
+    def _remove_directory_with_retry(self, path: Path) -> None:
+        for attempt in range(DIRECTORY_SWAP_ATTEMPTS):
+            try:
+                shutil.rmtree(path)
+                return
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                winerror = getattr(exc, "winerror", None)
+                retryable = isinstance(exc, PermissionError) or winerror in {5, 32, 33}
+                if not retryable or attempt + 1 >= DIRECTORY_SWAP_ATTEMPTS:
+                    raise
+                time.sleep(min(0.1 * (attempt + 1), DIRECTORY_SWAP_MAX_RETRY_SECONDS))
+
+    @staticmethod
+    def _replace_path(source: Path, target: Path) -> None:
+        for attempt in range(DIRECTORY_SWAP_ATTEMPTS):
+            try:
+                os.replace(source, target)
+                return
+            except OSError as exc:
+                winerror = getattr(exc, "winerror", None)
+                retryable = isinstance(exc, PermissionError) or winerror in {5, 32, 33}
+                if not retryable or attempt + 1 >= DIRECTORY_SWAP_ATTEMPTS:
+                    raise
+                time.sleep(min(0.1 * (attempt + 1), DIRECTORY_SWAP_MAX_RETRY_SECONDS))
 
     def _recover_install_backups(self) -> None:
         entries: list[tuple[str, dict[str, Any]]] = []
@@ -547,10 +591,14 @@ class AsrOperationManager:
                 continue
             self._assert_managed_target(backup)
             if target.exists():
-                shutil.rmtree(backup)
+                try:
+                    self._remove_directory_with_retry(backup)
+                except OSError:
+                    # Keep startup usable; a later initialization can retry cleanup.
+                    continue
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(backup, target)
+                self._replace_path(backup, target)
 
     def _installed_result(
         self,
@@ -559,6 +607,7 @@ class AsrOperationManager:
         cancel_event: threading.Event,
     ) -> dict[str, Any] | None:
         target = self._install_target(kind, entry)
+        self._assert_managed_target(target)
         marker_path = target / ("model.json" if kind == "model" else "component.json")
         if not marker_path.is_file():
             return None
@@ -720,14 +769,37 @@ class AsrOperationManager:
     def _assert_managed_target(self, path: Path) -> None:
         resolved = path.resolve()
         roots = (self.paths.components_root.resolve(), self.paths.models_root.resolve())
-        if not any(resolved == root or root in resolved.parents for root in roots):
+        matching_root = next(
+            (root for root in roots if resolved == root or root in resolved.parents),
+            None,
+        )
+        if matching_root is None:
             raise AsrOperationError("unsafe_path", f"Refusing to change unmanaged path: {resolved}")
+        if self._has_reparse_component(path, matching_root):
+            raise AsrOperationError("unsafe_path", f"Refusing a linked ASR path: {path}")
 
     def _assert_download_target(self, path: Path) -> None:
         resolved = path.resolve()
         root = self.paths.downloads_root.resolve()
         if resolved != root and root not in resolved.parents:
             raise AsrOperationError("unsafe_path", f"Refusing to write outside ASR downloads: {resolved}")
+        if self._has_reparse_component(path, root):
+            raise AsrOperationError("unsafe_path", f"Refusing a linked ASR download path: {path}")
+
+    @staticmethod
+    def _has_reparse_component(path: Path, stop_root: Path) -> bool:
+        current = Path(os.path.abspath(os.fspath(path)))
+        lexical_root = Path(os.path.abspath(os.fspath(stop_root)))
+        is_junction = getattr(os.path, "isjunction", None)
+        while True:
+            if current.is_symlink() or bool(is_junction and is_junction(current)):
+                return True
+            if os.path.normcase(str(current)) == os.path.normcase(str(lexical_root)):
+                return False
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
 
     @staticmethod
     def _safe_relative_path(value: str) -> PurePosixPath:
@@ -746,15 +818,15 @@ class AsrOperationManager:
             raise AsrOperationError("invalid_catalog", "ASR component is missing a valid SHA-256 digest")
         return value
 
-    @staticmethod
     def _file_valid(
+        self,
         path: Path,
         expected_size: int,
         expected_sha256: str,
         *,
         cancel_event: threading.Event | None = None,
     ) -> bool:
-        if not path.is_file() or path.stat().st_size != expected_size:
+        if self._has_reparse_component(path, path.parent) or not path.is_file() or path.stat().st_size != expected_size:
             return False
         digest = hashlib.sha256()
         with path.open("rb") as handle:

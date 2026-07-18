@@ -72,3 +72,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 `-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册及用户数据保留。终端用户运行安装器和已安装应用均不依赖 PowerShell。公开发布仍需 Authenticode 签名、FFmpeg 完整对应源码托管，以及干净 Windows 环境的首启和真实媒体任务验收。
 
 安装器始终使用专用的 `TransVortex` 安装目录：如果用户选择的是其他父目录，会在其中创建 `TransVortex` 子目录；如果目标目录非空且没有有效的安装归属标记，安装器会拒绝覆盖。检测到已有安装时，升级必须沿用原安装路径；如需更换路径，应先卸载旧版本，避免遗留两套程序或误删无关文件。
+
+## 内部安装路径验收现状
+
+2026-07-18 的本机内部验收使用当前 NSIS 产物完成全新安装、升级、运行中保护、AUMID 快捷方式、卸载和用户数据保留检查。在另一个保留的隔离安装目录中，包内 `runtime/python/python.exe` 也已完成受管 Whisper runtime、NVIDIA 组件和 `large-v3` 模型的校验安装，并通过 `managed + stdio_jsonl + cuda + int8_float16` 最小转录。该过程没有使用工作区 Python。
+
+同一隔离安装目录随后启动了可见 Flutter APP，并完成一条确实需要 ASR 的真实媒体任务。机器报告固定了 `DONE` 任务与 checkpoint、正常退出的 Python Worker、23 条 `managed + stdio_jsonl + cuda + int8_float16` 识别行，以及非空 SRT / ASS；人工操作覆盖运行态、独立任务处理窗审看和重新导出。无活动 Worker 后静默卸载返回 0，程序目录删除，隔离任务与报告保留。因此“本机内部安装路径真实任务”已经闭环。
+
+该结论不覆盖干净 Windows、通知聚焦、公开组件下载、Authenticode 和 FFmpeg 对应源码托管；这些仍是独立发布边界。当次证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。

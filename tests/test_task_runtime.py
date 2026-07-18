@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import sys
 from pathlib import Path
 
 from transvortex.app.desktop_requests import ResumeRequest, RunRequest
@@ -156,6 +158,9 @@ def test_runtime_worker_heartbeat_and_finish(tmp_path: Path) -> None:
 
     saved = runtime.worker_file("task1").read_text(encoding="utf-8")
     assert str(worker["pid"]) in saved
+    executable = Path(sys.executable).resolve()
+    assert Path(worker["executable"]) == executable
+    assert worker["executable_sha256"] == hashlib.sha256(executable.read_bytes()).hexdigest()
     assert not runtime.active_file.exists()
 
 

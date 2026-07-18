@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,11 +245,15 @@ class TaskRuntime:
     ) -> dict[str, Any]:
         with self.lock():
             now = utc_now_iso()
+            executable = Path(sys.executable).resolve()
+            executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
             payload = {
                 "task_id": task_id,
                 "pid": int(pid or os.getpid()),
                 "owner": owner,
                 "command": command,
+                "executable": str(executable),
+                "executable_sha256": executable_sha256,
                 "state": "running",
                 "started_at": now,
                 "last_seen": now,
@@ -266,6 +271,8 @@ class TaskRuntime:
                     "started_at": now,
                     "last_seen": now,
                     "command": command,
+                    "executable": str(executable),
+                    "executable_sha256": executable_sha256,
                 }
             )
             write_json(self.active_file, active)
