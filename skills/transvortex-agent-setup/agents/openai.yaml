@@ -1,0 +1,4 @@
+interface:
+  display_name: "TransVortex Agent Setup"
+  short_description: "Prepare and verify TransVortex ASR with your Agent"
+  default_prompt: "Use $transvortex-agent-setup to inspect and prepare a verified TransVortex ASR environment."

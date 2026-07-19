@@ -1,0 +1,539 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:transvortex:agent-setup-contract:1",
+  "title": "TransVortex Agent setup contract",
+  "description": "Versioned, secret-free payload emitted by TransVortex setup-plan/setup-verify and the compatible plan envelope an Agent may produce.",
+  "type": "object",
+  "required": ["schema_version", "contract", "kind"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "contract": {"type": "string", "const": "transvortex.agent_setup"},
+    "kind": {"type": "string", "enum": ["setup_plan", "setup_verify", "provider_test", "agent_plan", "agent_result"]},
+    "ok": {"type": "boolean", "description": "For setup_plan, the contract was generated; for setup_verify/provider_test, the verification or probe succeeded."},
+    "ready": {"type": "boolean", "description": "Whether a generated setup_plan has no blocking items and is ready for use."},
+    "network_access": {"type": "boolean"},
+    "plan_status": {"type": "string", "enum": ["ready", "needs_action", "blocked"]},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "verified_at": {"type": "string", "format": "date-time"},
+    "product": {"$ref": "#/$defs/product"},
+    "platform": {"$ref": "#/$defs/platform"},
+    "root_dir": {"type": "string"},
+    "providers_file": {"type": "string"},
+    "active_asr": {"oneOf": [{"$ref": "#/$defs/asr"}, {"type": "null"}]},
+    "current": {"$ref": "#/$defs/current"},
+    "requirements": {"$ref": "#/$defs/requirements"},
+    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+    "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+    "blocking_items": {"type": "array", "items": {"$ref": "#/$defs/blocking_item"}},
+    "success_conditions": {"type": "array", "items": {"type": "string"}},
+    "verification": {"$ref": "#/$defs/verification"},
+    "executes_local_code": {"type": "boolean"},
+    "agent_commands": {"type": "object", "additionalProperties": {"type": "string"}},
+    "agent_argv": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "config_error": {"type": "string"},
+    "catalog_error": {"type": "string"},
+    "readiness_error": {"type": "string"},
+    "environment_error": {"type": "string"},
+    "readiness": {"$ref": "#/$defs/readiness"},
+    "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "integrity": {"$ref": "#/$defs/integrity"},
+    "read_only": {"type": "boolean"},
+    "status": {"type": "string", "enum": ["ready", "needs_user", "blocked", "failed"]},
+    "route": {"oneOf": [{"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]}, {"type": "null"}]},
+    "alternatives": {"type": "array", "items": {"$ref": "#/$defs/alternative"}},
+    "plan_id": {"type": "string"},
+    "actions": {"type": "array", "items": {"$ref": "#/$defs/action_result"}},
+    "next": {"type": "array", "items": {"type": "string"}},
+    "errors": {"type": "array", "items": {"$ref": "#/$defs/error"}},
+    "host": {"$ref": "#/$defs/host"},
+    "current_state": {"type": "object", "additionalProperties": true},
+    "requested": {"$ref": "#/$defs/requested"},
+    "policy": {"$ref": "#/$defs/policy"},
+    "plan": {"$ref": "#/$defs/plan"},
+    "result": {"$ref": "#/$defs/result"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "setup_plan"}}, "required": ["kind"]},
+      "then": {
+        "required": [
+          "ok",
+          "ready",
+          "plan_status",
+          "product",
+          "platform",
+          "root_dir",
+          "active_asr",
+          "route",
+          "alternatives",
+          "plan_id",
+          "plan",
+          "current",
+          "requirements",
+          "allowed_actions",
+          "forbidden_actions",
+          "blocking_items",
+          "success_conditions",
+          "verification",
+          "read_only",
+          "network_access"
+        ],
+        "properties": {"route": {"type": "null"}}
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "setup_verify"}}, "required": ["kind"]},
+      "then": {
+        "required": [
+          "ok",
+          "root_dir",
+          "active_asr",
+          "readiness",
+          "checks",
+          "blocking_items",
+          "success_conditions",
+          "read_only",
+          "network_access"
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "provider_test"}}, "required": ["kind"]},
+      "then": {
+        "required": ["ok", "status", "code", "provider", "probe", "network_access", "read_only"],
+        "properties": {
+          "status": {"enum": ["ready", "needs_user", "failed"]},
+          "provider": {"oneOf": [{"$ref": "#/$defs/asr"}, {"type": "string"}]},
+          "probe": {"type": "object", "additionalProperties": true}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "agent_result"}}, "required": ["kind"]},
+      "then": {
+        "required": ["status", "route", "actions", "verification", "next", "errors"]
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "agent_plan"}}, "required": ["kind"]},
+      "then": {
+        "required": ["plan", "requested", "policy", "alternatives"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {"const": "agent_result"},
+          "status": {"const": "ready"}
+        },
+        "required": ["kind", "status"]
+      },
+      "then": {
+        "properties": {
+          "route": {"not": {"type": "null"}},
+          "verification": {
+            "required": ["doctor", "readiness", "probe"],
+            "properties": {
+              "doctor": {"const": "pass"},
+              "readiness": {"const": "pass"},
+              "probe": {"const": "pass"}
+            }
+          },
+          "actions": {
+            "not": {
+              "contains": {
+                "properties": {"status": {"enum": ["failed", "blocked"]}},
+                "required": ["status"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"kind": {"const": "setup_plan"}, "ready": {"const": true}},
+        "required": ["kind", "ready"]
+      },
+      "then": {
+        "properties": {
+          "plan_status": {"const": "ready"},
+          "blocking_items": {
+            "not": {
+              "contains": {
+                "properties": {"severity": {"const": "blocking"}},
+                "required": ["severity"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {"const": "setup_verify"},
+          "ok": {"const": true}
+        },
+        "required": ["kind", "ok"]
+      },
+      "then": {
+        "properties": {
+          "readiness": {
+            "required": ["can_run"],
+            "properties": {"can_run": {"const": true}}
+          },
+          "checks": {
+            "items": {
+              "properties": {"status": {"enum": ["pass", "skip"]}},
+              "required": ["status"]
+            }
+          },
+          "blocking_items": {
+            "not": {
+              "contains": {
+                "properties": {"severity": {"const": "blocking"}},
+                "required": ["severity"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "product": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "const": "transvortex"},
+        "version": {"type": "string"},
+        "cli_executable": {"type": "string"},
+        "installation_root": {"type": "string"},
+        "data_root": {"type": "string"},
+        "capabilities": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "platform": {
+      "type": "object",
+      "properties": {
+        "system": {"type": "string"},
+        "release": {"type": "string"},
+        "machine": {"type": "string"},
+        "python_version": {"type": "string"},
+        "python_executable": {"type": "string"},
+        "disk": {
+          "type": "object",
+          "properties": {
+            "free_bytes": {"type": ["integer", "null"], "minimum": 0},
+            "total_bytes": {"type": ["integer", "null"], "minimum": 0}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "os": {"type": "string"},
+        "os_version": {"type": "string"},
+        "architecture": {"type": "string"},
+        "admin": {"type": "boolean"},
+        "reboot_pending": {"type": "boolean"},
+        "disk_free_bytes": {"type": "integer", "minimum": 0},
+        "gpu": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      },
+      "additionalProperties": true
+    },
+    "asr": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "kind": {"type": "string"},
+        "protocol": {"type": "string"},
+        "model": {"type": "string"},
+        "runtime_source": {"type": "string"},
+        "runtime_id": {"type": "string"},
+        "model_source": {"type": "string"},
+        "model_path_configured": {"type": "boolean"},
+        "device": {"type": "string"},
+        "compute_type": {"type": "string"},
+        "auth_type": {"type": "string"},
+        "env_key": {"type": "string"},
+        "credential_id": {"type": "string"},
+        "credential_required": {"type": "boolean"},
+        "credential_configured": {"type": "boolean"},
+        "credential_metadata_valid": {"type": "boolean"},
+        "base_url": {"type": "string"},
+        "endpoint": {"type": "string"},
+        "network_scope": {"type": "string", "enum": ["loopback", "remote", "invalid"]}
+      },
+      "additionalProperties": true
+    },
+    "readiness": {
+      "type": "object",
+      "properties": {
+        "state": {"type": "string"},
+        "code": {"type": "string"},
+        "can_run": {"type": "boolean"},
+        "primary_action": {"type": "string"},
+        "checked_at": {"type": "string"},
+        "details": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "current": {
+      "type": "object",
+      "properties": {
+        "readiness": {"$ref": "#/$defs/readiness"},
+        "runtime": {"type": "object", "additionalProperties": true},
+        "accelerators": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "models": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "registered_models": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "environment_candidates": {"type": "array", "items": {"$ref": "#/$defs/environment"}},
+        "provider_test": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]}
+      },
+      "additionalProperties": true
+    },
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "runtime": {"oneOf": [{"$ref": "#/$defs/requirement"}, {"type": "null"}]},
+        "accelerator": {"oneOf": [{"$ref": "#/$defs/requirement"}, {"type": "null"}]},
+        "model": {"oneOf": [{"$ref": "#/$defs/model_requirement"}, {"type": "null"}]},
+        "available_models": {"type": "array", "items": {"$ref": "#/$defs/model_requirement"}}
+      },
+      "additionalProperties": true
+    },
+    "requirement": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "version": {"type": "string"},
+        "platform": {"type": "string"},
+        "protocol_version": {"type": "integer"},
+        "python_version": {"type": "string"},
+        "faster_whisper_version": {"type": "string"},
+        "ctranslate2_version": {"type": "string"},
+        "packages": {"type": "object", "additionalProperties": {"type": "string"}},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      },
+      "additionalProperties": true
+    },
+    "model_requirement": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "display_name": {"type": "string"},
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"},
+        "revision": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "size": {"type": "integer", "minimum": 0},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/artifact_file"}}
+      },
+      "additionalProperties": true
+    },
+    "artifact": {
+      "type": "object",
+      "properties": {
+        "published": {"type": "boolean"},
+        "release_tag": {"type": "string"},
+        "asset_name": {"type": "string"},
+        "url": {"type": "string", "pattern": "^$|^https://[^@/?#]+(?::[0-9]+)?(?:/[^?#]*)?$"},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$|^$"}
+      },
+      "additionalProperties": true
+    },
+    "artifact_file": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$|^$"}
+      },
+      "additionalProperties": true
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "source": {"type": "string"},
+        "python_executable": {"type": "string"},
+        "python_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$|^$"},
+        "python_version": {"type": "string"},
+        "faster_whisper_version": {"type": "string"},
+        "ctranslate2_version": {"type": "string"},
+        "probe": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "requested": {
+      "type": "object",
+      "properties": {
+        "route": {"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external", "auto"]},
+        "model_id": {"type": "string"},
+        "model_revision": {"type": "string"},
+        "device": {"type": "string", "enum": ["auto", "cuda", "cpu"]},
+        "compute_type": {"type": "string"},
+        "source_language": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "alternative": {
+      "type": "object",
+      "required": ["route", "rank", "reason"],
+      "properties": {
+        "route": {"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]},
+        "rank": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string"},
+        "observed": {"type": "boolean"},
+        "availability": {"type": "string", "enum": ["observed", "detected_candidate"]},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "blocking": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "allowed_actions": {"type": "array", "items": {"type": "string"}},
+        "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+        "approval_required_for": {"type": "array", "items": {"type": "string"}},
+        "allowed_output_root": {"type": "string"},
+        "network": {"type": "string", "enum": ["offline", "trusted_manifest_only", "user_approved"]}
+      },
+      "additionalProperties": true
+    },
+    "plan": {
+      "type": "object",
+      "required": ["plan_id", "created_at", "route", "actions", "rollback"],
+      "properties": {
+        "plan_id": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "route": {"oneOf": [{"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]}, {"type": "null"}]},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
+        "rollback": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "mutating",
+        "requires_confirmation",
+        "requires_admin",
+        "requires_restart",
+        "requires_network",
+        "may_cost_money",
+        "expected_outputs",
+        "rollback"
+      ],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"type": "string"},
+        "description": {"type": "string"},
+        "mutating": {"type": "boolean"},
+        "requires_confirmation": {"type": "boolean"},
+        "requires_admin": {"type": "boolean"},
+        "requires_restart": {"type": "boolean"},
+        "requires_network": {"type": "boolean"},
+        "may_cost_money": {"type": "boolean"},
+        "command": {"type": "string"},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "inputs": {"type": "object", "additionalProperties": true},
+        "expected_outputs": {"type": "array", "items": {"type": "string"}},
+        "rollback": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "command": {"type": "string"},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "read_only": {"type": "boolean"},
+        "network_access": {"type": "boolean"},
+        "executes_local_code": {"type": "boolean"},
+        "doctor": {"type": "string", "enum": ["pass", "fail", "not_run"]},
+        "readiness": {"type": "string", "enum": ["pass", "fail", "not_run"]},
+        "probe": {"type": "string", "enum": ["pass", "fail", "not_run"]}
+      },
+      "additionalProperties": true
+    },
+    "integrity": {
+      "type": "object",
+      "properties": {
+        "runtime_marker": {"type": "object", "additionalProperties": true},
+        "runtime_probe": {"type": "object", "additionalProperties": true},
+        "accelerator_marker": {"type": "object", "additionalProperties": true},
+        "model_files": {"type": "object", "additionalProperties": true},
+        "hashes_not_checked": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "check": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "status": {"type": "string", "enum": ["pass", "fail", "skip", "not_run"]},
+        "code": {"type": "string"},
+        "message": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "blocking_item": {
+      "type": "object",
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "severity": {"type": "string", "enum": ["blocking", "warning"]},
+        "message": {"type": "string"},
+        "recommended_action": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string", "enum": ["ready", "needs_user", "blocked", "failed"]},
+        "route": {"type": "string"},
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/action_result"}},
+        "verification": {"type": "object", "additionalProperties": true},
+        "next": {"type": "array", "items": {"type": "string"}},
+        "errors": {"type": "array", "items": {"$ref": "#/$defs/error"}}
+      },
+      "additionalProperties": true
+    },
+    "action_result": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "status": {"type": "string", "enum": ["planned", "running", "completed", "skipped", "failed", "blocked"]},
+        "exit_code": {"type": ["integer", "null"]},
+        "started_at": {"type": "string", "format": "date-time"},
+        "ended_at": {"type": "string", "format": "date-time"},
+        "report_path": {"type": "string"},
+        "error_code": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "details": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    }
+  }
+}

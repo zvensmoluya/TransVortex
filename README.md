@@ -82,6 +82,24 @@ transvortex result open --task-id <task_id> --json
 
 `--detach --json` 返回排队回执，不是最终任务结果。机器调用不要解析人类日志，完整约定见 [`AGENT_USAGE.md`](AGENT_USAGE.md)。
 
+## Agent 环境准备
+
+TransVortex 还提供一个只读的 ASR 环境契约，适合交给 Codex、Claude Code、
+OpenClaw 或其他本地 Agent 规划安装和修复：
+
+```powershell
+transvortex agent-info --json
+transvortex asr setup-plan --json
+transvortex asr setup-verify --json --strict
+```
+
+契约不会自行安装 Whisper、CUDA、模型或凭据。需要让 Agent 接手时，可直接
+使用 [`AGENT_BOOTSTRAP.md`](AGENT_BOOTSTRAP.md)；它会要求先生成计划、等待
+用户确认，再调用 TransVortex 已广告的能力并由 TransVortex 验证结果。Skill
+参考实现位于 [`skills/transvortex-agent-setup/SKILL.md`](skills/transvortex-agent-setup/SKILL.md)。
+其中 setup-plan 的 `ok` 只表示契约生成成功；是否可运行要看 `ready`、
+`plan_status` 和 `blocking_items`，最终以 setup-verify 的 `ok` 为准。
+
 ## Flutter 桌面端
 
 ```powershell

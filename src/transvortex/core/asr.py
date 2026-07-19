@@ -19,6 +19,7 @@ from typing import Any
 from ..app.credentials import resolve_credential
 from ..app.asr_runtime import (
     WHISPER_HOST_PROTOCOL_VERSION,
+    asr_provider_endpoint_policy_code,
     resolve_whisper_runtime,
     whisper_host_script,
 )
@@ -482,12 +483,15 @@ class OpenAITranscriptionsAsrClient:
         prompt: str = "",
         root_dir: Path | None = None,
     ) -> AsrTranscriptionResult:
+        policy_code = asr_provider_endpoint_policy_code(self.config)
+        if policy_code:
+            raise RuntimeError(policy_code)
         api_key = ""
         if self.config.auth.type == "bearer":
             credential = resolve_credential(
                 env_key=self.config.env_key,
                 credential_id=self.config.credential_id,
-                provider_name="",
+                provider_name=self.config.name,
                 root_dir=root_dir,
             )
             if not credential.found:

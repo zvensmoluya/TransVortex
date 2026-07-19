@@ -1165,6 +1165,7 @@ def _preflight(
                 credential = resolve_credential(
                     env_key=asr_provider.env_key,
                     credential_id=asr_provider.credential_id,
+                    provider_name=asr_provider.name,
                     root_dir=root_dir,
                 )
                 if not credential.found:

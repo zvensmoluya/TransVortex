@@ -20,12 +20,13 @@ from transvortex.app.asr_runtime import (
     load_asr_runtime_state,
     probe_managed_model,
     probe_python_environment,
+    provider_test_fingerprint,
     resolve_whisper_runtime,
     save_asr_runtime_state,
     save_external_environment,
 )
 from transvortex.app.media_inspect import inspect_media_source
-from transvortex.app.models import AsrLocalConfig, AsrProviderConfig, AsrRuntimeConfig
+from transvortex.app.models import AsrAuthConfig, AsrLocalConfig, AsrProviderConfig, AsrRuntimeConfig
 from transvortex.utils import write_json
 
 
@@ -54,6 +55,39 @@ def _catalog(content: bytes = b"trusted-model") -> dict:
             }
         ],
     }
+
+
+def test_provider_test_fingerprint_tracks_auth_and_request_shape() -> None:
+    original = AsrProviderConfig(
+        name="remote_asr",
+        kind="remote",
+        model="whisper-1",
+        auth=AsrAuthConfig(type="bearer", env_key="ASR_KEY", credential_id="asr-prod"),
+    )
+    changed_credential = AsrProviderConfig(
+        name="remote_asr",
+        kind="remote",
+        model="whisper-1",
+        auth=AsrAuthConfig(type="bearer", env_key="ASR_KEY", credential_id="asr-next"),
+    )
+    changed_request = AsrProviderConfig(
+        name="remote_asr",
+        kind="remote",
+        model="whisper-1",
+        auth=AsrAuthConfig(type="bearer", env_key="ASR_KEY", credential_id="asr-prod"),
+    )
+    changed_request.request.send_language = False
+
+    assert provider_test_fingerprint(original) != provider_test_fingerprint(changed_credential)
+    assert provider_test_fingerprint(original) != provider_test_fingerprint(changed_request)
+
+
+def test_asr_readiness_rejects_insecure_or_misclassified_service_endpoints(tmp_path: Path) -> None:
+    remote = AsrProviderConfig(name="remote", kind="remote", base_url="http://example.invalid/v1")
+    local = AsrProviderConfig(name="local", kind="local_server", base_url="https://example.invalid/v1")
+
+    assert asr_provider_readiness(remote, root_dir=tmp_path)["code"] == "remote_endpoint_requires_https"
+    assert asr_provider_readiness(local, root_dir=tmp_path)["code"] == "local_service_endpoint_not_loopback"
 
 
 def _wait_terminal(manager: AsrOperationManager, operation_id: str) -> dict:
@@ -217,6 +251,7 @@ def test_runtime_component_install_verifies_and_extracts_archive(tmp_path: Path)
     assert (target / "python.exe").read_bytes() == b"embedded-runtime"
     assert marker["id"] == "managed:faster-whisper"
     assert marker["protocol_version"] == 1
+    assert marker["artifact_sha256"] == hashlib.sha256(archive).hexdigest()
 
 
 def test_component_archive_rejects_path_traversal(tmp_path: Path) -> None:

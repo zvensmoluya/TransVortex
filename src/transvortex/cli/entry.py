@@ -42,6 +42,8 @@ from ..app.desktop_requests import (
     run_request_to_payload,
 )
 from ..app.doctor import doctor_report, format_doctor_report
+from ..app.asr_runtime import asr_provider_endpoint_policy_code
+from ..app.asr_testing import run_asr_connection_test
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..formats.srt import parse_srt_file
 from ..app.models import Segment
@@ -78,6 +80,13 @@ from ..prompts.asr_admin import (
     save_asr_prompt_profile,
 )
 from ..protocol.agent_protocol import agent_info_payload
+from ..protocol.agent_setup import (
+    provider_test_contract_payload,
+    provider_test_error_payload,
+    setup_failure_payload,
+    setup_plan_payload,
+    setup_verify_payload,
+)
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..protocol.redaction import redact
 from ..utils import read_json, to_plain, utc_now_iso
@@ -716,7 +725,11 @@ def _handle_detached_worker_error(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="transvortex")
-    parser.add_argument("--root", default=".", help="Project root (contains providers.yaml/pipeline.yaml)")
+    parser.add_argument(
+        "--root",
+        default=".",
+        help="Project/config root (installed Windows app: %LOCALAPPDATA%\\TransVortex\\Config)",
+    )
     public_commands = (
         "{agent-info,run,resume,status,events,cancel,tasks,doctor,config,catalog,"
         "probe-provider,provider,auth,result,memory,runtime,reexport,asr,translate,export}"
@@ -930,13 +943,48 @@ def _build_parser() -> argparse.ArgumentParser:
     reexport_p.add_argument("--subtitle-prefer-single-line", choices=["true", "false"], default=None)
     reexport_p.add_argument("--json", action="store_true")
 
-    asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments")
+    asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments, or inspect Agent setup")
     _add_providers_file_arg(asr_p)
-    asr_p.add_argument("--input", required=True)
-    asr_p.add_argument("--src", required=True)
+    # Keep the historical ``asr --input ...`` form while allowing a nested,
+    # machine-readable setup contract: ``asr setup-plan --json``.  The input
+    # and source flags are validated in the legacy branch below so argparse
+    # can also parse the nested commands without making them mandatory.
+    asr_p.add_argument("--input", required=False)
+    asr_p.add_argument("--src", required=False)
     _add_pipeline_override_args(asr_p)
     asr_p.add_argument("--json", action="store_true")
     asr_p.add_argument("--detach", action="store_true")
+    asr_sub = asr_p.add_subparsers(dest="asr_command")
+    asr_setup_plan_p = asr_sub.add_parser("setup-plan", help="Print a read-only Agent environment setup plan")
+    asr_setup_plan_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_setup_plan_p.add_argument("--json", action="store_true", help="Print machine-readable setup contract")
+    asr_setup_verify_p = asr_sub.add_parser("setup-verify", help="Verify the active ASR environment without changing it")
+    asr_setup_verify_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_setup_verify_p.add_argument("--json", action="store_true", help="Print machine-readable verification result")
+    asr_setup_verify_p.add_argument("--strict", action="store_true", help="Exit with code 1 when verification is not ready")
+    asr_provider_test_p = asr_sub.add_parser(
+        "provider-test",
+        help="Run an authorized ASR route probe and record its non-secret status",
+    )
+    asr_provider_test_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_provider_test_p.add_argument("--provider", default=None, help="ASR provider name; defaults to the active provider")
+    asr_provider_test_p.add_argument("--source-lang", default="en")
+    asr_provider_test_p.add_argument(
+        "--confirm-network",
+        action="store_true",
+        help="Confirm that this probe may contact a local or remote ASR endpoint and may upload a short sample",
+    )
+    asr_provider_test_p.add_argument(
+        "--confirm-media",
+        action="store_true",
+        help="For remote providers, confirm that the short generated probe audio may leave this machine",
+    )
+    asr_provider_test_p.add_argument(
+        "--confirm-cost",
+        action="store_true",
+        help="For remote providers, confirm that the probe may incur provider charges",
+    )
+    asr_provider_test_p.add_argument("--json", action="store_true", help="Print machine-readable probe result")
 
     translate_p = sub.add_parser("translate", help="Translate existing segments or SRT")
     _add_providers_file_arg(translate_p)
@@ -977,7 +1025,7 @@ def main() -> None:
     args = parser.parse_args()
     root = Path(args.root).resolve()
     _CURRENT_ROOT = root
-    raw_providers_file = getattr(args, "providers_file", None)
+    raw_providers_file = getattr(args, "setup_providers_file", None) or getattr(args, "providers_file", None)
     providers_file = Path(raw_providers_file).resolve() if raw_providers_file else None
     if args.command == "agent-info":
         payload = agent_info_payload()
@@ -985,6 +1033,80 @@ def main() -> None:
             _print_json(payload)
         else:
             print(payload)
+        return
+
+    if args.command == "asr" and getattr(args, "asr_command", None) == "provider-test":
+        try:
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+        except Exception:  # noqa: BLE001 - keep the Agent probe contract structured
+            _print_json(provider_test_error_payload("config_load_failed", provider_name=args.provider or ""))
+            raise SystemExit(1)
+        provider_name = args.provider or config.pipeline.asr_provider
+        provider = config.asr_providers.get(provider_name)
+        if provider is None:
+            _print_json(provider_test_error_payload("asr_provider_missing", provider_name=provider_name))
+            raise SystemExit(1)
+        if provider.kind not in {"local_server", "remote"}:
+            _print_json(provider_test_error_payload("route_probe_not_applicable", provider_name=provider.name, network_access=False))
+            raise SystemExit(1)
+        route_policy_code = asr_provider_endpoint_policy_code(provider)
+        if route_policy_code:
+            _print_json(
+                provider_test_error_payload(
+                    route_policy_code,
+                    provider_name=provider.name,
+                    network_access=False,
+                )
+            )
+            raise SystemExit(1)
+        required_confirmations: list[str] = []
+        if not args.confirm_network:
+            required_confirmations.append("confirm-network")
+        if provider.kind == "remote" and not args.confirm_media:
+            required_confirmations.append("confirm-media")
+        if provider.kind == "remote" and not args.confirm_cost:
+            required_confirmations.append("confirm-cost")
+        if required_confirmations:
+            _print_json(
+                provider_test_error_payload(
+                    "confirmation_required",
+                    provider_name=provider.name,
+                    required_confirmations=required_confirmations,
+                )
+            )
+            raise SystemExit(2)
+        try:
+            payload = run_asr_connection_test(provider, root_dir=root, source_lang=args.source_lang)
+        except Exception:  # noqa: BLE001 - keep probe/storage failures secret-free and structured
+            _print_json(provider_test_error_payload("route_probe_failed", provider_name=provider.name))
+            raise SystemExit(1)
+        contract_payload = provider_test_contract_payload(provider, payload, root_dir=root)
+        _print_json(contract_payload)
+        raise SystemExit(0 if contract_payload.get("ok") is True else 1)
+
+    if args.command == "asr" and getattr(args, "asr_command", None) in {"setup-plan", "setup-verify"}:
+        if args.asr_command == "setup-plan":
+            try:
+                payload = setup_plan_payload(root_dir=root, providers_file=providers_file)
+            except Exception:  # noqa: BLE001 - the Agent contract must remain structured
+                payload = setup_failure_payload(kind="setup_plan", root_dir=root)
+            if args.json:
+                _print_json(payload)
+            else:
+                print(json.dumps(redact(payload, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
+            if payload.get("ok") is not True:
+                raise SystemExit(1)
+            return
+        try:
+            payload = setup_verify_payload(root_dir=root, providers_file=providers_file)
+        except Exception:  # noqa: BLE001 - the Agent contract must remain structured
+            payload = setup_failure_payload(kind="setup_verify", root_dir=root)
+        if args.json:
+            _print_json(payload)
+        else:
+            print(json.dumps(redact(payload, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
+        if args.strict and payload.get("ok") is not True:
+            raise SystemExit(1)
         return
 
     if args.command == "_worker":
@@ -1600,6 +1722,8 @@ def main() -> None:
         return
 
     if args.command == "asr":
+        if not args.input or not args.src:
+            parser.error("asr requires --input and --src unless using setup-plan/setup-verify")
         input_type = "video_asr"
         if args.detach:
             task_id, artifacts_dir = _run_or_exit(

@@ -9,13 +9,75 @@ Start with:
 
 ```powershell
 transvortex agent-info --json
+transvortex asr setup-plan --json
 transvortex doctor --json
 transvortex probe-provider --strict
 ```
 
-`agent-info --json` is static protocol metadata and must not contain secret
-values. `doctor --json` reports local runtime/config health. `probe-provider`
-performs zero-token provider protocol checks.
+`agent-info --json`, `doctor --json`, `asr setup-plan --json`, and
+`asr setup-verify --json --strict` must be treated as secret-free structured
+metadata; still apply a field allowlist before forwarding third-party output.
+`doctor` reports local runtime/config health. `probe-provider` validates the
+translation-provider URL, payload, and response mapping locally; it does not
+send a network request. It is not an ASR route probe.
+
+## ASR Environment Setup Contract
+
+`asr setup-plan --json` emits the versioned, read-only
+`transvortex.agent_setup` contract. It reports the active ASR route, pinned
+runtime/model requirements, installed component state, safe credential metadata,
+blocking items, and the exact verification command. It does not install assets,
+write configuration, invoke `pip`, change a driver, or access the network. If a
+route has not been confirmed, an Agent must keep `route` as `null` and return
+ranked alternatives rather than guessing.
+For a setup plan, `ok: true` means the contract was generated; it does not mean
+the environment is usable. Use `ready: true`, `plan_status: "ready"`, and an
+empty blocking list together before presenting the plan as ready.
+
+The CLI `--root` value is the configuration/project root. For an installed
+Windows desktop app, use `%LOCALAPPDATA%\TransVortex\Config` (or the explicit
+`TRANSVORTEX_HOME` data root together with its `Config` directory); do not use
+the program installation directory as the data root.
+Execute the returned `agent_argv` or `plan.actions[].argv` arrays directly so
+follow-up commands use the same resolved root and providers file; do not rebuild
+them by concatenating an unquoted shell command.
+
+After an explicitly approved plan has been applied through an advertised
+TransVortex capability or the native desktop wizard, run:
+
+```powershell
+transvortex asr setup-verify --json --strict
+```
+
+Treat `ok: true` as the only successful environment result. The verify command
+does not mutate TransVortex configuration or components and does not use the
+network. For local workers it launches the selected runtime locally, loads the
+model, and transcribes generated probe audio in addition to checking readiness,
+managed markers, and managed model file SHA-256 values. When the catalog publishes
+an archive SHA-256, the component marker records the install-time verified digest;
+otherwise the missing archive check is reported in `hashes_not_checked`. The
+installed marker and model hashes must still pass. A route-specific provider
+probe is required in addition to this check for local-service or remote routes.
+The contract marks this local worker execution as `executes_local_code: true`;
+an Agent must never substitute an unadvertised executable.
+
+For a local Agent workflow, use [`AGENT_BOOTSTRAP.md`](AGENT_BOOTSTRAP.md) or
+adapt [`skills/transvortex-agent-setup/SKILL.md`](skills/transvortex-agent-setup/SKILL.md)
+to the Agent's native skill, plugin, or rules format. Web-only Agents should
+generate a handoff prompt and must not claim to have inspected or changed the
+local machine.
+
+For a route-specific ASR probe, use the explicitly authorized command below
+only after confirming network, privacy, and possible media/cost implications:
+
+```powershell
+transvortex asr provider-test --confirm-network --json
+```
+
+For a remote provider, also pass `--confirm-media --confirm-cost`. The command
+may contact a local or remote ASR endpoint and writes only a non-secret probe
+status record; it is separate from the offline setup-plan and setup-verify
+commands.
 
 ## Recommended Full Pipeline
 

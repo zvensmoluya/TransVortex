@@ -22,6 +22,7 @@
 | 应用运行时与安装 | [`APP_RUNTIME.md`](APP_RUNTIME.md) | 固定 Python / FFmpeg runtime、NSIS 安装器和公开发布边界 |
 | 配置与凭据 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) | 配置优先级、provider、用户级凭据和安全边界 |
 | 本机语音识别 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) | 本机 Whisper 组件、模型、下载和安装边界 |
+| Agent 环境接力 | [`../AGENT_USAGE.md`](../AGENT_USAGE.md) / [`../AGENT_BOOTSTRAP.md`](../AGENT_BOOTSTRAP.md) | 机器可读 setup contract、通用 Prompt 和 Agent-native Skill 适配 |
 | 翻译链路 | [`TRANSLATION_DESIGN.md`](TRANSLATION_DESIGN.md) | 当前分片、术语记忆、校验和修复边界 |
 | 低优先级验证 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) | 已观察到但暂不承诺实现的实验问题 |
 

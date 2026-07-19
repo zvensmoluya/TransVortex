@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import importlib.metadata
 import importlib.util
 import json
@@ -8,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -169,6 +171,46 @@ def asr_provider_readiness(
     return _readiness("unavailable", "unsupported_provider", False, "choose_provider")
 
 
+def asr_provider_network_scope(provider: AsrProviderConfig) -> str:
+    """Classify an ASR endpoint without DNS or network access."""
+
+    try:
+        parsed = urllib.parse.urlsplit(str(provider.base_url or ""))
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return "invalid"
+        hostname = parsed.hostname.lower().rstrip(".")
+        if hostname == "localhost":
+            return "loopback"
+        try:
+            return "loopback" if ipaddress.ip_address(hostname).is_loopback else "remote"
+        except ValueError:
+            return "remote"
+    except (TypeError, ValueError):
+        return "invalid"
+
+
+def asr_provider_endpoint_policy_code(provider: AsrProviderConfig) -> str:
+    """Reject credential-bearing or misclassified ASR service routes."""
+
+    try:
+        parsed = urllib.parse.urlsplit(str(provider.base_url or ""))
+        if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            return "unsafe_provider_endpoint"
+        if provider.kind == "remote" and parsed.scheme.lower() != "https":
+            return "remote_endpoint_requires_https"
+        if provider.kind == "local_server":
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return "unsafe_provider_endpoint"
+            if asr_provider_network_scope(provider) != "loopback":
+                return "local_service_endpoint_not_loopback"
+        endpoint = urllib.parse.urlsplit(str(provider.endpoint or ""))
+        if endpoint.scheme or endpoint.netloc or endpoint.query or endpoint.fragment:
+            return "unsafe_provider_endpoint"
+        return ""
+    except (TypeError, ValueError):
+        return "unsafe_provider_endpoint"
+
+
 def _inprocess_readiness(provider: AsrProviderConfig) -> dict[str, Any]:
     if importlib.util.find_spec("faster_whisper") is None:
         return _readiness("needs_action", "runtime_missing", False, "install_runtime")
@@ -322,11 +364,19 @@ def _local_server_readiness(
     root_dir: Path,
     app_data_root: Path | None,
 ) -> dict[str, Any]:
+    policy_code = asr_provider_endpoint_policy_code(provider)
+    if policy_code:
+        return _readiness("unavailable", policy_code, False, "choose_provider")
     paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
     state = load_asr_runtime_state(paths)
     fingerprint = provider_test_fingerprint(provider)
     test = (state.get("provider_tests") or {}).get(fingerprint)
     if not isinstance(test, dict):
+        return _readiness("needs_action", "connection_untested", False, "test_connection")
+    credential_fingerprint = provider_credential_fingerprint(provider, root_dir=root_dir)
+    if provider.auth.type != "none" and not credential_fingerprint:
+        return _readiness("needs_action", "credential_missing", False, "set_credential")
+    if str(test.get("credential_fingerprint") or "") != credential_fingerprint:
         return _readiness("needs_action", "connection_untested", False, "test_connection")
     if test.get("ok") is not True:
         return _readiness("unavailable", "service_unreachable", False, "test_connection", details=test)
@@ -334,6 +384,9 @@ def _local_server_readiness(
 
 
 def _remote_readiness(provider: AsrProviderConfig, *, root_dir: Path) -> dict[str, Any]:
+    policy_code = asr_provider_endpoint_policy_code(provider)
+    if policy_code:
+        return _readiness("unavailable", policy_code, False, "choose_provider")
     if provider.auth.type != "bearer":
         return _readiness("unavailable", "unsupported_auth", False, "set_credential")
     credential = resolve_credential(
@@ -369,17 +422,73 @@ def _readiness(
 def provider_test_fingerprint(provider: AsrProviderConfig) -> str:
     raw = json.dumps(
         {
+            "fingerprint_version": 2,
             "name": provider.name,
             "kind": provider.kind,
             "protocol": provider.protocol,
             "base_url": provider.base_url,
             "endpoint": provider.endpoint,
             "model": provider.model,
+            "auth": {
+                "type": provider.auth.type,
+                "env_key": provider.auth.env_key,
+                "credential_id": provider.auth.credential_id,
+            },
+            "runtime": {
+                "source": provider.runtime.source,
+                "id": provider.runtime.id,
+            },
+            "local": {
+                "model_source": provider.local.model_source,
+                "model_path": provider.local.model_path,
+                "device": provider.local.device,
+                "compute_type": provider.local.compute_type,
+            },
+            "network": {
+                "mode": provider.network.mode,
+                "proxy_port": provider.network.proxy_port,
+            },
+            "http2": provider.http2,
+            "request": {
+                "response_format": provider.request.response_format,
+                "temperature": provider.request.temperature,
+                "timestamp_granularities": provider.request.timestamp_granularities,
+                "include": provider.request.include,
+                "extra_form_fields": provider.request.extra_form_fields,
+                "array_format": provider.request.array_format,
+                "send_response_format": provider.request.send_response_format,
+                "send_temperature": provider.request.send_temperature,
+                "send_timestamp_granularities": provider.request.send_timestamp_granularities,
+                "send_language": provider.request.send_language,
+                "send_prompt": provider.request.send_prompt,
+                "language_field": provider.request.language_field,
+                "prompt_field": provider.request.prompt_field,
+            },
+            "execution": {
+                "timeout_seconds": provider.execution.timeout_seconds,
+                "retry": provider.execution.retry,
+            },
         },
         sort_keys=True,
         separators=(",", ":"),
+        default=str,
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def provider_credential_fingerprint(provider: AsrProviderConfig, *, root_dir: Path) -> str:
+    if provider.auth.type == "none":
+        return "none"
+    credential = resolve_credential(
+        env_key=provider.env_key,
+        credential_id=provider.credential_id,
+        provider_name=provider.name,
+        root_dir=root_dir,
+    )
+    if not credential.found:
+        return ""
+    raw = f"{provider.name}\0{credential.key}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def record_provider_test(
@@ -397,6 +506,7 @@ def record_provider_test(
         "ok": bool(ok),
         "code": code,
         "checked_at": utc_now_iso(),
+        "credential_fingerprint": provider_credential_fingerprint(provider, root_dir=root_dir),
         "details": details or {},
     }
     tests = state.setdefault("provider_tests", {})
@@ -625,7 +735,7 @@ def probe_python_environment(
     executable = Path(python_executable).expanduser().resolve()
     if not executable.is_file():
         return {"ok": False, "code": "environment_missing", "message": f"Python executable not found: {executable}"}
-    command = [str(executable), "-u", str(whisper_host_script()), "--probe"]
+    command = [str(executable), "-B", "-u", str(whisper_host_script()), "--probe"]
     if model_path is not None:
         command.extend(["--model-path", str(Path(model_path).expanduser().resolve())])
     command.extend(["--device", device, "--compute-type", compute_type])
@@ -642,7 +752,12 @@ def probe_python_environment(
             timeout=timeout_seconds,
             check=False,
             creationflags=creationflags,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+            env={
+                **os.environ,
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "code": "environment_probe_failed", "message": str(exc)}

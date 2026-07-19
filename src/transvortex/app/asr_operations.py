@@ -306,12 +306,14 @@ class AsrOperationManager:
                 "version": entry.get("version"),
                 "python": python_name,
                 "protocol_version": entry.get("protocol_version"),
+                "artifact_sha256": str((entry.get("artifact") or {}).get("sha256") or "").lower(),
                 "installed_at": utc_now_iso(),
             }
         else:
             marker = {
                 "id": entry.get("id"),
                 "version": entry.get("version"),
+                "artifact_sha256": str((entry.get("artifact") or {}).get("sha256") or "").lower(),
                 "installed_at": utc_now_iso(),
             }
         write_json(staging / "component.json", marker)

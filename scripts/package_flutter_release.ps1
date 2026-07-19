@@ -385,6 +385,11 @@ tools. It does not depend on a system Python or FFmpeg installation. It does not
 include model files, API keys, auth.json, .env files, or local provider
 configuration.
 
+The agent\ directory contains the machine-readable ASR setup contract,
+AGENT_USAGE.md, a generic bootstrap prompt, and the reference
+transvortex-agent-setup skill. These files only describe bounded discovery and
+verification workflows; they do not contain models, credentials, or installers.
+
 Local Whisper is represented as an optional managed component. Runtime,
 model, and NVIDIA packages are downloaded only after an explicit user action
 and are stored under the user-level TransVortex data directory.
@@ -422,6 +427,10 @@ FFmpeg, or PowerShell installation at runtime.
 This payload does not include model files, API keys, auth.json, .env files, or
 local provider configuration. Local Whisper components are installed only after
 an explicit user action and remain under the user-level TransVortex data root.
+
+The agent\ directory contains the read-only ASR setup contract and the generic
+Agent handoff material. It is safe to copy to a local Codex, Claude Code,
+OpenClaw, or other Agent workspace for review before any mutating action.
 
 FFmpeg notices and source traceability are under tools\ffmpeg. Public release of
 an installer must be accompanied by the complete corresponding FFmpeg source
@@ -528,6 +537,7 @@ $requiredRuntimePaths = @(
     "app_runtime.json",
     "python\python.exe",
     "python\Lib\site-packages\transvortex\app_service.py",
+    "python\Lib\site-packages\transvortex\protocol\agent_setup.py",
     "python\Lib\site-packages\transvortex\resources\asr_components.json"
 )
 $missingRuntimePaths = @(
@@ -610,6 +620,9 @@ Get-ChildItem -LiteralPath $releaseRoot -Force | ForEach-Object {
 Copy-RequiredDirectory -Source $resolvedAppRuntimeRoot -Destination (Join-Path $packageRoot "runtime")
 Copy-RequiredDirectory -Source $resolvedFfmpegRuntimeRoot -Destination (Join-Path $packageRoot "tools\ffmpeg")
 Copy-RequiredDirectory -Source (Join-Path $repoRoot "prompts") -Destination (Join-Path $packageRoot "prompts")
+Copy-RequiredFile -Source (Join-Path $repoRoot "AGENT_USAGE.md") -Destination (Join-Path $packageRoot "agent\AGENT_USAGE.md")
+Copy-RequiredFile -Source (Join-Path $repoRoot "AGENT_BOOTSTRAP.md") -Destination (Join-Path $packageRoot "agent\AGENT_BOOTSTRAP.md")
+Copy-RequiredDirectory -Source (Join-Path $repoRoot "skills\transvortex-agent-setup") -Destination (Join-Path $packageRoot "agent\skills\transvortex-agent-setup")
 if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
     Copy-RequiredDirectory -Source (Join-Path $repoRoot "memory\presets") -Destination (Join-Path $packageRoot "memory\presets")
 }
@@ -637,6 +650,7 @@ $requiredPaths = @(
     "runtime\app_runtime.json",
     "runtime\python\python.exe",
     "runtime\python\Lib\site-packages\transvortex\app_service.py",
+    "runtime\python\Lib\site-packages\transvortex\protocol\agent_setup.py",
     "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
     "runtime\python\Lib\site-packages\transvortex\app\asr_operations.py",
     "runtime\python\Lib\site-packages\transvortex\core\whisper_host.py",
@@ -646,6 +660,12 @@ $requiredPaths = @(
     "tools\ffmpeg\bin\ffprobe.exe",
     "tools\ffmpeg\SOURCE_NOTICE.txt",
     "prompts\translation\system.v1.md",
+    "agent\AGENT_USAGE.md",
+    "agent\AGENT_BOOTSTRAP.md",
+    "agent\skills\transvortex-agent-setup\SKILL.md",
+    "agent\skills\transvortex-agent-setup\agents\openai.yaml",
+    "agent\skills\transvortex-agent-setup\references\provider-modes.md",
+    "agent\skills\transvortex-agent-setup\references\setup_contract.schema.json",
     "pipeline.yaml",
     "providers.yaml"
 )
@@ -723,6 +743,8 @@ $report = [ordered]@{
     ffmpeg_included = $true
     ffmpeg_runtime_root = "tools\ffmpeg"
     ffmpeg_runtime_source = if ($InstallerPayload) { $null } else { $resolvedFfmpegRuntimeRoot }
+    agent_assets_included = $true
+    agent_asset_root = "agent"
     ffmpeg_check = $ffmpegReport
     local_asr_runtime_included = $false
     local_asr_models_included = $false
