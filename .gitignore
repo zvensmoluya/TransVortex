@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+/.tmp-network-tests/
 src/*.egg-info/
 /artifacts/
 /build/
