@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$BuildManifest,
-    [string]$Repository = "zvensmoluya/TransVortex",
+    [string]$Repository = "zvensmoluya/transvortex-assets",
     [switch]$Force,
     [switch]$Json
 )

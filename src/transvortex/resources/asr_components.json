@@ -9,12 +9,12 @@
     "faster_whisper_version": "1.2.1",
     "ctranslate2_version": "4.8.1",
     "artifact": {
-      "published": false,
+      "published": true,
       "release_tag": "asr-components-v1.0.0",
       "asset_name": "transvortex-faster-whisper-runtime-1.0.0-windows-x64.zip",
-      "url": "https://github.com/zvensmoluya/TransVortex/releases/download/asr-components-v1.0.0/transvortex-faster-whisper-runtime-1.0.0-windows-x64.zip",
-      "size": 0,
-      "sha256": ""
+      "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/asr-components-v1.0.0/transvortex-faster-whisper-runtime-1.0.0-windows-x64.zip",
+      "size": 99539400,
+      "sha256": "11a088296161f753dbc8fffa417c836bc7ccee9275dcea3438107ac020a6e52e"
     }
   },
   "accelerators": [
@@ -32,7 +32,7 @@
         "published": false,
         "release_tag": "asr-components-v1.0.0",
         "asset_name": "transvortex-nvidia-cuda12-12.4-windows-x64.zip",
-        "url": "https://github.com/zvensmoluya/TransVortex/releases/download/asr-components-v1.0.0/transvortex-nvidia-cuda12-12.4-windows-x64.zip",
+        "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/asr-components-v1.0.0/transvortex-nvidia-cuda12-12.4-windows-x64.zip",
         "size": 0,
         "sha256": ""
       }

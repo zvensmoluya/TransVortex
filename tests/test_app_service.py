@@ -9,6 +9,7 @@ from pathlib import Path
 
 from transvortex.app.desktop_api import DesktopApi, task_payload
 from transvortex.app.config import load_app_config
+from transvortex.app.asr_runtime import load_asr_catalog
 from transvortex.app.models import TaskRecord
 from transvortex.app_service import LocalServicePump, handle_line, serve
 from transvortex.artifacts.runtime import TaskRuntime
@@ -32,6 +33,14 @@ routing:
         """.strip(),
         encoding="utf-8",
     )
+
+
+def _use_unpublished_asr_catalog(tmp_path: Path, monkeypatch) -> None:
+    catalog = load_asr_catalog()
+    catalog["runtime"]["artifact"]["published"] = False
+    catalog_path = tmp_path / "asr_components_unpublished.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setenv("TRANSVORTEX_ASR_CATALOG", str(catalog_path))
 
 
 def _request(method: str, params: dict | None = None, request_id: int = 1) -> str:
@@ -258,8 +267,9 @@ def test_app_service_saves_global_network_settings(tmp_path: Path) -> None:
     assert config.network.proxy_port == 7890
 
 
-def test_app_service_default_local_whisper_is_not_ready_without_component(tmp_path: Path) -> None:
+def test_app_service_default_local_whisper_is_not_ready_without_component(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
+    _use_unpublished_asr_catalog(tmp_path, monkeypatch)
     service = DesktopApi(root_dir=tmp_path)
 
     config = handle_line(service, _request("config.get"), root_dir=tmp_path)["result"]
@@ -278,8 +288,9 @@ def test_app_service_default_local_whisper_is_not_ready_without_component(tmp_pa
     assert status["readiness"]["can_run"] is False
 
 
-def test_app_service_rejects_unpublished_managed_runtime_install(tmp_path: Path) -> None:
+def test_app_service_rejects_unpublished_managed_runtime_install(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
+    _use_unpublished_asr_catalog(tmp_path, monkeypatch)
     service = DesktopApi(root_dir=tmp_path)
 
     response = handle_line(
