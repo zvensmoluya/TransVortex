@@ -23,6 +23,26 @@ import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
 
 void main() {
+  test('tray reports the active ASR setup phase', () {
+    final model = AsrOperationStatus.fromJson({
+      'id': 'asr_setup',
+      'kind': 'setup',
+      'item_id': 'small',
+      'state': 'running',
+      'phase': 'model',
+    });
+    final cancelling = AsrOperationStatus.fromJson({
+      'id': 'asr_setup',
+      'kind': 'setup',
+      'item_id': 'small',
+      'state': 'cancelling',
+      'phase': 'model',
+    });
+
+    expect(asrTrayStatusLabel(model), '正在下载 Whisper Small');
+    expect(asrTrayStatusLabel(cancelling), '正在取消识别环境下载');
+  });
+
   test('window argument parser falls back to CLI args when window args empty', () {
     expect(
       AppWindowArgs.parse(
@@ -2613,7 +2633,30 @@ void main() {
     Map<String, Object?>? savedAsrDraft;
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
-      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          asrLocal: const {
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': true,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [
+              {
+                'id': 'large-v3',
+                'display_name': 'Whisper Large v3',
+                'installed': true,
+                'size': 100,
+              },
+            ],
+            'accelerators': [],
+            'environments': [],
+            'operations': [],
+          },
+        ).raw;
+      }
       if (method == 'asr.provider.save') {
         savedAsrDraft = Map<String, Object?>.from(
           params['provider_draft'] as Map,
@@ -2633,7 +2676,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('保存并设为默认'));
+    await tester.tap(find.text('保存并切换'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -2703,7 +2746,7 @@ void main() {
       expect(find.text('OpenAI Whisper'), findsOneWidget);
       expect(find.text('FunASR'), findsOneWidget);
       expect(find.text('已保存方案'), findsNothing);
-      expect(find.text('保存并设为默认'), findsOneWidget);
+      expect(find.text('下载并启用'), findsOneWidget);
       expect(find.textContaining('method_not_found'), findsNothing);
       expectNoFlutterException();
     },
@@ -2768,6 +2811,21 @@ void main() {
           managedAsr: true,
           localModelSource: 'external',
           localModelPath: r'D:\Models\faster-whisper-large-v3',
+          asrLocal: const {
+            'paths': {
+              'app_data_root': r'C:\Users\tester\AppData\Local\TransVortex',
+            },
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': true,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [],
+            'accelerators': [],
+            'environments': [],
+            'operations': [],
+          },
         ).raw;
       }
       if (method == 'asr.model.probe') {
@@ -2794,14 +2852,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('自动准备'), findsOneWidget);
+    expect(find.text('由 TransVortex 下载'), findsOneWidget);
     expect(find.text('使用已有模型'), findsOneWidget);
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
     expect(find.text('Whisper Large v3 · 文件完整'), findsOneWidget);
 
-    await tester.tap(find.text('验证并使用'));
+    await tester.tap(find.text('验证并启用'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -2817,10 +2875,11 @@ void main() {
   testWidgets('ASR settings window renders managed component progress', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(920, 680));
+    await tester.binding.setSurfaceSize(const Size(760, 560));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? cancelParams;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -2845,9 +2904,12 @@ void main() {
             'operations': [
               {
                 'id': 'asr_progress',
-                'kind': 'model',
+                'kind': 'setup',
                 'item_id': 'large-v3',
                 'state': 'running',
+                'phase': 'model',
+                'phase_index': 1,
+                'phase_count': 3,
                 'bytes_done': 25,
                 'bytes_total': 100,
                 'current_file': 'model.bin',
@@ -2855,6 +2917,20 @@ void main() {
             ],
           },
         ).raw;
+      }
+      if (method == 'asr.operation.cancel') {
+        cancelParams = Map<String, Object?>.from(params);
+        return {
+          'id': 'asr_progress',
+          'kind': 'setup',
+          'item_id': 'large-v3',
+          'state': 'cancelling',
+          'phase': 'model',
+          'phase_index': 1,
+          'phase_count': 3,
+          'bytes_done': 25,
+          'bytes_total': 100,
+        };
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -2869,11 +2945,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('本地识别引擎'), findsOneWidget);
-    expect(find.text('当前版本暂未开放'), findsOneWidget);
-    expect(find.textContaining('Whisper Large v3 · 25%'), findsOneWidget);
-    expect(find.text('正在处理：model.bin'), findsOneWidget);
-    expect(find.text('取消'), findsOneWidget);
+    expect(find.text('正在下载 Whisper Large v3'), findsOneWidget);
+    expect(find.text('识别引擎'), findsOneWidget);
+    expect(find.text('识别模型'), findsOneWidget);
+    expect(find.text('校验并启用'), findsOneWidget);
+    expect(find.text('25 B / 100 B'), findsOneWidget);
+    expect(find.textContaining('model.bin'), findsNothing);
+    expect(find.text('取消下载'), findsOneWidget);
+
+    await tester.tap(find.text('取消下载'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(cancelParams, {'operation_id': 'asr_progress'});
+    expect(find.text('正在取消…'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -2887,18 +2971,24 @@ void main() {
     var snapshotCalls = 0;
     final running = {
       'id': 'asr_terminal',
-      'kind': 'model',
+      'kind': 'setup',
       'item_id': 'large-v3',
       'state': 'running',
+      'phase': 'model',
+      'phase_index': 1,
+      'phase_count': 3,
       'bytes_done': 25,
       'bytes_total': 100,
       'current_file': 'model.bin',
     };
     final terminal = {
       'id': 'asr_terminal',
-      'kind': 'model',
+      'kind': 'setup',
       'item_id': 'large-v3',
       'state': 'completed',
+      'phase': 'activate',
+      'phase_index': 2,
+      'phase_count': 3,
       'bytes_done': 100,
       'bytes_total': 100,
       'current_file': '',
@@ -2942,15 +3032,176 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.textContaining('Whisper Large v3 · 25%'), findsOneWidget);
+    expect(find.text('正在下载 Whisper Large v3'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 700));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.textContaining('Whisper Large v3 · 已完成'), findsOneWidget);
-    expect(find.textContaining('准备完成'), findsOneWidget);
+    expect(find.text('本机 Whisper 已启用'), findsOneWidget);
+    expect(find.textContaining('已下载并启用'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 2300));
-    expect(find.textContaining('Whisper Large v3 · 已完成'), findsNothing);
+    expect(find.text('本机 Whisper 已启用'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings keeps cancelled setup recovery visible', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var snapshotCalls = 0;
+    final running = {
+      'id': 'asr_cancelled',
+      'kind': 'setup',
+      'item_id': 'small',
+      'state': 'running',
+      'phase': 'model',
+      'phase_index': 1,
+      'phase_count': 3,
+      'bytes_done': 25,
+      'bytes_total': 100,
+    };
+    final cancelled = {
+      ...running,
+      'state': 'cancelled',
+      'error_code': 'cancelled',
+      'message': 'partial data kept',
+    };
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        snapshotCalls += 1;
+        return _desktopSnapshot(
+          managedAsr: true,
+          asrLocal: {
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': true,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [
+              {
+                'id': 'small',
+                'display_name': 'Whisper Small',
+                'installed': false,
+                'size': 100,
+              },
+            ],
+            'accelerators': const [],
+            'environments': const [],
+            'operations': snapshotCalls <= 2 ? [running] : const [],
+          },
+        ).raw;
+      }
+      if (method == 'asr.operation.get') return cancelled;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('继续下载'), findsOneWidget);
+    expect(find.textContaining('已校验的部分会保留'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 2400));
+
+    expect(find.text('继续下载'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings starts one managed setup task', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final calls = <String>[];
+    Map<String, Object?>? savedDraft;
+    Map<String, Object?>? setupParams;
+    final snapshot = _desktopSnapshot(
+      withAsrProviders: false,
+      asrLocal: const {
+        'paths': {
+          'app_data_root': r'C:\Users\tester\AppData\Local\TransVortex',
+        },
+        'runtime': {
+          'id': 'managed:faster-whisper',
+          'version': '1.0.0',
+          'installed': false,
+          'artifact': {'published': true, 'size': 100},
+        },
+        'models': [
+          {
+            'id': 'small',
+            'display_name': 'Whisper Small',
+            'installed': false,
+            'size': 200,
+          },
+        ],
+        'accelerators': [],
+        'environments': [],
+        'operations': [],
+      },
+    );
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') return snapshot.raw;
+      if (method == 'asr.provider.save') {
+        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
+        return {'ok': true, 'provider': 'faster_whisper_large_v3'};
+      }
+      if (method == 'asr.setup.start') {
+        setupParams = Map<String, Object?>.from(params);
+        return {
+          'id': 'asr_setup_small',
+          'kind': 'setup',
+          'item_id': 'small',
+          'state': 'running',
+          'phase': 'runtime',
+          'phase_index': 0,
+          'phase_count': 3,
+          'bytes_done': 0,
+          'bytes_total': 300,
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('由 TransVortex 下载'), findsOneWidget);
+    expect(find.text('Whisper Small'), findsWidgets);
+    expect(find.text('CPU（推荐）'), findsOneWidget);
+    expect(find.text('下载并启用'), findsOneWidget);
+
+    await tester.tap(find.text('下载并启用'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, containsAllInOrder(['asr.provider.save', 'asr.setup.start']));
+    expect(calls, isNot(contains('asr.component.install')));
+    expect(setupParams, {'model_id': 'small'});
+    expect((savedDraft?['local'] as Map?)?['model_source'], 'managed');
+    expect((savedDraft?['local'] as Map?)?['device'], 'cpu');
+    expect(find.text('正在下载本地识别引擎'), findsOneWidget);
+    expect(find.textContaining('关闭此窗口'), findsOneWidget);
     expectNoFlutterException();
   });
 

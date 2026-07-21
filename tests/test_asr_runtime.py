@@ -254,6 +254,69 @@ def test_runtime_component_install_verifies_and_extracts_archive(tmp_path: Path)
     assert marker["artifact_sha256"] == hashlib.sha256(archive).hexdigest()
 
 
+def test_setup_installs_runtime_and_model_as_one_operation(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr("python.exe", b"embedded-runtime")
+    archive = buffer.getvalue()
+    model_content = b"trusted-model"
+    catalog = _catalog(model_content)
+    catalog["runtime"]["python"] = "python.exe"
+    catalog["runtime"]["artifact"] = {
+        "published": True,
+        "url": "https://downloads.example.test/runtime.zip",
+        "size": len(archive),
+        "sha256": hashlib.sha256(archive).hexdigest(),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        content = archive if request.url.host == "downloads.example.test" else model_content
+        return httpx.Response(200, content=content, request=request)
+
+    manager = AsrOperationManager(
+        root_dir=tmp_path,
+        catalog=catalog,
+        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    started = manager.start_setup("small")
+    completed = _wait_terminal(manager, started["id"])
+
+    paths = asr_runtime_paths(tmp_path)
+    assert completed["kind"] == "setup"
+    assert completed["state"] == "completed"
+    assert completed["phase"] == "activate"
+    assert completed["phase_index"] == 2
+    assert completed["phase_count"] == 3
+    assert completed["bytes_done"] == len(archive) + len(model_content)
+    assert completed["bytes_total"] == len(archive) + len(model_content)
+    assert (paths.components_root / "faster-whisper" / "1.0.0" / "python.exe").is_file()
+    assert (paths.models_root / "small" / "pinned-revision" / "model.bin").read_bytes() == model_content
+
+
+def test_asr_operations_are_global_single_flight(tmp_path: Path, monkeypatch) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+
+    def wait_for_cancel(_operation_id, _entry, cancel_event, **_kwargs):  # noqa: ANN001
+        while not cancel_event.wait(0.01):
+            pass
+        manager._check_cancelled(cancel_event)
+
+    monkeypatch.setattr(manager, "_install_model", wait_for_cancel)
+    first = manager.start_install("model", "small")
+
+    assert manager.start_install("model", "small")["id"] == first["id"]
+    with pytest.raises(AsrOperationError) as error:
+        manager.start_install("runtime")
+    with pytest.raises(AsrOperationError) as remove_error:
+        manager.remove("runtime")
+
+    assert error.value.code == "operation_active"
+    assert remove_error.value.code == "operation_active"
+    manager.cancel(first["id"])
+    assert _wait_terminal(manager, first["id"])["state"] == "cancelled"
+
+
 def test_component_archive_rejects_path_traversal(tmp_path: Path) -> None:
     manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
     archive = tmp_path / "unsafe.zip"

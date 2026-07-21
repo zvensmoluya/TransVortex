@@ -20,6 +20,9 @@ String friendlySettingsError(Object error) {
     if (message.isNotEmpty) return message;
   }
   if (error is RpcRemoteException) {
+    if (error.code == 'operation_active') {
+      return '已有识别环境任务正在进行，请先等待完成或取消当前任务。';
+    }
     final details = _map(error.details);
     final info = _map(details['error_info']);
     final hint =

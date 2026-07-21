@@ -136,6 +136,7 @@ class DesktopApi:
             "asr.provider.save": self.asr_provider_save,
             "asr.status": self.asr_status,
             "asr.provider.test": self.asr_provider_test,
+            "asr.setup.start": self.asr_setup_start,
             "asr.component.install": self.asr_component_install,
             "asr.component.remove": self.asr_component_remove,
             "asr.operation.get": self.asr_operation_get,
@@ -189,7 +190,7 @@ class DesktopApi:
 
     def service_shutdown(self, _params: dict[str, Any]) -> dict[str, Any]:
         self.shutdown_requested = True
-        self._asr_operation_manager.cancel_all()
+        self._asr_operation_manager.cancel_all(wait_seconds=5.0)
         if self._shutdown_callback is not None:
             self._shutdown_callback()
         return {"ok": True, "shutdown": "requested"}
@@ -414,6 +415,16 @@ class DesktopApi:
             return self._asr_operation_manager.start_install(
                 _required_text(params, "kind"),
                 _optional_text(params, "item_id", "itemId", "id") or "",
+            )
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_setup_start(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+            self._asr_operation_manager.set_network(config.network)
+            return self._asr_operation_manager.start_setup(
+                _required_text(params, "model_id", "modelId", "id")
             )
         except AsrOperationError as exc:
             raise DesktopApiError(exc.code, str(exc)) from exc

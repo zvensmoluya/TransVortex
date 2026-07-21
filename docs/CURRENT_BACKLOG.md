@@ -16,7 +16,7 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| ASR 组件公开下载与可见 APP 验收 | 待验收 | 已发布 runtime 的 Flutter 点击下载、CPU 基线真实任务和干净系统首启仍需完成；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
+| ASR 组件公开下载与可见 APP 验收 | 待验收 | 单一设置任务、取消/恢复、托盘反馈和 760×560 界面已实现并通过自动验证；仍需用已发布 runtime 完成可见 Flutter 真实点击下载、取消/续传、关窗重开、`small + CPU` 真实媒体任务和干净系统首启；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
 | 干净 Windows 首启与媒体任务 | 待验收 | 在未配置开发环境的干净系统完成安装、首启、配置和真实任务 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 已安装路径通知行为 | 待验收 | 通知中心归属正确，点击通知能够聚焦应用 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | Authenticode 签名 | 外部条件 | 正式安装包和主可执行文件完成签名、时间戳和 Windows 验证 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |

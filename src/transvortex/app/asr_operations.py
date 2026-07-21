@@ -74,9 +74,14 @@ class AsrOperationManager:
         entry = self._catalog_entry(normalized_kind, item_id)
         target_id = str(entry.get("id") or item_id)
         with self._lock:
-            active = self._find_active(normalized_kind, target_id)
+            active = self._find_any_active()
             if active is not None:
-                return active
+                if active.get("kind") == normalized_kind and active.get("item_id") == target_id:
+                    return active
+                raise AsrOperationError(
+                    "operation_active",
+                    "Another ASR setup task is already running; wait for it to finish or cancel it first",
+                )
             operation_id = f"asr_{uuid.uuid4().hex}"
             total = self._entry_download_size(normalized_kind, entry)
             self._check_disk_space(total)
@@ -102,6 +107,57 @@ class AsrOperationManager:
                 target=self._run_install,
                 args=(operation_id, normalized_kind, entry, cancel_event),
                 name=f"transvortex-{normalized_kind}-installer",
+                daemon=True,
+            )
+            self._cancel_events[operation_id] = cancel_event
+            self._threads[operation_id] = thread
+            thread.start()
+            return operation
+
+    def start_setup(self, model_id: str) -> dict[str, Any]:
+        normalized_model_id = model_id.strip()
+        runtime = self._catalog_entry("runtime", "")
+        model = self._catalog_entry("model", normalized_model_id)
+        target_id = str(model.get("id") or normalized_model_id)
+        with self._lock:
+            active = self._find_any_active()
+            if active is not None:
+                if active.get("kind") == "setup" and active.get("item_id") == target_id:
+                    return active
+                raise AsrOperationError(
+                    "operation_active",
+                    "Another ASR setup task is already running; wait for it to finish or cancel it first",
+                )
+            runtime_total = self._entry_download_size("runtime", runtime)
+            model_total = self._entry_download_size("model", model)
+            total = runtime_total + model_total
+            self._check_disk_space(total)
+            operation_id = f"asr_{uuid.uuid4().hex}"
+            now = utc_now_iso()
+            operation = {
+                "id": operation_id,
+                "kind": "setup",
+                "item_id": target_id,
+                "state": "queued",
+                "phase": "runtime",
+                "phase_index": 0,
+                "phase_count": 3,
+                "bytes_done": 0,
+                "bytes_total": total,
+                "current_file": "",
+                "error_code": "",
+                "message": "",
+                "created_at": now,
+                "updated_at": now,
+                "result": {},
+                "owner_pid": os.getpid(),
+            }
+            self._save_operation(operation)
+            cancel_event = threading.Event()
+            thread = threading.Thread(
+                target=self._run_setup,
+                args=(operation_id, runtime, model, runtime_total, cancel_event),
+                name="transvortex-asr-setup",
                 daemon=True,
             )
             self._cancel_events[operation_id] = cancel_event
@@ -147,10 +203,19 @@ class AsrOperationManager:
             event.set()
             return self._update(operation_id, state="cancelling", message="Cancellation requested")
 
-    def cancel_all(self) -> None:
+    def cancel_all(self, *, wait_seconds: float = 0.0) -> None:
         with self._lock:
             for event in self._cancel_events.values():
                 event.set()
+            threads = list(self._threads.values())
+        if wait_seconds <= 0:
+            return
+        deadline = time.monotonic() + wait_seconds
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
 
     def probe_hardware(self) -> dict[str, Any]:
         result = self._probe_and_record_hardware()
@@ -166,7 +231,7 @@ class AsrOperationManager:
         entry = self._catalog_entry(normalized_kind, item_id)
         target_id = str(entry.get("id") or item_id)
         with self._lock:
-            if self._find_active(normalized_kind, target_id) is not None:
+            if self._find_any_active() is not None:
                 raise AsrOperationError("operation_active", "Cannot remove an ASR component while it is changing")
             target = self._install_target(normalized_kind, entry)
             self._assert_managed_target(target)
@@ -203,11 +268,78 @@ class AsrOperationManager:
                 self._cancel_events.pop(operation_id, None)
                 self._threads.pop(operation_id, None)
 
+    def _run_setup(
+        self,
+        operation_id: str,
+        runtime: dict[str, Any],
+        model: dict[str, Any],
+        runtime_total: int,
+        cancel_event: threading.Event,
+    ) -> None:
+        try:
+            self._update(
+                operation_id,
+                state="running",
+                phase="runtime",
+                phase_index=0,
+                message="",
+            )
+            with FileLock(self.paths.downloads_root / ".component-install.lock"):
+                self._check_cancelled(cancel_event)
+                runtime_result = self._installed_result("runtime", runtime, cancel_event)
+                if runtime_result is None:
+                    runtime_result = self._install_archive(
+                        operation_id,
+                        "runtime",
+                        runtime,
+                        cancel_event,
+                    )
+                self._progress(operation_id, runtime_total, "")
+                self._update(operation_id, phase="model", phase_index=1, current_file="")
+                self._check_cancelled(cancel_event)
+                model_result = self._installed_result("model", model, cancel_event)
+                if model_result is None:
+                    model_result = self._install_model(
+                        operation_id,
+                        model,
+                        cancel_event,
+                        progress_base=runtime_total,
+                    )
+                self._update(
+                    operation_id,
+                    phase="activate",
+                    phase_index=2,
+                    bytes_done=int(self.operation(operation_id).get("bytes_total") or 0),
+                    current_file="",
+                )
+            self._finish(
+                operation_id,
+                "completed",
+                result={"runtime": runtime_result, "model": model_result},
+            )
+        except _OperationCancelled:
+            self._finish(
+                operation_id,
+                "cancelled",
+                error_code="cancelled",
+                message="Setup cancelled; verified partial data was kept for retry",
+            )
+        except AsrOperationError as exc:
+            self._finish(operation_id, "failed", error_code=exc.code, message=str(exc))
+        except Exception as exc:  # noqa: BLE001 - background operation must persist a terminal state
+            self._finish(operation_id, "failed", error_code="install_failed", message=str(exc))
+        finally:
+            with self._lock:
+                self._cancel_events.pop(operation_id, None)
+                self._threads.pop(operation_id, None)
+
     def _install_model(
         self,
         operation_id: str,
         model: dict[str, Any],
         cancel_event: threading.Event,
+        *,
+        progress_base: int = 0,
     ) -> dict[str, Any]:
         target = managed_model_path(self.paths, model)
         staging = target.parent / f".{target.name}.installing"
@@ -229,7 +361,7 @@ class AsrOperationManager:
             staged_file = staging.joinpath(*relative.parts)
             if self._file_valid(staged_file, expected_size, expected_sha, cancel_event=cancel_event):
                 completed += expected_size
-                self._progress(operation_id, completed, str(relative))
+                self._progress(operation_id, progress_base + completed, str(relative))
                 continue
             if staged_file.exists():
                 staged_file.unlink()
@@ -244,14 +376,14 @@ class AsrOperationManager:
                 expected_size=expected_size,
                 expected_sha256=expected_sha,
                 cancel_event=cancel_event,
-                progress=lambda current, label=str(relative), base=completed: self._progress(
+                progress=lambda current, label=str(relative), base=progress_base + completed: self._progress(
                     operation_id, base + current, label
                 ),
             )
             staged_file.parent.mkdir(parents=True, exist_ok=True)
             os.replace(part_file, staged_file)
             completed += expected_size
-            self._progress(operation_id, completed, str(relative))
+            self._progress(operation_id, progress_base + completed, str(relative))
         marker = {
             "id": model.get("id"),
             "revision": revision,
@@ -268,6 +400,8 @@ class AsrOperationManager:
         kind: str,
         entry: dict[str, Any],
         cancel_event: threading.Event,
+        *,
+        progress_base: int = 0,
     ) -> dict[str, Any]:
         artifact = entry.get("artifact") if isinstance(entry.get("artifact"), dict) else {}
         if artifact.get("published") is not True:
@@ -286,7 +420,7 @@ class AsrOperationManager:
             expected_size=expected_size,
             expected_sha256=expected_sha,
             cancel_event=cancel_event,
-            progress=lambda current: self._progress(operation_id, current, filename),
+            progress=lambda current: self._progress(operation_id, progress_base + current, filename),
         )
         target = self._install_target(kind, entry)
         staging = target.parent / f".{target.name}.installing"
@@ -703,6 +837,12 @@ class AsrOperationManager:
                 and row.get("item_id") == item_id
                 and row.get("state") in ACTIVE_OPERATION_STATES
             ),
+            None,
+        )
+
+    def _find_any_active(self) -> dict[str, Any] | None:
+        return next(
+            (row for row in self.operations() if row.get("state") in ACTIVE_OPERATION_STATES),
             None,
         )
 

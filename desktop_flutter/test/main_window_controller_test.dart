@@ -49,6 +49,49 @@ void main() {
   );
 
   test(
+    'controller keeps snapshots fresh while an ASR setup is active',
+    () async {
+      final active = _desktopSnapshot(
+        asrLocal: const {
+          'operations': [
+            {
+              'id': 'asr_setup_small',
+              'kind': 'setup',
+              'item_id': 'small',
+              'state': 'running',
+              'phase': 'model',
+            },
+          ],
+        },
+      );
+      final terminal = _desktopSnapshot(asrLocal: const {'operations': []});
+      final handle = _FakeHandle(active, snapshotSequence: [active, terminal]);
+      final service = _readyController(handle: handle);
+      final controller = MainWindowController(service: service);
+      addTearDown(() {
+        controller.dispose();
+        service.dispose();
+      });
+
+      await controller.startService();
+      expect(
+        service.snapshot.desktopSnapshot?.asrOperations.single.active,
+        isTrue,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 2200));
+
+      expect(
+        handle.transport.calls
+            .where((call) => call == 'desktop.snapshot')
+            .length,
+        greaterThanOrEqualTo(2),
+      );
+      expect(service.snapshot.desktopSnapshot?.asrOperations, isEmpty);
+    },
+  );
+
+  test(
     'controller blocks unsupported subtitle input before payload build',
     () async {
       final controller = MainWindowController(service: _readyController());
@@ -1336,6 +1379,7 @@ DesktopSnapshot _desktopSnapshot({
   List<String> extraModels = const [],
   List<Map<String, Object?>> routingProfiles = const [],
   List<Map<String, Object?>> tasks = const [],
+  Map<String, Object?> asrLocal = const {},
 }) {
   final models = ['real-model', 'fallback-model', ...extraModels];
   final activeProfile = routingProfiles.isEmpty ? null : routingProfiles.first;
@@ -1389,6 +1433,7 @@ DesktopSnapshot _desktopSnapshot({
           'has_key': asrHasKey,
         },
       },
+      if (asrLocal.isNotEmpty) 'asr_local': asrLocal,
     },
     'tasks': tasks,
     'runtime': {},
@@ -1434,6 +1479,7 @@ class _FakeHandle implements LocalServiceHandle {
     Map<String, Object?>? mediaInspection,
     RpcRemoteException? resultReexportError,
     RpcRemoteException? runtimeCancelError,
+    List<DesktopSnapshot>? snapshotSequence,
   }) : transport = _FakeTransport(
          {
            'service.info': {
@@ -1500,7 +1546,9 @@ class _FakeHandle implements LocalServiceHandle {
            'runtime.cancel': ?runtimeCancelError,
          },
          sequences: {
-           'desktop.snapshot': ?snapshotAfterReexport == null
+           'desktop.snapshot': ?snapshotSequence != null
+               ? snapshotSequence.map((item) => item.raw).toList()
+               : snapshotAfterReexport == null
                ? null
                : [snapshot.raw, snapshotAfterReexport.raw],
          },

@@ -126,7 +126,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   final _model = TextEditingController();
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
-  final _device = TextEditingController(text: 'auto');
+  final _device = TextEditingController(text: 'cpu');
   final _externalModelPath = TextEditingController();
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
@@ -477,22 +477,16 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final draft = _asrDraft(_selectedAsrProvider);
     final kind = '${draft['kind']}';
     final provider = _selectedAsrOption();
+    if (kind == 'local_worker') {
+      return _localWhisperSetupDetails(provider);
+    }
     return ToolPanel(
       footer: [
-        if (kind == 'local_worker' && _asrModelSource == 'external')
-          ActionButton(
-            label: _probingAsrModel ? '验证中' : '验证并使用',
-            strong: true,
-            onTap: _probingAsrModel || _externalModelPath.text.isEmpty
-                ? null
-                : _probeManagedAsrModel,
-          )
-        else if (kind != 'local_worker' || _asrModelSource == 'managed')
-          ActionButton(
-            label: _savingAsr ? '保存中' : '保存并设为默认',
-            strong: true,
-            onTap: _savingAsr ? null : _saveAsrProvider,
-          ),
+        ActionButton(
+          label: _savingAsr ? '保存中' : '保存并设为默认',
+          strong: true,
+          onTap: _savingAsr ? null : _saveAsrProvider,
+        ),
         if (kind == 'local_server' || kind == 'remote')
           ActionButton(
             label: _testingAsr ? '测试中' : '测试连接',
@@ -506,12 +500,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
           readiness: provider?.readiness,
           draftDirty: _asrDraftDirty,
         ),
-        const SizedBox(height: T.s12),
-        if (kind == 'local_worker') ...[
-          const _AsrSectionHeading(title: '识别方案', detail: '选择模型来源和运算方式。'),
-          const SizedBox(height: T.s8),
-          _localWhisperSettings(),
-        ] else if (kind == 'local_inprocess') ...[
+        const SizedBox(height: T.s8),
+        if (kind == 'local_inprocess') ...[
           Row(
             children: [
               Expanded(
@@ -565,42 +555,141 @@ class _SettingsWindowState extends State<SettingsWindow> {
     );
   }
 
-  Widget _localWhisperSettings() {
+  Widget _localWhisperSetupDetails(AsrProviderOption? provider) {
     final models = _snapshot?.asrModels ?? const <AsrComponentOption>[];
     final modelIds = models.isEmpty
         ? const ['small', 'medium', 'large-v3']
         : models.map((item) => item.id).toList(growable: false);
     final selectedModel = modelIds.contains(_model.text.trim())
         ? _model.text.trim()
-        : 'large-v3';
+        : 'small';
+    final runtime = _snapshot?.asrRuntime;
+    final model = models.firstWhere(
+      (item) => item.id == selectedModel,
+      orElse: () => AsrComponentOption(id: selectedModel, kind: 'model'),
+    );
+    final operation = _activeAsrOperation;
+    final active = operation?.active == true;
+    final managedReady = runtime?.installed == true && model.installed;
+    final isCurrentDefault =
+        provider != null && provider.name == _snapshot?.asrProviderName;
+    final currentReady =
+        managedReady &&
+        isCurrentDefault &&
+        provider.readiness.canRun &&
+        !_asrDraftDirty;
+
+    final footer = <Widget>[];
+    if (operation != null && !operation.active) {
+      if (operation.state == 'failed' || operation.state == 'cancelled') {
+        footer.add(
+          ActionButton(
+            label: operation.state == 'cancelled' ? '继续下载' : '重试',
+            strong: true,
+            onTap: _retryAsrOperation,
+          ),
+        );
+        footer.add(ActionButton(label: '调整设置', onTap: _dismissAsrOperation));
+      }
+    } else if (!active && _asrModelSource == 'managed') {
+      footer.add(
+        ActionButton(
+          label: _savingAsr
+              ? '正在启动'
+              : managedReady
+              ? currentReady
+                    ? '已启用'
+                    : '保存并切换'
+              : '下载并启用',
+          strong: true,
+          onTap: _savingAsr || currentReady
+              ? null
+              : managedReady
+              ? _saveAsrProvider
+              : _startManagedAsrSetup,
+        ),
+      );
+    } else if (!active && _asrModelSource == 'external') {
+      final runtimeReady = runtime?.installed == true;
+      footer.add(
+        ActionButton(
+          label: runtimeReady
+              ? _probingAsrModel
+                    ? '验证中'
+                    : '验证并启用'
+              : '下载识别引擎',
+          strong: true,
+          onTap: runtimeReady
+              ? _probingAsrModel || _externalModelPath.text.isEmpty
+                    ? null
+                    : _probeManagedAsrModel
+              : () => _startAsrInstall('runtime'),
+        ),
+      );
+    }
+
+    return ToolPanel(
+      footer: footer,
+      children: [
+        _AsrSetupOverview(
+          modelLabel: _asrModelLabel(selectedModel),
+          deviceLabel: _asrDeviceLabel(_device.text),
+          currentReady: currentReady,
+          draftDirty: _asrDraftDirty,
+          operation: operation,
+        ),
+        const SizedBox(height: T.s8),
+        if (operation != null)
+          _AsrSetupProgress(
+            operation: operation,
+            onCancel: operation.active ? _cancelAsrOperation : null,
+          )
+        else ...[
+          _localWhisperSettings(
+            modelIds,
+            selectedModel,
+            runtime: runtime,
+            model: model,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _localWhisperSettings(
+    List<String> modelIds,
+    String selectedModel, {
+    required AsrComponentOption? runtime,
+    required AsrComponentOption model,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Text('模型来源', style: T.tCaption),
-            const SizedBox(width: T.s8),
-            Expanded(
-              child: _AsrSourceToggle(
-                selected: _asrModelSource,
-                onChanged: _setAsrModelSource,
-              ),
-            ),
-          ],
+        _AsrSourceToggle(
+          selected: _asrModelSource,
+          onChanged: _setAsrModelSource,
         ),
-        const SizedBox(height: T.s12),
+        const SizedBox(height: T.s8),
         if (_asrModelSource == 'managed')
-          _managedWhisperModelSettings(modelIds, selectedModel)
+          _managedWhisperModelSettings(
+            modelIds,
+            selectedModel,
+            runtime: runtime,
+            model: model,
+          )
         else
-          _externalWhisperModelSettings(selectedModel),
+          _externalWhisperModelSettings(runtime),
       ],
     );
   }
 
   Widget _managedWhisperModelSettings(
     List<String> modelIds,
-    String selectedModel,
-  ) {
+    String selectedModel, {
+    required AsrComponentOption? runtime,
+    required AsrComponentOption model,
+  }) {
+    final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
       children: [
         Row(
@@ -618,12 +707,20 @@ class _SettingsWindowState extends State<SettingsWindow> {
           ],
         ),
         const SizedBox(height: T.s8),
-        _managedWhisperComponents(selectedModel, includeModel: true),
+        _AsrDownloadPlan(
+          runtimeReady: runtime?.installed == true,
+          runtimeSize: runtime?.size ?? 0,
+          modelLabel: _asrModelLabel(selectedModel),
+          modelReady: model.installed,
+          modelSize: model.size,
+          appDataRoot: '${paths['app_data_root'] ?? ''}',
+        ),
       ],
     );
   }
 
-  Widget _externalWhisperModelSettings(String selectedModel) {
+  Widget _externalWhisperModelSettings(AsrComponentOption? runtime) {
+    final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -651,18 +748,32 @@ class _SettingsWindowState extends State<SettingsWindow> {
         const SizedBox(height: T.s12),
         SizedBox(width: 220, child: _asrDeviceSelect()),
         const SizedBox(height: T.s12),
-        _managedWhisperComponents(selectedModel, includeModel: false),
+        _AsrDownloadPlan(
+          runtimeReady: runtime?.installed == true,
+          runtimeSize: runtime?.size ?? 0,
+          modelLabel: _detectedExternalModelId.isEmpty
+              ? '所选已有模型'
+              : _asrModelLabel(_detectedExternalModelId),
+          modelReady: _detectedExternalModelId.isNotEmpty,
+          modelSize: 0,
+          appDataRoot: '${paths['app_data_root'] ?? ''}',
+          externalModel: true,
+        ),
       ],
     );
   }
 
   Widget _asrDeviceSelect() {
+    final hasInstalledNvidia =
+        _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
+    final items = <String, String>{
+      'cpu': 'CPU（推荐）',
+      if (hasInstalledNvidia) 'cuda': 'NVIDIA（已安装）',
+    };
     return _AsrSelect(
       label: '运算方式',
-      value: const {'auto', 'cpu', 'cuda'}.contains(_device.text)
-          ? _device.text
-          : 'auto',
-      items: const {'auto': '自动', 'cpu': 'CPU', 'cuda': 'NVIDIA'},
+      value: items.containsKey(_device.text) ? _device.text : 'cpu',
+      items: items,
       onChanged: (value) => setState(() {
         _device.text = value;
         _asrDraftDirty = true;
@@ -679,75 +790,6 @@ class _SettingsWindowState extends State<SettingsWindow> {
       _error = null;
       if (source == 'managed') _detectedExternalModelId = '';
     });
-  }
-
-  Widget _managedWhisperComponents(
-    String selectedModel, {
-    required bool includeModel,
-  }) {
-    final snapshot = _snapshot;
-    final runtime = snapshot?.asrRuntime;
-    final model = snapshot?.asrModels.firstWhere(
-      (item) => item.id == selectedModel,
-      orElse: () => AsrComponentOption(id: selectedModel, kind: 'model'),
-    );
-    final accelerator = snapshot?.asrAccelerators.firstOrNull;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _AsrSectionHeading(title: '准备清单', detail: '只显示当前识别方案需要的内容。'),
-        const SizedBox(height: T.s4),
-        _AsrComponentRow(
-          label: '本地识别引擎',
-          detail: runtime == null
-              ? '清单不可用'
-              : runtime.installed
-              ? 'faster-whisper ${runtime.version} · 已准备'
-              : runtime.published
-              ? '还需要准备运行环境'
-              : '当前版本暂未开放',
-          installed: runtime?.installed ?? false,
-          onInstall: runtime == null || runtime.installed || !runtime.published
-              ? null
-              : () => _startAsrInstall('runtime'),
-        ),
-        if (includeModel)
-          _AsrComponentRow(
-            label: '识别模型 · ${_asrModelLabel(selectedModel)}',
-            detail: model?.installed == true
-                ? '已准备 · ${_formatBytes(model!.size)}'
-                : '等待准备 · ${_formatBytes(model?.size ?? 0)}',
-            installed: model?.installed ?? false,
-            onInstall: model?.installed == true
-                ? null
-                : () => _startAsrInstall('model', itemId: selectedModel),
-          ),
-        if (accelerator != null &&
-            (accelerator.installed || accelerator.published))
-          _AsrComponentRow(
-            label: 'NVIDIA 加速环境',
-            detail: accelerator.installed
-                ? '已准备 · ${accelerator.version}'
-                : accelerator.published
-                ? '可选 · 等待准备'
-                : '当前版本暂未开放',
-            installed: accelerator.installed,
-            actionLabel: accelerator.installed ? '检查' : '准备',
-            onInstall: accelerator.installed
-                ? _probeManagedAsrHardware
-                : !accelerator.published
-                ? null
-                : () => _startAsrInstall('accelerator', itemId: accelerator.id),
-          ),
-        if (_activeAsrOperation != null) ...[
-          const SizedBox(height: T.s12),
-          _AsrOperationProgress(
-            operation: _activeAsrOperation!,
-            onCancel: _activeAsrOperation!.active ? _cancelAsrOperation : null,
-          ),
-        ],
-      ],
-    );
   }
 
   void _selectLocalWhisperModel(String modelId) {
@@ -820,6 +862,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   void _pickAsrProvider(String providerName) {
+    if (_activeAsrOperation?.active == true) return;
     setState(() {
       _selectedAsrProvider = providerName;
       _loadAsrDraftFields();
@@ -832,9 +875,23 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final draft = _asrDraft(_selectedAsrProvider, useEditedFields: false);
     _baseUrl.text = '${draft['base_url'] ?? ''}';
     _model.text = '${draft['model'] ?? ''}';
+    if (draft['kind'] == 'local_worker') {
+      final availableModels =
+          _snapshot?.asrModels.map((item) => item.id).toList() ??
+          const <String>[];
+      if (availableModels.isNotEmpty &&
+          !availableModels.contains(_model.text)) {
+        _model.text = availableModels.contains('small')
+            ? 'small'
+            : availableModels.first;
+      }
+    }
     _endpoint.text = '${draft['endpoint'] ?? '/v1/audio/transcriptions'}';
     final local = _stringMap(draft['local']);
-    _device.text = '${local['device'] ?? 'auto'}';
+    final savedDevice = '${local['device'] ?? 'cpu'}';
+    final hasInstalledNvidia =
+        _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
+    _device.text = savedDevice == 'cuda' && hasInstalledNvidia ? 'cuda' : 'cpu';
     final runtime = _stringMap(draft['runtime']);
     final runtimeSource = '${runtime['source'] ?? 'managed'}';
     _asrModelSource = '${local['model_source'] ?? ''}' == 'external'
@@ -919,6 +976,46 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return provider.name.isEmpty ? null : provider;
   }
 
+  Future<void> _startManagedAsrSetup() async {
+    final modelId = _model.text.trim().isEmpty ? 'small' : _model.text.trim();
+    final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
+    _asrOperationDismissTimer?.cancel();
+    _asrOperationDismissTimer = null;
+    setState(() {
+      _savingAsr = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final latest = await _client.desktopSnapshot();
+      if (!mounted) return;
+      setState(() => _snapshot = latest);
+      final draft = _asrDraft(providerName);
+      await _client.asrProviderSave(
+        providerDraft: draft,
+        expectedVersion: latest.pipelineFileVersion,
+      );
+      final operation = await _client.asrSetupStart(modelId);
+      if (!mounted) return;
+      setState(() {
+        _activeAsrOperation = operation;
+        _asrDraftDirty = false;
+      });
+      await widget.bridge.setAsrDefault(
+        '${_asrLabelForDraft(draft)} · ${_asrModelLabel(modelId)}',
+        configured: false,
+      );
+      await widget.bridge.refreshServiceSnapshot();
+      if (!mounted) return;
+      _startAsrOperationPolling();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _savingAsr = false);
+    }
+  }
+
   Future<void> _startAsrInstall(String kind, {String? itemId}) async {
     _asrOperationDismissTimer?.cancel();
     _asrOperationDismissTimer = null;
@@ -930,6 +1027,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
       final operation = await _client.asrComponentInstall(kind, itemId: itemId);
       if (!mounted) return;
       setState(() => _activeAsrOperation = operation);
+      await widget.bridge.refreshServiceSnapshot();
+      if (!mounted) return;
       _startAsrOperationPolling();
     } on Object catch (error) {
       if (!mounted) return;
@@ -957,16 +1056,20 @@ class _SettingsWindowState extends State<SettingsWindow> {
         _asrOperationPoll = null;
         await _loadConfig();
         if (!mounted) return;
+        await widget.bridge.refreshServiceSnapshot();
+        if (!mounted) return;
         setState(() {
           _activeAsrOperation = operation;
           if (operation.state == 'completed') {
-            _message = '${_asrOperationLabel(operation.itemId)}准备完成。';
+            _message = operation.kind == 'setup'
+                ? '本机 Whisper 已下载并启用。'
+                : '${_asrOperationLabel(operation.itemId)}下载完成。';
           } else if (operation.state == 'failed') {
-            _error = operation.message.isEmpty
-                ? '安装失败：${operation.errorCode}'
-                : operation.message;
+            _error = null;
+            _message = null;
           } else if (operation.state == 'cancelled') {
-            _message = '安装已取消，可继续下载。';
+            _error = null;
+            _message = null;
           }
         });
         _scheduleAsrOperationDismiss(operation);
@@ -981,7 +1084,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   void _scheduleAsrOperationDismiss(AsrOperationStatus operation) {
     _asrOperationDismissTimer?.cancel();
-    if (operation.active) return;
+    if (operation.active || operation.state != 'completed') return;
     _asrOperationDismissTimer = Timer(const Duration(milliseconds: 2200), () {
       if (!mounted || _activeAsrOperation?.id != operation.id) return;
       setState(() => _activeAsrOperation = null);
@@ -995,37 +1098,31 @@ class _SettingsWindowState extends State<SettingsWindow> {
       final operation = await _client.asrOperationCancel(operationId);
       if (!mounted) return;
       setState(() => _activeAsrOperation = operation);
+      await widget.bridge.refreshServiceSnapshot();
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
     }
   }
 
-  Future<void> _probeManagedAsrHardware() async {
+  Future<void> _retryAsrOperation() async {
+    final operation = _activeAsrOperation;
+    if (operation == null || operation.active) return;
+    setState(() => _activeAsrOperation = null);
+    if (operation.kind == 'setup') {
+      await _startManagedAsrSetup();
+      return;
+    }
+    await _startAsrInstall(operation.kind, itemId: operation.itemId);
+  }
+
+  void _dismissAsrOperation() {
+    _asrOperationDismissTimer?.cancel();
     setState(() {
-      _testingAsr = true;
+      _activeAsrOperation = null;
       _error = null;
       _message = null;
     });
-    try {
-      final result = await _client.probeAsrHardware();
-      final cuda = _stringMap(result['cuda']);
-      if (!mounted) return;
-      await _loadConfig();
-      if (!mounted) return;
-      setState(() {
-        if (result['ok'] == true && cuda['available'] == true) {
-          _message = 'NVIDIA 硬件检查通过。';
-        } else {
-          _error = '${result['message'] ?? 'NVIDIA 硬件不可用，请改用 CPU。'}';
-        }
-      });
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _error = _friendlySettingsError(error));
-    } finally {
-      if (mounted) setState(() => _testingAsr = false);
-    }
   }
 
   Future<void> _pickExternalModelPath() async {
@@ -1271,7 +1368,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   String _defaultAsrModel(String kind, String protocol) {
     if (kind == 'local_worker' || kind == 'local_inprocess') {
-      return 'large-v3';
+      return 'small';
     }
     if (protocol == 'funasr_openai') return 'sensevoice';
     return 'whisper-1';
@@ -2097,38 +2194,6 @@ class _AsrOverview extends StatelessWidget {
   }
 }
 
-class _AsrSectionHeading extends StatelessWidget {
-  const _AsrSectionHeading({required this.title, required this.detail});
-
-  final String title;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const SizedBox(
-          width: 14,
-          height: 16,
-          child: CustomPaint(painter: _AsrStickerPainter()),
-        ),
-        const SizedBox(width: T.s8),
-        Text(title, style: T.tSection),
-        const SizedBox(width: T.s12),
-        Expanded(child: Container(height: 1, color: T.line)),
-        const SizedBox(width: T.s8),
-        Flexible(
-          child: Text(
-            detail,
-            style: T.tCaption,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _AsrSourceToggle extends StatelessWidget {
   const _AsrSourceToggle({required this.selected, required this.onChanged});
 
@@ -2148,14 +2213,14 @@ class _AsrSourceToggle extends StatelessWidget {
       child: Row(
         children: [
           _AsrSourceChoice(
-            label: '自动准备',
-            detail: '下载校验',
+            label: '由 TransVortex 下载',
+            detail: '自动管理',
             selected: selected == 'managed',
             onTap: () => onChanged('managed'),
           ),
           _AsrSourceChoice(
             label: '使用已有模型',
-            detail: '直接使用',
+            detail: '原地验证',
             selected: selected == 'external',
             onTap: () => onChanged('external'),
           ),
@@ -2264,205 +2329,387 @@ class _AsrStatusChip extends StatelessWidget {
   }
 }
 
-class _AsrComponentRow extends StatelessWidget {
-  const _AsrComponentRow({
-    required this.label,
-    required this.detail,
-    required this.installed,
-    this.actionLabel = '准备',
-    this.onInstall,
+class _AsrSetupOverview extends StatelessWidget {
+  const _AsrSetupOverview({
+    required this.modelLabel,
+    required this.deviceLabel,
+    required this.currentReady,
+    required this.draftDirty,
+    required this.operation,
   });
 
-  final String label;
-  final String detail;
-  final bool installed;
-  final String actionLabel;
-  final VoidCallback? onInstall;
+  final String modelLabel;
+  final String deviceLabel;
+  final bool currentReady;
+  final bool draftDirty;
+  final AsrOperationStatus? operation;
 
   @override
   Widget build(BuildContext context) {
-    final unavailable = detail.contains('暂未开放');
-    final color = installed
-        ? T.ok
-        : onInstall != null
-        ? T.accentStrong
-        : unavailable
-        ? T.muted
-        : T.warn;
-    final status = installed
-        ? '已准备'
-        : onInstall != null
-        ? '待准备'
-        : unavailable
-        ? '暂未开放'
-        : '未准备';
+    final task = operation;
+    final (status, detail, color) = task?.active == true
+        ? (
+            task!.state == 'cancelling' ? '正在取消' : '正在配置',
+            _asrSetupPhaseLabel(task),
+            T.accentStrong,
+          )
+        : task?.state == 'completed'
+        ? (
+            task?.kind == 'setup' ? '已启用' : '下载完成',
+            task?.kind == 'setup'
+                ? '$modelLabel · $deviceLabel'
+                : '${_asrOperationLabel(task!.itemId)}已可用',
+            T.ok,
+          )
+        : task?.state == 'cancelled'
+        ? ('已取消', '已下载部分将在下次继续时复用', T.warn)
+        : task?.state == 'failed'
+        ? ('需要处理', _asrOperationFailureMessage(task!), T.danger)
+        : currentReady
+        ? ('可以开始', '当前使用：$modelLabel · $deviceLabel', T.ok)
+        : draftDirty
+        ? ('待应用', '将切换为：$modelLabel · $deviceLabel', T.accentStrong)
+        : ('尚未可用', '完成下载和校验后即可在本机识别', T.warn);
     return Container(
-      constraints: const BoxConstraints(minHeight: 64),
-      padding: const EdgeInsets.symmetric(vertical: T.s8),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: T.line)),
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rMd),
+        border: Border.all(color: T.line),
       ),
       child: Row(
         children: [
-          _AsrStateMark(color: color, ready: installed),
-          const SizedBox(width: T.s8),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: T.skySoft.withValues(alpha: 0.64),
+              borderRadius: BorderRadius.circular(T.rSm),
+              border: Border.all(color: T.sky.withValues(alpha: 0.46)),
+            ),
+            child: const Icon(Icons.graphic_eq_rounded, color: T.ink, size: 22),
+          ),
+          const SizedBox(width: T.s12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(label, style: T.tBody.copyWith(fontWeight: T.wMedium)),
+                Text(
+                  '本机 Whisper',
+                  style: T.tBody.copyWith(fontWeight: T.wBold),
+                ),
                 const SizedBox(height: 2),
-                Text(detail, style: T.tCaption),
+                Text(
+                  '$detail；音频不会上传。',
+                  style: T.tCaption,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
-          const SizedBox(width: T.s8),
-          if (onInstall != null)
-            ActionButton(label: actionLabel, onTap: onInstall)
-          else
-            _AsrStatusChip(label: status, color: color),
+          const SizedBox(width: T.s12),
+          _AsrStatusChip(label: status, color: color),
         ],
       ),
     );
   }
 }
 
-class _AsrStateMark extends StatelessWidget {
-  const _AsrStateMark({required this.color, required this.ready});
+class _AsrDownloadPlan extends StatelessWidget {
+  const _AsrDownloadPlan({
+    required this.runtimeReady,
+    required this.runtimeSize,
+    required this.modelLabel,
+    required this.modelReady,
+    required this.modelSize,
+    required this.appDataRoot,
+    this.externalModel = false,
+  });
 
-  final Color color;
-  final bool ready;
+  final bool runtimeReady;
+  final int runtimeSize;
+  final String modelLabel;
+  final bool modelReady;
+  final int modelSize;
+  final String appDataRoot;
+  final bool externalModel;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 18,
-      height: 18,
-      child: CustomPaint(
-        painter: _AsrStateMarkPainter(color: color, ready: ready),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: T.s4),
+      decoration: const BoxDecoration(
+        border: Border(
+          top: BorderSide(color: T.line),
+          bottom: BorderSide(color: T.line),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '本次设置',
+            style: T.tCaption.copyWith(fontWeight: T.wBold, color: T.ink),
+          ),
+          const SizedBox(height: T.s4),
+          _AsrPlanRow(
+            label: '本地识别引擎',
+            detail: runtimeReady
+                ? '已安装，将复用现有版本'
+                : runtimeSize > 0
+                ? '需要下载 ${_formatBytes(runtimeSize)}'
+                : '需要下载并校验',
+            ready: runtimeReady,
+          ),
+          const SizedBox(height: T.s4),
+          _AsrPlanRow(
+            label: modelLabel,
+            detail: externalModel
+                ? modelReady
+                      ? '已验证，将原地使用，不复制模型'
+                      : '选择目录后验证，不复制模型'
+                : modelReady
+                ? '已安装，将复用现有模型'
+                : '需要下载 ${_formatBytes(modelSize)}',
+            ready: modelReady,
+          ),
+          if (appDataRoot.isNotEmpty) ...[
+            const SizedBox(height: T.s4),
+            Text(
+              '保存位置（与程序安装位置不同）：$appDataRoot',
+              style: T.tCaption,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
       ),
     );
   }
 }
 
-class _AsrOperationProgress extends StatefulWidget {
-  const _AsrOperationProgress({required this.operation, this.onCancel});
+class _AsrPlanRow extends StatelessWidget {
+  const _AsrPlanRow({
+    required this.label,
+    required this.detail,
+    required this.ready,
+  });
+
+  final String label;
+  final String detail;
+  final bool ready;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          ready
+              ? Icons.check_circle_outline_rounded
+              : Icons.arrow_downward_rounded,
+          size: 18,
+          color: ready ? T.ok : T.accentStrong,
+        ),
+        const SizedBox(width: T.s8),
+        SizedBox(width: 150, child: Text(label, style: T.tBody)),
+        Expanded(
+          child: Text(
+            detail,
+            style: T.tCaption,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AsrSetupProgress extends StatelessWidget {
+  const _AsrSetupProgress({required this.operation, this.onCancel});
 
   final AsrOperationStatus operation;
   final VoidCallback? onCancel;
 
   @override
-  State<_AsrOperationProgress> createState() => _AsrOperationProgressState();
-}
-
-class _AsrOperationProgressState extends State<_AsrOperationProgress>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _animation = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    );
-    if (widget.operation.active) _animation.repeat();
-  }
-
-  @override
-  void didUpdateWidget(covariant _AsrOperationProgress oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.operation.active && !_animation.isAnimating) {
-      _animation.repeat();
-    } else if (!widget.operation.active && _animation.isAnimating) {
-      _animation.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _animation.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final operation = widget.operation;
     final progress = operation.progress;
-    final percent = progress == null ? '' : '${(progress * 100).round()}%';
-    final title = operation.active
-        ? '${_asrOperationLabel(operation.itemId)} · $percent'
-        : operation.state == 'completed'
-        ? '${_asrOperationLabel(operation.itemId)} · 已完成'
-        : '${_asrOperationLabel(operation.itemId)} · ${operation.state}';
+    final title = _asrSetupTaskTitle(operation);
     final color = operation.state == 'failed'
         ? T.danger
         : operation.state == 'cancelled'
         ? T.warn
-        : T.accent;
+        : operation.state == 'completed'
+        ? T.ok
+        : T.accentStrong;
     return Semantics(
       label: title,
-      value: operation.currentFile,
+      value: progress == null ? '' : '${(progress * 100).round()}%',
       child: Container(
-        padding: const EdgeInsets.all(T.s12),
+        width: double.infinity,
+        padding: const EdgeInsets.all(T.s16),
         decoration: BoxDecoration(
-          color: T.accentSoft.withValues(alpha: 0.42),
+          color: T.surface,
           borderRadius: BorderRadius.circular(T.rMd),
-          border: Border.all(color: color.withValues(alpha: 0.54)),
+          border: Border.all(color: color.withValues(alpha: 0.52)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CustomPaint(
-                    painter: _AsrProgressStickerPainter(color: color),
-                  ),
-                ),
+                Icon(Icons.downloading_rounded, color: color, size: 22),
                 const SizedBox(width: T.s8),
                 Expanded(
                   child: Text(
                     title,
-                    style: T.tBody.copyWith(fontWeight: T.wMedium),
+                    style: T.tSection,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (widget.onCancel != null)
-                  ActionButton(label: '取消', onTap: widget.onCancel),
+                if (onCancel != null)
+                  ActionButton(
+                    label: operation.state == 'cancelling' ? '正在取消…' : '取消下载',
+                    onTap: operation.state == 'cancelling' ? null : onCancel,
+                  ),
               ],
             ),
-            const SizedBox(height: T.s8),
-            AnimatedBuilder(
-              animation: _animation,
-              builder: (context, child) => SizedBox(
-                height: 14,
-                width: double.infinity,
-                child: CustomPaint(
-                  painter: _CandyProgressPainter(
-                    progress: progress,
-                    phase: _animation.value,
-                    color: color,
-                    active: operation.active,
-                  ),
-                ),
+            if (operation.kind == 'setup') ...[
+              const SizedBox(height: T.s16),
+              _AsrSetupPhaseStrip(operation: operation),
+            ],
+            const SizedBox(height: T.s16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                minHeight: 8,
+                value: progress,
+                backgroundColor: T.line,
+                color: color,
               ),
             ),
-            if (operation.currentFile.isNotEmpty) ...[
-              const SizedBox(height: T.s4),
+            const SizedBox(height: T.s8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _asrSetupPhaseLabel(operation),
+                    style: T.tCaption,
+                  ),
+                ),
+                if (operation.bytesTotal > 0)
+                  Text(
+                    '${_formatBytes(operation.bytesDone)} / ${_formatBytes(operation.bytesTotal)}',
+                    style: T.tCaption,
+                  ),
+              ],
+            ),
+            if (operation.active) ...[
+              const SizedBox(height: T.s12),
+              Text('关闭此窗口后任务会继续，可从系统托盘重新打开。', style: T.tCaption),
+            ] else if (operation.state == 'cancelled') ...[
+              const SizedBox(height: T.s12),
+              Text('下载已取消；已校验的部分会保留，继续下载时自动复用。', style: T.tBody),
+            ] else if (operation.state == 'failed') ...[
+              const SizedBox(height: T.s12),
               Text(
-                '正在处理：${operation.currentFile}',
-                style: T.tCaption,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                _asrOperationFailureMessage(operation),
+                style: T.tBody.copyWith(color: T.danger),
               ),
             ],
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AsrSetupPhaseStrip extends StatelessWidget {
+  const _AsrSetupPhaseStrip({required this.operation});
+
+  final AsrOperationStatus operation;
+
+  @override
+  Widget build(BuildContext context) {
+    const labels = ['识别引擎', '识别模型', '校验并启用'];
+    final completed = operation.state == 'completed';
+    return Row(
+      children: [
+        for (var index = 0; index < labels.length; index++) ...[
+          Expanded(
+            child: _AsrSetupPhase(
+              label: labels[index],
+              index: index,
+              currentIndex: operation.phaseIndex.clamp(0, labels.length - 1),
+              completed: completed,
+            ),
+          ),
+          if (index < labels.length - 1)
+            Container(
+              width: 24,
+              height: 1,
+              color: index < operation.phaseIndex || completed ? T.ok : T.line,
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _AsrSetupPhase extends StatelessWidget {
+  const _AsrSetupPhase({
+    required this.label,
+    required this.index,
+    required this.currentIndex,
+    required this.completed,
+  });
+
+  final String label;
+  final int index;
+  final int currentIndex;
+  final bool completed;
+
+  @override
+  Widget build(BuildContext context) {
+    final done = completed || index < currentIndex;
+    final current = !completed && index == currentIndex;
+    final color = done
+        ? T.ok
+        : current
+        ? T.accentStrong
+        : T.muted;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: done ? color : T.surface,
+            border: Border.all(color: color, width: current ? 1.6 : 1),
+          ),
+          child: done
+              ? const Icon(
+                  Icons.check_rounded,
+                  size: 13,
+                  color: Color(0xFFFFFFFF),
+                )
+              : Text('${index + 1}', style: T.tCaption.copyWith(color: color)),
+        ),
+        const SizedBox(width: T.s4),
+        Flexible(
+          child: Text(
+            label,
+            style: T.tCaption.copyWith(
+              color: current || done ? T.ink : T.muted,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -2504,6 +2751,54 @@ String _asrOperationLabel(String itemId) {
     'large-v3' => 'Whisper Large v3',
     'nvidia-cuda12' => 'NVIDIA 加速环境',
     _ => itemId,
+  };
+}
+
+String _asrDeviceLabel(String device) => switch (device) {
+  'cuda' => 'NVIDIA',
+  _ => 'CPU',
+};
+
+String _asrSetupTaskTitle(AsrOperationStatus operation) {
+  return switch (operation.state) {
+    'queued' => '本机识别设置即将开始',
+    'cancelling' => '正在取消本机识别设置',
+    'completed' =>
+      operation.kind == 'setup'
+          ? '本机 Whisper 已启用'
+          : '${_asrOperationLabel(operation.itemId)}下载完成',
+    'cancelled' => '本机识别下载已取消',
+    'failed' => '本机识别设置需要处理',
+    _ => switch (operation.phase) {
+      'runtime' => '正在下载本地识别引擎',
+      'model' => '正在下载 ${_asrOperationLabel(operation.itemId)}',
+      'activate' => '正在校验并启用本机识别',
+      _ => '正在下载 ${_asrOperationLabel(operation.itemId)}',
+    },
+  };
+}
+
+String _asrSetupPhaseLabel(AsrOperationStatus operation) {
+  if (operation.state == 'cancelling') return '等待当前步骤安全停止';
+  if (operation.state == 'completed') return '运行组件和模型已校验完成';
+  if (operation.state == 'cancelled') return '可继续下载并复用已校验数据';
+  if (operation.state == 'failed') return '保留安全断点，修复后可以重试';
+  return switch (operation.phase) {
+    'runtime' => '第 1 步，共 3 步 · 下载并校验识别引擎',
+    'model' => '第 2 步，共 3 步 · 下载并校验识别模型',
+    'activate' => '第 3 步，共 3 步 · 校验并启用当前方案',
+    _ => '正在准备本机识别环境',
+  };
+}
+
+String _asrOperationFailureMessage(AsrOperationStatus operation) {
+  return switch (operation.errorCode) {
+    'insufficient_disk_space' => '磁盘空间不足，请清理空间后重试。',
+    'component_unpublished' => '当前版本的识别引擎尚未开放下载。',
+    'checksum_mismatch' => '下载文件未通过完整性校验，请重试。',
+    'download_failed' || 'download_incomplete' => '下载没有完成，请检查网络设置后重试。',
+    'operation_interrupted' => '上次下载意外中断，可以从已保留的安全断点继续。',
+    _ => operation.message.trim().isEmpty ? '本机识别设置失败，请重试。' : operation.message,
   };
 }
 
@@ -2562,174 +2857,6 @@ class _WhisperBuddyPainter extends CustomPainter {
   bool shouldRepaint(covariant _WhisperBuddyPainter oldDelegate) => false;
 }
 
-class _AsrStickerPainter extends CustomPainter {
-  const _AsrStickerPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final tape = Path()
-      ..moveTo(1, 1)
-      ..lineTo(size.width - 1, 0)
-      ..lineTo(size.width - 2, size.height - 2)
-      ..lineTo(0, size.height)
-      ..close();
-    canvas.drawPath(tape, Paint()..color = T.skySoft);
-    canvas.drawPath(
-      tape,
-      Paint()
-        ..color = T.sky.withValues(alpha: 0.72)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
-    );
-    canvas.drawLine(
-      Offset(size.width * 0.58, 2),
-      Offset(size.width * 0.42, size.height - 2),
-      Paint()
-        ..color = T.accent.withValues(alpha: 0.74)
-        ..strokeWidth = 1.1,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _AsrStickerPainter oldDelegate) => false;
-}
-
-class _AsrStateMarkPainter extends CustomPainter {
-  const _AsrStateMarkPainter({required this.color, required this.ready});
-
-  final Color color;
-  final bool ready;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final ring = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawCircle(center, 7, ring);
-    if (ready) {
-      final check = Path()
-        ..moveTo(5.2, 9.2)
-        ..lineTo(8, 12)
-        ..lineTo(13.2, 6.2);
-      canvas.drawPath(
-        check,
-        Paint()
-          ..color = color
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round,
-      );
-    } else {
-      canvas.drawCircle(center, 2, Paint()..color = color);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _AsrStateMarkPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.ready != ready;
-}
-
-class _AsrProgressStickerPainter extends CustomPainter {
-  const _AsrProgressStickerPainter({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    _drawSparkle(canvas, Offset(size.width / 2, size.height / 2), 6, color);
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height / 2),
-      2,
-      Paint()..color = color.withValues(alpha: 0.22),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _AsrProgressStickerPainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
-class _CandyProgressPainter extends CustomPainter {
-  const _CandyProgressPainter({
-    required this.progress,
-    required this.phase,
-    required this.color,
-    required this.active,
-  });
-
-  final double? progress;
-  final double phase;
-  final Color color;
-  final bool active;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final track = RRect.fromRectAndRadius(
-      Offset.zero & size,
-      const Radius.circular(7),
-    );
-    canvas.drawRRect(track, Paint()..color = T.line.withValues(alpha: 0.72));
-
-    final normalized = progress?.clamp(0.0, 1.0).toDouble();
-    if (normalized == null) {
-      final segmentWidth = size.width * 0.28;
-      final left = (phase * (size.width + segmentWidth)) - segmentWidth;
-      final segment = RRect.fromRectAndRadius(
-        Rect.fromLTWH(left, 0, segmentWidth, size.height),
-        const Radius.circular(7),
-      );
-      canvas.save();
-      canvas.clipRRect(track);
-      canvas.drawRRect(segment, Paint()..color = color.withValues(alpha: 0.82));
-      _drawSparkle(
-        canvas,
-        Offset(left + segmentWidth * 0.72, size.height / 2),
-        3,
-        T.surface,
-      );
-      canvas.restore();
-      return;
-    }
-
-    final width = size.width * normalized;
-    if (width <= 0) return;
-    final fill = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 0, width, size.height),
-      const Radius.circular(7),
-    );
-    canvas.save();
-    canvas.clipRRect(fill);
-    canvas.drawRRect(fill, Paint()..color = color);
-    final stripe = Paint()
-      ..color = T.surface.withValues(alpha: 0.30)
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-    for (var x = -size.height * 2 + (phase * 18); x < width + 18; x += 12) {
-      canvas.drawLine(Offset(x, size.height), Offset(x + 6, 0), stripe);
-    }
-    if (active && width > 18) {
-      final sparkleX = 6 + (width - 12) * phase;
-      _drawSparkle(
-        canvas,
-        Offset(sparkleX.clamp(5, width - 5).toDouble(), size.height / 2),
-        3,
-        T.surface,
-      );
-    }
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _CandyProgressPainter oldDelegate) =>
-      oldDelegate.progress != progress ||
-      oldDelegate.phase != phase ||
-      oldDelegate.color != color ||
-      oldDelegate.active != active;
-}
-
 void _drawSparkle(Canvas canvas, Offset center, double radius, Color color) {
   final paint = Paint()
     ..color = color
@@ -2761,8 +2888,11 @@ String _formatBytes(int bytes) {
   if (bytes <= 0) return '大小未知';
   const gib = 1024 * 1024 * 1024;
   const mib = 1024 * 1024;
+  const kib = 1024;
   if (bytes >= gib) return '${(bytes / gib).toStringAsFixed(1)} GB';
-  return '${(bytes / mib).toStringAsFixed(0)} MB';
+  if (bytes >= mib) return '${(bytes / mib).toStringAsFixed(0)} MB';
+  if (bytes >= kib) return '${(bytes / kib).toStringAsFixed(0)} KB';
+  return '$bytes B';
 }
 
 class _DiagnosticSummaryList extends StatelessWidget {

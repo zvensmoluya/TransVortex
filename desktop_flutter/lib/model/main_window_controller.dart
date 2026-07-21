@@ -875,6 +875,7 @@ class MainWindowController extends ChangeNotifier {
     final snapshot = service.snapshot.desktopSnapshot;
     final task = _taskFromSnapshot(snapshot);
     if (task != null) _applyTask(task);
+    _syncSnapshotPolling(snapshot);
     _publish();
   }
 
@@ -946,12 +947,25 @@ class MainWindowController extends ChangeNotifier {
     _failure = task.isFailed || task.isCancelled
         ? _failureFromTask(task)
         : null;
-    if (task.isTerminal || (!_running && !_canceling)) {
-      _taskPoll?.cancel();
-      _taskPoll = null;
-    } else {
+    if (!task.isTerminal && (_running || _canceling)) {
       _ensureTaskPolling();
     }
+  }
+
+  void _syncSnapshotPolling(DesktopSnapshot? snapshot) {
+    final hasActiveTask =
+        _running ||
+        _canceling ||
+        (snapshot?.tasks.any((task) => task.isActive && !task.isTerminal) ??
+            false);
+    final hasActiveAsrSetup =
+        snapshot?.asrOperations.any((operation) => operation.active) ?? false;
+    if (hasActiveTask || hasActiveAsrSetup) {
+      _ensureTaskPolling();
+      return;
+    }
+    _taskPoll?.cancel();
+    _taskPoll = null;
   }
 
   void _ensureTaskPolling() {

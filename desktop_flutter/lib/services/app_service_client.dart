@@ -770,6 +770,12 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<AsrOperationStatus> asrSetupStart(String modelId) async {
+    return AsrOperationStatus.fromJson(
+      await call('asr.setup.start', {'model_id': modelId}),
+    );
+  }
+
   Future<AsrOperationStatus> asrComponentInstall(
     String kind, {
     String? itemId,
@@ -1837,6 +1843,9 @@ class AsrOperationStatus {
     this.currentFile = '',
     this.errorCode = '',
     this.message = '',
+    this.phase = '',
+    this.phaseIndex = 0,
+    this.phaseCount = 0,
   });
 
   final String id;
@@ -1848,6 +1857,9 @@ class AsrOperationStatus {
   final String currentFile;
   final String errorCode;
   final String message;
+  final String phase;
+  final int phaseIndex;
+  final int phaseCount;
 
   factory AsrOperationStatus.fromJson(Object? value) {
     final map = _stringMap(value);
@@ -1869,6 +1881,11 @@ class AsrOperationStatus {
           _stringValue(map['errorCode']) ??
           '',
       message: _stringValue(map['message']) ?? '',
+      phase: _stringValue(map['phase']) ?? '',
+      phaseIndex:
+          _intValue(map['phase_index']) ?? _intValue(map['phaseIndex']) ?? 0,
+      phaseCount:
+          _intValue(map['phase_count']) ?? _intValue(map['phaseCount']) ?? 0,
     );
   }
 

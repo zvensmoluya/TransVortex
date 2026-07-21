@@ -179,7 +179,7 @@ asr_providers:
     check = next(item for item in report["checks"] if item["name"] == "faster_whisper")
 
     assert check["status"] == "WARN"
-    assert check["code"] == "runtime_unpublished"
+    assert check["code"] == "runtime_missing"
     assert check["details"]["kind"] == "local_worker"
 
 

@@ -36,6 +36,23 @@ import 'widgets/title_bar.dart';
 
 Completer<void>? _initialWindowShowCompleter;
 
+String asrTrayStatusLabel(AsrOperationStatus operation) {
+  if (operation.state == 'cancelling') return '正在取消识别环境下载';
+  return switch (operation.phase) {
+    'runtime' => '正在下载本机识别引擎',
+    'model' => '正在下载 ${_asrTrayItemLabel(operation.itemId)}',
+    'activate' => '正在启用本机识别',
+    _ => '正在准备本机识别',
+  };
+}
+
+String _asrTrayItemLabel(String itemId) => switch (itemId) {
+  'small' => 'Whisper Small',
+  'medium' => 'Whisper Medium',
+  'large-v3' => 'Whisper Large v3',
+  _ => '识别模型',
+};
+
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await _currentWindowController();
@@ -382,6 +399,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   DesktopTrayPresentation _trayPresentation(MainWindowViewModel view) {
     final activeTasks = _activeTasks();
     final activeTask = activeTasks.isEmpty ? null : activeTasks.first;
+    final activeAsrOperation = _activeAsrOperations().firstOrNull;
     final taskName = _shortTrayName(activeTask?.displayName ?? '');
     final taskSuffix = taskName.isEmpty ? '' : ' · $taskName';
     final status = activeTask != null
@@ -390,6 +408,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
               : activeTask.status == 'CANCEL_REQUESTED'
               ? '正在取消$taskSuffix'
               : '正在制作$taskSuffix'
+        : activeAsrOperation != null
+        ? asrTrayStatusLabel(activeAsrOperation)
         : switch (view.state) {
             MainState.running => view.canceling ? '正在取消任务' : '正在制作字幕',
             MainState.completed => '本次任务已完成',
@@ -408,6 +428,14 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (snapshot == null) return const [];
     return snapshot.tasks
         .where((task) => task.isActive && !task.isTerminal)
+        .toList(growable: false);
+  }
+
+  List<AsrOperationStatus> _activeAsrOperations() {
+    final snapshot = _service.snapshot.desktopSnapshot;
+    if (snapshot == null) return const [];
+    return snapshot.asrOperations
+        .where((operation) => operation.active)
         .toList(growable: false);
   }
 
@@ -510,11 +538,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
           children: [
             const Icon(Icons.hourglass_top_rounded, color: T.accentStrong),
             const SizedBox(width: T.s8),
-            Text('任务还在制作', style: T.tSection),
+            Text('后台任务仍在进行', style: T.tSection),
           ],
         ),
         content: Text(
-          '关闭窗口会继续留在托盘；如果现在退出，TransVortex 会先取消进行中和排队任务。',
+          '关闭窗口会继续留在托盘；如果现在退出，TransVortex 会先取消进行中的字幕任务和识别环境下载。',
           style: T.tBody,
         ),
         actions: [
@@ -545,6 +573,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       for (final taskId in taskIds) {
         await client.cancel(taskId);
       }
+      final asrOperations = _activeAsrOperations();
+      for (final operation in asrOperations) {
+        await client.asrOperationCancel(operation.id);
+      }
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      for (final operation in asrOperations) {
+        while (DateTime.now().isBefore(deadline)) {
+          final latest = await client.asrOperation(operation.id);
+          if (!latest.active) break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
       return true;
     } on Object catch (error) {
       _toast('取消任务失败，应用将继续在后台：$error');
@@ -554,7 +594,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   bool get _hasActiveWork {
     return _controller.view.state == MainState.running ||
-        _activeTasks().isNotEmpty;
+        _activeTasks().isNotEmpty ||
+        _activeAsrOperations().isNotEmpty;
   }
 
   Future<bool> _closeToolWindows() async {

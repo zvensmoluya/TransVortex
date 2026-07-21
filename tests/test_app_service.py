@@ -302,6 +302,36 @@ def test_app_service_rejects_unpublished_managed_runtime_install(tmp_path: Path,
     assert response["error"]["code"] == "component_unpublished"
 
 
+def test_app_service_starts_one_managed_asr_setup_operation(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    received: list[str] = []
+
+    def start_setup(model_id: str) -> dict:
+        received.append(model_id)
+        return {
+            "id": "asr_setup_small",
+            "kind": "setup",
+            "item_id": model_id,
+            "state": "queued",
+            "phase": "runtime",
+            "phase_index": 0,
+            "phase_count": 3,
+        }
+
+    monkeypatch.setattr(service._asr_operation_manager, "start_setup", start_setup)
+
+    response = handle_line(
+        service,
+        _request("asr.setup.start", {"model_id": "small"}),
+        root_dir=tmp_path,
+    )
+
+    assert received == ["small"]
+    assert response["result"]["kind"] == "setup"
+    assert response["result"]["phase"] == "runtime"
+
+
 def test_app_service_media_inspection_gates_only_audio_asr_without_ffprobe(tmp_path: Path) -> None:
     _write_config(tmp_path)
     service = DesktopApi(root_dir=tmp_path)

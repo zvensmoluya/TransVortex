@@ -306,9 +306,12 @@ void main() {
   test('ASR operation parses progress and terminal state', () {
     final active = AsrOperationStatus.fromJson({
       'id': 'asr_1',
-      'kind': 'model',
+      'kind': 'setup',
       'item_id': 'large-v3',
       'state': 'running',
+      'phase': 'model',
+      'phase_index': 1,
+      'phase_count': 3,
       'bytes_done': 25,
       'bytes_total': 100,
     });
@@ -322,6 +325,9 @@ void main() {
 
     expect(active.active, isTrue);
     expect(active.progress, 0.25);
+    expect(active.phase, 'model');
+    expect(active.phaseIndex, 1);
+    expect(active.phaseCount, 3);
     expect(failed.active, isFalse);
     expect(failed.errorCode, 'checksum_mismatch');
   });
@@ -1318,6 +1324,15 @@ routing:
         },
       },
       'asr.provider.save': {'ok': true, 'provider': 'openai_whisper'},
+      'asr.setup.start': {
+        'id': 'asr_setup_small',
+        'kind': 'setup',
+        'item_id': 'small',
+        'state': 'queued',
+        'phase': 'runtime',
+        'phase_index': 0,
+        'phase_count': 3,
+      },
       'network.settings.save': {
         'ok': true,
         'network': {'mode': 'local_proxy', 'proxy_port': 7890},
@@ -1371,6 +1386,7 @@ routing:
       },
       expectedVersion: {'mtime_ns': 3, 'size': 4},
     );
+    final setup = await client.asrSetupStart('small');
     await client.networkSettingsSave(
       mode: 'local_proxy',
       proxyPort: 7890,
@@ -1385,8 +1401,12 @@ routing:
       'provider.routing.save',
       'provider.routing.save',
       'asr.provider.save',
+      'asr.setup.start',
       'network.settings.save',
     ]);
+    expect(setup.kind, 'setup');
+    expect(setup.phase, 'runtime');
+    expect(transport.calls[7].params, {'model_id': 'small'});
     expect(transport.calls.first.params['api_key'], 'secret');
     expect(transport.calls[2].params['reasoning_effort'], 'high');
     expect(transport.calls[3].params['name'], 'p1');
