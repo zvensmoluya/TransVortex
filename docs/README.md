@@ -12,6 +12,8 @@
 3. [`FRONTEND/README.md`](FRONTEND/README.md)
    - Flutter 主体验前端的产品表面、配置语义、设计规格和历史归档入口。
 
+最近一次现场复盘：[`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md)。
+
 ## 当前专题文档
 
 | 主题 | 文档 | 说明 |

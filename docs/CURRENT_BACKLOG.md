@@ -1,6 +1,6 @@
 # TransVortex 当前待办
 
-更新时间：2026-07-18
+更新时间：2026-07-21
 
 本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
 
@@ -16,7 +16,7 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| ASR 组件内部发布与下载闭环 | 外部条件 | 发布固定版本资产并写入大小、SHA-256 和 `published` 清单，在全新 APP 数据目录完成下载、校验、安装和真实任务 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
+| ASR 组件公开下载与可见 APP 验收 | 待验收 | 已发布 runtime 的 Flutter 点击下载、CPU 基线真实任务和干净系统首启仍需完成；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
 | 干净 Windows 首启与媒体任务 | 待验收 | 在未配置开发环境的干净系统完成安装、首启、配置和真实任务 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 已安装路径通知行为 | 待验收 | 通知中心归属正确，点击通知能够聚焦应用 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | Authenticode 签名 | 外部条件 | 正式安装包和主可执行文件完成签名、时间戳和 Windows 验证 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
