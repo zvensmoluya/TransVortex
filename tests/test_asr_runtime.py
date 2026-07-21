@@ -317,6 +317,63 @@ def test_asr_operations_are_global_single_flight(tmp_path: Path, monkeypatch) ->
     assert _wait_terminal(manager, first["id"])["state"] == "cancelled"
 
 
+def test_asr_storage_root_can_change_before_managed_downloads(tmp_path: Path) -> None:
+    app_root = tmp_path / "LocalAppData" / "TransVortex"
+    config_root = app_root / "Config"
+    config_root.mkdir(parents=True)
+    target = tmp_path / "large-drive" / "TransVortex-ASR"
+    manager = AsrOperationManager(root_dir=config_root, catalog=_catalog())
+
+    selected = manager.set_storage_root(str(target))
+    paths = asr_runtime_paths(config_root)
+
+    assert selected["root"] == str(target.resolve())
+    assert selected["customized"] is True
+    assert paths.storage_root == target.resolve()
+    assert paths.components_root == target.resolve() / "Components"
+    assert paths.models_root == target.resolve() / "Models" / "faster-whisper"
+    assert paths.state_file == config_root / "asr_runtime_state.json"
+    assert json.loads((config_root / "asr_storage.json").read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "storage_root": str(target.resolve()),
+    }
+
+    reset = manager.set_storage_root(str(app_root))
+
+    assert reset["customized"] is False
+    assert manager.paths.storage_root == app_root.resolve()
+    assert not (config_root / "asr_storage.json").exists()
+
+
+def test_asr_storage_change_requires_migration_when_managed_data_exists(tmp_path: Path) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+    existing = manager.paths.models_root / "small" / "pinned-revision" / "model.bin"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"model")
+
+    with pytest.raises(AsrOperationError) as error:
+        manager.set_storage_root(str(tmp_path / "other-storage"))
+
+    assert error.value.code == "storage_change_requires_migration"
+
+
+def test_asr_disk_check_uses_selected_storage_root(tmp_path: Path, monkeypatch) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+    target = tmp_path / "large-drive" / "TransVortex-ASR"
+    manager.set_storage_root(str(target))
+    checked: list[Path] = []
+
+    def disk_usage(path):  # noqa: ANN001
+        checked.append(Path(path))
+        return SimpleNamespace(free=10 * 1024 * 1024 * 1024)
+
+    monkeypatch.setattr("transvortex.app.asr_operations.shutil.disk_usage", disk_usage)
+
+    manager._check_disk_space(1024)
+
+    assert checked == [target.resolve()]
+
+
 def test_component_archive_rejects_path_traversal(tmp_path: Path) -> None:
     manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
     archive = tmp_path / "unsafe.zip"

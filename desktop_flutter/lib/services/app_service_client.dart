@@ -776,6 +776,12 @@ class AppServiceClient {
     );
   }
 
+  Future<AsrStorageOption> asrStorageSet(String storageRoot) async {
+    return AsrStorageOption.fromJson(
+      await call('asr.storage.set', {'storage_root': storageRoot}),
+    );
+  }
+
   Future<AsrOperationStatus> asrComponentInstall(
     String kind, {
     String? itemId,
@@ -1105,6 +1111,9 @@ class DesktopSnapshot {
   }
 
   Map<String, Object?> get asrLocal => _stringMap(config['asr_local']);
+
+  AsrStorageOption get asrStorage =>
+      AsrStorageOption.fromJson(asrLocal['storage']);
 
   List<AsrComponentOption> get asrModels {
     return _objectList(asrLocal['models'])
@@ -1782,6 +1791,84 @@ class AsrReadiness {
       'needs_action' => _asrReadinessCodeLabel(code),
       _ => _asrReadinessCodeLabel(code),
     };
+  }
+}
+
+class AsrStorageOption {
+  const AsrStorageOption({
+    this.root = '',
+    this.defaultRoot = '',
+    this.customized = false,
+    this.totalBytes = 0,
+    this.freeBytes = 0,
+    this.reserveBytes = 0,
+    this.spaceKnown = false,
+    this.writable = false,
+    this.canChange = false,
+    this.changeBlocker = '',
+    this.configError = '',
+    this.diskError = '',
+  });
+
+  final String root;
+  final String defaultRoot;
+  final bool customized;
+  final int totalBytes;
+  final int freeBytes;
+  final int reserveBytes;
+  final bool spaceKnown;
+  final bool writable;
+  final bool canChange;
+  final String changeBlocker;
+  final String configError;
+  final String diskError;
+
+  factory AsrStorageOption.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AsrStorageOption(
+      root: _stringValue(map['root']) ?? '',
+      defaultRoot:
+          _stringValue(map['default_root']) ??
+          _stringValue(map['defaultRoot']) ??
+          '',
+      customized: map['customized'] == true,
+      totalBytes:
+          _intValue(map['total_bytes']) ?? _intValue(map['totalBytes']) ?? 0,
+      freeBytes:
+          _intValue(map['free_bytes']) ?? _intValue(map['freeBytes']) ?? 0,
+      reserveBytes:
+          _intValue(map['reserve_bytes']) ??
+          _intValue(map['reserveBytes']) ??
+          0,
+      spaceKnown: map['space_known'] == true || map['spaceKnown'] == true,
+      writable: map['writable'] == true,
+      canChange: map['can_change'] == true || map['canChange'] == true,
+      changeBlocker:
+          _stringValue(map['change_blocker']) ??
+          _stringValue(map['changeBlocker']) ??
+          '',
+      configError:
+          _stringValue(map['config_error']) ??
+          _stringValue(map['configError']) ??
+          '',
+      diskError:
+          _stringValue(map['disk_error']) ??
+          _stringValue(map['diskError']) ??
+          '',
+    );
+  }
+
+  int requiredBytesFor(int downloadBytes) {
+    final normalized = downloadBytes < 0 ? 0 : downloadBytes;
+    if (normalized == 0) return 0;
+    final proportional = normalized ~/ 10;
+    final safety = reserveBytes > proportional ? reserveBytes : proportional;
+    return normalized + safety;
+  }
+
+  bool hasSpaceFor(int downloadBytes) {
+    if (configError.isNotEmpty || diskError.isNotEmpty) return false;
+    return !spaceKnown || freeBytes >= requiredBytesFor(downloadBytes);
   }
 }
 

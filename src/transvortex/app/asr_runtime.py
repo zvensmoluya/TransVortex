@@ -20,15 +20,21 @@ from .models import AsrProviderConfig
 
 
 ASR_RUNTIME_STATE_VERSION = 1
+ASR_STORAGE_CONFIG_VERSION = 1
 WHISPER_HOST_PROTOCOL_VERSION = 1
 APP_DATA_ROOT_ENV = "TRANSVORTEX_HOME"
 CATALOG_OVERRIDE_ENV = "TRANSVORTEX_ASR_CATALOG"
+ASR_STORAGE_CONFIG_NAME = "asr_storage.json"
+ASR_MIN_FREE_SPACE_RESERVE = 256 * 1024 * 1024
 
 
 @dataclass(frozen=True)
 class AsrRuntimePaths:
     app_data_root: Path
     config_root: Path
+    storage_root: Path
+    storage_config_file: Path
+    storage_config_error: str
     components_root: Path
     models_root: Path
     downloads_root: Path
@@ -36,7 +42,12 @@ class AsrRuntimePaths:
     operations_root: Path
 
 
-def asr_runtime_paths(root_dir: Path, *, app_data_root: Path | None = None) -> AsrRuntimePaths:
+def asr_runtime_paths(
+    root_dir: Path,
+    *,
+    app_data_root: Path | None = None,
+    storage_root: Path | None = None,
+) -> AsrRuntimePaths:
     root = Path(root_dir).expanduser().resolve()
     explicit = os.environ.get(APP_DATA_ROOT_ENV, "").strip()
     if app_data_root is not None:
@@ -50,15 +61,54 @@ def asr_runtime_paths(root_dir: Path, *, app_data_root: Path | None = None) -> A
     config_root = root if root.name.lower() == "config" else app_root / "Config"
     if root == app_root:
         config_root = root
+    storage_config_file = config_root / ASR_STORAGE_CONFIG_NAME
+    resolved_storage_root, storage_config_error = _resolve_asr_storage_root(
+        storage_config_file,
+        default_root=app_root,
+        explicit_root=storage_root,
+    )
     return AsrRuntimePaths(
         app_data_root=app_root,
         config_root=config_root,
-        components_root=app_root / "Components",
-        models_root=app_root / "Models" / "faster-whisper",
-        downloads_root=app_root / "Downloads" / "ASR",
+        storage_root=resolved_storage_root,
+        storage_config_file=storage_config_file,
+        storage_config_error=storage_config_error,
+        components_root=resolved_storage_root / "Components",
+        models_root=resolved_storage_root / "Models" / "faster-whisper",
+        downloads_root=resolved_storage_root / "Downloads" / "ASR",
         state_file=config_root / "asr_runtime_state.json",
-        operations_root=app_root / "Downloads" / "ASR" / "operations",
+        operations_root=resolved_storage_root / "Downloads" / "ASR" / "operations",
     )
+
+
+def _resolve_asr_storage_root(
+    config_file: Path,
+    *,
+    default_root: Path,
+    explicit_root: Path | None,
+) -> tuple[Path, str]:
+    if explicit_root is not None:
+        return Path(explicit_root).expanduser().resolve(), ""
+    if not config_file.is_file():
+        return default_root, ""
+    try:
+        payload = read_json(config_file)
+        if not isinstance(payload, dict) or int(payload.get("schema_version") or 0) != ASR_STORAGE_CONFIG_VERSION:
+            raise ValueError("unsupported schema")
+        raw = str(payload.get("storage_root") or "").strip()
+        candidate = Path(raw).expanduser()
+        if not raw or not candidate.is_absolute():
+            raise ValueError("storage_root must be absolute")
+        return candidate.resolve(), ""
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return default_root, f"Invalid ASR storage setting: {exc}"
+
+
+def required_asr_disk_bytes(download_size: int) -> int:
+    normalized = max(int(download_size), 0)
+    if normalized == 0:
+        return 0
+    return normalized + max(ASR_MIN_FREE_SPACE_RESERVE, normalized // 10)
 
 
 def load_asr_catalog() -> dict[str, Any]:
@@ -132,13 +182,16 @@ def asr_runtime_snapshot(
         row["path"] = str(path) if row["installed"] else ""
         row["size"] = sum(int(item.get("size", 0)) for item in row.get("files") or [] if isinstance(item, dict))
         model_rows.append(row)
+    operations = _operation_rows(paths)
     return {
         "paths": {
             "app_data_root": str(paths.app_data_root),
+            "storage_root": str(paths.storage_root),
             "components_root": str(paths.components_root),
             "models_root": str(paths.models_root),
             "downloads_root": str(paths.downloads_root),
         },
+        "storage": asr_storage_status(paths, operations=operations),
         "runtime": runtime,
         "accelerators": accelerator_rows,
         "models": model_rows,
@@ -150,8 +203,93 @@ def asr_runtime_snapshot(
             [dict(value, id=key) for key, value in (state.get("environments") or {}).items() if isinstance(value, dict)],
             key=lambda item: str(item.get("python_executable") or "").lower(),
         ),
-        "operations": _operation_rows(paths),
+        "operations": operations,
     }
+
+
+def asr_storage_status(
+    paths: AsrRuntimePaths,
+    *,
+    operations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rows = operations if operations is not None else _operation_rows(paths)
+    active = any(str(row.get("state") or "") in {"queued", "running", "cancelling"} for row in rows)
+    content_blocker = asr_storage_content_blocker(paths)
+    config_error = paths.storage_config_error
+    change_blocker = (
+        "storage_config_invalid"
+        if config_error
+        else "active_operation"
+        if active
+        else content_blocker
+    )
+    disk_root = _nearest_existing_directory(paths.storage_root)
+    total_bytes = 0
+    free_bytes = 0
+    space_known = False
+    writable = False
+    disk_error = ""
+    try:
+        usage = shutil.disk_usage(disk_root)
+        total_bytes = int(usage.total)
+        free_bytes = int(usage.free)
+        space_known = True
+        writable = os.access(disk_root, os.W_OK)
+    except OSError as exc:
+        disk_error = str(exc)
+    return {
+        "root": str(paths.storage_root),
+        "default_root": str(paths.app_data_root),
+        "customized": paths.storage_root != paths.app_data_root,
+        "total_bytes": total_bytes,
+        "free_bytes": free_bytes,
+        "reserve_bytes": ASR_MIN_FREE_SPACE_RESERVE,
+        "space_known": space_known,
+        "writable": writable,
+        "can_change": not active and not bool(content_blocker),
+        "change_blocker": change_blocker,
+        "config_error": config_error,
+        "disk_error": disk_error,
+    }
+
+
+def asr_storage_content_blocker(paths: AsrRuntimePaths) -> str:
+    if _tree_has_data(paths.components_root) or _tree_has_data(paths.models_root):
+        return "managed_resources_present"
+    downloads = paths.downloads_root
+    if downloads.is_dir():
+        try:
+            for child in downloads.iterdir():
+                if child.name == "operations":
+                    continue
+                if _tree_has_data(child):
+                    return "partial_downloads_present"
+        except OSError:
+            return "storage_unreadable"
+    return ""
+
+
+def _tree_has_data(path: Path) -> bool:
+    if path.is_file() or path.is_symlink():
+        return True
+    if not path.is_dir():
+        return False
+    try:
+        for _root, directories, files in os.walk(path, followlinks=False):
+            if files:
+                return True
+            if any((Path(_root) / name).is_symlink() for name in directories):
+                return True
+    except OSError:
+        return True
+    return False
+
+
+def _nearest_existing_directory(path: Path) -> Path:
+    candidate = path
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    return candidate if candidate.is_dir() else candidate.parent
 
 
 def asr_provider_readiness(

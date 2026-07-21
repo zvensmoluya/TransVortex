@@ -64,6 +64,8 @@ $modelRoot = "C:\path\to\verified\faster-whisper-large-v3"
   -Json
 ```
 
+这是默认资源根。Flutter 在首次受管下载前可以选择另一个本地专用文件夹，随后仍使用相同的 `Components`、`Models` 和 `Downloads` 子目录结构。界面提供可用空间预览，安装 operation 在写入前重新读取目标盘空间并保留安全余量。配置、任务、Cache 和用户级凭据不会跟随 ASR 资源根移动；已有受管资源或 `.part` 断点时首版拒绝切换，避免无校验地遗留或覆盖大文件。
+
 脚本会重新校验构建清单、ZIP 和模型的大小与 SHA-256，生成只在会话内有效的清单副本，并把组件和模型写入受管下载缓存的 `.part` 路径。副本使用 `https://local-staging.invalid/` 占位地址，但安装前会先命中已验证的完整缓存，因此不访问该地址，也不修改 `src/transvortex/resources/asr_components.json`。
 
 默认拒绝覆盖非空目录。仅当目录含有匹配的 TransVortex 会话归属标记时，才允许使用 `-Force` 替换；`-PlanOnly` 只校验输入并返回计划，不写入会话。

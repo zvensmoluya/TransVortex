@@ -23,7 +23,9 @@
 - Flutter 正常启动时，配置副本固定放在 `%LOCALAPPDATA%\TransVortex\Config`，正式任务固定放在 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`。
 - ffmpeg 分离音轨、ASR WAV 分片、上传预处理音频和细分重试文件放在 `%LOCALAPPDATA%\TransVortex\Workspace\Cache`。成功任务会自动清理对应缓存；失败或取消的任务暂时保留，以支持继续任务。
 - ASR 原始响应、识别文本、质量信息、翻译状态和最终结果属于任务资料，不进入 Cache。最终字幕仍写入用户选择的输出目录。
-- 普通用户不选择内部存储根。任务处理窗提供任务目录、结果目录和重新导出入口；开发期仓库 `artifacts/` 和旧 `.transvortex-desktop` 不会被正式模式自动导入。
+- 普通用户不选择配置、任务或 Cache 的内部存储根。任务处理窗提供任务目录、结果目录和重新导出入口；开发期仓库 `artifacts/` 和旧 `.transvortex-desktop` 不会被正式模式自动导入。
+
+本机 Whisper 的大文件是例外。语音识别设置在首次受管下载前允许选择独立的本地资源目录；该目录只承载 `Components`、`Models/faster-whisper` 和 `Downloads/ASR`。选择结果保存在 `%LOCALAPPDATA%\TransVortex\Config\asr_storage.json`，默认仍是 `%LOCALAPPDATA%\TransVortex`。已有受管资源或断点时当前版本不会自动迁移，应继续使用原位置；不要手工修改路径文件或移动目录。
 
 开发和自动化可使用 `TRANSVORTEX_HOME` 整体覆盖桌面数据根。Local Service 的 `--artifacts-dir` / `--cache-dir` 及内部环境变量 `TRANSVORTEX_ARTIFACTS_DIR` / `TRANSVORTEX_CACHE_DIR` 用于把固定任务目录和缓存目录传给 Python worker，不是普通用户设置。
 

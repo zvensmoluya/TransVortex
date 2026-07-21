@@ -332,6 +332,28 @@ def test_app_service_starts_one_managed_asr_setup_operation(tmp_path: Path, monk
     assert response["result"]["phase"] == "runtime"
 
 
+def test_app_service_changes_asr_storage_root(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    received: list[str] = []
+
+    def set_storage_root(path: str) -> dict:
+        received.append(path)
+        return {"root": path, "customized": True, "can_change": True}
+
+    monkeypatch.setattr(service._asr_operation_manager, "set_storage_root", set_storage_root)
+    target = str(tmp_path / "asr-storage")
+
+    response = handle_line(
+        service,
+        _request("asr.storage.set", {"storage_root": target}),
+        root_dir=tmp_path,
+    )
+
+    assert received == [target]
+    assert response["result"]["root"] == target
+
+
 def test_app_service_media_inspection_gates_only_audio_asr_without_ffprobe(tmp_path: Path) -> None:
     _write_config(tmp_path)
     service = DesktopApi(root_dir=tmp_path)

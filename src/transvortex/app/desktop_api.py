@@ -69,6 +69,7 @@ SERVICE_CAPABILITIES = [
     "network_settings",
     "asr_provider_admin",
     "asr_component_manager",
+    "asr_storage_settings",
     "asr_model_probe",
     "asr_environment_probe",
     "media_inspection",
@@ -137,6 +138,7 @@ class DesktopApi:
             "asr.status": self.asr_status,
             "asr.provider.test": self.asr_provider_test,
             "asr.setup.start": self.asr_setup_start,
+            "asr.storage.set": self.asr_storage_set,
             "asr.component.install": self.asr_component_install,
             "asr.component.remove": self.asr_component_remove,
             "asr.operation.get": self.asr_operation_get,
@@ -425,6 +427,14 @@ class DesktopApi:
             self._asr_operation_manager.set_network(config.network)
             return self._asr_operation_manager.start_setup(
                 _required_text(params, "model_id", "modelId", "id")
+            )
+        except AsrOperationError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def asr_storage_set(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._asr_operation_manager.set_storage_root(
+                _required_text(params, "storage_root", "storageRoot", "path")
             )
         except AsrOperationError as exc:
             raise DesktopApiError(exc.code, str(exc)) from exc

@@ -1333,6 +1333,16 @@ routing:
         'phase_index': 0,
         'phase_count': 3,
       },
+      'asr.storage.set': {
+        'root': r'D:\TransVortex-ASR',
+        'default_root': r'C:\Users\tester\AppData\Local\TransVortex',
+        'customized': true,
+        'free_bytes': 5000000000,
+        'reserve_bytes': 268435456,
+        'space_known': true,
+        'writable': true,
+        'can_change': true,
+      },
       'network.settings.save': {
         'ok': true,
         'network': {'mode': 'local_proxy', 'proxy_port': 7890},
@@ -1387,6 +1397,7 @@ routing:
       expectedVersion: {'mtime_ns': 3, 'size': 4},
     );
     final setup = await client.asrSetupStart('small');
+    final storage = await client.asrStorageSet(r'D:\TransVortex-ASR');
     await client.networkSettingsSave(
       mode: 'local_proxy',
       proxyPort: 7890,
@@ -1402,11 +1413,16 @@ routing:
       'provider.routing.save',
       'asr.provider.save',
       'asr.setup.start',
+      'asr.storage.set',
       'network.settings.save',
     ]);
     expect(setup.kind, 'setup');
     expect(setup.phase, 'runtime');
+    expect(storage.root, r'D:\TransVortex-ASR');
+    expect(storage.customized, isTrue);
+    expect(storage.hasSpaceFor(1000000000), isTrue);
     expect(transport.calls[7].params, {'model_id': 'small'});
+    expect(transport.calls[8].params, {'storage_root': r'D:\TransVortex-ASR'});
     expect(transport.calls.first.params['api_key'], 'secret');
     expect(transport.calls[2].params['reasoning_effort'], 'high');
     expect(transport.calls[3].params['name'], 'p1');

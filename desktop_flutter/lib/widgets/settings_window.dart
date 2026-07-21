@@ -23,6 +23,8 @@ import 'settings_common.dart';
 import 'title_bar.dart';
 import 'translation_settings_view.dart';
 
+typedef SettingsDirectoryPicker = Future<String?> Function(String dialogTitle);
+
 class _SmokeSettingsTransport implements AppServiceTransport {
   _SmokeSettingsTransport(this.service);
 
@@ -106,6 +108,7 @@ class SettingsWindow extends StatefulWidget {
     this.localServiceController,
     this.pathOpener,
     this.directoryProbe,
+    this.directoryPicker,
     this.smoke,
   });
 
@@ -115,6 +118,7 @@ class SettingsWindow extends StatefulWidget {
   final LocalServiceController? localServiceController;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
+  final SettingsDirectoryPicker? directoryPicker;
   final AppSmokeArgs? smoke;
 
   @override
@@ -134,6 +138,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   late final AppServiceClient _client;
   late final PathOpener _pathOpener;
   late final DirectoryWriteProbe _directoryProbe;
+  late final SettingsDirectoryPicker _directoryPicker;
 
   // Translation settings live in their own controller + view; the settings
   // window only owns it, mirrors its labels into the store, and drives smoke.
@@ -154,6 +159,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _savingAsr = false;
   bool _testingAsr = false;
   bool _probingAsrModel = false;
+  bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
   String _detectedExternalModelId = '';
@@ -172,6 +178,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _client = AppServiceClient(_settingsTransport());
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
     _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
+    _directoryPicker =
+        widget.directoryPicker ??
+        ((dialogTitle) =>
+            FilePicker.platform.getDirectoryPath(dialogTitle: dialogTitle));
     if (widget.smoke == null) {
       widget.bridge.initializeChild();
     }
@@ -570,6 +580,19 @@ class _SettingsWindowState extends State<SettingsWindow> {
     );
     final operation = _activeAsrOperation;
     final active = operation?.active == true;
+    final storage = _snapshot?.asrStorage ?? const AsrStorageOption();
+    final managedDownloadBytes =
+        (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
+        (model.installed ? 0 : model.size);
+    final externalDownloadBytes = runtime?.installed == true
+        ? 0
+        : runtime?.size ?? 0;
+    final plannedDownloadBytes = _asrModelSource == 'managed'
+        ? managedDownloadBytes
+        : externalDownloadBytes;
+    final storageAvailable =
+        storage.configError.isEmpty && storage.diskError.isEmpty;
+    final storageHasSpace = storage.hasSpaceFor(plannedDownloadBytes);
     final managedReady = runtime?.installed == true && model.installed;
     final isCurrentDefault =
         provider != null && provider.name == _snapshot?.asrProviderName;
@@ -596,13 +619,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
         ActionButton(
           label: _savingAsr
               ? '正在启动'
+              : !storageAvailable
+              ? '保存位置不可用'
+              : !storageHasSpace
+              ? '保存空间不足'
               : managedReady
               ? currentReady
                     ? '已启用'
                     : '保存并切换'
               : '下载并启用',
           strong: true,
-          onTap: _savingAsr || currentReady
+          onTap: _savingAsr || currentReady || !storageHasSpace
               ? null
               : managedReady
               ? _saveAsrProvider
@@ -623,7 +650,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
               ? _probingAsrModel || _externalModelPath.text.isEmpty
                     ? null
                     : _probeManagedAsrModel
-              : () => _startAsrInstall('runtime'),
+              : storageHasSpace
+              ? () => _startAsrInstall('runtime')
+              : null,
         ),
       );
     }
@@ -638,7 +667,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           draftDirty: _asrDraftDirty,
           operation: operation,
         ),
-        const SizedBox(height: T.s8),
+        const SizedBox(height: T.s4),
         if (operation != null)
           _AsrSetupProgress(
             operation: operation,
@@ -650,6 +679,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
             selectedModel,
             runtime: runtime,
             model: model,
+            storage: storage,
           ),
         ],
       ],
@@ -661,6 +691,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     String selectedModel, {
     required AsrComponentOption? runtime,
     required AsrComponentOption model,
+    required AsrStorageOption storage,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -669,16 +700,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
           selected: _asrModelSource,
           onChanged: _setAsrModelSource,
         ),
-        const SizedBox(height: T.s8),
+        const SizedBox(height: T.s4),
         if (_asrModelSource == 'managed')
           _managedWhisperModelSettings(
             modelIds,
             selectedModel,
             runtime: runtime,
             model: model,
+            storage: storage,
           )
         else
-          _externalWhisperModelSettings(runtime),
+          _externalWhisperModelSettings(runtime, storage),
       ],
     );
   }
@@ -688,6 +720,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     String selectedModel, {
     required AsrComponentOption? runtime,
     required AsrComponentOption model,
+    required AsrStorageOption storage,
   }) {
     final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
@@ -706,7 +739,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
             Expanded(child: _asrDeviceSelect()),
           ],
         ),
-        const SizedBox(height: T.s8),
+        const SizedBox(height: T.s4),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
           runtimeSize: runtime?.size ?? 0,
@@ -714,12 +747,24 @@ class _SettingsWindowState extends State<SettingsWindow> {
           modelReady: model.installed,
           modelSize: model.size,
           appDataRoot: '${paths['app_data_root'] ?? ''}',
+          storage: storage,
+          requiredDownloadBytes:
+              (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
+              (model.installed ? 0 : model.size),
+          changingStorage: _changingAsrStorage,
+          onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
+          onResetStorage: storage.customized && storage.canChange
+              ? _resetAsrStorageRoot
+              : null,
         ),
       ],
     );
   }
 
-  Widget _externalWhisperModelSettings(AsrComponentOption? runtime) {
+  Widget _externalWhisperModelSettings(
+    AsrComponentOption? runtime,
+    AsrStorageOption storage,
+  ) {
     final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -758,6 +803,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
           modelSize: 0,
           appDataRoot: '${paths['app_data_root'] ?? ''}',
           externalModel: true,
+          storage: storage,
+          requiredDownloadBytes: runtime?.installed == true
+              ? 0
+              : runtime?.size ?? 0,
+          changingStorage: _changingAsrStorage,
+          onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
+          onResetStorage: storage.customized && storage.canChange
+              ? _resetAsrStorageRoot
+              : null,
         ),
       ],
     );
@@ -797,6 +851,40 @@ class _SettingsWindowState extends State<SettingsWindow> {
       _model.text = modelId;
       _asrDraftDirty = true;
     });
+  }
+
+  Future<void> _pickAsrStorageRoot() async {
+    final path = await _directoryPicker('选择识别资源保存文件夹');
+    if (path == null || path.trim().isEmpty || !mounted) return;
+    await _setAsrStorageRoot(path.trim());
+  }
+
+  Future<void> _resetAsrStorageRoot() async {
+    final defaultRoot = _snapshot?.asrStorage.defaultRoot.trim() ?? '';
+    if (defaultRoot.isEmpty) return;
+    await _setAsrStorageRoot(defaultRoot, reset: true);
+  }
+
+  Future<void> _setAsrStorageRoot(String path, {bool reset = false}) async {
+    setState(() {
+      _changingAsrStorage = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final storage = await _client.asrStorageSet(path);
+      await _loadConfig();
+      if (!mounted) return;
+      setState(() {
+        _message = reset ? '识别资源已恢复到默认位置。' : '识别资源将保存到：${storage.root}';
+      });
+      await widget.bridge.refreshServiceSnapshot();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _changingAsrStorage = false);
+    }
   }
 
   Widget _diagnosticsBody() {
@@ -1126,9 +1214,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _pickExternalModelPath() async {
-    final path = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: '选择 faster-whisper 模型目录',
-    );
+    final path = await _directoryPicker('选择 faster-whisper 模型目录');
     if (path == null || path.isEmpty || !mounted) return;
     setState(() {
       _externalModelPath.text = path;
@@ -2371,7 +2457,7 @@ class _AsrSetupOverview extends StatelessWidget {
         ? ('待应用', '将切换为：$modelLabel · $deviceLabel', T.accentStrong)
         : ('尚未可用', '完成下载和校验后即可在本机识别', T.warn);
     return Container(
-      padding: const EdgeInsets.all(T.s12),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 10),
       decoration: BoxDecoration(
         color: T.surface,
         borderRadius: BorderRadius.circular(T.rMd),
@@ -2424,6 +2510,11 @@ class _AsrDownloadPlan extends StatelessWidget {
     required this.modelReady,
     required this.modelSize,
     required this.appDataRoot,
+    required this.storage,
+    required this.requiredDownloadBytes,
+    required this.changingStorage,
+    required this.onChangeStorage,
+    required this.onResetStorage,
     this.externalModel = false,
   });
 
@@ -2433,10 +2524,32 @@ class _AsrDownloadPlan extends StatelessWidget {
   final bool modelReady;
   final int modelSize;
   final String appDataRoot;
+  final AsrStorageOption storage;
+  final int requiredDownloadBytes;
+  final bool changingStorage;
+  final VoidCallback? onChangeStorage;
+  final VoidCallback? onResetStorage;
   final bool externalModel;
 
   @override
   Widget build(BuildContext context) {
+    final storageRoot = storage.root.isEmpty ? appDataRoot : storage.root;
+    final storageAvailable =
+        storage.configError.isEmpty && storage.diskError.isEmpty;
+    final hasSpace = storage.hasSpaceFor(requiredDownloadBytes);
+    final requiredBytes = storage.requiredBytesFor(requiredDownloadBytes);
+    final spaceLabel = !storageAvailable
+        ? '位置不可用'
+        : !storage.spaceKnown
+        ? '空间待检查'
+        : hasSpace
+        ? '可用 ${_formatBytes(storage.freeBytes)}'
+        : '仅余 ${_formatBytes(storage.freeBytes)}';
+    final storageHint = !storageAvailable
+        ? '请重新连接目标磁盘或改选其他位置。'
+        : !hasSpace
+        ? '本次至少需要 ${_formatBytes(requiredBytes)}，请更改位置或清理目标盘。'
+        : _asrStorageChangeHint(storage.changeBlocker);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: T.s4),
@@ -2475,14 +2588,70 @@ class _AsrDownloadPlan extends StatelessWidget {
                 : '需要下载 ${_formatBytes(modelSize)}',
             ready: modelReady,
           ),
-          if (appDataRoot.isNotEmpty) ...[
+          if (storageRoot.isNotEmpty) ...[
             const SizedBox(height: T.s4),
-            Text(
-              '保存位置（与程序安装位置不同）：$appDataRoot',
-              style: T.tCaption,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            Row(
+              children: [
+                const Icon(Icons.storage_rounded, size: 17, color: T.muted),
+                const SizedBox(width: T.s8),
+                Expanded(
+                  child: Tooltip(
+                    message: storageRoot,
+                    child: Text(
+                      '识别资源：$storageRoot',
+                      style: T.tCaption,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: T.s8),
+                Text(
+                  spaceLabel,
+                  style: T.tCaption.copyWith(
+                    color: hasSpace ? T.muted : T.danger,
+                    fontWeight: hasSpace ? T.wRegular : T.wBold,
+                  ),
+                ),
+                if (onChangeStorage != null) ...[
+                  const SizedBox(width: T.s4),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 22),
+                      padding: const EdgeInsets.symmetric(horizontal: T.s4),
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: changingStorage ? null : onChangeStorage,
+                    child: Text(changingStorage ? '处理中' : '更改'),
+                  ),
+                ],
+                if (onResetStorage != null) ...[
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 22),
+                      padding: const EdgeInsets.symmetric(horizontal: T.s4),
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: changingStorage ? null : onResetStorage,
+                    child: const Text('默认'),
+                  ),
+                ],
+              ],
             ),
+            if (storageHint.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 25),
+                child: Text(
+                  storageHint,
+                  style: T.tCaption.copyWith(
+                    color: hasSpace ? T.muted : T.danger,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
           ],
         ],
       ),
@@ -2799,6 +2968,17 @@ String _asrOperationFailureMessage(AsrOperationStatus operation) {
     'download_failed' || 'download_incomplete' => '下载没有完成，请检查网络设置后重试。',
     'operation_interrupted' => '上次下载意外中断，可以从已保留的安全断点继续。',
     _ => operation.message.trim().isEmpty ? '本机识别设置失败，请重试。' : operation.message,
+  };
+}
+
+String _asrStorageChangeHint(String blocker) {
+  return switch (blocker) {
+    'active_operation' => '当前任务完成后才能更改保存位置。',
+    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。',
+    'partial_downloads_present' => '已有下载断点；继续下载时仍会复用当前位置。',
+    'storage_config_invalid' => '保存位置配置需要重新选择。',
+    'storage_unreadable' => '当前位置暂时无法读取。',
+    _ => '',
   };
 }
 

@@ -23,6 +23,27 @@ String friendlySettingsError(Object error) {
     if (error.code == 'operation_active') {
       return '已有识别环境任务正在进行，请先等待完成或取消当前任务。';
     }
+    if (error.code == 'storage_change_requires_migration') {
+      return '当前位置已有识别资源或下载断点；当前版本不会自动搬动大文件，请继续使用该位置。';
+    }
+    if (error.code == 'storage_target_has_managed_data') {
+      return '所选文件夹已包含另一套识别资源，请选择新的专用文件夹。';
+    }
+    if (error.code == 'invalid_storage_root') {
+      return '请选择本地磁盘中的专用文件夹，不要直接选择磁盘根目录。';
+    }
+    if (error.code == 'storage_root_unwritable') {
+      return '所选文件夹无法写入，请检查权限或改选其他位置。';
+    }
+    if (error.code == 'storage_root_unavailable') {
+      return '识别资源位置当前不可用，请重新连接目标磁盘或改选其他位置。';
+    }
+    if (error.code == 'storage_config_invalid') {
+      return '识别资源位置配置无效，请重新选择保存位置。';
+    }
+    if (error.code == 'insufficient_disk_space') {
+      return '目标盘剩余空间不足，请清理空间或更改识别资源位置。';
+    }
     final details = _map(error.details);
     final info = _map(details['error_info']);
     final hint =

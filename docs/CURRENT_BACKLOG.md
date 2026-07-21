@@ -16,7 +16,7 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| ASR 组件公开下载与可见 APP 验收 | 待验收 | 单一设置任务、取消/恢复、托盘反馈和 760×560 界面已实现并通过自动验证；仍需用已发布 runtime 完成可见 Flutter 真实点击下载、取消/续传、关窗重开、`small + CPU` 真实媒体任务和干净系统首启；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
+| ASR 组件公开下载与可见 APP 验收 | 待验收 | 单一设置任务、取消/恢复、托盘反馈、首次下载前独立资源目录、目标盘空间判断和 760×560 界面已实现并通过自动验证；仍需用已发布 runtime 完成可见 Flutter 真实点击下载、取消/续传、关窗重开、`small + CPU` 真实媒体任务和干净系统首启；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
 | 干净 Windows 首启与媒体任务 | 待验收 | 在未配置开发环境的干净系统完成安装、首启、配置和真实任务 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 已安装路径通知行为 | 待验收 | 通知中心归属正确，点击通知能够聚焦应用 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | Authenticode 签名 | 外部条件 | 正式安装包和主可执行文件完成签名、时间戳和 Windows 验证 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
@@ -43,6 +43,7 @@
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
 | 失败恢复矩阵 | 待验收 | 配置、凭据、识别、目录和任务失败都有真实可执行的恢复动作 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
+| 已有 ASR 资源跨盘迁移 | 待实现 | 在不重新下载的前提下复制运行组件、模型和安全断点，提供真实进度、逐文件校验、取消、原位置保留与失败回滚；完成前只允许首次下载前选择资源位置 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | Flutter Agent 环境接力入口 | 待实现 | 在 Flutter 识别设置中提供复制通用 Prompt / 导出 Agent-native Skill 的入口，并让原生向导与 `transvortex.agent_setup` verify 结果保持一致 | [`../AGENT_USAGE.md`](../AGENT_USAGE.md)、[`../AGENT_BOOTSTRAP.md`](../AGENT_BOOTSTRAP.md) |
 | 术语能力归位 | 待决策 | 区分生成术语建议、使用术语和维护术语，并明确回流与优先级语义 | [`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
 | 高级翻译与识别设置 | 待实现 | 补齐 fallback routing、mapping、识别高级参数和诊断修复联动 | [`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |

@@ -144,6 +144,7 @@ class TransVortexApp extends StatelessWidget {
     this.taskNotificationService,
     this.pathOpener,
     this.directoryProbe,
+    this.directoryPicker,
     this.smoke,
   });
 
@@ -156,6 +157,7 @@ class TransVortexApp extends StatelessWidget {
   final TaskNotificationService? taskNotificationService;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
+  final SettingsDirectoryPicker? directoryPicker;
   final AppSmokeArgs? smoke;
 
   @override
@@ -238,6 +240,7 @@ class TransVortexApp extends StatelessWidget {
           localServiceController: localServiceController,
           pathOpener: pathOpener,
           directoryProbe: directoryProbe,
+          directoryPicker: directoryPicker,
           smoke: smoke,
         ),
       },

@@ -3205,6 +3205,148 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('ASR settings changes managed storage before download', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    const defaultRoot = r'C:\Users\tester\AppData\Local\TransVortex';
+    const selectedRoot = r'D:\TransVortex-ASR';
+    var customized = false;
+    final storageCalls = <Map<String, Object?>>[];
+
+    Map<String, Object?> localSnapshot() => {
+      'paths': {
+        'app_data_root': defaultRoot,
+        'storage_root': customized ? selectedRoot : defaultRoot,
+      },
+      'storage': {
+        'root': customized ? selectedRoot : defaultRoot,
+        'default_root': defaultRoot,
+        'customized': customized,
+        'free_bytes': 20 * 1024 * 1024 * 1024,
+        'total_bytes': 100 * 1024 * 1024 * 1024,
+        'reserve_bytes': 256 * 1024 * 1024,
+        'space_known': true,
+        'writable': true,
+        'can_change': true,
+        'change_blocker': '',
+      },
+      'runtime': {
+        'id': 'managed:faster-whisper',
+        'version': '1.0.0',
+        'installed': false,
+        'artifact': {'published': true, 'size': 100 * 1024 * 1024},
+      },
+      'models': [
+        {
+          'id': 'small',
+          'display_name': 'Whisper Small',
+          'installed': false,
+          'size': 500 * 1024 * 1024,
+        },
+      ],
+      'accelerators': const [],
+      'environments': const [],
+      'operations': const [],
+    };
+
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          withAsrProviders: false,
+          asrLocal: localSnapshot(),
+        ).raw;
+      }
+      if (method == 'asr.storage.set') {
+        storageCalls.add(Map<String, Object?>.from(params));
+        customized = true;
+        return Map<String, Object?>.from(localSnapshot()['storage']! as Map);
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+        directoryPicker: (_) async => selectedRoot,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('更改'), findsOneWidget);
+    expect(find.textContaining('可用 20.0 GB'), findsOneWidget);
+
+    await tester.tap(find.text('更改'));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(storageCalls, [
+      {'storage_root': selectedRoot},
+    ]);
+    expect(find.textContaining(selectedRoot), findsWidgets);
+    expect(find.text('默认'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings blocks managed download when target is full', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          withAsrProviders: false,
+          asrLocal: const {
+            'paths': {'app_data_root': r'C:\TVX'},
+            'storage': {
+              'root': r'C:\TVX',
+              'default_root': r'C:\TVX',
+              'free_bytes': 128,
+              'reserve_bytes': 256,
+              'space_known': true,
+              'writable': true,
+              'can_change': true,
+            },
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'installed': false,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [
+              {'id': 'small', 'installed': false, 'size': 200},
+            ],
+            'accelerators': [],
+            'environments': [],
+            'operations': [],
+          },
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('保存空间不足'), findsOneWidget);
+    expect(find.textContaining('本次至少需要'), findsOneWidget);
+    expect(find.text('更改'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
   testWidgets('diagnostics window reads doctor report through bridge', (
     tester,
   ) async {

@@ -21,10 +21,14 @@ from ..utils import FileLock, read_json, utc_now_iso, write_json
 from .models import NetworkConfig
 from .asr_runtime import (
     AsrRuntimePaths,
+    ASR_STORAGE_CONFIG_VERSION,
+    asr_storage_content_blocker,
+    asr_storage_status,
     asr_runtime_paths,
     load_asr_catalog,
     managed_model_path,
     model_catalog_entry,
+    required_asr_disk_bytes,
     whisper_host_script,
 )
 
@@ -32,7 +36,6 @@ from .asr_runtime import (
 ACTIVE_OPERATION_STATES = {"queued", "running", "cancelling"}
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 DOWNLOAD_ATTEMPTS = 3
-MIN_FREE_SPACE_RESERVE = 256 * 1024 * 1024
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 16 * 1024 * 1024 * 1024
 DIRECTORY_SWAP_ATTEMPTS = 20
 DIRECTORY_SWAP_MAX_RETRY_SECONDS = 1.0
@@ -70,6 +73,7 @@ class AsrOperationManager:
         self._reconcile_interrupted_operations()
 
     def start_install(self, kind: str, item_id: str = "") -> dict[str, Any]:
+        self._ensure_storage_ready()
         normalized_kind = kind.strip().lower()
         entry = self._catalog_entry(normalized_kind, item_id)
         target_id = str(entry.get("id") or item_id)
@@ -115,6 +119,7 @@ class AsrOperationManager:
             return operation
 
     def start_setup(self, model_id: str) -> dict[str, Any]:
+        self._ensure_storage_ready()
         normalized_model_id = model_id.strip()
         runtime = self._catalog_entry("runtime", "")
         model = self._catalog_entry("model", normalized_model_id)
@@ -226,7 +231,87 @@ class AsrOperationManager:
             )
         return result
 
+    def storage_status(self) -> dict[str, Any]:
+        with self._lock:
+            return asr_storage_status(self.paths, operations=self.operations())
+
+    def set_storage_root(self, storage_root: str) -> dict[str, Any]:
+        raw = storage_root.strip()
+        candidate = Path(raw).expanduser()
+        if not raw or not candidate.is_absolute():
+            raise AsrOperationError("invalid_storage_root", "ASR storage root must be an absolute directory")
+        candidate = candidate.resolve()
+        if candidate == candidate.parent:
+            raise AsrOperationError(
+                "invalid_storage_root",
+                "Choose a dedicated folder instead of the root of a drive",
+            )
+        with self._lock:
+            if self._find_any_active() is not None:
+                raise AsrOperationError(
+                    "operation_active",
+                    "Wait for the active ASR task to finish before changing its storage location",
+                )
+            if candidate == self.paths.storage_root:
+                return self.storage_status()
+            current_blocker = asr_storage_content_blocker(self.paths)
+            if current_blocker:
+                raise AsrOperationError(
+                    "storage_change_requires_migration",
+                    "The current ASR storage contains managed resources or partial downloads",
+                )
+            for managed_root in (
+                self.paths.components_root,
+                self.paths.models_root,
+                self.paths.downloads_root,
+            ):
+                resolved = managed_root.resolve()
+                if candidate == resolved or resolved in candidate.parents:
+                    raise AsrOperationError(
+                        "invalid_storage_root",
+                        "The new ASR storage folder cannot be inside a managed resource directory",
+                    )
+            target_paths = asr_runtime_paths(
+                self.root_dir,
+                app_data_root=self.paths.app_data_root,
+                storage_root=candidate,
+            )
+            if asr_storage_content_blocker(target_paths):
+                raise AsrOperationError(
+                    "storage_target_has_managed_data",
+                    "The selected folder already contains managed ASR data",
+                )
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                probe = candidate / f".transvortex-write-probe-{uuid.uuid4().hex}"
+                with probe.open("xb") as handle:
+                    handle.write(b"ok")
+                probe.unlink()
+                self.paths.config_root.mkdir(parents=True, exist_ok=True)
+                if candidate == self.paths.app_data_root:
+                    if self.paths.storage_config_file.exists():
+                        self.paths.storage_config_file.unlink()
+                else:
+                    write_json(
+                        self.paths.storage_config_file,
+                        {
+                            "schema_version": ASR_STORAGE_CONFIG_VERSION,
+                            "storage_root": str(candidate),
+                        },
+                    )
+            except OSError as exc:
+                raise AsrOperationError(
+                    "storage_root_unwritable",
+                    f"Cannot use the selected ASR storage folder: {exc}",
+                ) from exc
+            self.paths = asr_runtime_paths(
+                self.root_dir,
+                app_data_root=self.paths.app_data_root,
+            )
+            return self.storage_status()
+
     def remove(self, kind: str, item_id: str = "") -> dict[str, Any]:
+        self._ensure_storage_ready()
         normalized_kind = kind.strip().lower()
         entry = self._catalog_entry(normalized_kind, item_id)
         target_id = str(entry.get("id") or item_id)
@@ -819,14 +904,24 @@ class AsrOperationManager:
         return total
 
     def _check_disk_space(self, download_size: int) -> None:
-        self.paths.app_data_root.mkdir(parents=True, exist_ok=True)
-        available = shutil.disk_usage(self.paths.app_data_root).free
-        required = download_size + max(MIN_FREE_SPACE_RESERVE, download_size // 10)
+        try:
+            self.paths.storage_root.mkdir(parents=True, exist_ok=True)
+            available = shutil.disk_usage(self.paths.storage_root).free
+        except OSError as exc:
+            raise AsrOperationError(
+                "storage_root_unavailable",
+                f"ASR storage folder is unavailable: {exc}",
+            ) from exc
+        required = required_asr_disk_bytes(download_size)
         if available < required:
             raise AsrOperationError(
                 "insufficient_disk_space",
                 f"ASR installation needs {required} bytes free but only {available} bytes are available",
             )
+
+    def _ensure_storage_ready(self) -> None:
+        if self.paths.storage_config_error:
+            raise AsrOperationError("storage_config_invalid", self.paths.storage_config_error)
 
     def _find_active(self, kind: str, item_id: str) -> dict[str, Any] | None:
         return next(

@@ -87,6 +87,8 @@ Windows 正式应用默认使用：
 
 任务和 Cache 已与安装目录分离。当前仍需补齐 `logs`、`temp`、Cache 清理失败的可观察性，以及配置和资源的版本迁移。
 
+本机 Whisper 的大文件可以在首次下载前使用独立 ASR 资源根；Local Service 从固定配置根内的 `asr_storage.json` 解析该位置，因此不会出现“配置文件也被搬走后无法找到新路径”的循环依赖。该覆盖只改变 `Components`、`Models/faster-whisper` 和 `Downloads/ASR`。已有资源的跨盘迁移尚未实现，不能用直接改路径替代复制、校验、切换和回滚协议。
+
 ## 6. 安装态运行时
 
 安装目录包含固定资源：
