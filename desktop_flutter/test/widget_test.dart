@@ -2869,11 +2869,88 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Whisper 运行组件'), findsOneWidget);
-    expect(find.text('尚未发布'), findsOneWidget);
-    expect(find.textContaining('large-v3 · 25%'), findsOneWidget);
-    expect(find.text('model.bin'), findsOneWidget);
+    expect(find.text('本地识别引擎'), findsOneWidget);
+    expect(find.text('当前版本暂未开放'), findsOneWidget);
+    expect(find.textContaining('Whisper Large v3 · 25%'), findsOneWidget);
+    expect(find.text('正在处理：model.bin'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings dismisses terminal operation feedback', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(920, 680));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var snapshotCalls = 0;
+    final running = {
+      'id': 'asr_terminal',
+      'kind': 'model',
+      'item_id': 'large-v3',
+      'state': 'running',
+      'bytes_done': 25,
+      'bytes_total': 100,
+      'current_file': 'model.bin',
+    };
+    final terminal = {
+      'id': 'asr_terminal',
+      'kind': 'model',
+      'item_id': 'large-v3',
+      'state': 'completed',
+      'bytes_done': 100,
+      'bytes_total': 100,
+      'current_file': '',
+    };
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        snapshotCalls += 1;
+        return _desktopSnapshot(
+          managedAsr: true,
+          asrLocal: {
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': true,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [
+              {
+                'id': 'large-v3',
+                'display_name': 'Whisper Large v3',
+                'installed': false,
+                'size': 100,
+              },
+            ],
+            'accelerators': [],
+            'environments': [],
+            'operations': snapshotCalls <= 2 ? [running] : const [],
+          },
+        ).raw;
+      }
+      if (method == 'asr.operation.get') return terminal;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('Whisper Large v3 · 25%'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('Whisper Large v3 · 已完成'), findsOneWidget);
+    expect(find.textContaining('准备完成'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 2300));
+    expect(find.textContaining('Whisper Large v3 · 已完成'), findsNothing);
     expectNoFlutterException();
   });
 

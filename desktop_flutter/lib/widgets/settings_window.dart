@@ -159,6 +159,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   String _detectedExternalModelId = '';
   AsrOperationStatus? _activeAsrOperation;
   Timer? _asrOperationPoll;
+  Timer? _asrOperationDismissTimer;
   bool _loadingDiagnosticTasks = false;
   bool _loadingDiagnosticResult = false;
 
@@ -201,6 +202,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _device.dispose();
     _externalModelPath.dispose();
     _asrOperationPoll?.cancel();
+    _asrOperationDismissTimer?.cancel();
     super.dispose();
   }
 
@@ -465,7 +467,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
           selected: _selectedAsrProvider,
           onPick: _pickAsrProvider,
         ),
-        const SizedBox(height: T.s24),
+        const SizedBox(height: T.s16),
         Expanded(child: _asrDetails()),
       ],
     );
@@ -477,7 +479,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final provider = _selectedAsrOption();
     return ToolPanel(
       footer: [
-        if (kind != 'local_worker' || _asrModelSource == 'managed')
+        if (kind == 'local_worker' && _asrModelSource == 'external')
+          ActionButton(
+            label: _probingAsrModel ? '验证中' : '验证并使用',
+            strong: true,
+            onTap: _probingAsrModel || _externalModelPath.text.isEmpty
+                ? null
+                : _probeManagedAsrModel,
+          )
+        else if (kind != 'local_worker' || _asrModelSource == 'managed')
           ActionButton(
             label: _savingAsr ? '保存中' : '保存并设为默认',
             strong: true,
@@ -491,17 +501,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
       ],
       footnote: kind == 'remote' ? '密钥保存在用户级凭据文件中。' : null,
       children: [
-        Row(
-          children: [
-            Expanded(child: Text(_asrLabelForDraft(draft), style: T.tSection)),
-            _AsrStatusText(
-              readiness: provider?.readiness,
-              draftDirty: _asrDraftDirty,
-            ),
-          ],
+        _AsrOverview(
+          label: _asrLabelForDraft(draft),
+          readiness: provider?.readiness,
+          draftDirty: _asrDraftDirty,
         ),
         const SizedBox(height: T.s12),
         if (kind == 'local_worker') ...[
+          const _AsrSectionHeading(title: '识别方案', detail: '选择模型来源和运算方式。'),
+          const SizedBox(height: T.s8),
           _localWhisperSettings(),
         ] else if (kind == 'local_inprocess') ...[
           Row(
@@ -568,26 +576,19 @@ class _SettingsWindowState extends State<SettingsWindow> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('模型来源', style: T.tCaption),
-        const SizedBox(height: T.s8),
         Row(
           children: [
-            SegmentButton(
-              label: '自动准备',
-              detail: '下载并校验模型',
-              selected: _asrModelSource == 'managed',
-              onTap: () => _setAsrModelSource('managed'),
-            ),
-            const SizedBox(width: T.s12),
-            SegmentButton(
-              label: '使用已有模型',
-              detail: '直接使用当前位置',
-              selected: _asrModelSource == 'external',
-              onTap: () => _setAsrModelSource('external'),
+            const Text('模型来源', style: T.tCaption),
+            const SizedBox(width: T.s8),
+            Expanded(
+              child: _AsrSourceToggle(
+                selected: _asrModelSource,
+                onChanged: _setAsrModelSource,
+              ),
             ),
           ],
         ),
-        const SizedBox(height: T.s16),
+        const SizedBox(height: T.s12),
         if (_asrModelSource == 'managed')
           _managedWhisperModelSettings(modelIds, selectedModel)
         else
@@ -616,7 +617,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
             Expanded(child: _asrDeviceSelect()),
           ],
         ),
-        const SizedBox(height: T.s16),
+        const SizedBox(height: T.s8),
         _managedWhisperComponents(selectedModel, includeModel: true),
       ],
     );
@@ -649,16 +650,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
         ],
         const SizedBox(height: T.s12),
         SizedBox(width: 220, child: _asrDeviceSelect()),
-        const SizedBox(height: T.s16),
+        const SizedBox(height: T.s12),
         _managedWhisperComponents(selectedModel, includeModel: false),
-        const SizedBox(height: T.s16),
-        ActionButton(
-          label: _probingAsrModel ? '验证中' : '验证并使用',
-          strong: true,
-          onTap: _probingAsrModel || _externalModelPath.text.isEmpty
-              ? null
-              : _probeManagedAsrModel,
-        ),
       ],
     );
   }
@@ -700,16 +693,19 @@ class _SettingsWindowState extends State<SettingsWindow> {
     );
     final accelerator = snapshot?.asrAccelerators.firstOrNull;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const _AsrSectionHeading(title: '准备清单', detail: '只显示当前识别方案需要的内容。'),
+        const SizedBox(height: T.s4),
         _AsrComponentRow(
-          label: 'Whisper 运行组件',
+          label: '本地识别引擎',
           detail: runtime == null
               ? '清单不可用'
               : runtime.installed
-              ? '已安装 ${runtime.version}'
+              ? 'faster-whisper ${runtime.version} · 已准备'
               : runtime.published
-              ? '未安装'
-              : '尚未发布',
+              ? '还需要准备运行环境'
+              : '当前版本暂未开放',
           installed: runtime?.installed ?? false,
           onInstall: runtime == null || runtime.installed || !runtime.published
               ? null
@@ -717,25 +713,26 @@ class _SettingsWindowState extends State<SettingsWindow> {
         ),
         if (includeModel)
           _AsrComponentRow(
-            label: _asrModelLabel(selectedModel),
+            label: '识别模型 · ${_asrModelLabel(selectedModel)}',
             detail: model?.installed == true
-                ? '已安装 · ${_formatBytes(model!.size)}'
-                : '未安装 · ${_formatBytes(model?.size ?? 0)}',
+                ? '已准备 · ${_formatBytes(model!.size)}'
+                : '等待准备 · ${_formatBytes(model?.size ?? 0)}',
             installed: model?.installed ?? false,
             onInstall: model?.installed == true
                 ? null
                 : () => _startAsrInstall('model', itemId: selectedModel),
           ),
-        if (accelerator != null)
+        if (accelerator != null &&
+            (accelerator.installed || accelerator.published))
           _AsrComponentRow(
-            label: 'NVIDIA 加速包',
+            label: 'NVIDIA 加速环境',
             detail: accelerator.installed
-                ? '已安装 ${accelerator.version}'
+                ? '已准备 · ${accelerator.version}'
                 : accelerator.published
-                ? '可选 · 未安装'
-                : '尚未发布',
+                ? '可选 · 等待准备'
+                : '当前版本暂未开放',
             installed: accelerator.installed,
-            actionLabel: accelerator.installed ? '检查' : '安装',
+            actionLabel: accelerator.installed ? '检查' : '准备',
             onInstall: accelerator.installed
                 ? _probeManagedAsrHardware
                 : !accelerator.published
@@ -923,6 +920,8 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _startAsrInstall(String kind, {String? itemId}) async {
+    _asrOperationDismissTimer?.cancel();
+    _asrOperationDismissTimer = null;
     setState(() {
       _error = null;
       _message = null;
@@ -961,7 +960,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
         setState(() {
           _activeAsrOperation = operation;
           if (operation.state == 'completed') {
-            _message = '本机 Whisper 组件已就绪。';
+            _message = '${_asrOperationLabel(operation.itemId)}准备完成。';
           } else if (operation.state == 'failed') {
             _error = operation.message.isEmpty
                 ? '安装失败：${operation.errorCode}'
@@ -970,6 +969,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
             _message = '安装已取消，可继续下载。';
           }
         });
+        _scheduleAsrOperationDismiss(operation);
       }
     } on Object catch (error) {
       _asrOperationPoll?.cancel();
@@ -977,6 +977,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
     }
+  }
+
+  void _scheduleAsrOperationDismiss(AsrOperationStatus operation) {
+    _asrOperationDismissTimer?.cancel();
+    if (operation.active) return;
+    _asrOperationDismissTimer = Timer(const Duration(milliseconds: 2200), () {
+      if (!mounted || _activeAsrOperation?.id != operation.id) return;
+      setState(() => _activeAsrOperation = null);
+    });
   }
 
   Future<void> _cancelAsrOperation() async {
@@ -2036,31 +2045,221 @@ class _AsrSelect extends StatelessWidget {
   }
 }
 
-class _AsrStatusText extends StatelessWidget {
-  const _AsrStatusText({this.readiness, this.draftDirty = false});
+class _AsrOverview extends StatelessWidget {
+  const _AsrOverview({
+    required this.label,
+    required this.readiness,
+    required this.draftDirty,
+  });
 
+  final String label;
   final AsrReadiness? readiness;
   final bool draftDirty;
 
   @override
   Widget build(BuildContext context) {
-    if (draftDirty) {
-      return Text(
-        '尚未保存',
-        style: T.tCaption.copyWith(color: T.accentStrong, fontWeight: T.wBold),
-      );
-    }
-    final value = readiness;
-    final state = value?.state ?? 'unavailable';
-    final color = switch (state) {
-      'ready' => T.ok,
-      'checking' => T.accentStrong,
-      'needs_action' => T.warn,
-      _ => T.danger,
-    };
-    return Text(
-      value?.statusLabel ?? '状态未知',
-      style: T.tCaption.copyWith(color: color, fontWeight: T.wBold),
+    final state = readiness?.state ?? 'unavailable';
+    final color = draftDirty ? T.accentStrong : _asrStateColor(state);
+    final status = draftDirty ? '尚未保存' : _asrStatusChipLabel(readiness);
+    final hint = draftDirty
+        ? '保存后会重新检查这套本地识别方案。'
+        : _asrReadinessHint(readiness);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rMd),
+        border: Border.all(color: T.line),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 40,
+            height: 40,
+            child: CustomPaint(painter: _WhisperBuddyPainter()),
+          ),
+          const SizedBox(width: T.s12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: T.tBody.copyWith(fontWeight: T.wBold)),
+                const SizedBox(height: 2),
+                Text(hint, style: T.tCaption, maxLines: 1),
+              ],
+            ),
+          ),
+          const SizedBox(width: T.s12),
+          _AsrStatusChip(label: status, color: color),
+        ],
+      ),
+    );
+  }
+}
+
+class _AsrSectionHeading extends StatelessWidget {
+  const _AsrSectionHeading({required this.title, required this.detail});
+
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const SizedBox(
+          width: 14,
+          height: 16,
+          child: CustomPaint(painter: _AsrStickerPainter()),
+        ),
+        const SizedBox(width: T.s8),
+        Text(title, style: T.tSection),
+        const SizedBox(width: T.s12),
+        Expanded(child: Container(height: 1, color: T.line)),
+        const SizedBox(width: T.s8),
+        Flexible(
+          child: Text(
+            detail,
+            style: T.tCaption,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AsrSourceToggle extends StatelessWidget {
+  const _AsrSourceToggle({required this.selected, required this.onChanged});
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rMd),
+        border: Border.all(color: T.line),
+      ),
+      child: Row(
+        children: [
+          _AsrSourceChoice(
+            label: '自动准备',
+            detail: '下载校验',
+            selected: selected == 'managed',
+            onTap: () => onChanged('managed'),
+          ),
+          _AsrSourceChoice(
+            label: '使用已有模型',
+            detail: '直接使用',
+            selected: selected == 'external',
+            onTap: () => onChanged('external'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AsrSourceChoice extends StatefulWidget {
+  const _AsrSourceChoice({
+    required this.label,
+    required this.detail,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String detail;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_AsrSourceChoice> createState() => _AsrSourceChoiceState();
+}
+
+class _AsrSourceChoiceState extends State<_AsrSourceChoice> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOut,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: widget.selected || _hover
+                  ? T.accentSoft
+                  : const Color(0x00000000),
+              borderRadius: BorderRadius.circular(T.rSm),
+              border: Border.all(
+                color: widget.selected ? T.accent : const Color(0x00000000),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    style: T.tCaption.copyWith(
+                      color: T.ink,
+                      fontWeight: widget.selected ? T.wBold : T.wRegular,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(' · ${widget.detail}', style: T.tCaption),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AsrStatusChip extends StatelessWidget {
+  const _AsrStatusChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: T.s4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: color.withValues(alpha: 0.52)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: T.s4),
+          Text(
+            label,
+            style: T.tCaption.copyWith(color: color, fontWeight: T.wBold),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2070,7 +2269,7 @@ class _AsrComponentRow extends StatelessWidget {
     required this.label,
     required this.detail,
     required this.installed,
-    this.actionLabel = '安装',
+    this.actionLabel = '准备',
     this.onInstall,
   });
 
@@ -2082,83 +2281,471 @@ class _AsrComponentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final unavailable = detail.contains('暂未开放');
+    final color = installed
+        ? T.ok
+        : onInstall != null
+        ? T.accentStrong
+        : unavailable
+        ? T.muted
+        : T.warn;
+    final status = installed
+        ? '已准备'
+        : onInstall != null
+        ? '待准备'
+        : unavailable
+        ? '暂未开放'
+        : '未准备';
     return Container(
-      constraints: const BoxConstraints(minHeight: 48),
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: const EdgeInsets.symmetric(vertical: T.s8),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: T.line)),
       ),
       child: Row(
         children: [
+          _AsrStateMark(color: color, ready: installed),
+          const SizedBox(width: T.s8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(label, style: T.tBody),
+                Text(label, style: T.tBody.copyWith(fontWeight: T.wMedium)),
+                const SizedBox(height: 2),
                 Text(detail, style: T.tCaption),
               ],
             ),
           ),
+          const SizedBox(width: T.s8),
           if (onInstall != null)
             ActionButton(label: actionLabel, onTap: onInstall)
-          else if (installed)
-            Text('可用', style: T.tCaption.copyWith(color: T.ok))
           else
-            ActionButton(label: actionLabel, onTap: null),
+            _AsrStatusChip(label: status, color: color),
         ],
       ),
     );
   }
 }
 
-class _AsrOperationProgress extends StatelessWidget {
+class _AsrStateMark extends StatelessWidget {
+  const _AsrStateMark({required this.color, required this.ready});
+
+  final Color color;
+  final bool ready;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: CustomPaint(
+        painter: _AsrStateMarkPainter(color: color, ready: ready),
+      ),
+    );
+  }
+}
+
+class _AsrOperationProgress extends StatefulWidget {
   const _AsrOperationProgress({required this.operation, this.onCancel});
 
   final AsrOperationStatus operation;
   final VoidCallback? onCancel;
 
   @override
+  State<_AsrOperationProgress> createState() => _AsrOperationProgressState();
+}
+
+class _AsrOperationProgressState extends State<_AsrOperationProgress>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+    if (widget.operation.active) _animation.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AsrOperationProgress oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.operation.active && !_animation.isAnimating) {
+      _animation.repeat();
+    } else if (!widget.operation.active && _animation.isAnimating) {
+      _animation.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final operation = widget.operation;
     final progress = operation.progress;
     final percent = progress == null ? '' : '${(progress * 100).round()}%';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    final title = operation.active
+        ? '${_asrOperationLabel(operation.itemId)} · $percent'
+        : operation.state == 'completed'
+        ? '${_asrOperationLabel(operation.itemId)} · 已完成'
+        : '${_asrOperationLabel(operation.itemId)} · ${operation.state}';
+    final color = operation.state == 'failed'
+        ? T.danger
+        : operation.state == 'cancelled'
+        ? T.warn
+        : T.accent;
+    return Semantics(
+      label: title,
+      value: operation.currentFile,
+      child: Container(
+        padding: const EdgeInsets.all(T.s12),
+        decoration: BoxDecoration(
+          color: T.accentSoft.withValues(alpha: 0.42),
+          borderRadius: BorderRadius.circular(T.rMd),
+          border: Border.all(color: color.withValues(alpha: 0.54)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: Text(
-                operation.active
-                    ? '${operation.itemId} · $percent'
-                    : operation.state == 'completed'
-                    ? '${operation.itemId} · 已完成'
-                    : '${operation.itemId} · ${operation.state}',
-                style: T.tCaption,
-                overflow: TextOverflow.ellipsis,
+            Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CustomPaint(
+                    painter: _AsrProgressStickerPainter(color: color),
+                  ),
+                ),
+                const SizedBox(width: T.s8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: T.tBody.copyWith(fontWeight: T.wMedium),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (widget.onCancel != null)
+                  ActionButton(label: '取消', onTap: widget.onCancel),
+              ],
+            ),
+            const SizedBox(height: T.s8),
+            AnimatedBuilder(
+              animation: _animation,
+              builder: (context, child) => SizedBox(
+                height: 14,
+                width: double.infinity,
+                child: CustomPaint(
+                  painter: _CandyProgressPainter(
+                    progress: progress,
+                    phase: _animation.value,
+                    color: color,
+                    active: operation.active,
+                  ),
+                ),
               ),
             ),
-            if (onCancel != null) ActionButton(label: '取消', onTap: onCancel),
+            if (operation.currentFile.isNotEmpty) ...[
+              const SizedBox(height: T.s4),
+              Text(
+                '正在处理：${operation.currentFile}',
+                style: T.tCaption,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ],
         ),
-        const SizedBox(height: T.s8),
-        LinearProgressIndicator(
-          value: progress,
-          minHeight: 4,
-          color: T.accent,
-          backgroundColor: T.line,
-        ),
-        if (operation.currentFile.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text(
-            operation.currentFile,
-            style: T.tCaption,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ],
+      ),
     );
   }
+}
+
+Color _asrStateColor(String state) {
+  return switch (state) {
+    'ready' => T.ok,
+    'checking' => T.accentStrong,
+    'needs_action' => T.warn,
+    _ => T.danger,
+  };
+}
+
+String _asrStatusChipLabel(AsrReadiness? readiness) {
+  return switch (readiness?.state) {
+    'ready' => '可以开始',
+    'checking' => '检查中',
+    'needs_action' => '还差一步',
+    _ => '暂未准备',
+  };
+}
+
+String _asrReadinessHint(AsrReadiness? readiness) {
+  final value = readiness;
+  if (value == null) return '正在读取本机识别状态。';
+  return switch (value.state) {
+    'ready' => '本地识别方案已准备好，可以开始处理视频。',
+    'checking' => '正在检查运行环境和模型。',
+    'needs_action' => '还差一步准备，完成后即可开始识别。',
+    _ => value.statusLabel.isEmpty ? '当前方案还不能运行。' : value.statusLabel,
+  };
+}
+
+String _asrOperationLabel(String itemId) {
+  return switch (itemId) {
+    'managed:faster-whisper' => '本地识别引擎',
+    'small' => 'Whisper Small',
+    'medium' => 'Whisper Medium',
+    'large-v3' => 'Whisper Large v3',
+    'nvidia-cuda12' => 'NVIDIA 加速环境',
+    _ => itemId,
+  };
+}
+
+class _WhisperBuddyPainter extends CustomPainter {
+  const _WhisperBuddyPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final body = RRect.fromRectAndRadius(
+      Rect.fromLTWH(5, 9, 34, 29),
+      const Radius.circular(11),
+    );
+    final fill = Paint()..color = T.accentSoft;
+    final line = Paint()
+      ..color = T.accentStrong
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawRRect(body, fill);
+    canvas.drawRRect(body, line);
+    final tail = Path()
+      ..moveTo(12, 35)
+      ..lineTo(9, 43)
+      ..lineTo(19, 37)
+      ..close();
+    canvas.drawPath(tail, fill);
+    canvas.drawPath(tail, line);
+
+    final eye = Paint()..color = T.ink;
+    canvas.drawCircle(const Offset(16, 23), 2.1, eye);
+    canvas.drawCircle(const Offset(28, 23), 2.1, eye);
+    final blush = Paint()..color = T.accent.withValues(alpha: 0.56);
+    canvas.drawOval(
+      Rect.fromCenter(center: const Offset(12.5, 28), width: 6, height: 3),
+      blush,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(center: const Offset(31.5, 28), width: 6, height: 3),
+      blush,
+    );
+    final smile = Paint()
+      ..color = T.ink
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCenter(center: const Offset(22, 26.5), width: 8, height: 7),
+      0.2,
+      2.7,
+      false,
+      smile,
+    );
+    _drawSparkle(canvas, const Offset(40, 7), 4, T.accentStrong);
+  }
+
+  @override
+  bool shouldRepaint(covariant _WhisperBuddyPainter oldDelegate) => false;
+}
+
+class _AsrStickerPainter extends CustomPainter {
+  const _AsrStickerPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final tape = Path()
+      ..moveTo(1, 1)
+      ..lineTo(size.width - 1, 0)
+      ..lineTo(size.width - 2, size.height - 2)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(tape, Paint()..color = T.skySoft);
+    canvas.drawPath(
+      tape,
+      Paint()
+        ..color = T.sky.withValues(alpha: 0.72)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    canvas.drawLine(
+      Offset(size.width * 0.58, 2),
+      Offset(size.width * 0.42, size.height - 2),
+      Paint()
+        ..color = T.accent.withValues(alpha: 0.74)
+        ..strokeWidth = 1.1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AsrStickerPainter oldDelegate) => false;
+}
+
+class _AsrStateMarkPainter extends CustomPainter {
+  const _AsrStateMarkPainter({required this.color, required this.ready});
+
+  final Color color;
+  final bool ready;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final ring = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    canvas.drawCircle(center, 7, ring);
+    if (ready) {
+      final check = Path()
+        ..moveTo(5.2, 9.2)
+        ..lineTo(8, 12)
+        ..lineTo(13.2, 6.2);
+      canvas.drawPath(
+        check,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    } else {
+      canvas.drawCircle(center, 2, Paint()..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _AsrStateMarkPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.ready != ready;
+}
+
+class _AsrProgressStickerPainter extends CustomPainter {
+  const _AsrProgressStickerPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _drawSparkle(canvas, Offset(size.width / 2, size.height / 2), 6, color);
+    canvas.drawCircle(
+      Offset(size.width / 2, size.height / 2),
+      2,
+      Paint()..color = color.withValues(alpha: 0.22),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AsrProgressStickerPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class _CandyProgressPainter extends CustomPainter {
+  const _CandyProgressPainter({
+    required this.progress,
+    required this.phase,
+    required this.color,
+    required this.active,
+  });
+
+  final double? progress;
+  final double phase;
+  final Color color;
+  final bool active;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final track = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(7),
+    );
+    canvas.drawRRect(track, Paint()..color = T.line.withValues(alpha: 0.72));
+
+    final normalized = progress?.clamp(0.0, 1.0).toDouble();
+    if (normalized == null) {
+      final segmentWidth = size.width * 0.28;
+      final left = (phase * (size.width + segmentWidth)) - segmentWidth;
+      final segment = RRect.fromRectAndRadius(
+        Rect.fromLTWH(left, 0, segmentWidth, size.height),
+        const Radius.circular(7),
+      );
+      canvas.save();
+      canvas.clipRRect(track);
+      canvas.drawRRect(segment, Paint()..color = color.withValues(alpha: 0.82));
+      _drawSparkle(
+        canvas,
+        Offset(left + segmentWidth * 0.72, size.height / 2),
+        3,
+        T.surface,
+      );
+      canvas.restore();
+      return;
+    }
+
+    final width = size.width * normalized;
+    if (width <= 0) return;
+    final fill = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, width, size.height),
+      const Radius.circular(7),
+    );
+    canvas.save();
+    canvas.clipRRect(fill);
+    canvas.drawRRect(fill, Paint()..color = color);
+    final stripe = Paint()
+      ..color = T.surface.withValues(alpha: 0.30)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    for (var x = -size.height * 2 + (phase * 18); x < width + 18; x += 12) {
+      canvas.drawLine(Offset(x, size.height), Offset(x + 6, 0), stripe);
+    }
+    if (active && width > 18) {
+      final sparkleX = 6 + (width - 12) * phase;
+      _drawSparkle(
+        canvas,
+        Offset(sparkleX.clamp(5, width - 5).toDouble(), size.height / 2),
+        3,
+        T.surface,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CandyProgressPainter oldDelegate) =>
+      oldDelegate.progress != progress ||
+      oldDelegate.phase != phase ||
+      oldDelegate.color != color ||
+      oldDelegate.active != active;
+}
+
+void _drawSparkle(Canvas canvas, Offset center, double radius, Color color) {
+  final paint = Paint()
+    ..color = color
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.2
+    ..strokeCap = StrokeCap.round;
+  canvas.drawLine(
+    Offset(center.dx, center.dy - radius),
+    Offset(center.dx, center.dy + radius),
+    paint,
+  );
+  canvas.drawLine(
+    Offset(center.dx - radius, center.dy),
+    Offset(center.dx + radius, center.dy),
+    paint,
+  );
 }
 
 String _asrModelLabel(String modelId) {
