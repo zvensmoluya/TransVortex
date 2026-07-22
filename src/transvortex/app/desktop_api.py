@@ -36,6 +36,7 @@ from .asr_operations import AsrOperationError, AsrOperationManager
 from .asr_runtime import (
     asr_provider_readiness,
     asr_runtime_snapshot,
+    discover_external_models,
     discover_python_environments,
     probe_managed_model,
     probe_python_environment,
@@ -70,6 +71,7 @@ SERVICE_CAPABILITIES = [
     "asr_provider_admin",
     "asr_component_manager",
     "asr_storage_settings",
+    "asr_model_discovery",
     "asr_model_probe",
     "asr_environment_probe",
     "media_inspection",
@@ -144,6 +146,7 @@ class DesktopApi:
             "asr.operation.get": self.asr_operation_get,
             "asr.operation.cancel": self.asr_operation_cancel,
             "asr.hardware.probe": self.asr_hardware_probe,
+            "asr.model.discover": self.asr_model_discover,
             "asr.model.probe": self.asr_model_probe,
             "asr.environment.discover": self.asr_environment_discover,
             "asr.environment.probe": self.asr_environment_probe,
@@ -478,6 +481,11 @@ class DesktopApi:
             device=_optional_text(params, "device") or "auto",
             compute_type=_optional_text(params, "compute_type", "computeType") or "auto",
             timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
+        )
+
+    def asr_model_discover(self, params: dict[str, Any]) -> dict[str, Any]:
+        return discover_external_models(
+            Path(_required_text(params, "search_root", "searchRoot", "path"))
         )
 
     def asr_environment_discover(self, _params: dict[str, Any]) -> dict[str, Any]:

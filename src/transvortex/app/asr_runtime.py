@@ -26,6 +26,9 @@ APP_DATA_ROOT_ENV = "TRANSVORTEX_HOME"
 CATALOG_OVERRIDE_ENV = "TRANSVORTEX_ASR_CATALOG"
 ASR_STORAGE_CONFIG_NAME = "asr_storage.json"
 ASR_MIN_FREE_SPACE_RESERVE = 256 * 1024 * 1024
+ASR_MODEL_SEARCH_MAX_DEPTH = 6
+ASR_MODEL_SEARCH_MAX_DIRECTORIES = 4096
+ASR_MODEL_SEARCH_MAX_RESULTS = 32
 
 
 @dataclass(frozen=True)
@@ -786,7 +789,7 @@ def probe_managed_model(
             "message": f"Model directory not found: {resolved_model}",
         }
     try:
-        model_id = _detect_external_model_id(resolved_model, catalog)
+        identity = _external_model_identity(resolved_model, catalog)
         initial_signature = _external_model_signature(resolved_model)
     except OSError as exc:
         return {
@@ -795,12 +798,13 @@ def probe_managed_model(
             "message": str(exc),
             "model_path": str(resolved_model),
         }
-    if not model_id:
+    if identity is None:
         return {
             "ok": False,
             "code": "unsupported_model_directory",
-            "message": "The directory is not a supported faster-whisper Small, Medium, or Large v3 model.",
+            "message": "The directory does not contain a readable CTranslate2 config.json and model.bin.",
         }
+    model_id = str(identity["model_id"])
     if not initial_signature:
         return {
             "ok": False,
@@ -856,8 +860,100 @@ def probe_managed_model(
         model_path=resolved_model,
         probe=probe,
         signature=final_signature,
+        identity=identity,
     )
     return {"ok": True, "code": "ready", "model": record, "probe": probe}
+
+
+def discover_external_models(
+    search_root: Path,
+    *,
+    max_depth: int = ASR_MODEL_SEARCH_MAX_DEPTH,
+    max_directories: int = ASR_MODEL_SEARCH_MAX_DIRECTORIES,
+    max_results: int = ASR_MODEL_SEARCH_MAX_RESULTS,
+) -> dict[str, Any]:
+    """Find plausible local CTranslate2 Whisper directories below a user-selected folder."""
+
+    try:
+        resolved_root = Path(search_root).expanduser().resolve()
+    except OSError as exc:
+        return {
+            "ok": False,
+            "code": "model_search_root_unavailable",
+            "message": str(exc),
+            "candidates": [],
+        }
+    if not resolved_root.is_dir():
+        return {
+            "ok": False,
+            "code": "model_search_root_unavailable",
+            "message": f"Model search folder not found: {resolved_root}",
+            "root": str(resolved_root),
+            "candidates": [],
+        }
+
+    catalog = load_asr_catalog()
+    pending: list[tuple[Path, int]] = [(resolved_root, 0)]
+    cursor = 0
+    scanned = 0
+    candidates: list[dict[str, Any]] = []
+    truncated = False
+    while cursor < len(pending):
+        if scanned >= max(max_directories, 1):
+            truncated = True
+            break
+        directory, depth = pending[cursor]
+        cursor += 1
+        scanned += 1
+        identity = _external_model_identity(directory, catalog)
+        if identity is not None:
+            try:
+                model_bytes = int((directory / "model.bin").stat().st_size)
+            except OSError:
+                model_bytes = 0
+            relative = (
+                "."
+                if directory == resolved_root
+                else str(directory.relative_to(resolved_root))
+            )
+            candidates.append(
+                {
+                    **identity,
+                    "path": str(directory),
+                    "relative_path": relative,
+                    "folder_name": directory.name,
+                    "model_bytes": model_bytes,
+                }
+            )
+            if len(candidates) >= max(max_results, 1):
+                truncated = cursor < len(pending)
+                break
+            # Model payload directories are leaves for discovery purposes.
+            continue
+        if depth >= max(max_depth, 0):
+            continue
+        try:
+            children = sorted(
+                (
+                    child
+                    for child in directory.iterdir()
+                    if not child.is_symlink() and child.is_dir()
+                ),
+                key=lambda child: child.name.lower(),
+            )
+        except OSError:
+            continue
+        pending.extend((child, depth + 1) for child in children)
+
+    return {
+        "ok": True,
+        "code": "ready",
+        "root": str(resolved_root),
+        "candidates": candidates,
+        "scanned_directories": scanned,
+        "max_depth": max(max_depth, 0),
+        "truncated": truncated,
+    }
 
 
 def probe_python_environment(
@@ -918,11 +1014,20 @@ def probe_python_environment(
     return payload
 
 
-def _detect_external_model_id(model_path: Path, catalog: dict[str, Any]) -> str:
+def _external_model_identity(
+    model_path: Path,
+    catalog: dict[str, Any],
+) -> dict[str, Any] | None:
     config_path = model_path / "config.json"
     model_bin = model_path / "model.bin"
     if not config_path.is_file() or not model_bin.is_file():
-        return ""
+        return None
+    try:
+        config = read_json(config_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
     config_hash = _file_sha256(config_path)
     for model in catalog.get("models") or []:
         if not isinstance(model, dict):
@@ -936,8 +1041,28 @@ def _detect_external_model_id(model_path: Path, catalog: dict[str, Any]) -> str:
             "",
         )
         if expected and expected == config_hash:
-            return str(model.get("id") or "")
-    return ""
+            model_id = str(model.get("id") or "")
+            return {
+                "model_id": model_id,
+                "catalog_model_id": model_id,
+                "display_name": str(model.get("display_name") or model_id),
+                "catalog_config_match": True,
+                "config_sha256": config_hash,
+                "model_format": "ctranslate2",
+            }
+    return {
+        "model_id": f"custom-{config_hash[:12]}",
+        "catalog_model_id": "",
+        "display_name": "Custom faster-whisper model",
+        "catalog_config_match": False,
+        "config_sha256": config_hash,
+        "model_format": "ctranslate2",
+    }
+
+
+def _detect_external_model_id(model_path: Path, catalog: dict[str, Any]) -> str:
+    identity = _external_model_identity(model_path, catalog)
+    return str(identity.get("model_id") or "") if identity is not None else ""
 
 
 def _file_sha256(path: Path) -> str:
@@ -993,11 +1118,17 @@ def _save_registered_model(
     model_path: Path,
     probe: dict[str, Any],
     signature: str,
+    identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved = model_path.expanduser().resolve()
     record = {
         "model_id": model_id,
         "model_path": str(resolved),
+        "display_name": str((identity or {}).get("display_name") or model_id),
+        "catalog_model_id": str((identity or {}).get("catalog_model_id") or ""),
+        "catalog_config_match": (identity or {}).get("catalog_config_match") is True,
+        "model_format": str((identity or {}).get("model_format") or "ctranslate2"),
+        "config_sha256": str((identity or {}).get("config_sha256") or ""),
         "signature": signature,
         "probe": probe,
         "updated_at": utc_now_iso(),

@@ -48,6 +48,17 @@ void main() {
     },
   );
 
+  test('controller hides generated custom Whisper model ids', () async {
+    final controller = MainWindowController(
+      service: _readyController(
+        snapshot: _desktopSnapshot(asrModel: 'custom-123456789abc'),
+      ),
+    );
+    await controller.startService();
+
+    expect(controller.view.asrLabel, '本机 Whisper · 自定义 Whisper');
+  });
+
   test(
     'controller keeps snapshots fresh while an ASR setup is active',
     () async {
@@ -1376,6 +1387,7 @@ LocalServiceController _readyController({
 DesktopSnapshot _desktopSnapshot({
   bool translationHasKey = true,
   bool asrHasKey = true,
+  String asrModel = 'large-v3',
   List<String> extraModels = const [],
   List<Map<String, Object?>> routingProfiles = const [],
   List<Map<String, Object?>> tasks = const [],
@@ -1429,7 +1441,7 @@ DesktopSnapshot _desktopSnapshot({
           'name': 'local',
           'kind': 'local_inprocess',
           'protocol': 'faster_whisper',
-          'model': 'large-v3',
+          'model': asrModel,
           'has_key': asrHasKey,
         },
       },

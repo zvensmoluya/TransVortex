@@ -817,6 +817,12 @@ class AppServiceClient {
     return call('asr.hardware.probe').then(_stringMap);
   }
 
+  Future<AsrModelDiscovery> discoverManagedAsrModels(String searchRoot) async {
+    return AsrModelDiscovery.fromJson(
+      await call('asr.model.discover', {'search_root': searchRoot}),
+    );
+  }
+
   Future<Map<String, Object?>> probeManagedAsrModel({
     required String modelPath,
     String device = 'auto',
@@ -1915,6 +1921,91 @@ class AsrComponentOption {
       size: _intValue(map['size']) ?? _intValue(artifact['size']) ?? 0,
       path: _stringValue(map['path']) ?? '',
       raw: map,
+    );
+  }
+}
+
+class AsrModelCandidate {
+  const AsrModelCandidate({
+    required this.modelId,
+    required this.path,
+    this.displayName = '',
+    this.relativePath = '',
+    this.folderName = '',
+    this.modelBytes = 0,
+    this.catalogConfigMatch = false,
+  });
+
+  final String modelId;
+  final String path;
+  final String displayName;
+  final String relativePath;
+  final String folderName;
+  final int modelBytes;
+  final bool catalogConfigMatch;
+
+  factory AsrModelCandidate.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AsrModelCandidate(
+      modelId:
+          _stringValue(map['model_id']) ?? _stringValue(map['modelId']) ?? '',
+      path: _stringValue(map['path']) ?? '',
+      displayName:
+          _stringValue(map['display_name']) ??
+          _stringValue(map['displayName']) ??
+          '',
+      relativePath:
+          _stringValue(map['relative_path']) ??
+          _stringValue(map['relativePath']) ??
+          '',
+      folderName:
+          _stringValue(map['folder_name']) ??
+          _stringValue(map['folderName']) ??
+          '',
+      modelBytes:
+          _intValue(map['model_bytes']) ?? _intValue(map['modelBytes']) ?? 0,
+      catalogConfigMatch:
+          map['catalog_config_match'] == true ||
+          map['catalogConfigMatch'] == true,
+    );
+  }
+}
+
+class AsrModelDiscovery {
+  const AsrModelDiscovery({
+    required this.ok,
+    required this.root,
+    this.code = '',
+    this.message = '',
+    this.candidates = const <AsrModelCandidate>[],
+    this.scannedDirectories = 0,
+    this.truncated = false,
+  });
+
+  final bool ok;
+  final String root;
+  final String code;
+  final String message;
+  final List<AsrModelCandidate> candidates;
+  final int scannedDirectories;
+  final bool truncated;
+
+  factory AsrModelDiscovery.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AsrModelDiscovery(
+      ok: map['ok'] == true,
+      root: _stringValue(map['root']) ?? '',
+      code: _stringValue(map['code']) ?? '',
+      message: _stringValue(map['message']) ?? '',
+      candidates: _objectList(map['candidates'])
+          .map(AsrModelCandidate.fromJson)
+          .where((item) => item.modelId.isNotEmpty && item.path.isNotEmpty)
+          .toList(growable: false),
+      scannedDirectories:
+          _intValue(map['scanned_directories']) ??
+          _intValue(map['scannedDirectories']) ??
+          0,
+      truncated: map['truncated'] == true,
     );
   }
 }

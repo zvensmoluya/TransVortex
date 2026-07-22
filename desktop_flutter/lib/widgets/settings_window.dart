@@ -158,10 +158,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
+  bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
   bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
+  String _locatedExternalModelId = '';
   String _detectedExternalModelId = '';
   AsrOperationStatus? _activeAsrOperation;
   Timer? _asrOperationPoll;
@@ -570,8 +572,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final modelIds = models.isEmpty
         ? const ['small', 'medium', 'large-v3']
         : models.map((item) => item.id).toList(growable: false);
-    final selectedModel = modelIds.contains(_model.text.trim())
-        ? _model.text.trim()
+    final editedModel = _model.text.trim();
+    final selectedModel =
+        _asrModelSource == 'external' && editedModel.isNotEmpty
+        ? editedModel
+        : modelIds.contains(editedModel)
+        ? editedModel
         : 'small';
     final runtime = _snapshot?.asrRuntime;
     final model = models.firstWhere(
@@ -597,10 +603,17 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final isCurrentDefault =
         provider != null && provider.name == _snapshot?.asrProviderName;
     final currentReady =
-        managedReady &&
         isCurrentDefault &&
         provider.readiness.canRun &&
-        !_asrDraftDirty;
+        !_asrDraftDirty &&
+        (_asrModelSource == 'external'
+            ? _detectedExternalModelId.isNotEmpty
+            : managedReady);
+    final overviewModelLabel = _asrModelSource == 'external'
+        ? _locatedExternalModelId.isEmpty
+              ? '待查找已有模型'
+              : _asrExternalModelLabel(_locatedExternalModelId)
+        : _asrModelLabel(selectedModel);
 
     final footer = <Widget>[];
     if (operation != null && !operation.active) {
@@ -661,7 +674,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       footer: footer,
       children: [
         _AsrSetupOverview(
-          modelLabel: _asrModelLabel(selectedModel),
+          modelLabel: overviewModelLabel,
           deviceLabel: _asrDeviceLabel(_device.text),
           currentReady: currentReady,
           draftDirty: _asrDraftDirty,
@@ -773,21 +786,36 @@ class _SettingsWindowState extends State<SettingsWindow> {
           children: [
             Expanded(
               child: ReadonlyRow(
-                label: '模型目录',
+                label: '模型位置',
                 value: _externalModelPath.text.isEmpty
-                    ? '尚未选择'
+                    ? '尚未查找'
                     : _externalModelPath.text,
               ),
             ),
             const SizedBox(width: T.s12),
-            ActionButton(label: '选择目录', onTap: _pickExternalModelPath),
+            ActionButton(
+              label: _discoveringAsrModels ? '查找中' : '查找模型',
+              onTap: _discoveringAsrModels || _probingAsrModel
+                  ? null
+                  : _pickExternalModelPath,
+            ),
           ],
         ),
+        if (_locatedExternalModelId.isNotEmpty &&
+            _detectedExternalModelId.isEmpty) ...[
+          const SizedBox(height: T.s8),
+          ReadonlyRow(
+            label: '找到模型',
+            value:
+                '${_asrExternalModelLabel(_locatedExternalModelId)} · 等待兼容性测试',
+          ),
+        ],
         if (_detectedExternalModelId.isNotEmpty) ...[
           const SizedBox(height: T.s8),
           ReadonlyRow(
-            label: '识别结果',
-            value: '${_asrModelLabel(_detectedExternalModelId)} · 文件完整',
+            label: '验证结果',
+            value:
+                '${_asrExternalModelLabel(_detectedExternalModelId)} · 本机兼容性测试通过',
           ),
         ],
         const SizedBox(height: T.s12),
@@ -796,9 +824,9 @@ class _SettingsWindowState extends State<SettingsWindow> {
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
           runtimeSize: runtime?.size ?? 0,
-          modelLabel: _detectedExternalModelId.isEmpty
+          modelLabel: _locatedExternalModelId.isEmpty
               ? '所选已有模型'
-              : _asrModelLabel(_detectedExternalModelId),
+              : _asrExternalModelLabel(_locatedExternalModelId),
           modelReady: _detectedExternalModelId.isNotEmpty,
           modelSize: 0,
           appDataRoot: '${paths['app_data_root'] ?? ''}',
@@ -842,7 +870,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
       _asrDraftDirty = true;
       _message = null;
       _error = null;
-      if (source == 'managed') _detectedExternalModelId = '';
+      if (source == 'managed') {
+        _locatedExternalModelId = '';
+        _detectedExternalModelId = '';
+      }
     });
   }
 
@@ -963,7 +994,15 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final draft = _asrDraft(_selectedAsrProvider, useEditedFields: false);
     _baseUrl.text = '${draft['base_url'] ?? ''}';
     _model.text = '${draft['model'] ?? ''}';
-    if (draft['kind'] == 'local_worker') {
+    final local = _stringMap(draft['local']);
+    final runtime = _stringMap(draft['runtime']);
+    final runtimeSource = '${runtime['source'] ?? 'managed'}';
+    _asrModelSource = '${local['model_source'] ?? ''}' == 'external'
+        ? 'external'
+        : runtimeSource == 'external'
+        ? 'external'
+        : 'managed';
+    if (draft['kind'] == 'local_worker' && _asrModelSource == 'managed') {
       final availableModels =
           _snapshot?.asrModels.map((item) => item.id).toList() ??
           const <String>[];
@@ -975,18 +1014,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
       }
     }
     _endpoint.text = '${draft['endpoint'] ?? '/v1/audio/transcriptions'}';
-    final local = _stringMap(draft['local']);
     final savedDevice = '${local['device'] ?? 'cpu'}';
     final hasInstalledNvidia =
         _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
     _device.text = savedDevice == 'cuda' && hasInstalledNvidia ? 'cuda' : 'cpu';
-    final runtime = _stringMap(draft['runtime']);
-    final runtimeSource = '${runtime['source'] ?? 'managed'}';
-    _asrModelSource = '${local['model_source'] ?? ''}' == 'external'
-        ? 'external'
-        : runtimeSource == 'external'
-        ? 'external'
-        : 'managed';
     _externalModelPath.text = '${local['model_path'] ?? ''}';
     if (_externalModelPath.text.isEmpty && runtimeSource == 'external') {
       final environmentId = '${runtime['id'] ?? ''}';
@@ -1001,6 +1032,10 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final readiness = _selectedAsrOption()?.readiness;
     _detectedExternalModelId =
         _asrModelSource == 'external' && readiness?.canRun == true
+        ? _model.text.trim()
+        : '';
+    _locatedExternalModelId =
+        _asrModelSource == 'external' && _externalModelPath.text.isNotEmpty
         ? _model.text.trim()
         : '';
     _key.clear();
@@ -1214,16 +1249,99 @@ class _SettingsWindowState extends State<SettingsWindow> {
   }
 
   Future<void> _pickExternalModelPath() async {
-    final path = await _directoryPicker('选择 faster-whisper 模型目录');
-    if (path == null || path.isEmpty || !mounted) return;
+    final path = await _directoryPicker('选择模型文件夹或它的上层文件夹');
+    if (path == null || path.trim().isEmpty || !mounted) return;
     setState(() {
-      _externalModelPath.text = path;
-      _asrModelSource = 'external';
-      _detectedExternalModelId = '';
-      _asrDraftDirty = true;
+      _discoveringAsrModels = true;
       _message = null;
       _error = null;
     });
+    try {
+      final discovery = await _client.discoverManagedAsrModels(path.trim());
+      if (!mounted) return;
+      if (!discovery.ok) {
+        setState(() {
+          _error = discovery.message.isEmpty
+              ? '无法读取所选位置，请重新选择。'
+              : discovery.message;
+        });
+        return;
+      }
+      if (discovery.candidates.isEmpty) {
+        setState(() {
+          _error = discovery.truncated
+              ? '所选范围太大，暂未找到模型；请改选更靠近模型的位置。'
+              : '没有找到可加载的 faster-whisper 模型。可以改选模型本身或它的上层文件夹。';
+        });
+        return;
+      }
+      final candidate = discovery.candidates.length == 1
+          ? discovery.candidates.single
+          : await _chooseExternalModelCandidate(discovery.candidates);
+      if (candidate == null || !mounted) return;
+      setState(() {
+        _externalModelPath.text = candidate.path;
+        _model.text = candidate.modelId;
+        _asrModelSource = 'external';
+        _locatedExternalModelId = candidate.modelId;
+        _detectedExternalModelId = '';
+        _asrDraftDirty = true;
+        _message =
+            '已找到 ${_asrExternalModelLabel(candidate.modelId)}，可以进行本机兼容性测试。';
+        _error = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _discoveringAsrModels = false);
+    }
+  }
+
+  Future<AsrModelCandidate?> _chooseExternalModelCandidate(
+    List<AsrModelCandidate> candidates,
+  ) {
+    final height = (candidates.length * 74.0).clamp(140.0, 340.0);
+    return showDialog<AsrModelCandidate>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('找到 ${candidates.length} 个模型'),
+        content: SizedBox(
+          width: 520,
+          height: height,
+          child: ListView.separated(
+            itemCount: candidates.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final candidate = candidates[index];
+              final location = candidate.relativePath.isEmpty
+                  ? candidate.path
+                  : candidate.relativePath == '.'
+                  ? candidate.folderName
+                  : candidate.relativePath;
+              return ListTile(
+                key: ValueKey('asr-model-candidate-${candidate.path}'),
+                contentPadding: const EdgeInsets.symmetric(horizontal: T.s4),
+                title: Text(_asrExternalModelLabel(candidate.modelId)),
+                subtitle: Text(
+                  '$location · ${_formatBytes(candidate.modelBytes)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.of(context).pop(candidate),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _probeManagedAsrModel() async {
@@ -1245,13 +1363,14 @@ class _SettingsWindowState extends State<SettingsWindow> {
           setState(() => _error = '无法识别这个模型目录。');
         } else {
           setState(() {
+            _locatedExternalModelId = modelId;
             _detectedExternalModelId = modelId;
             _model.text = modelId;
             _asrModelSource = 'external';
             _asrDraftDirty = true;
           });
           await _saveAsrProvider(
-            successMessage: '已有 ${_asrModelLabel(modelId)} 已验证并设为默认。',
+            successMessage: '${_asrExternalModelLabel(modelId)} 已通过兼容性测试并设为默认。',
           );
         }
       } else {
@@ -1479,7 +1598,11 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   String _asrHeaderLabel(String providerName) {
     final draft = _asrDraft(providerName, useEditedFields: false);
-    return '${_asrLabelForDraft(draft)} · ${draft['model']}';
+    final model = '${draft['model']}';
+    final modelLabel = model.startsWith('custom-')
+        ? _asrModelLabel(model)
+        : model;
+    return '${_asrLabelForDraft(draft)} · $modelLabel';
   }
 
   String _savedAsrHeaderLabel() {
@@ -2306,7 +2429,7 @@ class _AsrSourceToggle extends StatelessWidget {
           ),
           _AsrSourceChoice(
             label: '使用已有模型',
-            detail: '原地验证',
+            detail: '自动查找',
             selected: selected == 'external',
             onTap: () => onChanged('external'),
           ),
@@ -3056,10 +3179,21 @@ void _drawSparkle(Canvas canvas, Offset center, double radius, Color color) {
 }
 
 String _asrModelLabel(String modelId) {
+  if (modelId.startsWith('custom-')) return '自定义 Whisper';
   return switch (modelId) {
     'small' => 'Whisper Small',
     'medium' => 'Whisper Medium',
     'large-v3' => 'Whisper Large v3',
+    _ => modelId,
+  };
+}
+
+String _asrExternalModelLabel(String modelId) {
+  if (modelId.startsWith('custom-')) return '自定义 Whisper';
+  return switch (modelId) {
+    'small' => '兼容 Whisper Small',
+    'medium' => '兼容 Whisper Medium',
+    'large-v3' => '兼容 Whisper Large v3',
     _ => modelId,
   };
 }
@@ -3832,7 +3966,7 @@ String _friendlyAsrModelProbeError(String code, String message) {
     'model_path_unavailable' => '模型目录不存在或当前无法访问。',
     'model_changed' => '验证期间模型文件发生了变化，请等待文件写入完成后重试。',
     'unsupported_model_directory' =>
-      '无法识别这个模型目录；请选择兼容的 Whisper Small、Medium 或 Large v3 模型。',
+      '这个目录不是可加载的 faster-whisper/CTranslate2 模型，请重新查找。',
     'file_not_found' => '模型文件不完整，请重新选择完整的 faster-whisper 模型目录。',
     'environment_probe_failed' ||
     'environment_probe_invalid_json' ||

@@ -1467,7 +1467,8 @@ class MainWindowController extends ChangeNotifier {
       ),
     );
     final label = option?.displayLabel ?? providerName;
-    final modelText = model ?? option?.model ?? '';
+    final rawModel = model ?? option?.model ?? '';
+    final modelText = rawModel.startsWith('custom-') ? '自定义 Whisper' : rawModel;
     return modelText.isEmpty ? label : '$label · $modelText';
   }
 

@@ -1492,6 +1492,38 @@ routing:
     },
   );
 
+  test('AppServiceClient discovers models below a selected folder', () async {
+    final transport = _RecordingTransport({
+      'asr.model.discover': {
+        'ok': true,
+        'root': r'D:\Models',
+        'scanned_directories': 12,
+        'truncated': false,
+        'candidates': [
+          {
+            'model_id': 'custom-123456789abc',
+            'display_name': 'Custom faster-whisper model',
+            'path': r'D:\Models\customer\snapshot',
+            'relative_path': r'customer\snapshot',
+            'model_bytes': 1234,
+            'catalog_config_match': false,
+          },
+        ],
+      },
+    });
+    final client = AppServiceClient(transport);
+
+    final result = await client.discoverManagedAsrModels(r'D:\Models');
+
+    expect(result.ok, isTrue);
+    expect(result.scannedDirectories, 12);
+    expect(result.candidates.single.modelId, 'custom-123456789abc');
+    expect(result.candidates.single.modelBytes, 1234);
+    expect(result.candidates.single.catalogConfigMatch, isFalse);
+    expect(transport.calls.single.method, 'asr.model.discover');
+    expect(transport.calls.single.params, {'search_root': r'D:\Models'});
+  });
+
   test('TaskSummary parses status, runtime, progress, and errors', () {
     final task = TaskSummary.fromJson({
       'task_id': 'tvx_1',

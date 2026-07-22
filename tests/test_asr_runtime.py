@@ -16,6 +16,7 @@ from transvortex.app.asr_operations import AsrOperationError, AsrOperationManage
 from transvortex.app.asr_runtime import (
     asr_provider_readiness,
     asr_runtime_paths,
+    discover_external_models,
     discover_python_environments,
     load_asr_runtime_state,
     probe_managed_model,
@@ -816,6 +817,95 @@ def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, m
     state["models"][result["model"]["id"]]["probe"] = "invalid"
     save_asr_runtime_state(paths, state)
     assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "model_unverified"
+
+
+def test_external_model_discovery_accepts_parent_with_multiple_candidates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog_path = tmp_path / "catalog.json"
+    write_json(catalog_path, _catalog())
+    monkeypatch.setenv("TRANSVORTEX_ASR_CATALOG", str(catalog_path))
+    search_root = tmp_path / "user-models"
+    first = search_root / "converted" / "small-finetune"
+    second = search_root / "hub" / "snapshots" / "custom-revision"
+    for index, model_root in enumerate((first, second), start=1):
+        model_root.mkdir(parents=True)
+        (model_root / "config.json").write_text(
+            json.dumps({"model_type": "whisper", "custom_revision": index}),
+            encoding="utf-8",
+        )
+        (model_root / "model.bin").write_bytes(f"custom-{index}".encode())
+
+    result = discover_external_models(search_root)
+
+    assert result["ok"] is True
+    assert result["truncated"] is False
+    assert [row["path"] for row in result["candidates"]] == [
+        str(first),
+        str(second),
+    ]
+    assert all(
+        str(row["model_id"]).startswith("custom-")
+        for row in result["candidates"]
+    )
+    assert all(row["catalog_config_match"] is False for row in result["candidates"])
+
+
+def test_managed_runtime_accepts_loadable_custom_ctranslate2_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    catalog_path = tmp_path / "catalog.json"
+    write_json(catalog_path, _catalog())
+    monkeypatch.setenv("TRANSVORTEX_ASR_CATALOG", str(catalog_path))
+    paths = asr_runtime_paths(tmp_path)
+    runtime_root = paths.components_root / "faster-whisper" / "1.0.0"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "python.exe").write_bytes(b"")
+    write_json(
+        runtime_root / "component.json",
+        {
+            "id": "managed:faster-whisper",
+            "version": "1.0.0",
+            "python": "python.exe",
+            "protocol_version": 1,
+        },
+    )
+    model_root = tmp_path / "customer-finetune"
+    model_root.mkdir()
+    (model_root / "config.json").write_text(
+        '{"model_type":"whisper","customer_finetune":true}', encoding="utf-8"
+    )
+    (model_root / "model.bin").write_bytes(b"customer-weights")
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.probe_python_environment",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "protocol_version": 1,
+            "model": {"loaded": True},
+            "transcription": {"ok": True},
+        },
+    )
+
+    result = probe_managed_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+
+    assert result["ok"] is True
+    assert result["model"]["model_id"].startswith("custom-")
+    assert result["model"]["display_name"] == "Custom faster-whisper model"
+    assert result["model"]["catalog_config_match"] is False
+    provider = AsrProviderConfig(
+        name="custom-whisper",
+        kind="local_worker",
+        protocol="faster_whisper",
+        model=result["model"]["model_id"],
+        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        local=AsrLocalConfig(
+            model_source="external",
+            model_path=str(model_root),
+            device="cpu",
+        ),
+    )
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
 
 
 def test_media_inspection_only_requires_asr_when_video_has_no_selected_subtitle(

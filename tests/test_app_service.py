@@ -95,6 +95,7 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert info["result"]["protocol_version"] == 1
     assert "runtime_pump" in info["result"]["capabilities"]
     assert "derived_translation" in info["result"]["capabilities"]
+    assert "asr_model_discovery" in info["result"]["capabilities"]
     assert health["result"]["status"] == "healthy"
     assert health["result"]["pump"]["running"] is True
     assert set(health["result"]["runtime"]) == {"active"}
@@ -423,6 +424,36 @@ def test_app_service_validates_existing_model_with_managed_runtime(tmp_path: Pat
     assert captured["model_path"] == tmp_path / "large-v3"
     assert captured["device"] == "cpu"
     assert captured["compute_type"] == "int8"
+
+
+def test_app_service_discovers_existing_models_below_selected_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    captured = {}
+
+    def fake_discover(search_root: Path) -> dict:
+        captured["search_root"] = search_root
+        return {
+            "ok": True,
+            "root": str(search_root),
+            "candidates": [{"model_id": "custom-test", "path": str(search_root / "model")}],
+        }
+
+    monkeypatch.setattr("transvortex.app.desktop_api.discover_external_models", fake_discover)
+    selected = tmp_path / "models"
+
+    response = handle_line(
+        service,
+        _request("asr.model.discover", {"search_root": str(selected)}),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["ok"] is True
+    assert response["result"]["candidates"][0]["model_id"] == "custom-test"
+    assert captured["search_root"] == selected
 
 
 def test_app_service_runs_asr_provider_test_for_saved_provider(tmp_path: Path, monkeypatch) -> None:
