@@ -318,6 +318,34 @@ def test_asr_operations_are_global_single_flight(tmp_path: Path, monkeypatch) ->
     assert _wait_terminal(manager, first["id"])["state"] == "cancelled"
 
 
+def test_managed_runtime_and_model_can_be_removed_independently(tmp_path: Path) -> None:
+    manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
+    paths = asr_runtime_paths(tmp_path)
+    runtime = paths.components_root / "faster-whisper" / "1.0.0"
+    model = paths.models_root / "small" / "pinned-revision"
+    runtime.mkdir(parents=True)
+    model.mkdir(parents=True)
+    (runtime / "python.exe").write_bytes(b"runtime")
+    (model / "model.bin").write_bytes(b"model")
+
+    removed_model = manager.remove("model", "small")
+
+    assert removed_model == {
+        "ok": True,
+        "kind": "model",
+        "item_id": "small",
+        "removed": True,
+    }
+    assert not model.exists()
+    assert runtime.is_dir()
+
+    removed_runtime = manager.remove("runtime")
+
+    assert removed_runtime["removed"] is True
+    assert not runtime.exists()
+    assert manager.remove("runtime")["removed"] is False
+
+
 def test_asr_storage_root_can_change_before_managed_downloads(tmp_path: Path) -> None:
     app_root = tmp_path / "LocalAppData" / "TransVortex"
     config_root = app_root / "Config"

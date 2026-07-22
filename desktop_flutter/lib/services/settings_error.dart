@@ -44,6 +44,12 @@ String friendlySettingsError(Object error) {
     if (error.code == 'insufficient_disk_space') {
       return '目标盘剩余空间不足，请清理空间或更改识别资源位置。';
     }
+    if (error.code == 'component_remove_failed') {
+      return '无法删除识别资源；请关闭正在使用它的程序后重试。';
+    }
+    if (error.code == 'component_not_found') {
+      return '这个识别资源已不存在，请刷新后再试。';
+    }
     final details = _map(error.details);
     final info = _map(details['error_info']);
     final hint =

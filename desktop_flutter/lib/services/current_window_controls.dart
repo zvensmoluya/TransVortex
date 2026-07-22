@@ -12,6 +12,38 @@ import 'package:window_manager/window_manager.dart';
 import '../model/window_state.dart';
 import '../theme/tokens.dart';
 
+const Size mainWindowSize = Size(720, 520);
+const double applicationSettingsPanelWidth = 480;
+const Size applicationSettingsExpandedWindowSize = Size(1200, 520);
+
+abstract interface class MainWindowSurfaceController {
+  Future<Rect?> getBounds();
+
+  Future<void> setBounds(Rect bounds);
+
+  Future<Rect?> visibleBoundsFor(Rect bounds);
+}
+
+class SystemMainWindowSurfaceController implements MainWindowSurfaceController {
+  const SystemMainWindowSurfaceController();
+
+  @override
+  Future<Rect?> getBounds() async {
+    try {
+      return await windowManager.getBounds();
+    } on Object {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> setBounds(Rect bounds) => windowManager.setBounds(bounds);
+
+  @override
+  Future<Rect?> visibleBoundsFor(Rect bounds) =>
+      currentDisplayVisibleBoundsFor(bounds);
+}
+
 Future<void> Function(AppWindowArgs args)? _retargetHandler;
 Future<bool> Function()? _closeRequestHandler;
 Future<Object?> Function(MethodCall call)? _windowCommandHandler;
@@ -90,6 +122,76 @@ Future<void> configureCurrentWindow(AppWindowArgs args) async {
     await windowManager.setAlignment(geometry.alignment!);
   }
   await _installWindowGeometryMemory(args.type);
+}
+
+class ApplicationSettingsExpansionPlan {
+  const ApplicationSettingsExpansionPlan({
+    required this.windowBounds,
+    required this.useOverlay,
+  });
+
+  final Rect windowBounds;
+  final bool useOverlay;
+}
+
+/// Expands the single main HWND while preserving a fixed 720 px task surface.
+/// Displays too narrow for both surfaces keep the native window collapsed and
+/// render application settings as an in-window overlay instead.
+ApplicationSettingsExpansionPlan applicationSettingsExpansionPlanFor(
+  Rect mainBounds,
+  Rect? visibleBounds,
+) {
+  if (visibleBounds == null || visibleBounds.isEmpty) {
+    return ApplicationSettingsExpansionPlan(
+      windowBounds: Rect.fromLTWH(
+        mainBounds.left,
+        mainBounds.top,
+        applicationSettingsExpandedWindowSize.width,
+        applicationSettingsExpandedWindowSize.height,
+      ),
+      useOverlay: false,
+    );
+  }
+
+  if (visibleBounds.width >= applicationSettingsExpandedWindowSize.width) {
+    final maxLeft =
+        visibleBounds.right - applicationSettingsExpandedWindowSize.width;
+    final maxTop =
+        visibleBounds.bottom - applicationSettingsExpandedWindowSize.height;
+    final left = mainBounds.left
+        .clamp(visibleBounds.left, math.max(visibleBounds.left, maxLeft))
+        .toDouble();
+    final top = mainBounds.top
+        .clamp(visibleBounds.top, math.max(visibleBounds.top, maxTop))
+        .toDouble();
+    return ApplicationSettingsExpansionPlan(
+      windowBounds: Rect.fromLTWH(
+        left,
+        top,
+        applicationSettingsExpandedWindowSize.width,
+        applicationSettingsExpandedWindowSize.height,
+      ),
+      useOverlay: false,
+    );
+  }
+
+  final maxLeft = math.max(
+    visibleBounds.left,
+    visibleBounds.right - mainWindowSize.width,
+  );
+  final maxTop = math.max(
+    visibleBounds.top,
+    visibleBounds.bottom - mainWindowSize.height,
+  );
+  return ApplicationSettingsExpansionPlan(
+    windowBounds: Rect.fromLTWH(
+      mainBounds.left.clamp(visibleBounds.left, maxLeft).toDouble(),
+      mainBounds.top.clamp(visibleBounds.top, maxTop).toDouble(),
+      mainWindowSize.width,
+      mainWindowSize.height,
+    ),
+    useOverlay: true,
+  );
 }
 
 @visibleForTesting
@@ -321,7 +423,7 @@ WindowRole _roleFor(AppWindowType type) => switch (type) {
 };
 
 Size _defaultSize(AppWindowType type) => switch (type) {
-  AppWindowType.main => const Size(720, 520),
+  AppWindowType.main => mainWindowSize,
   AppWindowType.translationSettings => const Size(820, 600),
   AppWindowType.asrSettings => const Size(760, 560),
   AppWindowType.diagnostics => const Size(780, 580),
@@ -329,7 +431,7 @@ Size _defaultSize(AppWindowType type) => switch (type) {
 };
 
 Size _minimumSize(AppWindowType type) => switch (type) {
-  AppWindowType.main => const Size(720, 520),
+  AppWindowType.main => mainWindowSize,
   AppWindowType.translationSettings => const Size(760, 540),
   AppWindowType.asrSettings => const Size(700, 500),
   AppWindowType.diagnostics => const Size(720, 520),

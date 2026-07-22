@@ -16,9 +16,11 @@ import '../services/directory_probe.dart';
 import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import '../services/settings_error.dart';
+import '../services/settings_service_transport.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
+import 'asr_resource_management.dart';
 import 'settings_common.dart';
 import 'title_bar.dart';
 import 'translation_settings_view.dart';
@@ -49,54 +51,6 @@ class _SmokeSettingsTransport implements AppServiceTransport {
 
   @override
   Future<void> close() => service.shutdown();
-}
-
-class _BridgeOrLocalSettingsTransport implements AppServiceTransport {
-  _BridgeOrLocalSettingsTransport({
-    required WindowStateBridge bridge,
-    required this.service,
-  }) : _bridge = WindowBridgeTransport(bridge);
-
-  final WindowBridgeTransport _bridge;
-  final LocalServiceController service;
-
-  @override
-  Future<Object?> call(
-    String method, [
-    Map<String, Object?> params = const {},
-    Duration? timeout,
-  ]) async {
-    try {
-      return await _bridge.call(method, params, timeout);
-    } on Object catch (error) {
-      if (!_shouldUseLocalService(error)) rethrow;
-    }
-    await service.start();
-    final client = service.client;
-    if (client == null) {
-      throw PlatformException(
-        code: 'service_unavailable',
-        message: '本地服务暂时不可用，请稍后重试。',
-      );
-    }
-    return client.call(method, params, timeout);
-  }
-
-  @override
-  Future<void> close() async {}
-
-  bool _shouldUseLocalService(Object error) {
-    if (error is PlatformException) {
-      final message = error.message ?? '';
-      return error.code == 'service_unavailable' ||
-          message.contains('Local Service caller') ||
-          '$error'.contains('CHANNEL_UNREGISTERED') ||
-          '$error'.contains('WindowChannelException');
-    }
-    final text = '$error';
-    return text.contains('CHANNEL_UNREGISTERED') ||
-        text.contains('WindowChannelException');
-  }
 }
 
 class SettingsWindow extends StatefulWidget {
@@ -248,10 +202,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
       if (widget.localServiceController == null) {
         _ownedFallbackService = service;
       }
-      return _BridgeOrLocalSettingsTransport(
-        bridge: widget.bridge,
-        service: service,
-      );
+      return SettingsServiceTransport(bridge: widget.bridge, service: service);
     }
     final service = LocalServiceController(
       supervisor: LocalServiceSupervisor(serviceRoot: _serviceRoot(smoke)),
@@ -765,6 +716,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
               (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
               (model.installed ? 0 : model.size),
           changingStorage: _changingAsrStorage,
+          onManageResources: _showAsrResourceManagement,
           onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
           onResetStorage: storage.customized && storage.canChange
               ? _resetAsrStorageRoot
@@ -836,6 +788,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
               ? 0
               : runtime?.size ?? 0,
           changingStorage: _changingAsrStorage,
+          onManageResources: _showAsrResourceManagement,
           onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
           onResetStorage: storage.customized && storage.canChange
               ? _resetAsrStorageRoot
@@ -888,6 +841,37 @@ class _SettingsWindowState extends State<SettingsWindow> {
     final path = await _directoryPicker('选择识别资源保存文件夹');
     if (path == null || path.trim().isEmpty || !mounted) return;
     await _setAsrStorageRoot(path.trim());
+  }
+
+  Future<void> _showAsrResourceManagement() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        surfaceTintColor: T.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(T.rMd),
+          side: const BorderSide(color: T.line),
+        ),
+        title: Text('管理本机识别资源', style: T.tSection),
+        content: SizedBox(
+          width: 620,
+          height: 410,
+          child: AsrResourceManagement(
+            client: _client,
+            bridge: widget.bridge,
+            pathOpener: _pathOpener,
+            onResourcesChanged: _loadConfig,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('完成'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _resetAsrStorageRoot() async {
@@ -2636,6 +2620,7 @@ class _AsrDownloadPlan extends StatelessWidget {
     required this.storage,
     required this.requiredDownloadBytes,
     required this.changingStorage,
+    required this.onManageResources,
     required this.onChangeStorage,
     required this.onResetStorage,
     this.externalModel = false,
@@ -2650,6 +2635,7 @@ class _AsrDownloadPlan extends StatelessWidget {
   final AsrStorageOption storage;
   final int requiredDownloadBytes;
   final bool changingStorage;
+  final VoidCallback onManageResources;
   final VoidCallback? onChangeStorage;
   final VoidCallback? onResetStorage;
   final bool externalModel;
@@ -2685,9 +2671,26 @@ class _AsrDownloadPlan extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '本次设置',
-            style: T.tCaption.copyWith(fontWeight: T.wBold, color: T.ink),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '本次设置',
+                  style: T.tCaption.copyWith(fontWeight: T.wBold, color: T.ink),
+                ),
+              ),
+              TextButton(
+                key: const ValueKey('asr-manage-resources'),
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 24),
+                  padding: const EdgeInsets.symmetric(horizontal: T.s4),
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: onManageResources,
+                child: const Text('管理已下载资源'),
+              ),
+            ],
           ),
           const SizedBox(height: T.s4),
           _AsrPlanRow(

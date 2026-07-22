@@ -131,4 +131,34 @@ void main() {
       expect(workbenchGeometry.maximizable, isTrue);
     },
   );
+
+  test('application settings expand the main HWND within visible bounds', () {
+    final plan = applicationSettingsExpansionPlanFor(
+      const Rect.fromLTWH(380, 100, 720, 520),
+      const Rect.fromLTWH(0, 0, 1480, 900),
+    );
+
+    expect(plan.useOverlay, isFalse);
+    expect(plan.windowBounds, const Rect.fromLTWH(280, 100, 1200, 520));
+  });
+
+  test('application settings keep an already fitting window position', () {
+    final plan = applicationSettingsExpansionPlanFor(
+      const Rect.fromLTWH(600, 280, 720, 520),
+      const Rect.fromLTWH(0, 0, 1920, 1080),
+    );
+
+    expect(plan.useOverlay, isFalse);
+    expect(plan.windowBounds, const Rect.fromLTWH(600, 280, 1200, 520));
+  });
+
+  test('application settings use an in-window overlay on a narrow display', () {
+    final plan = applicationSettingsExpansionPlanFor(
+      const Rect.fromLTWH(152, 100, 720, 520),
+      const Rect.fromLTWH(0, 0, 1024, 768),
+    );
+
+    expect(plan.useOverlay, isTrue);
+    expect(plan.windowBounds, const Rect.fromLTWH(152, 100, 720, 520));
+  });
 }

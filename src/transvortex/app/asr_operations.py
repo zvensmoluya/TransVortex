@@ -320,9 +320,21 @@ class AsrOperationManager:
                 raise AsrOperationError("operation_active", "Cannot remove an ASR component while it is changing")
             target = self._install_target(normalized_kind, entry)
             self._assert_managed_target(target)
-            if target.exists():
-                shutil.rmtree(target)
-            return {"ok": True, "kind": normalized_kind, "item_id": target_id, "removed": True}
+            existed = target.exists()
+            if existed:
+                try:
+                    self._remove_directory_with_retry(target)
+                except OSError as exc:
+                    raise AsrOperationError(
+                        "component_remove_failed",
+                        f"Could not remove the ASR {normalized_kind}: {exc}",
+                    ) from exc
+            return {
+                "ok": True,
+                "kind": normalized_kind,
+                "item_id": target_id,
+                "removed": existed,
+            }
 
     def _run_install(
         self,

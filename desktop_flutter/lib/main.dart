@@ -26,6 +26,7 @@ import 'services/smoke_render_capture.dart';
 import 'services/task_notification_service.dart';
 import 'services/window_state_bridge.dart';
 import 'theme/tokens.dart';
+import 'widgets/application_settings_panel.dart';
 import 'widgets/job_line.dart';
 import 'widgets/primary_action.dart';
 import 'widgets/reasoning_effort_picker.dart';
@@ -145,6 +146,7 @@ class TransVortexApp extends StatelessWidget {
     this.pathOpener,
     this.directoryProbe,
     this.directoryPicker,
+    this.mainWindowSurfaceController,
     this.smoke,
   });
 
@@ -158,6 +160,7 @@ class TransVortexApp extends StatelessWidget {
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
   final SettingsDirectoryPicker? directoryPicker;
+  final MainWindowSurfaceController? mainWindowSurfaceController;
   final AppSmokeArgs? smoke;
 
   @override
@@ -224,6 +227,8 @@ class TransVortexApp extends StatelessWidget {
           localServiceController: localServiceController,
           desktopTrayService: desktopTrayService,
           taskNotificationService: taskNotificationService,
+          pathOpener: pathOpener,
+          mainWindowSurfaceController: mainWindowSurfaceController,
           smoke: smoke,
         ),
         AppWindowType.taskProcessing => TaskProcessingWindow(
@@ -256,6 +261,8 @@ class MainScreen extends StatefulWidget {
     this.localServiceController,
     this.desktopTrayService,
     this.taskNotificationService,
+    this.pathOpener,
+    this.mainWindowSurfaceController,
     this.smoke,
   });
 
@@ -264,6 +271,8 @@ class MainScreen extends StatefulWidget {
   final LocalServiceController? localServiceController;
   final DesktopTrayService? desktopTrayService;
   final TaskNotificationService? taskNotificationService;
+  final PathOpener? pathOpener;
+  final MainWindowSurfaceController? mainWindowSurfaceController;
   final AppSmokeArgs? smoke;
 
   @override
@@ -289,7 +298,19 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   String _trayHideError = '';
   bool _dropTargetHover = false;
   bool _dropTargetDown = false;
-
+  late final MainWindowSurfaceController _mainWindowSurface;
+  bool _applicationSettingsVisible = false;
+  bool _applicationSettingsUseOverlay = false;
+  bool _applicationSettingsChanging = false;
+  bool _applicationSettingsClosing = false;
+  Rect? _applicationSettingsOriginalBounds;
+  Rect? _applicationSettingsExpectedBounds;
+  late final AnimationController _applicationSettingsAnimation =
+      AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 160),
+        reverseDuration: const Duration(milliseconds: 140),
+      );
   late final AnimationController _breathe = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 4),
@@ -307,6 +328,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         widget.localServiceController ??
         LocalServiceController(supervisor: _localServiceSupervisor());
     _ownsService = widget.localServiceController == null;
+    _mainWindowSurface =
+        widget.mainWindowSurfaceController ??
+        const SystemMainWindowSurfaceController();
     _notificationObserver = TaskNotificationObserver(_notificationService());
     _controller = MainWindowController(service: _service)
       ..addListener(_syncBridgeState);
@@ -344,6 +368,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (_ownsService) _service.dispose();
     _breathe.dispose();
     _drag.dispose();
+    _applicationSettingsAnimation.dispose();
     super.dispose();
   }
 
@@ -485,6 +510,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       }
       try {
         await windowManager.hide();
+        await _closeApplicationSettings(animate: false);
       } on Object catch (error) {
         _trayHideError = '$error';
         // If hiding fails, keep the visible app alive rather than shutting down.
@@ -1547,62 +1573,174 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       animation: _controller,
       builder: (context, _) {
         final view = _controller.view;
-        return RepaintBoundary(
-          key: _renderKey,
-          child: Scaffold(
-            body: DropTarget(
-              onDragEntered: (_) => _drag.forward(),
-              onDragExited: (_) {
-                _drag.reverse();
-                if (_dropTargetHover) {
-                  setState(() => _dropTargetHover = false);
-                }
-              },
-              onDragDone: (detail) {
-                _drag.reverse();
-                if (_dropTargetHover || _dropTargetDown) {
-                  setState(() {
-                    _dropTargetHover = false;
-                    _dropTargetDown = false;
-                  });
-                }
-                final file = detail.files.isNotEmpty
-                    ? detail.files.first
-                    : null;
-                final path = file?.path;
-                if (path != null) {
-                  _controller.pickSource(path, name: file?.name);
-                }
-              },
-              child: Container(
-                decoration: BoxDecoration(
-                  color: T.bg,
-                  border: Border.all(color: T.line, width: 1),
-                ),
-                child: Column(
-                  children: [
-                    TitleBar(
-                      menuKey: const ValueKey('main-menu-button'),
-                      onMenu: () => unawaited(_showChromeMenu()),
+        final mainWorkspace = _buildMainWorkspace(view);
+        final settingsOpen = _applicationSettingsVisible;
+        final useOverlay = settingsOpen && _applicationSettingsUseOverlay;
+        final surface = useOverlay
+            ? Stack(
+                key: const ValueKey('main-with-settings-overlay'),
+                children: [
+                  mainWorkspace,
+                  Positioned.fill(child: _buildSettingsOverlayBarrier()),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    width: applicationSettingsPanelWidth,
+                    height: mainWindowSize.height,
+                    child: _buildApplicationSettingsPanel(),
+                  ),
+                ],
+              )
+            : Stack(
+                key: const ValueKey('main-with-settings-extension'),
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  mainWorkspace,
+                  if (settingsOpen)
+                    Positioned(
+                      left: mainWindowSize.width,
+                      top: 0,
+                      width: applicationSettingsPanelWidth,
+                      height: mainWindowSize.height,
+                      child: _buildApplicationSettingsPanel(),
                     ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          T.s32,
-                          T.s8,
-                          T.s32,
-                          T.s16,
-                        ),
-                        child: _body(view),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+                ],
+              );
+        return Material(
+          color: T.bg,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: useOverlay || !settingsOpen
+                  ? mainWindowSize.width
+                  : applicationSettingsExpandedWindowSize.width,
+              height: mainWindowSize.height,
+              child: surface,
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildMainWorkspace(MainWindowViewModel view) {
+    return SizedBox(
+      key: const ValueKey('main-workspace'),
+      width: mainWindowSize.width,
+      height: mainWindowSize.height,
+      child: RepaintBoundary(
+        key: _renderKey,
+        child: Scaffold(
+          body: DropTarget(
+            onDragEntered: (_) => _drag.forward(),
+            onDragExited: (_) {
+              _drag.reverse();
+              if (_dropTargetHover) {
+                setState(() => _dropTargetHover = false);
+              }
+            },
+            onDragDone: (detail) {
+              _drag.reverse();
+              if (_dropTargetHover || _dropTargetDown) {
+                setState(() {
+                  _dropTargetHover = false;
+                  _dropTargetDown = false;
+                });
+              }
+              final file = detail.files.isNotEmpty ? detail.files.first : null;
+              final path = file?.path;
+              if (path != null) {
+                _controller.pickSource(path, name: file?.name);
+              }
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: T.bg,
+                border: Border.all(color: T.line, width: 1),
+              ),
+              child: Column(
+                children: [
+                  TitleBar(
+                    menuKey: const ValueKey('main-menu-button'),
+                    onMenu: () => unawaited(_showChromeMenu()),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        T.s32,
+                        T.s8,
+                        T.s32,
+                        T.s16,
+                      ),
+                      child: _body(view),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsOverlayBarrier() {
+    return AnimatedBuilder(
+      animation: _applicationSettingsAnimation,
+      builder: (context, _) {
+        final progress = Curves.easeOutCubic.transform(
+          _applicationSettingsAnimation.value,
+        );
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _applicationSettingsChanging || _applicationSettingsClosing
+              ? null
+              : () => unawaited(_closeApplicationSettings()),
+          child: ColoredBox(
+            color: const Color(0xFF1F1C26).withValues(alpha: progress * 0.12),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildApplicationSettingsPanel() {
+    return DecoratedBox(
+      key: const ValueKey('application-settings-shell'),
+      decoration: BoxDecoration(
+        color: _applicationSettingsUseOverlay ? Colors.transparent : T.bg,
+        border: Border(
+          left: BorderSide(
+            color: _applicationSettingsUseOverlay ? Colors.transparent : T.line,
+          ),
+        ),
+      ),
+      child: AnimatedBuilder(
+        animation: _applicationSettingsAnimation,
+        child: ApplicationSettingsPanel(
+          bridge: widget.bridge,
+          service: _service,
+          pathOpener: widget.pathOpener,
+          onClose: () => unawaited(_closeApplicationSettings()),
+        ),
+        builder: (context, child) {
+          final curve = _applicationSettingsClosing
+              ? Curves.easeInOutCubic
+              : Curves.easeOutCubic;
+          final progress = curve.transform(_applicationSettingsAnimation.value);
+          return IgnorePointer(
+            ignoring: progress < 1,
+            child: Opacity(
+              key: const ValueKey('application-settings-transition'),
+              opacity: progress,
+              child: Transform.translate(
+                offset: Offset((1 - progress) * 28, 0),
+                child: child,
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -1707,7 +1845,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             if (view.state == MainState.empty) ...[
               _emptyPrompt(),
               if (view.homeTaskReminder != null) ...[
-                const SizedBox(height: T.s12),
+                const SizedBox(height: T.s8),
                 _PendingTaskSlip(
                   reminder: view.homeTaskReminder!,
                   onResume: _resumeHomeTaskReminder,
@@ -1938,6 +2076,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _menuItem('translation', '翻译模型设置'),
         _menuItem('asr', '语音识别设置'),
         _menuItem('history', '任务处理'),
+        const PopupMenuDivider(),
+        _menuItem('application_settings', '应用设置'),
       ],
     );
     switch (selected) {
@@ -1949,6 +2089,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         break;
       case 'history':
         _openToolWindow(AppWindowType.taskProcessing);
+        break;
+      case 'application_settings':
+        unawaited(_openApplicationSettings());
         break;
     }
   }
@@ -2409,6 +2552,148 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     return _openToolWindow(args.type, taskId: args.taskId);
   }
 
+  Future<void> _openApplicationSettings() async {
+    if (_applicationSettingsVisible ||
+        _applicationSettingsChanging ||
+        _applicationSettingsClosing) {
+      return;
+    }
+    _applicationSettingsChanging = true;
+    Rect? initialBounds;
+    try {
+      initialBounds = await _mainWindowSurface.getBounds();
+      if (initialBounds == null) {
+        _toast('无法读取主窗口位置，请稍后重试');
+        return;
+      }
+      final visibleBounds = await _mainWindowSurface.visibleBoundsFor(
+        initialBounds,
+      );
+      final plan = applicationSettingsExpansionPlanFor(
+        initialBounds,
+        visibleBounds,
+      );
+      _applicationSettingsOriginalBounds = initialBounds;
+      _applicationSettingsExpectedBounds = plan.windowBounds;
+      if (!_sameWindowBounds(initialBounds, plan.windowBounds)) {
+        await _mainWindowSurface.setBounds(plan.windowBounds);
+        _applicationSettingsExpectedBounds =
+            await _mainWindowSurface.getBounds() ?? plan.windowBounds;
+      }
+      if (!mounted) return;
+      setState(() {
+        _applicationSettingsUseOverlay = plan.useOverlay;
+        _applicationSettingsVisible = true;
+      });
+      _applicationSettingsChanging = false;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || _applicationSettingsClosing) return;
+      unawaited(_applicationSettingsAnimation.forward(from: 0));
+    } on Object catch (error) {
+      final expected = _applicationSettingsExpectedBounds;
+      if (initialBounds != null && expected != null) {
+        try {
+          final current = await _mainWindowSurface.getBounds();
+          if (current != null && _sameWindowBounds(current, expected)) {
+            await _mainWindowSurface.setBounds(initialBounds);
+          }
+        } on Object {
+          // The panel remains closed even if best-effort bounds recovery fails.
+        }
+      }
+      _applicationSettingsAnimation.value = 0;
+      _applicationSettingsOriginalBounds = null;
+      _applicationSettingsExpectedBounds = null;
+      if (!mounted) return;
+      setState(() {
+        _applicationSettingsVisible = false;
+        _applicationSettingsUseOverlay = false;
+      });
+      _toast('打开应用设置失败：$error');
+    } finally {
+      _applicationSettingsChanging = false;
+    }
+  }
+
+  Future<void> _closeApplicationSettings({bool animate = true}) async {
+    if (!_applicationSettingsVisible || _applicationSettingsClosing) return;
+    _applicationSettingsClosing = true;
+    try {
+      final current = await _mainWindowSurface.getBounds();
+      final original = _applicationSettingsOriginalBounds;
+      final expected = _applicationSettingsExpectedBounds;
+      final target = _collapsedBoundsAfterApplicationSettings(
+        current: current,
+        original: original,
+        expected: expected,
+      );
+      final resizeNeeded =
+          target != null &&
+          (current == null || !_sameWindowBounds(current, target));
+      if (animate) {
+        await _applicationSettingsAnimation.reverse();
+        await WidgetsBinding.instance.endOfFrame;
+        if (resizeNeeded) await _mainWindowSurface.setBounds(target!);
+      } else {
+        _applicationSettingsAnimation
+          ..stop()
+          ..value = 0;
+        if (resizeNeeded) await _mainWindowSurface.setBounds(target!);
+      }
+      if (!mounted) return;
+      setState(() => _applicationSettingsVisible = false);
+      _applicationSettingsOriginalBounds = null;
+      _applicationSettingsExpectedBounds = null;
+      if (mounted) {
+        setState(() => _applicationSettingsUseOverlay = false);
+      }
+    } on Object catch (error) {
+      final expected = _applicationSettingsExpectedBounds;
+      if (expected != null) {
+        try {
+          final current = await _mainWindowSurface.getBounds();
+          if (current != null && !_sameWindowBounds(current, expected)) {
+            await _mainWindowSurface.setBounds(expected);
+          }
+        } on Object {
+          // Keep the still-visible panel usable at the best available size.
+        }
+      }
+      _applicationSettingsAnimation.value = 1;
+      if (!mounted) return;
+      _toast('收起应用设置失败：$error');
+    } finally {
+      _applicationSettingsClosing = false;
+    }
+  }
+
+  Rect? _collapsedBoundsAfterApplicationSettings({
+    required Rect? current,
+    required Rect? original,
+    required Rect? expected,
+  }) {
+    if (current == null) return original;
+    if (original != null &&
+        expected != null &&
+        _sameWindowBounds(current, expected)) {
+      return original;
+    }
+    return Rect.fromLTWH(
+      current.left,
+      current.top,
+      mainWindowSize.width,
+      mainWindowSize.height,
+    );
+  }
+
+  bool _sameWindowBounds(Rect a, Rect b) {
+    const tolerance = 2.0;
+    return (a.left - b.left).abs() <= tolerance &&
+        (a.top - b.top).abs() <= tolerance &&
+        (a.width - b.width).abs() <= tolerance &&
+        (a.height - b.height).abs() <= tolerance;
+  }
+
   Future<void> _openToolWindow(AppWindowType type, {String? taskId}) async {
     final parentBounds = await _currentWindowBounds();
     final args = AppWindowArgs(
@@ -2444,7 +2729,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   String _toolWindowKey(AppWindowType type, {String? taskId}) {
-    if (type == AppWindowType.taskProcessing) return type.id;
+    if (type == AppWindowType.taskProcessing) {
+      return type.id;
+    }
     return '${type.id}:${taskId?.trim() ?? ''}';
   }
 

@@ -19,6 +19,7 @@ import 'package:transvortex_desktop_flutter/services/task_notification_service.d
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
 import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
+import 'package:transvortex_desktop_flutter/widgets/application_settings_panel.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
 
@@ -342,10 +343,250 @@ void main() {
     expect(find.text('翻译模型设置'), findsOneWidget);
     expect(find.text('语音识别设置'), findsOneWidget);
     expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('应用设置'), findsOneWidget);
+    expect(find.text('全部设置'), findsNothing);
     expect(find.text('任务资料库位置'), findsNothing);
     expect(find.text('诊断'), findsNothing);
     expectNoFlutterException();
   });
+
+  testWidgets('application settings only manage app-owned local resources', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(480, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var modelInstalled = true;
+    final calls = <String>[];
+    Map<String, Object?>? removeParams;
+    bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(modelInstalled: modelInstalled),
+        ).raw;
+      }
+      if (method == 'asr.component.remove') {
+        removeParams = Map<String, Object?>.from(params);
+        modelInstalled = false;
+        return {
+          'ok': true,
+          'kind': params['kind'],
+          'item_id': params['item_id'],
+          'removed': true,
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    final service = _readyController();
+    addTearDown(service.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 480,
+          height: 520,
+          child: ApplicationSettingsPanel(
+            bridge: bridge,
+            service: service,
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(
+      find.byKey(const ValueKey('application-settings-panel')),
+      findsOneWidget,
+    );
+    expect(find.text('应用设置'), findsOneWidget);
+    expect(find.text('存储与资源'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('application-settings-drag-area')),
+      findsOneWidget,
+    );
+    expect(find.text('翻译模型设置'), findsNothing);
+    expect(find.text('语音识别设置'), findsNothing);
+    expect(find.text('Whisper Small'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('asr-resource-remove-model-small')),
+    );
+    await tester.pump();
+    expect(find.text('删除Whisper Small？'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('asr-resource-confirm-remove')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(calls, contains('asr.component.remove'));
+    expect(removeParams, {'kind': 'model', 'item_id': 'small'});
+    expect(find.text('Whisper Small已删除。'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('asr-resource-remove-model-small')),
+      findsNothing,
+    );
+    expectNoFlutterException();
+  });
+
+  testWidgets(
+    'main expands once for application settings and keeps task surface fixed',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 520));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var panelMountedDuringNativeCollapse = false;
+      final surface = _FakeMainWindowSurfaceController(
+        bounds: const Rect.fromLTWH(600, 280, 720, 520),
+        visibleBounds: const Rect.fromLTWH(0, 0, 1920, 1080),
+        onSetBounds: (bounds) {
+          if (bounds.width == mainWindowSize.width) {
+            panelMountedDuringNativeCollapse = find
+                .byKey(const ValueKey('application-settings-panel'))
+                .evaluate()
+                .isNotEmpty;
+          }
+        },
+      );
+      final service = _readyController(
+        snapshot: _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(),
+        ),
+      );
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          localServiceController: service,
+          mainWindowSurfaceController: surface,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        tester.getSize(find.byKey(const ValueKey('main-workspace'))),
+        mainWindowSize,
+      );
+      await tester.tap(find.byKey(const ValueKey('main-menu-button')));
+      await tester.pump();
+      activatePopupMenuItem(
+        tester,
+        const ValueKey('main-menu-application_settings'),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+
+      expect(surface.writes, [const Rect.fromLTWH(600, 280, 1200, 520)]);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('main-workspace'))),
+        mainWindowSize,
+      );
+      expect(
+        find.byKey(const ValueKey('application-settings-panel')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('application-settings-transition')),
+            )
+            .opacity,
+        1,
+      );
+      expect(find.text('应用设置'), findsOneWidget);
+      expect(find.text('翻译模型设置'), findsNothing);
+      expect(find.text('语音识别设置'), findsNothing);
+
+      final closeButton = tester.widget<IconButton>(
+        find.byKey(const ValueKey('application-settings-close')),
+      );
+      expect(closeButton.onPressed, isNotNull);
+      closeButton.onPressed!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(surface.writes, [
+        const Rect.fromLTWH(600, 280, 1200, 520),
+        const Rect.fromLTWH(600, 280, 720, 520),
+      ]);
+      expect(panelMountedDuringNativeCollapse, isTrue);
+      expect(
+        find.byKey(const ValueKey('application-settings-panel')),
+        findsNothing,
+      );
+      expectNoFlutterException();
+    },
+  );
+
+  testWidgets(
+    'application settings use an overlay without widening narrow windows',
+    (tester) async {
+      await tester.binding.setSurfaceSize(mainWindowSize);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final surface = _FakeMainWindowSurfaceController(
+        bounds: const Rect.fromLTWH(152, 100, 720, 520),
+        visibleBounds: const Rect.fromLTWH(0, 0, 1024, 768),
+      );
+      final service = _readyController();
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          localServiceController: service,
+          mainWindowSurfaceController: surface,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byKey(const ValueKey('main-menu-button')));
+      await tester.pump();
+      activatePopupMenuItem(
+        tester,
+        const ValueKey('main-menu-application_settings'),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+
+      expect(surface.writes, isEmpty);
+      expect(
+        find.byKey(const ValueKey('main-with-settings-overlay')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('main-workspace'))),
+        mainWindowSize,
+      );
+      expect(
+        find.byKey(const ValueKey('application-settings-panel')),
+        findsOneWidget,
+      );
+
+      final closeButton = tester.widget<IconButton>(
+        find.byKey(const ValueKey('application-settings-close')),
+      );
+      closeButton.onPressed!();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      await tester.pump();
+
+      expect(surface.writes, isEmpty);
+      expect(
+        find.byKey(const ValueKey('application-settings-panel')),
+        findsNothing,
+      );
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets('main empty-state CTA opens native picker path', (tester) async {
     FilePickerIO.registerWith();
@@ -2684,6 +2925,49 @@ void main() {
     expect(savedAsrDraft?['kind'], 'local_worker');
     expect((savedAsrDraft?['runtime'] as Map?)?['source'], 'managed');
     expect(find.textContaining('识别默认已保存'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings directly opens managed resource cleanup', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(),
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const ValueKey('asr-manage-resources')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('asr-manage-resources')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('管理本机识别资源'), findsOneWidget);
+    expect(find.byKey(const ValueKey('asr-resource-manager')), findsOneWidget);
+    expect(find.text('Whisper Small'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('application-settings-window')),
+      findsNothing,
+    );
     expectNoFlutterException();
   });
 
@@ -5176,6 +5460,37 @@ LocalServiceController _readyController({DesktopSnapshot? snapshot}) {
   );
 }
 
+Map<String, Object?> _managedAsrResources({bool modelInstalled = true}) {
+  return {
+    'storage': {
+      'root': r'D:\TransVortex-ASR',
+      'default_root': r'D:\TransVortex-ASR',
+      'space_known': true,
+      'free_bytes': 10737418240,
+      'writable': true,
+      'can_change': true,
+    },
+    'runtime': {
+      'id': 'managed:faster-whisper',
+      'version': '1.0.0',
+      'installed': true,
+      'artifact': {'published': true, 'size': 559000000},
+    },
+    'models': [
+      {
+        'id': 'small',
+        'display_name': 'Whisper Small',
+        'revision': 'fixture-revision',
+        'installed': modelInstalled,
+        'size': 500000000,
+      },
+    ],
+    'accelerators': const [],
+    'environments': const [],
+    'operations': const [],
+  };
+}
+
 LocalServiceController _controllerForTransport(_FakeTransport transport) {
   return LocalServiceController(
     sessionFactory: () async => _FakeHandle.fromTransport(transport),
@@ -5560,6 +5875,32 @@ Map<String, Object?> _task({
     if (settings.isNotEmpty) 'settings': settings,
     if (progressDetail.isNotEmpty) 'progress_detail': progressDetail,
   };
+}
+
+class _FakeMainWindowSurfaceController implements MainWindowSurfaceController {
+  _FakeMainWindowSurfaceController({
+    required this.bounds,
+    required this.visibleBounds,
+    this.onSetBounds,
+  });
+
+  Rect bounds;
+  final Rect? visibleBounds;
+  final ValueChanged<Rect>? onSetBounds;
+  final List<Rect> writes = [];
+
+  @override
+  Future<Rect?> getBounds() async => bounds;
+
+  @override
+  Future<void> setBounds(Rect value) async {
+    onSetBounds?.call(value);
+    bounds = value;
+    writes.add(value);
+  }
+
+  @override
+  Future<Rect?> visibleBoundsFor(Rect bounds) async => visibleBounds;
 }
 
 class _FakeHandle implements LocalServiceHandle {
