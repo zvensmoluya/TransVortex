@@ -4,6 +4,8 @@
 
 这是一次临时现场复盘，正文集中记录本轮 faster-whisper 公开下载、安装器、卸载器和 Flutter 识别设置的观察。后续事项完成后，可将本文件归档或删除；产品长期边界仍以专题文档和 `CURRENT_BACKLOG.md` 为准。
 
+> 2026-07-22 后续：安装器品牌化、隐藏内部逐文件详情和卸载分项清理已经实现；下文相关条目保留当日现场背景，当前行为以 [`APP_RUNTIME.md`](APP_RUNTIME.md) 为准。
+
 ## 现场结论
 
 - Windows x64 的 faster-whisper runtime 已从公开 Release URL 下载，并按清单大小与 SHA-256 校验通过。

@@ -92,6 +92,7 @@ function Assert-InstalledLayout {
         "data\flutter_assets\FontManifest.json",
         "runtime\app_runtime.json",
         "runtime\python\python.exe",
+        "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py",
         "tools\ffmpeg\ffmpeg_runtime.json",
         "tools\ffmpeg\bin\ffmpeg.exe",
         "tools\ffmpeg\bin\ffprobe.exe",
@@ -276,6 +277,109 @@ function Start-IsolatedInstalledApp {
     return $process
 }
 
+function Invoke-InstalledUninstallCleanupCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$AcceptanceRoot
+    )
+
+    $cleanupRoot = Join-Path $AcceptanceRoot "uninstall-cleanup"
+    $appDataRoot = Join-Path $cleanupRoot "AppData\Local\TransVortex"
+    $customAsrRoot = Join-Path $cleanupRoot "asr-storage"
+    $credentialFile = Join-Path $cleanupRoot "profile\.transvortex\auth.json"
+    $credentialSentinel = Join-Path $cleanupRoot "profile\.transvortex\keep-cli-file.txt"
+    $externalModel = Join-Path $cleanupRoot "external-model\model.bin"
+    $customSentinel = Join-Path $customAsrRoot "keep-user-file.txt"
+    $appSentinel = Join-Path $appDataRoot "keep-user-file.txt"
+    $inspectReport = Join-Path $cleanupRoot "inspect.ini"
+    $cleanupReport = Join-Path $cleanupRoot "cleanup.ini"
+    $configRoot = Join-Path $appDataRoot "Config"
+    $pythonPath = Join-Path $Root "runtime\python\python.exe"
+
+    New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
+    Write-Utf8NoBom -Path (Join-Path $configRoot "asr_storage.json") -Content (
+        [ordered]@{
+            schema_version = 1
+            storage_root = $customAsrRoot
+        } | ConvertTo-Json -Depth 3
+    )
+    foreach ($file in @(
+        (Join-Path $customAsrRoot "Components\runtime\component.json"),
+        (Join-Path $customAsrRoot "Models\faster-whisper\small\model.bin"),
+        (Join-Path $customAsrRoot "Downloads\ASR\small\model.bin.part"),
+        (Join-Path $appDataRoot "Components\orphan\component.json"),
+        (Join-Path $appDataRoot "Workspace\Tasks\task-1\result.srt"),
+        (Join-Path $appDataRoot "Workspace\Cache\task-1.wav"),
+        $credentialFile,
+        $credentialSentinel,
+        $externalModel,
+        $customSentinel,
+        $appSentinel
+    )) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file) | Out-Null
+        Set-Content -LiteralPath $file -Value "installer acceptance" -Encoding utf8
+    }
+
+    $inspectExit = Invoke-WaitingProcess -FilePath $pythonPath -ArgumentList @(
+        "-m", "transvortex.app.uninstall_cleanup",
+        "--inspect",
+        "--app-data-root", "`"$appDataRoot`"",
+        "--credential-file", "`"$credentialFile`"",
+        "--report-ini", "`"$inspectReport`""
+    )
+    if ($inspectExit -ne 0 -or -not (Test-Path -LiteralPath $inspectReport)) {
+        throw "Installed uninstall cleanup inspection failed. Exit=$inspectExit"
+    }
+
+    $cleanupExit = Invoke-WaitingProcess -FilePath $pythonPath -ArgumentList @(
+        "-m", "transvortex.app.uninstall_cleanup",
+        "--app-data-root", "`"$appDataRoot`"",
+        "--credential-file", "`"$credentialFile`"",
+        "--report-ini", "`"$cleanupReport`"",
+        "--remove-asr-resources",
+        "--remove-settings",
+        "--remove-tasks",
+        "--remove-credentials"
+    )
+    if ($cleanupExit -ne 0 -or -not (Test-Path -LiteralPath $cleanupReport)) {
+        throw "Installed uninstall cleanup execution failed. Exit=$cleanupExit"
+    }
+
+    $removedTargets = @(
+        (Join-Path $customAsrRoot "Components"),
+        (Join-Path $customAsrRoot "Models\faster-whisper"),
+        (Join-Path $customAsrRoot "Downloads\ASR"),
+        (Join-Path $appDataRoot "Components"),
+        (Join-Path $appDataRoot "Config"),
+        (Join-Path $appDataRoot "Workspace"),
+        $credentialFile
+    )
+    $remainingRemovedTargets = @($removedTargets | Where-Object { Test-Path -LiteralPath $_ })
+    if ($remainingRemovedTargets.Count -gt 0) {
+        throw "Installed uninstall cleanup left selected targets: $($remainingRemovedTargets -join ', ')"
+    }
+    foreach ($preserved in @($credentialSentinel, $externalModel, $customSentinel, $appSentinel)) {
+        if (-not (Test-Path -LiteralPath $preserved)) {
+            throw "Installed uninstall cleanup removed an unmanaged file: $preserved"
+        }
+    }
+
+    return [ordered]@{
+        ok = $true
+        inspect_exit_code = $inspectExit
+        cleanup_exit_code = $cleanupExit
+        custom_asr_storage_removed = $true
+        default_asr_remnants_removed = $true
+        settings_removed = $true
+        tasks_and_cache_removed = $true
+        credentials_removed = $true
+        external_model_preserved = $true
+        unrelated_files_preserved = $true
+    }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $installerOutputRoot = Join-Path $repoRoot "dist\installer\windows"
@@ -405,6 +509,7 @@ try {
     }
     $shortcutReport = (($shortcutJson | Out-String).Trim() | ConvertFrom-Json)
     $serviceReport = Invoke-InstalledServiceCheck -Root $installFullPath -ServiceRoot $serviceRoot -IsolatedProfile $isolatedProfile -TimeoutSeconds $ServiceTimeoutSeconds
+    $uninstallCleanupReport = Invoke-InstalledUninstallCleanupCheck -Root $installFullPath -AcceptanceRoot $acceptanceRoot
 
     $pathChangeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$relocatedParent")
     if ($pathChangeExit -ne 12 -or (Test-Path -LiteralPath $relocatedTarget)) {
@@ -491,6 +596,7 @@ try {
         install_ownership_marker_ok = $true
         installed_powershell_script_count = 0
         local_service = $serviceReport
+        uninstall_cleanup_helper = $uninstallCleanupReport
         shortcut_app_user_model_id_ok = [bool]$shortcutReport.shortcut_app_user_model_id_ok
         upgrade_exit_code = $upgradeExit
         upgrade_removed_obsolete_file = $true
@@ -503,6 +609,7 @@ try {
         uninstall_removed_registry = $true
         uninstall_removed_shortcut = $true
         uninstall_preserved_user_data = $true
+        silent_uninstall_cleanup_default = "preserve"
         signed = [bool]$installerManifest.signed
         public_release_ready = $false
         generated_at = (Get-Date).ToUniversalTime().ToString("o")

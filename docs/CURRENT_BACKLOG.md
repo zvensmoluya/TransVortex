@@ -1,6 +1,6 @@
 # TransVortex 当前待办
 
-更新时间：2026-07-21
+更新时间：2026-07-22
 
 本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
 
@@ -47,8 +47,6 @@
 | Flutter Agent 环境接力入口 | 待实现 | 在 Flutter 识别设置中提供复制通用 Prompt / 导出 Agent-native Skill 的入口，并让原生向导与 `transvortex.agent_setup` verify 结果保持一致 | [`../AGENT_USAGE.md`](../AGENT_USAGE.md)、[`../AGENT_BOOTSTRAP.md`](../AGENT_BOOTSTRAP.md) |
 | 术语能力归位 | 待决策 | 区分生成术语建议、使用术语和维护术语，并明确回流与优先级语义 | [`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
 | 高级翻译与识别设置 | 待实现 | 补齐 fallback routing、mapping、识别高级参数和诊断修复联动 | [`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
-| 安装器视觉定制 | 待决策 | 最终图标确定后，再决定 NSIS 欢迎图、顶部图、文案和品牌化程度；不改变现有安全安装逻辑 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
-| 卸载时清理用户数据 | 待决策 | 决定是否提供明确的可选清理入口；默认仍应保留配置、任务、模型和凭据 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 
 ## P2：体验深化
 

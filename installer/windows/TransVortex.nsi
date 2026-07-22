@@ -8,6 +8,7 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "nsDialogs.nsh"
 
 !ifndef APP_SOURCE
   !error "APP_SOURCE must point to the validated installer payload"
@@ -30,6 +31,12 @@ SetCompressor /SOLID lzma
 !ifndef APP_ICON
   !error "APP_ICON must point to the TransVortex icon"
 !endif
+!ifndef INSTALLER_WELCOME_BITMAP
+  !error "INSTALLER_WELCOME_BITMAP must point to the branded NSIS welcome bitmap"
+!endif
+!ifndef INSTALLER_HEADER_BITMAP
+  !error "INSTALLER_HEADER_BITMAP must point to the branded NSIS header bitmap"
+!endif
 
 !define APP_NAME "TransVortex"
 !define APP_PUBLISHER "TransVortex Contributors"
@@ -37,6 +44,21 @@ SetCompressor /SOLID lzma
 !define APP_MUTEX "Local\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
 !define APP_REGISTRY_KEY "Software\TransVortex"
+
+!define MUI_ICON "${APP_ICON}"
+!define MUI_UNICON "${APP_ICON}"
+!define MUI_BGCOLOR "FAF8FC"
+!define MUI_TEXTCOLOR "2E2A33"
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_HEADERIMAGE_BITMAP "${INSTALLER_HEADER_BITMAP}"
+!define MUI_HEADERIMAGE_UNBITMAP "${INSTALLER_HEADER_BITMAP}"
+!define MUI_HEADERIMAGE_BITMAP_STRETCH "NoStretchNoCrop"
+!define MUI_HEADERIMAGE_UNBITMAP_STRETCH "NoStretchNoCrop"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${INSTALLER_WELCOME_BITMAP}"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${INSTALLER_WELCOME_BITMAP}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP_STRETCH "NoStretchNoCrop"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP_STRETCH "NoStretchNoCrop"
 
 Name "${APP_NAME}"
 Caption "${APP_NAME} 安装程序"
@@ -46,9 +68,10 @@ InstallDir "$LOCALAPPDATA\Programs\TransVortex"
 InstallDirRegKey HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
 Icon "${APP_ICON}"
 UninstallIcon "${APP_ICON}"
+SetFont /LANG=2052 "Segoe UI" 9
 AllowRootDirInstall false
-ShowInstDetails show
-ShowUninstDetails show
+ShowInstDetails nevershow
+ShowUninstDetails nevershow
 
 VIProductVersion "${APP_FILE_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductName" "${APP_NAME}"
@@ -61,16 +84,33 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TransVortex.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 TransVortex"
+!define MUI_WELCOMEPAGE_TITLE "欢迎来到 TransVortex"
+!define MUI_WELCOMEPAGE_TEXT "安静的个人字幕译制工作间。$\r$\n$\r$\n安装程序将准备固定运行环境、媒体工具和桌面入口；语音识别模型可在应用内按需下载。"
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_HEADER_TEXT "许可协议"
+!define MUI_PAGE_HEADER_SUBTEXT "请阅读 TransVortex 的开源许可。"
 !insertmacro MUI_PAGE_LICENSE "${LICENSE_FILE}"
 !define MUI_DIRECTORYPAGE_TEXT_TOP "请选择安装位置。若所选目录不是 TransVortex 专用目录，安装程序会在其中新建 TransVortex 子目录。"
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
+!define MUI_PAGE_HEADER_TEXT "选择程序安装位置"
+!define MUI_PAGE_HEADER_SUBTEXT "这里只存放程序文件；模型和任务使用独立的用户数据位置。"
 !insertmacro MUI_PAGE_DIRECTORY
+!define MUI_PAGE_HEADER_TEXT "正在准备 TransVortex"
+!define MUI_PAGE_HEADER_SUBTEXT "安装固定运行环境、媒体工具和开始菜单入口。"
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_FINISHPAGE_TITLE "TransVortex 已准备好"
+!define MUI_FINISHPAGE_TEXT "安装已经完成。首次启动后可配置翻译服务，并按需准备本机语音识别资源。"
 !insertmacro MUI_PAGE_FINISH
 
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "将从此电脑移除 TransVortex 程序。下一步可以选择是否同时清理下载资源、设置、任务和凭据。"
 !insertmacro MUI_UNPAGE_CONFIRM
+UninstPage custom un.CleanupPageCreate un.CleanupPageLeave
+!define MUI_PAGE_HEADER_TEXT "正在卸载 TransVortex"
+!define MUI_PAGE_HEADER_SUBTEXT "移除程序文件，并按你的选择清理本地内容。"
 !insertmacro MUI_UNPAGE_INSTFILES
+!define MUI_FINISHPAGE_TITLE "TransVortex 已卸载"
+!define MUI_FINISHPAGE_TEXT "程序已经移除。未选择清理的配置、任务、凭据和外部模型仍保留在原位置。"
+!insertmacro MUI_UNPAGE_FINISH
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
@@ -78,6 +118,21 @@ Var StagingDir
 Var PreviousDir
 Var HadPreviousInstall
 Var ShortcutBackup
+Var CleanupDialog
+Var CleanupAsrCheckbox
+Var CleanupSettingsCheckbox
+Var CleanupTasksCheckbox
+Var CleanupCredentialsCheckbox
+Var CleanupAsrRootLabel
+Var CleanupNoticeLabel
+Var CleanupRemoveAsr
+Var CleanupRemoveSettings
+Var CleanupRemoveTasks
+Var CleanupRemoveCredentials
+Var CleanupReport
+Var CleanupArgs
+Var CleanupMessage
+Var CleanupFailure
 
 Function CheckAppNotRunning
 check_again:
@@ -189,6 +244,8 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少 ffprobe.exe"
   IfFileExists "$StagingDir\tools\ffmpeg\ffmpeg_runtime.json" +2
     Abort "安装内容不完整：缺少 FFmpeg runtime 清单"
+  IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py" +2
+    Abort "安装内容不完整：缺少卸载清理组件"
   ReadINIStr $0 "$StagingDir\.transvortex-install.ini" "Install" "AppId"
   StrCmp $0 "${APP_ID}" +2
     Abort "安装内容不完整：缺少安装归属标记"
@@ -210,6 +267,9 @@ FunctionEnd
 Section "${APP_NAME}" SecMain
   Call CheckAppNotRunning
   SetShellVarContext current
+  SetDetailsPrint textonly
+  DetailPrint "正在准备安全安装目录…"
+  SetDetailsPrint none
   Call NormalizeInstallDirectory
   Call CheckInstallDirectorySafety
   StrCpy $StagingDir "$INSTDIR.__staging"
@@ -231,10 +291,16 @@ current_ready:
   RMDir /r "$StagingDir"
   CreateDirectory "$StagingDir"
   SetOutPath "$StagingDir"
+  SetDetailsPrint textonly
+  DetailPrint "正在安装程序与固定运行环境…"
+  SetDetailsPrint none
   File /r "${APP_SOURCE}\*.*"
   WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "AppId" "${APP_ID}"
   WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "Version" "${APP_VERSION}"
   WriteUninstaller "$StagingDir\Uninstall.exe"
+  SetDetailsPrint textonly
+  DetailPrint "正在校验安装内容…"
+  SetDetailsPrint none
   Call ValidateStagingPayload
   SetOutPath "$TEMP"
 
@@ -250,6 +316,9 @@ no_current_install:
   Rename "$StagingDir" "$INSTDIR"
   IfErrors restore_after_swap_failure
 
+  SetDetailsPrint textonly
+  DetailPrint "正在创建开始菜单入口…"
+  SetDetailsPrint none
   SetOutPath "$INSTDIR"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}.lnk" "$INSTDIR\TransVortex.exe" \
     "" "$INSTDIR\TransVortex.exe" 0 SW_SHOWNORMAL "" "${APP_NAME}"
@@ -273,6 +342,8 @@ no_current_install:
 
   RMDir /r "$PreviousDir"
   Delete "$ShortcutBackup"
+  SetDetailsPrint textonly
+  DetailPrint "TransVortex 已准备好。"
   Goto install_complete
 
 post_swap_failed:
@@ -291,6 +362,188 @@ swap_failed:
 
 install_complete:
 SectionEnd
+
+Function un.onInit
+  StrCpy $CleanupRemoveAsr "0"
+  StrCpy $CleanupRemoveSettings "0"
+  StrCpy $CleanupRemoveTasks "0"
+  StrCpy $CleanupRemoveCredentials "0"
+  StrCpy $CleanupFailure "0"
+  StrCpy $CleanupMessage ""
+  IfSilent parse_cleanup_options interactive_cleanup_defaults
+
+interactive_cleanup_defaults:
+  ; Re-downloadable app-owned resources are selected by default.
+  StrCpy $CleanupRemoveAsr "1"
+
+parse_cleanup_options:
+  ${un.GetParameters} $0
+  ClearErrors
+  ${un.GetOptions} "$0" "/REMOVEASR" $1
+  IfErrors remove_asr_option_done
+  StrCpy $CleanupRemoveAsr "1"
+remove_asr_option_done:
+  ClearErrors
+  ${un.GetOptions} "$0" "/REMOVESETTINGS" $1
+  IfErrors remove_settings_option_done
+  StrCpy $CleanupRemoveSettings "1"
+remove_settings_option_done:
+  ClearErrors
+  ${un.GetOptions} "$0" "/REMOVETASKS" $1
+  IfErrors remove_tasks_option_done
+  StrCpy $CleanupRemoveTasks "1"
+remove_tasks_option_done:
+  ClearErrors
+  ${un.GetOptions} "$0" "/REMOVECREDENTIALS" $1
+  IfErrors cleanup_options_done
+  StrCpy $CleanupRemoveCredentials "1"
+cleanup_options_done:
+FunctionEnd
+
+Function un.CleanupPageCreate
+  !insertmacro MUI_HEADER_TEXT "选择保留或清理的本地内容" "外部模型和用户导出的文件永远不会被卸载器删除。"
+  InitPluginsDir
+  StrCpy $CleanupReport "$PLUGINSDIR\transvortex-uninstall-inspection.ini"
+  Delete "$CleanupReport"
+  StrCpy $1 "$LOCALAPPDATA\TransVortex"
+  StrCpy $2 "无法估算"
+  StrCpy $3 "0"
+  StrCpy $4 "0"
+  StrCpy $5 "0"
+  StrCpy $6 "0 B"
+  StrCpy $7 "0"
+  StrCpy $8 ""
+  IfFileExists "$INSTDIR\runtime\python\python.exe" 0 cleanup_inspection_unavailable
+
+  ExecWait '"$INSTDIR\runtime\python\python.exe" -m transvortex.app.uninstall_cleanup --inspect --app-data-root "$LOCALAPPDATA\TransVortex" --credential-file "$PROFILE\.transvortex\auth.json" --report-ini "$CleanupReport"' $0
+  IfFileExists "$CleanupReport" 0 cleanup_inspection_unavailable
+  ReadINIStr $1 "$CleanupReport" "Summary" "asr_root"
+  ReadINIStr $2 "$CleanupReport" "Summary" "asr_size"
+  ReadINIStr $3 "$CleanupReport" "Summary" "asr_present"
+  ReadINIStr $4 "$CleanupReport" "Summary" "settings_present"
+  ReadINIStr $5 "$CleanupReport" "Summary" "tasks_present"
+  ReadINIStr $6 "$CleanupReport" "Summary" "task_size"
+  ReadINIStr $7 "$CleanupReport" "Summary" "credentials_present"
+  ReadINIStr $8 "$CleanupReport" "Summary" "message"
+  Goto cleanup_inspection_ready
+
+cleanup_inspection_unavailable:
+  StrCpy $CleanupRemoveAsr "0"
+  StrCpy $CleanupRemoveSettings "0"
+  StrCpy $CleanupRemoveTasks "0"
+  StrCpy $CleanupRemoveCredentials "0"
+  StrCpy $8 "无法检查本地内容；卸载器将只移除程序。"
+
+cleanup_inspection_ready:
+  nsDialogs::Create 1018
+  Pop $CleanupDialog
+  ${If} $CleanupDialog == error
+    Abort
+  ${EndIf}
+  SetCtlColors $CleanupDialog "" "FAF8FC"
+
+  ${NSD_CreateLabel} 0 0 100% 18u "选择需要随程序一起移除的内容。下载资源默认清理，设置、任务和凭据默认保留。"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+
+  ${NSD_CreateCheckbox} 0 24u 100% 12u "删除已下载的语音识别资源（约 $2）"
+  Pop $CleanupAsrCheckbox
+  SetCtlColors $CleanupAsrCheckbox "2E2A33" "FAF8FC"
+  ${NSD_CreateLabel} 16u 38u 94% 16u "识别资源位置：$1"
+  Pop $CleanupAsrRootLabel
+  SetCtlColors $CleanupAsrRootLabel "6F6573" "FAF8FC"
+
+  ${NSD_CreateCheckbox} 0 58u 100% 12u "删除应用设置与识别登记状态"
+  Pop $CleanupSettingsCheckbox
+  SetCtlColors $CleanupSettingsCheckbox "2E2A33" "FAF8FC"
+  ${NSD_CreateCheckbox} 0 80u 100% 12u "删除任务工作区与恢复缓存（约 $6，不可撤销）"
+  Pop $CleanupTasksCheckbox
+  SetCtlColors $CleanupTasksCheckbox "2E2A33" "FAF8FC"
+  ${NSD_CreateCheckbox} 0 102u 100% 12u "删除保存的服务凭据（也会影响 CLI / Agent）"
+  Pop $CleanupCredentialsCheckbox
+  SetCtlColors $CleanupCredentialsCheckbox "2E2A33" "FAF8FC"
+
+  ${NSD_CreateLabel} 0 124u 100% 18u "用户自行添加的模型、原始媒体和已导出的字幕不会被删除。"
+  Pop $0
+  SetCtlColors $0 "6F6573" "FAF8FC"
+  ${NSD_CreateLabel} 0 146u 100% 20u "$8"
+  Pop $CleanupNoticeLabel
+  SetCtlColors $CleanupNoticeLabel "D74F3E" "FAF8FC"
+
+  StrCmp $3 "1" asr_cleanup_available asr_cleanup_unavailable
+asr_cleanup_available:
+  StrCmp $CleanupRemoveAsr "1" 0 +2
+  ${NSD_Check} $CleanupAsrCheckbox
+  Goto settings_cleanup_state
+asr_cleanup_unavailable:
+  StrCpy $CleanupRemoveAsr "0"
+  ${NSD_Uncheck} $CleanupAsrCheckbox
+  EnableWindow $CleanupAsrCheckbox 0
+
+settings_cleanup_state:
+  StrCmp $4 "1" settings_cleanup_available settings_cleanup_unavailable
+settings_cleanup_available:
+  StrCmp $CleanupRemoveSettings "1" 0 +2
+  ${NSD_Check} $CleanupSettingsCheckbox
+  Goto tasks_cleanup_state
+settings_cleanup_unavailable:
+  StrCpy $CleanupRemoveSettings "0"
+  ${NSD_Uncheck} $CleanupSettingsCheckbox
+  EnableWindow $CleanupSettingsCheckbox 0
+
+tasks_cleanup_state:
+  StrCmp $5 "1" tasks_cleanup_available tasks_cleanup_unavailable
+tasks_cleanup_available:
+  StrCmp $CleanupRemoveTasks "1" 0 +2
+  ${NSD_Check} $CleanupTasksCheckbox
+  Goto credentials_cleanup_state
+tasks_cleanup_unavailable:
+  StrCpy $CleanupRemoveTasks "0"
+  ${NSD_Uncheck} $CleanupTasksCheckbox
+  EnableWindow $CleanupTasksCheckbox 0
+
+credentials_cleanup_state:
+  StrCmp $7 "1" credentials_cleanup_available credentials_cleanup_unavailable
+credentials_cleanup_available:
+  StrCmp $CleanupRemoveCredentials "1" 0 +2
+  ${NSD_Check} $CleanupCredentialsCheckbox
+  Goto show_cleanup_dialog
+credentials_cleanup_unavailable:
+  StrCpy $CleanupRemoveCredentials "0"
+  ${NSD_Uncheck} $CleanupCredentialsCheckbox
+  EnableWindow $CleanupCredentialsCheckbox 0
+
+show_cleanup_dialog:
+  nsDialogs::Show
+FunctionEnd
+
+Function un.CleanupPageLeave
+  ${NSD_GetState} $CleanupAsrCheckbox $0
+  StrCpy $CleanupRemoveAsr "0"
+  StrCmp $0 ${BST_CHECKED} 0 +2
+  StrCpy $CleanupRemoveAsr "1"
+  ${NSD_GetState} $CleanupSettingsCheckbox $0
+  StrCpy $CleanupRemoveSettings "0"
+  StrCmp $0 ${BST_CHECKED} 0 +2
+  StrCpy $CleanupRemoveSettings "1"
+  ${NSD_GetState} $CleanupTasksCheckbox $0
+  StrCpy $CleanupRemoveTasks "0"
+  StrCmp $0 ${BST_CHECKED} 0 +2
+  StrCpy $CleanupRemoveTasks "1"
+  ${NSD_GetState} $CleanupCredentialsCheckbox $0
+  StrCpy $CleanupRemoveCredentials "0"
+  StrCmp $0 ${BST_CHECKED} 0 +2
+  StrCpy $CleanupRemoveCredentials "1"
+
+  StrCmp $CleanupRemoveTasks "1" confirm_sensitive_cleanup
+  StrCmp $CleanupRemoveCredentials "1" confirm_sensitive_cleanup cleanup_page_done
+confirm_sensitive_cleanup:
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION \
+    "任务工作区或凭据一旦删除将无法通过重新安装恢复。确定继续吗？" \
+    IDYES cleanup_page_done
+  Abort
+cleanup_page_done:
+FunctionEnd
 
 Function un.CheckAppNotRunning
 un_check_again:
@@ -314,13 +567,84 @@ un_cancel:
 un_not_running:
 FunctionEnd
 
+Function un.RunSelectedCleanup
+  StrCmp $CleanupRemoveAsr "1" run_selected_cleanup
+  StrCmp $CleanupRemoveSettings "1" run_selected_cleanup
+  StrCmp $CleanupRemoveTasks "1" run_selected_cleanup
+  StrCmp $CleanupRemoveCredentials "1" run_selected_cleanup cleanup_not_requested
+
+run_selected_cleanup:
+  SetDetailsPrint textonly
+  DetailPrint "正在清理所选本地内容…"
+  SetDetailsPrint none
+  IfFileExists "$INSTDIR\runtime\python\python.exe" cleanup_helper_ready cleanup_helper_missing
+
+cleanup_helper_ready:
+  InitPluginsDir
+  StrCpy $CleanupReport "$PLUGINSDIR\transvortex-uninstall-cleanup.ini"
+  Delete "$CleanupReport"
+  StrCpy $CleanupArgs '--app-data-root "$LOCALAPPDATA\TransVortex" --credential-file "$PROFILE\.transvortex\auth.json" --report-ini "$CleanupReport"'
+  StrCmp $CleanupRemoveAsr "1" 0 +2
+  StrCpy $CleanupArgs '$CleanupArgs --remove-asr-resources'
+  StrCmp $CleanupRemoveSettings "1" 0 +2
+  StrCpy $CleanupArgs '$CleanupArgs --remove-settings'
+  StrCmp $CleanupRemoveTasks "1" 0 +2
+  StrCpy $CleanupArgs '$CleanupArgs --remove-tasks'
+  StrCmp $CleanupRemoveCredentials "1" 0 +2
+  StrCpy $CleanupArgs '$CleanupArgs --remove-credentials'
+  ClearErrors
+  ExecWait '"$INSTDIR\runtime\python\python.exe" -m transvortex.app.uninstall_cleanup $CleanupArgs' $0
+  IfErrors cleanup_failed
+  IfFileExists "$CleanupReport" 0 cleanup_failed
+  ReadINIStr $CleanupMessage "$CleanupReport" "Summary" "message"
+  StrCmp $0 "0" cleanup_succeeded cleanup_failed
+
+cleanup_succeeded:
+  StrCmp $CleanupMessage "" cleanup_done
+  IfSilent cleanup_done
+  MessageBox MB_OK|MB_ICONEXCLAMATION "$CleanupMessage"
+  Goto cleanup_done
+
+cleanup_helper_missing:
+  StrCpy $CleanupMessage "卸载清理组件缺失，所选本地内容可能仍保留。"
+  Goto cleanup_failed_message
+
+cleanup_failed:
+  StrCmp $CleanupMessage "" 0 cleanup_failed_message
+  ReadINIStr $CleanupMessage "$CleanupReport" "Summary" "message"
+  StrCmp $CleanupMessage "" 0 cleanup_failed_message
+  StrCpy $CleanupMessage "无法完成所选本地内容的清理。程序仍会继续卸载。"
+
+cleanup_failed_message:
+  StrCpy $CleanupFailure "1"
+  IfSilent cleanup_done
+  MessageBox MB_OK|MB_ICONEXCLAMATION "$CleanupMessage"
+  Goto cleanup_done
+
+cleanup_not_requested:
+  SetDetailsPrint textonly
+  DetailPrint "正在保留用户配置与本地内容…"
+  SetDetailsPrint none
+
+cleanup_done:
+FunctionEnd
+
 Section "Uninstall"
   Call un.CheckAppNotRunning
   SetShellVarContext current
+  Call un.RunSelectedCleanup
+  SetDetailsPrint textonly
+  DetailPrint "正在移除 TransVortex 程序…"
+  SetDetailsPrint none
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
   DeleteRegKey HKCU "${APP_REGISTRY_KEY}"
   RMDir /r "$INSTDIR"
   RMDir /r "$INSTDIR.__staging"
   RMDir /r "$INSTDIR.__previous"
+  StrCmp $CleanupFailure "1" 0 uninstall_complete
+  SetErrorLevel 20
+uninstall_complete:
+  SetDetailsPrint textonly
+  DetailPrint "TransVortex 程序已移除。"
 SectionEnd

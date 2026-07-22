@@ -180,6 +180,10 @@ $payloadManifest = Get-Content -LiteralPath $payloadManifestPath -Encoding utf8 
 if ($payloadManifest.package_type -ne "installer_payload" -or -not [bool]$payloadManifest.ffmpeg_included) {
     throw "Installer payload manifest does not describe the required fixed runtime layout."
 }
+$uninstallCleanupModule = Join-Path $payloadRoot "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py"
+if (-not (Test-Path -LiteralPath $uninstallCleanupModule)) {
+    throw "Installer payload is missing the uninstall cleanup module. Rebuild the app runtime with -BuildAppRuntime."
+}
 $powershellPayloads = @(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File -Filter "*.ps1")
 if ($powershellPayloads.Count -gt 0) {
     throw "Installer payload must not contain end-user PowerShell scripts: $($powershellPayloads.FullName -join ', ')"
@@ -192,6 +196,13 @@ $makensis = Resolve-Makensis -ExplicitPath $MakensisPath
 $nsiPath = Join-Path $repoRoot "installer\windows\TransVortex.nsi"
 $licensePath = Join-Path $repoRoot "LICENSE"
 $iconPath = Join-Path $repoRoot "desktop_flutter\windows\runner\resources\app_icon.ico"
+$welcomeBitmapPath = Join-Path $repoRoot "installer\windows\assets\installer_welcome.bmp"
+$headerBitmapPath = Join-Path $repoRoot "installer\windows\assets\installer_header.bmp"
+foreach ($brandAsset in @($iconPath, $welcomeBitmapPath, $headerBitmapPath)) {
+    if (-not (Test-Path -LiteralPath $brandAsset)) {
+        throw "Installer brand asset not found: $brandAsset. Run scripts\build_brand_assets.ps1."
+    }
+}
 
 $nsisArgs = @(
     "/V3",
@@ -203,6 +214,8 @@ $nsisArgs = @(
     "/DESTIMATED_SIZE_KB=$estimatedSizeKb",
     "/DLICENSE_FILE=$licensePath",
     "/DAPP_ICON=$iconPath",
+    "/DINSTALLER_WELCOME_BITMAP=$welcomeBitmapPath",
+    "/DINSTALLER_HEADER_BITMAP=$headerBitmapPath",
     $nsiPath
 )
 & $makensis @nsisArgs | Out-Host
@@ -254,6 +267,18 @@ $report = [ordered]@{
     payload_file_count = $payloadFiles.Count
     payload_bytes = [int64]$payloadBytes
     atomic_directory_swap = $true
+    branded_mui2_interface = $true
+    internal_file_details_hidden = $true
+    interactive_uninstall_cleanup = $true
+    interactive_asr_cleanup_default = "remove"
+    silent_uninstall_user_data_default = "preserve"
+    uninstall_cleanup_switches = @(
+        "/REMOVEASR",
+        "/REMOVESETTINGS",
+        "/REMOVETASKS",
+        "/REMOVECREDENTIALS"
+    )
+    external_models_removed_by_uninstaller = $false
     running_process_mutex = "Local\\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B"
     signed = $signed
     signing_required_for_public_release = $true
@@ -269,7 +294,7 @@ $report = [ordered]@{
         "upgrade replacement and obsolete-file removal",
         "running-process install and uninstall protection",
         "Start menu shortcut AppUserModelID",
-        "silent uninstall and user-data preservation"
+        "silent uninstall default preservation and explicit managed-data cleanup"
     )
     generated_at = (Get-Date).ToUniversalTime().ToString("o")
 }
