@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/app_service_client.dart';
+import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import '../services/settings_error.dart';
 import '../services/window_state_bridge.dart';
@@ -16,14 +19,18 @@ class AsrResourceManagement extends StatefulWidget {
     super.key,
     required this.client,
     required this.bridge,
+    this.service,
     this.pathOpener,
     this.onResourcesChanged,
+    this.showHeader = true,
   });
 
   final AppServiceClient client;
   final WindowStateBridge bridge;
+  final LocalServiceController? service;
   final PathOpener? pathOpener;
   final Future<void> Function()? onResourcesChanged;
+  final bool showHeader;
 
   @override
   State<AsrResourceManagement> createState() => _AsrResourceManagementState();
@@ -35,15 +42,49 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
   String? _removingKey;
   String? _message;
   String? _error;
+  Timer? _standaloneSyncTimer;
+  int _serviceRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    _snapshot = widget.service?.snapshot.desktopSnapshot;
+    widget.service?.addListener(_syncFromService);
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant AsrResourceManagement oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.service, widget.service)) {
+      oldWidget.service?.removeListener(_syncFromService);
+      widget.service?.addListener(_syncFromService);
+      _syncFromService();
+      _scheduleAutomaticSync();
+    }
+  }
+
+  @override
+  void dispose() {
+    _standaloneSyncTimer?.cancel();
+    widget.service?.removeListener(_syncFromService);
+    super.dispose();
+  }
+
+  void _syncFromService() {
+    final next = widget.service?.snapshot.desktopSnapshot;
+    if (!mounted || next == null || identical(next, _snapshot)) return;
+    _serviceRevision += 1;
+    setState(() {
+      _snapshot = next;
+      if (_error != null) _error = null;
+    });
+    _scheduleAutomaticSync();
+  }
+
   Future<void> _load({bool clearFeedback = true}) async {
-    if (_loading) return;
+    if (!mounted || _loading) return;
+    final serviceRevision = _serviceRevision;
     setState(() {
       _loading = true;
       if (clearFeedback) {
@@ -53,13 +94,19 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
     });
     try {
       final snapshot = await widget.client.desktopSnapshot();
-      if (!mounted) return;
-      setState(() => _snapshot = snapshot);
+      if (!mounted || serviceRevision != _serviceRevision) return;
+      setState(() {
+        _snapshot = snapshot;
+        _error = null;
+      });
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || serviceRevision != _serviceRevision) return;
       setState(() => _error = friendlySettingsError(error));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        _scheduleAutomaticSync();
+      }
     }
   }
 
@@ -161,21 +208,38 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         resource.kind,
         itemId: resource.component.id,
       );
-      await _load(clearFeedback: false);
-      await widget.bridge.refreshServiceSnapshot();
-      await widget.onResourcesChanged?.call();
-      if (!mounted) return;
-      setState(() => _message = '${resource.label}已删除。');
+      await _syncAfterResourceChange('${resource.label}已删除。');
     } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _error = friendlySettingsError(error));
+      if (error is RpcRemoteException && error.code == 'component_not_found') {
+        await _syncAfterResourceChange('这个识别资源已不存在，列表已自动同步。');
+      } else if (mounted) {
+        setState(() => _error = friendlySettingsError(error));
+      }
     } finally {
       if (mounted) setState(() => _removingKey = null);
     }
   }
 
+  Future<void> _syncAfterResourceChange(String message) async {
+    if (mounted) await _load(clearFeedback: false);
+    await widget.bridge.refreshServiceSnapshot();
+    await widget.onResourcesChanged?.call();
+    if (!mounted) return;
+    setState(() => _message = message);
+  }
+
   bool get _hasActiveOperation =>
       _snapshot?.asrOperations.any((operation) => operation.active) ?? false;
+
+  void _scheduleAutomaticSync() {
+    _standaloneSyncTimer?.cancel();
+    _standaloneSyncTimer = null;
+    if (!mounted || widget.service != null) return;
+    _standaloneSyncTimer = Timer(const Duration(seconds: 2), () {
+      _standaloneSyncTimer = null;
+      if (mounted) unawaited(_load(clearFeedback: false));
+    });
+  }
 
   Future<void> _openStorage() async {
     final root = _snapshot?.asrStorage.root.trim() ?? '';
@@ -200,31 +264,15 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
       key: const ValueKey('asr-resource-manager'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('本机识别资源', style: T.tSection),
-                  const SizedBox(height: 2),
-                  Text(
-                    '只管理由 TransVortex 下载的文件，不会删除用户自己的模型。',
-                    style: T.tCaption,
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              key: const ValueKey('asr-resource-refresh'),
-              tooltip: '刷新资源状态',
-              onPressed: busy ? null : _load,
-              icon: const Icon(Icons.refresh_rounded, size: 19),
-              color: T.muted,
-            ),
-          ],
-        ),
-        const SizedBox(height: T.s12),
+        if (widget.showHeader) ...[
+          Text('本机识别资源', style: T.tSection),
+          const SizedBox(height: 2),
+          Text('只管理由 TransVortex 下载的文件，不会删除用户自己的模型。', style: T.tCaption),
+          const SizedBox(height: T.s12),
+        ] else ...[
+          Text('只显示由 TransVortex 下载的文件；用户自己的模型不会被列出或删除。', style: T.tCaption),
+          const SizedBox(height: T.s12),
+        ],
         _StorageSummary(
           storage: storage,
           onOpen: storage.root.trim().isEmpty ? null : _openStorage,
@@ -238,7 +286,19 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         ],
         if (_error != null) ...[
           const SizedBox(height: T.s8),
-          Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
+              if (!busy)
+                ActionButton(
+                  label: '重试同步',
+                  onTap: () => _load(clearFeedback: false),
+                ),
+            ],
+          ),
         ] else if (_message != null) ...[
           const SizedBox(height: T.s8),
           Text(_message!, style: T.tCaption.copyWith(color: T.ok)),
@@ -248,7 +308,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
           child: _loading && snapshot == null
               ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
               : resources.isEmpty
-              ? _EmptyManagedResources(onRefresh: busy ? null : _load)
+              ? const _EmptyManagedResources()
               : ListView.separated(
                   padding: EdgeInsets.zero,
                   itemCount: resources.length,
@@ -398,9 +458,7 @@ class _ResourceRow extends StatelessWidget {
 }
 
 class _EmptyManagedResources extends StatelessWidget {
-  const _EmptyManagedResources({required this.onRefresh});
-
-  final VoidCallback? onRefresh;
+  const _EmptyManagedResources();
 
   @override
   Widget build(BuildContext context) {
@@ -412,9 +470,7 @@ class _EmptyManagedResources extends StatelessWidget {
           const SizedBox(height: T.s8),
           Text('没有由 TransVortex 下载的识别资源', style: T.tBody),
           const SizedBox(height: T.s4),
-          Text('用户自己选择的模型不会出现在这里。', style: T.tCaption),
-          const SizedBox(height: T.s12),
-          ActionButton(label: '刷新', onTap: onRefresh),
+          Text('当前无需清理。', style: T.tCaption),
         ],
       ),
     );

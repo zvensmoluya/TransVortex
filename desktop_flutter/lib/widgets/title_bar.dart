@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../theme/tokens.dart';
@@ -42,11 +42,7 @@ class TitleBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: T.s16),
                 child: Row(
                   children: [
-                    const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CustomPaint(painter: _BrandSealPainter()),
-                    ),
+                    const BrandSeal(),
                     const SizedBox(width: T.s8),
                     Text(
                       title,
@@ -93,6 +89,40 @@ class TitleBar extends StatelessWidget {
     } else {
       await windowManager.maximize();
     }
+  }
+}
+
+class BrandSeal extends StatelessWidget {
+  const BrandSeal({super.key, this.size = 20});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: const CustomPaint(painter: _BrandSealPainter()),
+    );
+  }
+}
+
+class TitleBarCloseButton extends StatelessWidget {
+  const TitleBarCloseButton({
+    super.key,
+    required this.onTap,
+    this.tooltip = '关闭',
+  });
+
+  final VoidCallback onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: _ChromeButton(glyph: _Glyph.close, danger: true, onTap: onTap),
+    );
   }
 }
 

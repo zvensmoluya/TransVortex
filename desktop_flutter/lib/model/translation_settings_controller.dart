@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../services/app_service_client.dart';
 import '../services/settings_error.dart';
+import 'network_settings.dart';
 import 'reasoning_effort.dart';
 
 /// Sink used to mirror the active translation route back onto the main window
@@ -26,6 +27,8 @@ enum TranslationBusy {
   savingProfile,
   savingNetwork,
 }
+
+enum _NetworkSyncResult { unchanged, changed, failed }
 
 /// State of the model catalog discovered from the selected upstream service.
 /// This catalog is deliberately separate from [ConnectionDraft.models], which
@@ -257,6 +260,10 @@ class TranslationSettingsController extends ChangeNotifier {
   bool _disposed = false;
   String _networkMode = 'system';
   String _proxyPort = '';
+  String _savedNetworkMode = 'system';
+  String _savedProxyPort = '';
+  bool _networkSyncing = false;
+  Future<_NetworkSyncResult>? _networkSyncFuture;
   String _connectionTestReasoningEffort = reasoningEffortAuto;
 
   // Bumped whenever the draft's text fields are replaced wholesale (selecting a
@@ -277,14 +284,10 @@ class TranslationSettingsController extends ChangeNotifier {
   ConnectionTestResult? get testResult => _testResult;
   String get networkMode => _networkMode;
   String get proxyPort => _proxyPort;
-  String get networkLabel => switch (_networkMode) {
-    'direct' => '直连',
-    'local_proxy' =>
-      _proxyPort.trim().isEmpty
-          ? '本地代理'
-          : '本地代理 · 127.0.0.1:${_proxyPort.trim()}',
-    _ => '跟随系统',
-  };
+  String get networkLabel => networkSettingsLabel(_networkMode, _proxyPort);
+  bool get networkSyncing => _networkSyncing;
+  bool get networkDirty =>
+      _networkMode != _savedNetworkMode || _proxyPort.trim() != _savedProxyPort;
   int get draftRevision => _draftRevision;
 
   List<ProviderOption> get connections => _snapshot?.providers ?? const [];
@@ -710,41 +713,102 @@ class TranslationSettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void editProxyPort(String value) => _proxyPort = value;
+  void editProxyPort(String value) {
+    if (_proxyPort == value) return;
+    _proxyPort = value;
+    _message = null;
+    _error = null;
+    notifyListeners();
+  }
 
-  Future<void> saveNetwork() async {
-    final snapshot = _snapshot;
-    if (snapshot == null) return;
-    final text = _proxyPort.trim();
-    final parsed = text.isEmpty ? 0 : int.tryParse(text);
-    if (_networkMode == 'local_proxy' &&
-        (parsed == null || parsed < 1 || parsed > 65535)) {
-      _fail('请填写 1 到 65535 之间的本地代理端口。');
+  Future<void> syncNetworkSettings() async {
+    if (_disposed || isBusy || _snapshot == null) return;
+    final pending = _networkSyncFuture;
+    if (pending != null) {
+      await pending;
       return;
     }
-    final retainedPort = parsed ?? snapshot.networkSettings.proxyPort;
+    final future = _performNetworkSync();
+    _networkSyncFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_networkSyncFuture, future)) _networkSyncFuture = null;
+    }
+  }
+
+  Future<_NetworkSyncResult> _performNetworkSync() async {
+    _networkSyncing = true;
+    if (!_disposed) notifyListeners();
+    try {
+      final changed = await _syncLatestNetwork(preserveDraft: true);
+      _error = null;
+      if (changed) {
+        _message = networkDirty
+            ? '网络设置已在其他窗口更新；当前未保存内容已保留。'
+            : '网络设置已自动同步：$networkLabel。';
+      }
+      return changed
+          ? _NetworkSyncResult.changed
+          : _NetworkSyncResult.unchanged;
+    } on Object catch (error) {
+      _error = friendlySettingsError(error);
+      return _NetworkSyncResult.failed;
+    } finally {
+      _networkSyncing = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  Future<void> saveNetwork() async {
+    final pendingSync = _networkSyncFuture;
+    if (pendingSync != null) {
+      final result = await pendingSync;
+      if (_disposed || isBusy || result != _NetworkSyncResult.unchanged) return;
+    }
+    if (_networkSyncing || isBusy) return;
+    final initialSnapshot = _snapshot;
+    if (initialSnapshot == null || !networkDirty) return;
+    try {
+      resolveNetworkProxyPort(
+        mode: _networkMode,
+        proxyPortText: _proxyPort,
+        fallbackPort: initialSnapshot.networkSettings.proxyPort,
+      );
+    } on NetworkSettingsValidationException catch (error) {
+      _fail(error.message);
+      return;
+    }
     _begin(TranslationBusy.savingNetwork);
     try {
-      final result = await _client.networkSettingsSave(
+      final changed = await _syncLatestNetwork(preserveDraft: true);
+      if (changed) {
+        _message = networkDirty
+            ? '网络设置已在其他窗口更新；当前修改已保留，请确认后再次保存。'
+            : '网络设置已自动同步：$networkLabel。';
+        return;
+      }
+      final snapshot = _snapshot!;
+      _snapshot = await saveNetworkSettingsDraft(
+        client: _client,
+        snapshot: snapshot,
         mode: _networkMode,
-        proxyPort: retainedPort,
-        expectedVersion: snapshot.pipelineFileVersion,
+        proxyPortText: _proxyPort,
       );
-      final network = _map(result['network']);
-      final nextConfig = <String, Object?>{
-        ...snapshot.config,
-        'network': network.isEmpty
-            ? {'mode': _networkMode, 'proxy_port': retainedPort}
-            : network,
-        if (_map(result['pipeline_file_version']).isNotEmpty)
-          'pipeline_file_version': _map(result['pipeline_file_version']),
-      };
-      _snapshot = snapshot.copyWith(config: nextConfig);
       _loadNetworkDraft(_snapshot!);
       await _notifyConfigChanged();
       _message = '网络设置已保存：$networkLabel。';
     } on Object catch (error) {
-      _error = friendlySettingsError(error);
+      if (isNetworkSettingsConflict(error)) {
+        try {
+          await _syncLatestNetwork(preserveDraft: true);
+          _message = '网络设置刚刚发生变化；当前修改已保留，请确认后再次保存。';
+        } on Object catch (syncError) {
+          _error = friendlySettingsError(syncError);
+        }
+      } else {
+        _error = friendlySettingsError(error);
+      }
     } finally {
       _end();
     }
@@ -2144,6 +2208,38 @@ class TranslationSettingsController extends ChangeNotifier {
     final network = snapshot.networkSettings;
     _networkMode = network.mode;
     _proxyPort = network.proxyPort > 0 ? '${network.proxyPort}' : '';
+    _savedNetworkMode = _networkMode;
+    _savedProxyPort = _proxyPort;
+  }
+
+  Future<bool> _syncLatestNetwork({required bool preserveDraft}) async {
+    final current = _snapshot;
+    if (current == null) return false;
+    final latest = await _client.desktopSnapshot();
+    final latestNetwork = latest.networkSettings;
+    final latestProxyPort = latestNetwork.proxyPort > 0
+        ? '${latestNetwork.proxyPort}'
+        : '';
+    final changed =
+        latestNetwork.mode != _savedNetworkMode ||
+        latestProxyPort != _savedProxyPort;
+    final keepDraft = preserveDraft && networkDirty;
+    final nextConfig = <String, Object?>{
+      ...current.config,
+      'network':
+          latest.config['network'] ??
+          {'mode': latestNetwork.mode, 'proxy_port': latestNetwork.proxyPort},
+      if (latest.pipelineFileVersion != null)
+        'pipeline_file_version': latest.pipelineFileVersion!,
+    };
+    _snapshot = current.copyWith(config: nextConfig);
+    _savedNetworkMode = latestNetwork.mode;
+    _savedProxyPort = latestProxyPort;
+    if (!keepDraft) {
+      _networkMode = latestNetwork.mode;
+      _proxyPort = latestProxyPort;
+    }
+    return changed;
   }
 
   static Map<String, Object?> _map(Object? value) =>

@@ -119,6 +119,121 @@ class SettingsSection extends StatelessWidget {
   }
 }
 
+class SettingsTabOption<V> {
+  const SettingsTabOption({required this.value, required this.label});
+
+  final V value;
+  final String label;
+}
+
+class SettingsTabs<V> extends StatelessWidget {
+  const SettingsTabs({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onPick,
+    this.tabWidth = 96,
+  });
+
+  final List<SettingsTabOption<V>> options;
+  final V selected;
+  final ValueChanged<V> onPick;
+  final double tabWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line, width: 1),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in options)
+              _SettingsTabButton(
+                label: option.label,
+                selected: option.value == selected,
+                onTap: () => onPick(option.value),
+                width: tabWidth,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsTabButton extends StatefulWidget {
+  const _SettingsTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.width,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final double width;
+
+  @override
+  State<_SettingsTabButton> createState() => _SettingsTabButtonState();
+}
+
+class _SettingsTabButtonState extends State<_SettingsTabButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 120),
+          curve: Curves.easeOutCubic,
+          width: widget.width,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: widget.selected
+                ? T.accentSoft
+                : _hover
+                ? T.accentSoft.withValues(alpha: 0.42)
+                : const Color(0x00000000),
+            borderRadius: BorderRadius.circular(T.rSm),
+            border: Border.all(
+              color: widget.selected ? T.accent : const Color(0x00000000),
+              width: 1,
+            ),
+          ),
+          child: Text(
+            widget.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: T.tBody.copyWith(
+              color: widget.selected ? T.accentStrong : T.ink,
+              fontWeight: widget.selected ? T.wBold : T.wMedium,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TapeMarker extends StatelessWidget {
   const _TapeMarker({required this.width, required this.height});
 

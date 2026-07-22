@@ -31,7 +31,7 @@
 
 ### 全局网络方式
 
-Flutter 在“翻译模型设置 > 网络”保存应用全局网络方式。配置位于用户级 `pipeline.yaml` 的 `network` 节点，不写入 Provider YAML，也不保存代理账号或密码：
+Flutter 可在“应用设置 > 网络”或“翻译模型设置 > 网络”保存同一份应用全局网络方式。配置位于用户级 `pipeline.yaml` 的 `network` 节点，不写入 Provider YAML，也不保存代理账号或密码：
 
 ```yaml
 network:

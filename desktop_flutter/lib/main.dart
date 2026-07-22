@@ -308,8 +308,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   late final AnimationController _applicationSettingsAnimation =
       AnimationController(
         vsync: this,
-        duration: const Duration(milliseconds: 160),
-        reverseDuration: const Duration(milliseconds: 140),
+        duration: const Duration(milliseconds: 200),
+        reverseDuration: const Duration(milliseconds: 160),
       );
   late final AnimationController _breathe = AnimationController(
     vsync: this,
@@ -1705,41 +1705,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildApplicationSettingsPanel() {
-    return DecoratedBox(
+    return RepaintBoundary(
       key: const ValueKey('application-settings-shell'),
-      decoration: BoxDecoration(
-        color: _applicationSettingsUseOverlay ? Colors.transparent : T.bg,
-        border: Border(
-          left: BorderSide(
-            color: _applicationSettingsUseOverlay ? Colors.transparent : T.line,
-          ),
-        ),
-      ),
-      child: AnimatedBuilder(
-        animation: _applicationSettingsAnimation,
-        child: ApplicationSettingsPanel(
-          bridge: widget.bridge,
-          service: _service,
-          pathOpener: widget.pathOpener,
-          onClose: () => unawaited(_closeApplicationSettings()),
-        ),
-        builder: (context, child) {
-          final curve = _applicationSettingsClosing
-              ? Curves.easeInOutCubic
-              : Curves.easeOutCubic;
-          final progress = curve.transform(_applicationSettingsAnimation.value);
-          return IgnorePointer(
-            ignoring: progress < 1,
-            child: Opacity(
-              key: const ValueKey('application-settings-transition'),
-              opacity: progress,
-              child: Transform.translate(
-                offset: Offset((1 - progress) * 28, 0),
-                child: child,
-              ),
-            ),
-          );
-        },
+      child: ApplicationSettingsPanel(
+        bridge: widget.bridge,
+        service: _service,
+        pathOpener: widget.pathOpener,
+        entranceAnimation: _applicationSettingsAnimation,
+        overlay: _applicationSettingsUseOverlay,
+        onClose: () => unawaited(_closeApplicationSettings()),
       ),
     );
   }
@@ -2586,9 +2560,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         _applicationSettingsVisible = true;
       });
       _applicationSettingsChanging = false;
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted || _applicationSettingsClosing) return;
-      unawaited(_applicationSettingsAnimation.forward(from: 0));
+      if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) {
+        _applicationSettingsAnimation.value = 1;
+      } else {
+        unawaited(_applicationSettingsAnimation.forward(from: 0));
+      }
     } on Object catch (error) {
       final expected = _applicationSettingsExpectedBounds;
       if (initialBounds != null && expected != null) {
@@ -2618,6 +2594,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   Future<void> _closeApplicationSettings({bool animate = true}) async {
     if (!_applicationSettingsVisible || _applicationSettingsClosing) return;
     _applicationSettingsClosing = true;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     try {
       final current = await _mainWindowSurface.getBounds();
       final original = _applicationSettingsOriginalBounds;
@@ -2630,15 +2608,15 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       final resizeNeeded =
           target != null &&
           (current == null || !_sameWindowBounds(current, target));
-      if (animate) {
+      if (animate && !reduceMotion) {
         await _applicationSettingsAnimation.reverse();
         await WidgetsBinding.instance.endOfFrame;
-        if (resizeNeeded) await _mainWindowSurface.setBounds(target!);
+        if (resizeNeeded) await _mainWindowSurface.setBounds(target);
       } else {
         _applicationSettingsAnimation
           ..stop()
           ..value = 0;
-        if (resizeNeeded) await _mainWindowSurface.setBounds(target!);
+        if (resizeNeeded) await _mainWindowSurface.setBounds(target);
       }
       if (!mounted) return;
       setState(() => _applicationSettingsVisible = false);

@@ -20,6 +20,9 @@ String friendlySettingsError(Object error) {
     if (message.isNotEmpty) return message;
   }
   if (error is RpcRemoteException) {
+    if (error.code == 'network_config_conflict') {
+      return '网络设置仍在其他窗口变化，请稍后再次保存。';
+    }
     if (error.code == 'operation_active') {
       return '已有识别环境任务正在进行，请先等待完成或取消当前任务。';
     }
@@ -48,7 +51,7 @@ String friendlySettingsError(Object error) {
       return '无法删除识别资源；请关闭正在使用它的程序后重试。';
     }
     if (error.code == 'component_not_found') {
-      return '这个识别资源已不存在，请刷新后再试。';
+      return '这个识别资源已不存在，当前状态已自动同步。';
     }
     final details = _map(error.details);
     final info = _map(details['error_info']);

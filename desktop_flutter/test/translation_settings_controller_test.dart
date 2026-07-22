@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:async';
+
 import 'package:transvortex_desktop_flutter/model/translation_settings_controller.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 
@@ -128,6 +130,171 @@ void main() {
       );
       expect(controller.error, contains('1 到 65535'));
     });
+
+    test('ignores an invalid hidden proxy port outside proxy mode', () async {
+      await controller.load();
+      controller.selectNetworkMode('local_proxy');
+      controller.editProxyPort('70000');
+      controller.selectNetworkMode('direct');
+
+      await controller.saveNetwork();
+
+      final save = transport.calls.firstWhere(
+        (call) => call.method == 'network.settings.save',
+      );
+      expect(save.params['mode'], 'direct');
+      expect(save.params['proxy_port'], 0);
+      expect(controller.error, isNull);
+    });
+
+    test('syncs an external network change without a refresh action', () async {
+      await controller.load();
+      final latest = _snapshot();
+      final config = Map<String, Object?>.from(latest['config'] as Map);
+      config['network'] = {'mode': 'local_proxy', 'proxy_port': 7897};
+      config['pipeline_file_version'] = {'mtime_ns': 9, 'size': 10};
+      transport.results['desktop.snapshot'] = {...latest, 'config': config};
+
+      await controller.syncNetworkSettings();
+
+      expect(controller.networkMode, 'local_proxy');
+      expect(controller.proxyPort, '7897');
+      expect(controller.networkDirty, isFalse);
+      expect(controller.message, contains('自动同步'));
+    });
+
+    test('successful network sync clears an earlier sync error', () async {
+      final flakyTransport = _FlakyNetworkSyncTransport();
+      final flakyController = TranslationSettingsController(
+        AppServiceClient(flakyTransport),
+        (label, {required configured}) async {},
+      );
+      addTearDown(flakyController.dispose);
+      await flakyController.load();
+
+      await flakyController.syncNetworkSettings();
+      expect(flakyController.error, isNotNull);
+
+      await flakyController.syncNetworkSettings();
+      expect(flakyController.error, isNull);
+      expect(flakyController.networkSyncing, isFalse);
+    });
+
+    test(
+      'save waits for focus sync and preserves an externally changed draft',
+      () async {
+        final pendingTransport = _PendingNetworkSyncTransport();
+        final pendingController = TranslationSettingsController(
+          AppServiceClient(pendingTransport),
+          (label, {required configured}) async {},
+        );
+        addTearDown(pendingController.dispose);
+        await pendingController.load();
+        pendingController.selectNetworkMode('local_proxy');
+        pendingController.editProxyPort('7890');
+
+        final sync = pendingController.syncNetworkSettings();
+        await pendingTransport.syncStarted.future;
+        expect(pendingController.networkSyncing, isTrue);
+
+        final save = pendingController.saveNetwork();
+        pendingTransport.releaseSync.complete();
+        await Future.wait([sync, save]);
+
+        expect(
+          pendingTransport.calls.where(
+            (call) => call.method == 'network.settings.save',
+          ),
+          isEmpty,
+        );
+        expect(pendingController.networkDirty, isTrue);
+        expect(pendingController.message, contains('未保存内容已保留'));
+
+        await pendingController.saveNetwork();
+        expect(
+          pendingTransport.calls.where(
+            (call) => call.method == 'network.settings.save',
+          ),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'external network changes require confirming a preserved draft',
+      () async {
+        final externalTransport = _ExternalNetworkChangeTransport();
+        final externalController = TranslationSettingsController(
+          AppServiceClient(externalTransport),
+          (label, {required configured}) async {},
+        );
+        addTearDown(externalController.dispose);
+        await externalController.load();
+        externalController.selectNetworkMode('local_proxy');
+        externalController.editProxyPort('7890');
+
+        await externalController.saveNetwork();
+
+        expect(
+          externalTransport.calls.where(
+            (call) => call.method == 'network.settings.save',
+          ),
+          isEmpty,
+        );
+        expect(externalController.proxyPort, '7890');
+        expect(externalController.networkDirty, isTrue);
+        expect(externalController.message, contains('确认后再次保存'));
+
+        await externalController.saveNetwork();
+
+        final save = externalTransport.calls.singleWhere(
+          (call) => call.method == 'network.settings.save',
+        );
+        expect(save.params['proxy_port'], 7890);
+        expect(save.params['expected_version'], {'mtime_ns': 9, 'size': 10});
+        expect(externalController.error, isNull);
+      },
+    );
+
+    test(
+      'network save resolves a version conflict without manual refresh',
+      () async {
+        final conflictTransport = _NetworkConflictTransport();
+        final conflictController = TranslationSettingsController(
+          AppServiceClient(conflictTransport),
+          (label, {required configured}) async {},
+        );
+        addTearDown(conflictController.dispose);
+        await conflictController.load();
+        conflictController.selectNetworkMode('local_proxy');
+        conflictController.editProxyPort('7890');
+
+        await conflictController.saveNetwork();
+
+        var saves = conflictTransport.calls
+            .where((call) => call.method == 'network.settings.save')
+            .toList();
+        expect(saves, hasLength(1));
+        expect(conflictController.message, contains('确认后再次保存'));
+
+        await conflictController.saveNetwork();
+
+        saves = conflictTransport.calls
+            .where((call) => call.method == 'network.settings.save')
+            .toList();
+        expect(saves, hasLength(2));
+        expect(saves.first.params['expected_version'], {
+          'mtime_ns': 9,
+          'size': 10,
+        });
+        expect(saves.last.params['expected_version'], {
+          'mtime_ns': 9,
+          'size': 10,
+        });
+        expect(conflictController.error, isNull);
+        expect(conflictController.message, contains('127.0.0.1:7890'));
+      },
+    );
 
     test('saveConnection only writes the provider, never the route', () async {
       await controller.load();
@@ -797,6 +964,140 @@ class _RecordingTransport implements AppServiceTransport {
       throw RpcRemoteException('method_not_found', method);
     }
     return results[method];
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+class _NetworkConflictTransport implements AppServiceTransport {
+  final List<_RecordedCall> calls = [];
+  var _snapshotCalls = 0;
+  var _saveCalls = 0;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    calls.add(_RecordedCall(method, params));
+    if (method == 'desktop.snapshot') {
+      final snapshot = _snapshot();
+      if (_snapshotCalls++ == 0) return snapshot;
+      final config = Map<String, Object?>.from(snapshot['config'] as Map);
+      config['pipeline_file_version'] = {'mtime_ns': 9, 'size': 10};
+      return {...snapshot, 'config': config};
+    }
+    if (method == 'network.settings.save') {
+      if (_saveCalls++ == 0) {
+        throw RpcRemoteException(
+          'network_config_conflict',
+          'Network config changed on disk',
+        );
+      }
+      return <String, Object?>{
+        'ok': true,
+        'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+        'pipeline_file_version': {'mtime_ns': 11, 'size': 12},
+      };
+    }
+    throw RpcRemoteException('method_not_found', method);
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+class _ExternalNetworkChangeTransport implements AppServiceTransport {
+  final List<_RecordedCall> calls = [];
+  var _snapshotCalls = 0;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    calls.add(_RecordedCall(method, params));
+    if (method == 'desktop.snapshot') {
+      final snapshot = _snapshot();
+      if (_snapshotCalls++ == 0) return snapshot;
+      final config = Map<String, Object?>.from(snapshot['config'] as Map);
+      config['network'] = {'mode': 'local_proxy', 'proxy_port': 7897};
+      config['pipeline_file_version'] = {'mtime_ns': 9, 'size': 10};
+      return {...snapshot, 'config': config};
+    }
+    if (method == 'network.settings.save') {
+      return <String, Object?>{
+        'ok': true,
+        'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+        'pipeline_file_version': {'mtime_ns': 11, 'size': 12},
+      };
+    }
+    throw RpcRemoteException('method_not_found', method);
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+class _FlakyNetworkSyncTransport implements AppServiceTransport {
+  var _snapshotCalls = 0;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    if (method != 'desktop.snapshot') {
+      throw RpcRemoteException('method_not_found', method);
+    }
+    if (_snapshotCalls++ == 1) {
+      throw RpcRemoteException('service_unavailable', 'offline');
+    }
+    return _snapshot();
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+class _PendingNetworkSyncTransport implements AppServiceTransport {
+  final List<_RecordedCall> calls = [];
+  final Completer<void> syncStarted = Completer<void>();
+  final Completer<void> releaseSync = Completer<void>();
+  var _snapshotCalls = 0;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> params = const {},
+    Duration? timeout,
+  ]) async {
+    calls.add(_RecordedCall(method, params));
+    if (method == 'desktop.snapshot') {
+      final snapshot = _snapshot();
+      final call = _snapshotCalls++;
+      if (call == 0) return snapshot;
+      if (call == 1) {
+        syncStarted.complete();
+        await releaseSync.future;
+      }
+      final config = Map<String, Object?>.from(snapshot['config'] as Map);
+      config['network'] = {'mode': 'local_proxy', 'proxy_port': 7897};
+      config['pipeline_file_version'] = {'mtime_ns': 9, 'size': 10};
+      return {...snapshot, 'config': config};
+    }
+    if (method == 'network.settings.save') {
+      return <String, Object?>{
+        'ok': true,
+        'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+        'pipeline_file_version': {'mtime_ns': 11, 'size': 12},
+      };
+    }
+    throw RpcRemoteException('method_not_found', method);
   }
 
   @override

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../model/translation_settings_controller.dart';
 import '../services/app_service_client.dart';
 import '../theme/tokens.dart';
+import 'network_settings_form.dart';
 import 'reasoning_effort_picker.dart';
 import 'settings_common.dart';
 
@@ -189,7 +190,15 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
           onRetry: c.snapshot == null && !c.isBusy ? c.refresh : null,
         ),
         const SizedBox(height: T.s16),
-        _TranslationTabs(selected: c.tab, onPick: c.switchTab),
+        SettingsTabs<TranslationTab>(
+          options: const [
+            SettingsTabOption(value: TranslationTab.connections, label: '连接'),
+            SettingsTabOption(value: TranslationTab.profiles, label: '常用模型'),
+            SettingsTabOption(value: TranslationTab.network, label: '网络'),
+          ],
+          selected: c.tab,
+          onPick: c.switchTab,
+        ),
         const SizedBox(height: T.s24),
         Expanded(
           child: switch (c.tab) {
@@ -203,80 +212,25 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
   }
 
   Widget _networkTab() {
-    final busy = c.isBusy;
+    final busy = c.isBusy || c.networkSyncing;
     return ToolPanel(
       footer: [
         FeedbackActionButton(
           label: '保存网络设置',
           strong: true,
           busy: c.busy == TranslationBusy.savingNetwork,
-          onTap: busy ? null : _saveNetwork,
+          onTap: busy || !c.networkDirty ? null : _saveNetwork,
         ),
       ],
       children: [
         Text('网络连接', style: T.tSection),
         const SizedBox(height: T.s16),
-        SettingsSection(
-          title: '连接方式',
-          divider: false,
-          children: [
-            Wrap(
-              spacing: T.s8,
-              runSpacing: T.s8,
-              children: [
-                ChoicePill(
-                  label: '跟随系统',
-                  selected: c.networkMode == 'system',
-                  onTap: () => c.selectNetworkMode('system'),
-                  showCheck: true,
-                ),
-                ChoicePill(
-                  label: '直连',
-                  selected: c.networkMode == 'direct',
-                  onTap: () => c.selectNetworkMode('direct'),
-                  showCheck: true,
-                ),
-                ChoicePill(
-                  label: '本地代理',
-                  selected: c.networkMode == 'local_proxy',
-                  onTap: () => c.selectNetworkMode('local_proxy'),
-                  showCheck: true,
-                ),
-              ],
-            ),
-            const SizedBox(height: T.s12),
-            Text(switch (c.networkMode) {
-              'direct' => '忽略 Windows 系统代理和代理环境变量，直接连接模型服务。',
-              'local_proxy' => '连接本机代理软件提供的 HTTP 或 Mixed 端口。',
-              _ => '使用 Windows 系统代理；没有系统代理时自动直连。',
-            }, style: T.tCaption),
-            if (c.networkMode == 'local_proxy') ...[
-              const SizedBox(height: T.s16),
-              SizedBox(
-                width: 260,
-                child: Input(
-                  label: '本地代理端口（HTTP / Mixed）',
-                  controller: _proxyPort,
-                  hintText: '例如 7890',
-                  keyboardType: TextInputType.number,
-                  onChanged: c.editProxyPort,
-                ),
-              ),
-              const SizedBox(height: T.s8),
-              ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _proxyPort,
-                builder: (context, value, child) {
-                  final port = value.text.trim();
-                  return Text(
-                    port.isEmpty
-                        ? '代理地址将使用 127.0.0.1。'
-                        : '代理地址：http://127.0.0.1:$port',
-                    style: T.tCaption,
-                  );
-                },
-              ),
-            ],
-          ],
+        NetworkSettingsForm(
+          mode: c.networkMode,
+          proxyPortController: _proxyPort,
+          onModeChanged: c.selectNetworkMode,
+          onProxyPortChanged: c.editProxyPort,
+          enabled: !busy,
         ),
       ],
     );
@@ -1503,88 +1457,6 @@ class _ConnectionSignalPainter extends CustomPainter {
       oldDelegate.phase != phase ||
       oldDelegate.status != status ||
       oldDelegate.color != color;
-}
-
-class _TranslationTabs extends StatelessWidget {
-  const _TranslationTabs({required this.selected, required this.onPick});
-
-  final TranslationTab selected;
-  final ValueChanged<TranslationTab> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: T.surface,
-        borderRadius: BorderRadius.circular(T.rSm),
-        border: Border.all(color: T.line, width: 1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _TranslationTabButton(
-            label: '连接',
-            selected: selected == TranslationTab.connections,
-            onTap: () => onPick(TranslationTab.connections),
-          ),
-          _TranslationTabButton(
-            label: '常用模型',
-            selected: selected == TranslationTab.profiles,
-            onTap: () => onPick(TranslationTab.profiles),
-          ),
-          _TranslationTabButton(
-            label: '网络',
-            selected: selected == TranslationTab.network,
-            onTap: () => onPick(TranslationTab.network),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TranslationTabButton extends StatelessWidget {
-  const _TranslationTabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        width: 96,
-        height: 32,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? T.accentSoft : const Color(0x00000000),
-          borderRadius: BorderRadius.circular(T.rSm),
-          border: Border.all(
-            color: selected ? T.accent : const Color(0x00000000),
-            width: 1,
-          ),
-        ),
-        child: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: T.tBody.copyWith(
-            color: selected ? T.accentStrong : T.ink,
-            fontWeight: selected ? T.wBold : T.wMedium,
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _GlobalDefaultBadge extends StatelessWidget {

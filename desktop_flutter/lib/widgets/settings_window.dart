@@ -79,7 +79,7 @@ class SettingsWindow extends StatefulWidget {
   State<SettingsWindow> createState() => _SettingsWindowState();
 }
 
-class _SettingsWindowState extends State<SettingsWindow> {
+class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
   final _key = TextEditingController();
@@ -131,6 +131,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
     _client = AppServiceClient(_settingsTransport());
     _pathOpener = widget.pathOpener ?? SystemPathOpener();
     _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
@@ -157,6 +158,7 @@ class _SettingsWindowState extends State<SettingsWindow> {
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _smokeService?.dispose();
     _ownedFallbackService?.dispose();
     _translationController?.removeListener(_onTranslationChanged);
@@ -170,6 +172,12 @@ class _SettingsWindowState extends State<SettingsWindow> {
     _asrOperationPoll?.cancel();
     _asrOperationDismissTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void onWindowFocus() {
+    final controller = _translationController;
+    if (controller != null) unawaited(controller.syncNetworkSettings());
   }
 
   Future<void> _initTranslation(

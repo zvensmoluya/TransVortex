@@ -19,7 +19,9 @@ import 'package:transvortex_desktop_flutter/services/task_notification_service.d
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
 import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
+import 'package:transvortex_desktop_flutter/widgets/application_network_settings.dart';
 import 'package:transvortex_desktop_flutter/widgets/application_settings_panel.dart';
+import 'package:transvortex_desktop_flutter/widgets/asr_resource_management.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
 
@@ -350,40 +352,124 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('application settings only manage app-owned local resources', (
+  testWidgets(
+    'application settings organize global network and local resources',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(480, 520));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      var modelInstalled = true;
+      final calls = <String>[];
+      Map<String, Object?>? removeParams;
+      bridge.attachServiceCaller((method, params) async {
+        calls.add(method);
+        if (method == 'desktop.snapshot') {
+          return _desktopSnapshot(
+            managedAsr: true,
+            localModel: 'small',
+            asrLocal: _managedAsrResources(modelInstalled: modelInstalled),
+          ).raw;
+        }
+        if (method == 'asr.component.remove') {
+          removeParams = Map<String, Object?>.from(params);
+          modelInstalled = false;
+          return {
+            'ok': true,
+            'kind': params['kind'],
+            'item_id': params['item_id'],
+            'removed': true,
+          };
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      final service = _readyController();
+      addTearDown(service.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 480,
+            height: 520,
+            child: ApplicationSettingsPanel(
+              bridge: bridge,
+              service: service,
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        find.byKey(const ValueKey('application-settings-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('应用设置'), findsOneWidget);
+      expect(find.text('网络'), findsOneWidget);
+      expect(find.text('网络与代理'), findsOneWidget);
+      expect(find.text('存储与资源'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('application-settings-drag-area')),
+        findsOneWidget,
+      );
+      expect(find.text('翻译模型设置'), findsNothing);
+      expect(find.text('语音识别设置'), findsNothing);
+      expect(find.text('Whisper Small'), findsNothing);
+      expect(find.text('刷新'), findsNothing);
+      expect(find.byKey(const ValueKey('asr-resource-refresh')), findsNothing);
+
+      await tester.tap(find.text('存储与资源'));
+      await tester.pumpAndSettle();
+      expect(find.text('Whisper Small'), findsOneWidget);
+      expect(find.text('刷新'), findsNothing);
+
+      await tester.tap(
+        find.byKey(const ValueKey('asr-resource-remove-model-small')),
+      );
+      await tester.pump();
+      expect(find.text('删除Whisper Small？'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('asr-resource-confirm-remove')),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(calls, contains('asr.component.remove'));
+      expect(removeParams, {'kind': 'model', 'item_id': 'small'});
+      expect(find.text('Whisper Small已删除。'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('asr-resource-remove-model-small')),
+        findsNothing,
+      );
+      expectNoFlutterException();
+    },
+  );
+
+  testWidgets('application settings save the shared local proxy setting', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(480, 520));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
-    var modelInstalled = true;
-    final calls = <String>[];
-    Map<String, Object?>? removeParams;
+    Map<String, Object?>? saved;
     bridge.attachServiceCaller((method, params) async {
-      calls.add(method);
-      if (method == 'desktop.snapshot') {
-        return _desktopSnapshot(
-          managedAsr: true,
-          localModel: 'small',
-          asrLocal: _managedAsrResources(modelInstalled: modelInstalled),
-        ).raw;
-      }
-      if (method == 'asr.component.remove') {
-        removeParams = Map<String, Object?>.from(params);
-        modelInstalled = false;
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'network.settings.save') {
+        saved = Map<String, Object?>.from(params);
         return {
           'ok': true,
-          'kind': params['kind'],
-          'item_id': params['item_id'],
-          'removed': true,
+          'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+          'pipeline_file_version': {'mtime_ns': 7, 'size': 8},
         };
       }
       throw RpcRemoteException('method_not_found', method);
     });
-
     final service = _readyController();
     addTearDown(service.dispose);
+
     await tester.pumpWidget(
       MaterialApp(
         home: SizedBox(
@@ -400,34 +486,447 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(
-      find.byKey(const ValueKey('application-settings-panel')),
-      findsOneWidget,
+    await tester.tap(find.text('本地代理'));
+    await tester.pumpAndSettle();
+    final portField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == '例如 7890',
     );
-    expect(find.text('应用设置'), findsOneWidget);
-    expect(find.text('存储与资源'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('application-settings-drag-area')),
-      findsOneWidget,
+    expect(portField, findsOneWidget);
+    await tester.enterText(portField, '7890');
+    await tester.pump();
+    await tester.tap(find.text('保存网络设置'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(saved, {
+      'mode': 'local_proxy',
+      'proxy_port': 7890,
+      'expected_version': {'mtime_ns': 1, 'size': 2},
+    });
+    expect(find.textContaining('127.0.0.1:7890'), findsWidgets);
+    expect(find.text('刷新'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('application network retry clears a resolved sync error', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 420));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    final transport = _FakeTransport(
+      {'desktop.snapshot': _desktopSnapshot().raw},
+      failures: {
+        'desktop.snapshot': [
+          RpcRemoteException('service_unavailable', 'offline'),
+        ],
+      },
     );
-    expect(find.text('翻译模型设置'), findsNothing);
-    expect(find.text('语音识别设置'), findsNothing);
+    final service = _readyController();
+    addTearDown(service.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Material(
+          child: SizedBox(
+            width: 448,
+            height: 420,
+            child: ApplicationNetworkSettings(
+              client: AppServiceClient(transport),
+              bridge: bridge,
+              service: service,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('重试同步'), findsOneWidget);
+    await tester.tap(find.text('重试同步'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('重试同步'), findsNothing);
+    expect(find.text('保存网络设置'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('managed resources follow service snapshots without refresh', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final initial = _desktopSnapshot(
+      managedAsr: true,
+      localModel: 'small',
+      asrLocal: _managedAsrResources(),
+    );
+    final updated = _desktopSnapshot(
+      managedAsr: true,
+      localModel: 'small',
+      asrLocal: _managedAsrResources(modelInstalled: false),
+    );
+    final serviceTransport = _FakeTransport(
+      {
+        'service.info': {
+          'service': 'transvortex.app_service',
+          'protocol_version': 1,
+          'app_version': 'test',
+          'capabilities': ['desktop_snapshot'],
+        },
+        'service.health': {
+          'service': 'transvortex.app_service',
+          'status': 'healthy',
+          'runtime': {'active': null},
+          'pump': {'enabled': true},
+        },
+        'desktop.snapshot': updated.raw,
+      },
+      sequences: {
+        'desktop.snapshot': [initial.raw, updated.raw],
+      },
+    );
+    final service = _controllerForTransport(serviceTransport);
+    addTearDown(service.dispose);
+    await service.start();
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    final client = AppServiceClient(
+      _FakeTransport({'desktop.snapshot': initial.raw}),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: client,
+            bridge: bridge,
+            service: service,
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Whisper Small'), findsOneWidget);
+    expect(find.text('刷新'), findsNothing);
+
+    await service.refresh();
+    await tester.pump();
+
+    expect(find.text('Whisper Small'), findsNothing);
+    expect(find.text('本机 Whisper 运行组件'), findsOneWidget);
+    expect(find.text('刷新'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('standalone managed resources resync external changes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final initial = _desktopSnapshot(
+      managedAsr: true,
+      localModel: 'small',
+      asrLocal: _managedAsrResources(),
+    );
+    final updated = _desktopSnapshot(
+      managedAsr: true,
+      localModel: 'small',
+      asrLocal: _managedAsrResources(modelInstalled: false),
+    );
+    final transport = _FakeTransport(
+      {'desktop.snapshot': updated.raw},
+      sequences: {
+        'desktop.snapshot': [initial.raw, updated.raw],
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: AppServiceClient(transport),
+            bridge: WindowStateBridge.main(WindowStateStore()),
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Whisper Small'), findsOneWidget);
 
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Whisper Small'), findsNothing);
+    expect(find.text('刷新'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('managed resource retry clears a resolved sync error', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final transport = _FakeTransport(
+      {
+        'desktop.snapshot': _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(),
+        ).raw,
+      },
+      failures: {
+        'desktop.snapshot': [
+          RpcRemoteException('service_unavailable', 'offline'),
+        ],
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: AppServiceClient(transport),
+            bridge: WindowStateBridge.main(WindowStateStore()),
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('重试同步'), findsOneWidget);
+    await tester.tap(find.text('重试同步'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('重试同步'), findsNothing);
+    expect(find.text('Whisper Small'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('missing managed resources are reconciled automatically', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var modelInstalled = true;
+    var serviceRefreshes = 0;
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(modelInstalled: modelInstalled),
+        ).raw;
+      }
+      if (method == 'asr.component.remove') {
+        modelInstalled = false;
+        throw RpcRemoteException('component_not_found', 'already removed');
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachServiceRefresher(() async {
+      serviceRefreshes += 1;
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: AppServiceClient(WindowBridgeTransport(bridge)),
+            bridge: bridge,
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(
       find.byKey(const ValueKey('asr-resource-remove-model-small')),
     );
     await tester.pump();
-    expect(find.text('删除Whisper Small？'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('asr-resource-confirm-remove')));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(calls, contains('asr.component.remove'));
-    expect(removeParams, {'kind': 'model', 'item_id': 'small'});
-    expect(find.text('Whisper Small已删除。'), findsOneWidget);
-    expect(
+    expect(find.text('Whisper Small'), findsNothing);
+    expect(find.textContaining('列表已自动同步'), findsOneWidget);
+    expect(serviceRefreshes, 1);
+    expect(find.text('刷新'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('resource removal refreshes shared state after its page closes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final releaseRemove = Completer<void>();
+    final removeStarted = Completer<void>();
+    var modelInstalled = true;
+    var serviceRefreshes = 0;
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(modelInstalled: modelInstalled),
+        ).raw;
+      }
+      if (method == 'asr.component.remove') {
+        removeStarted.complete();
+        await releaseRemove.future;
+        modelInstalled = false;
+        return {'ok': true, 'removed': true};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachServiceRefresher(() async {
+      serviceRefreshes += 1;
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: AppServiceClient(WindowBridgeTransport(bridge)),
+            bridge: bridge,
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(
       find.byKey(const ValueKey('asr-resource-remove-model-small')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('asr-resource-confirm-remove')));
+    await tester.pump();
+    await removeStarted.future;
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    releaseRemove.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+
+    expect(modelInstalled, isFalse);
+    expect(serviceRefreshes, 1);
+    expectNoFlutterException();
+  });
+
+  testWidgets('network save refreshes shared state after its page closes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 420));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final releaseSave = Completer<void>();
+    final saveStarted = Completer<void>();
+    var serviceRefreshes = 0;
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'network.settings.save') {
+        saveStarted.complete();
+        await releaseSave.future;
+        return {
+          'ok': true,
+          'network': {'mode': 'local_proxy', 'proxy_port': 7890},
+          'pipeline_file_version': {'mtime_ns': 7, 'size': 8},
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachServiceRefresher(() async {
+      serviceRefreshes += 1;
+    });
+    final service = _readyController();
+    addTearDown(service.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Material(
+          child: SizedBox(
+            width: 448,
+            height: 420,
+            child: ApplicationNetworkSettings(
+              client: AppServiceClient(WindowBridgeTransport(bridge)),
+              bridge: bridge,
+              service: service,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('本地代理'));
+    await tester.pumpAndSettle();
+    final portField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == '例如 7890',
+    );
+    await tester.enterText(portField, '7890');
+    await tester.pump();
+    await tester.tap(find.text('保存网络设置'));
+    await tester.pump();
+    await saveStarted.future;
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    releaseSave.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+
+    expect(serviceRefreshes, 1);
+    expectNoFlutterException();
+  });
+
+  testWidgets('application settings honor reduced motion', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(480, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _readyController();
+    addTearDown(service.dispose);
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: SizedBox(
+            width: 480,
+            height: 520,
+            child: ApplicationSettingsPanel(
+              bridge: bridge,
+              service: service,
+              entranceAnimation: const AlwaysStoppedAnimation(0),
+              onClose: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('应用设置'), findsOneWidget);
+    expect(find.text('网络与代理'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('application-settings-transition')),
       findsNothing,
     );
     expectNoFlutterException();
@@ -503,13 +1002,11 @@ void main() {
       expect(find.text('翻译模型设置'), findsNothing);
       expect(find.text('语音识别设置'), findsNothing);
 
-      final closeButton = tester.widget<IconButton>(
+      await tester.tap(
         find.byKey(const ValueKey('application-settings-close')),
       );
-      expect(closeButton.onPressed, isNotNull);
-      closeButton.onPressed!();
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 260));
       await tester.pump();
       await tester.pump();
       await tester.pump();
@@ -553,7 +1050,7 @@ void main() {
         const ValueKey('main-menu-application_settings'),
       );
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 260));
       await tester.pump();
 
       expect(surface.writes, isEmpty);
@@ -570,10 +1067,9 @@ void main() {
         findsOneWidget,
       );
 
-      final closeButton = tester.widget<IconButton>(
+      await tester.tap(
         find.byKey(const ValueKey('application-settings-close')),
       );
-      closeButton.onPressed!();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump();
