@@ -10,9 +10,9 @@
 ## Repository Boundaries
 
 - 当前文档入口是 `docs/README.md`，仓库级短期待办是 `docs/CURRENT_BACKLOG.md`；历史归档不建立新的兼容约束。
-- 主体验前端是 Flutter（`desktop_flutter/`）。Tauri（`desktop/`）已冻结，不作为设计、验收或后端兼容目标，背景见 `desktop/FROZEN.md`。
-- 后端契约由 CLI / Agent 与 Flutter Local Service 驱动；改后端不需要维持 Tauri RPC 形状或修复其已知降级。
-- 唯一保留的 Tauri 护栏是 sidecar 以 `--no-pump` 启动，避免与 Python pump 抢同一 `artifacts_dir`；修改 runtime 队列或锁语义时需要一并检查。
+- Flutter（`desktop_flutter/`）是唯一产品桌面前端；不新增或维护第二套桌面前端。
+- 后端契约由 CLI / Agent 与 Flutter Local Service 驱动；不为已移除的历史前端维持 RPC 形状或兼容行为。
+- `--no-pump` 仅作为打包、安装和健康检查中的隔离探针模式保留；修改其语义时需要一并检查当前脚本和测试。
 
 ## Credentials
 
@@ -61,6 +61,5 @@ Short English title
 - 验证范围与改动风险相匹配，不要求所有改动都跑完整测试。
 - Python 改动优先跑相关 pytest；较大或影响核心流程的改动优先跑全量 `pytest -q`。
 - 桌面 UI 或 worker protocol 改动默认在 `desktop_flutter/` 运行 `flutter analyze` 和 `flutter test`；较大或影响主流程时补 `flutter build windows`。
-- 仅当主动修改冻结的 Tauri 前端时运行 `npm run build`；修改 `desktop/src-tauri` 时至少运行 `cargo check`。
 - 凭据、provider、ASR 和翻译流程改动优先运行对应的最小验证命令或相关测试。
 - 回复用户时说明已经验证的内容，以及未验证的原因和剩余风险；纯文档、注释或配置说明改动可以不跑代码测试。

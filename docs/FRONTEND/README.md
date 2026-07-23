@@ -1,6 +1,6 @@
 # TransVortex Frontend Docs
 
-Flutter（`desktop_flutter/`）是主体验前端。冻结的 Tauri 树只作后端对接参考，不建立视觉、产品或兼容约束。
+Flutter（`desktop_flutter/`）是唯一产品桌面前端。已移除的历史前端实现只保留在归档文档和 Git 历史中，不建立视觉、产品或兼容约束。
 
 仓库级优先级见 [`../CURRENT_BACKLOG.md`](../CURRENT_BACKLOG.md)。当前前端只保留四份事实源：
 
@@ -11,7 +11,7 @@ Flutter（`desktop_flutter/`）是主体验前端。冻结的 Tauri 树只作后
 3. [`current/FRONTEND_DESIGN_SPEC.md`](current/FRONTEND_DESIGN_SPEC.md)
    - 定义窗口模型、主要交互和禁止模式。
 4. [`current/FRONTEND_VISUAL_INTERACTION_SPEC.md`](current/FRONTEND_VISUAL_INTERACTION_SPEC.md)
-   - 定义世界对象、颜色原则和反馈节奏。
+   - 定义视觉世界、场景级动效、颜色和反馈原则。
 
 ## 历史归档
 

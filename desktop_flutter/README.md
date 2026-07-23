@@ -1,6 +1,6 @@
 # TransVortex Desktop Flutter
 
-`desktop_flutter/` 是 TransVortex 的主体验桌面前端。冻结的 Tauri 树只作参考，不是兼容目标。
+`desktop_flutter/` 是 TransVortex 唯一的产品桌面前端。历史实现只保留在归档文档和 Git 历史中，不是兼容目标。
 
 ## 当前窗口
 
@@ -62,7 +62,7 @@ NSIS 是当前原生安装路径。基础包不携带本机 Whisper runtime、�
 
 ## 边界
 
-- 不移植冻结 Tauri UI。
+- 不新增或维护第二套产品桌面前端。
 - 不让窗口直接启动 Worker 或持有业务权威状态。
 - 不以 debug 画面、HTML mock 或静态预览替代 Windows release 验收。
 - 不把内部诊断、协议字段和完整本地路径变成普通用户界面。

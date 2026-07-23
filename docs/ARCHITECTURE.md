@@ -6,13 +6,12 @@ owning package directly.
 
 ## Runtime Shape
 
-TransVortex is an agent-callable headless worker with multiple frontends:
+TransVortex is an agent-callable headless worker with CLI/agent and desktop entry points:
 
 - CLI and agent commands call the Python worker directly.
 - The Flutter desktop app starts the packaged Python Local Service and uses its
   typed JSON-RPC contract to manage workers, tasks, and results.
-- The frozen Tauri app is a reference implementation, not a compatibility
-  target or a second product frontend.
+- The Flutter app is the only product desktop frontend.
 - Artifacts and task records are the stable contract between core, CLI, agents,
   and desktop UI.
 

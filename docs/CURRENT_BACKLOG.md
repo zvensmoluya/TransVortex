@@ -54,7 +54,7 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| 任务运行态反馈与视觉动效深化 | 待决策 | 在不制造伪进度或视觉噪音的前提下，让长时间识别、翻译和恢复阶段具有更清楚的状态变化、交互反馈和更鲜明的美术风格 | [`FRONTEND_VISUAL_INTERACTION_SPEC.md`](FRONTEND/current/FRONTEND_VISUAL_INTERACTION_SPEC.md) |
+| 全应用视觉动效与 CG 场景深化 | 探索中 | 以展示性和品牌记忆点为明确目标，探索启动、导入、运行阶段、完成、失败恢复、窗口切换和退出的全窗口 Shader、粒子、角色、音效与 2D / 2.5D CG 演出；真实业务状态、可读结果、减少动态效果版本和 Windows Release 性能验收仍为底线 | [`FRONTEND_VISUAL_INTERACTION_SPEC.md`](FRONTEND/current/FRONTEND_VISUAL_INTERACTION_SPEC.md) |
 | 结果工作区字幕轴易用性 | 待决策 | 先明确首版字幕轴需要承担的定位、选择、浏览和校时范围，再用真实长字幕编辑任务验收；不以专业 NLE 的极致能力作为首阶段目标 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
 
 ## P2：低优先级验证

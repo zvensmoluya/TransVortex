@@ -130,7 +130,7 @@ tools/ffmpeg/ffmpeg_runtime.json
 - `service.info` 已返回 protocol 和 app version，Flutter 仍需校验可接受组合。
 - 配置初始化目前主要是缺失时复制，尚无 schema migration、备份和失败回滚。
 - prompts、默认配置和用户覆盖需要版本化初始化策略。
-- frozen Tauri 不是兼容目标；唯一护栏是其 sidecar 继续以 `--no-pump` 启动，避免与 Python pump 竞争任务。
+- `--no-pump` 仅用于打包、安装和健康检查中的隔离探针；正常 Flutter Local Service 必须保持 pump 启用。
 
 ## 9. 当前发布边界
 
