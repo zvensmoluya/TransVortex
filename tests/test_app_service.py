@@ -692,6 +692,52 @@ def test_app_service_asr_provider_save_updates_pipeline_and_redacts_key(tmp_path
     assert config["asr_providers"]["openai_asr"]["has_key"] is True
 
 
+def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.save",
+            {
+                "provider_draft": {
+                    "name": "local",
+                    "kind": "local_worker",
+                    "protocol": "faster_whisper",
+                    "model": "small",
+                    "auth": {"type": "none"},
+                    "runtime": {
+                        "source": "managed",
+                        "id": "managed:faster-whisper",
+                    },
+                    "local": {
+                        "model_source": "managed",
+                        "model_size": "small",
+                        "managed_model_size": "small",
+                        "external_model_id": "large-v3",
+                        "external_model_path": r"D:\Models\large-v3",
+                        "model_path": "",
+                        "device": "cpu",
+                    },
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+    config = load_app_config(root_dir=tmp_path)
+    local = config.asr_providers["local"].local
+
+    assert response["result"]["provider"] == "local"
+    assert config.pipeline.asr_provider == "local"
+    assert local.model_source == "managed"
+    assert local.managed_model_size == "small"
+    assert local.external_model_id == "large-v3"
+    assert local.external_model_path == r"D:\Models\large-v3"
+    assert local.model_path == ""
+
+
 def test_app_service_subprocess_smoke(tmp_path: Path) -> None:
     _write_config(tmp_path)
     request = _request("desktop.ping") + "\n"

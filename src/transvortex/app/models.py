@@ -293,6 +293,9 @@ class AsrLocalConfig:
     model_size: str = "large-v3"
     model_source: str = "managed"  # managed | external
     model_path: str = ""
+    managed_model_size: str = ""
+    external_model_id: str = ""
+    external_model_path: str = ""
     device: str = "auto"
     compute_type: str = "auto"
     max_initial_timestamp: float = 30.0

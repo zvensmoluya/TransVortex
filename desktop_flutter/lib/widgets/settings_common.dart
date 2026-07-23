@@ -1198,7 +1198,7 @@ class SegmentButton extends StatefulWidget {
   final String label;
   final String detail;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   State<SegmentButton> createState() => _SegmentButtonState();
@@ -1210,7 +1210,9 @@ class _SegmentButtonState extends State<SegmentButton> {
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: widget.onTap == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
@@ -1222,7 +1224,9 @@ class _SegmentButtonState extends State<SegmentButton> {
             vertical: T.s8,
           ),
           decoration: BoxDecoration(
-            color: widget.selected || _hover ? T.accentSoft : T.surface,
+            color: widget.selected || (_hover && widget.onTap != null)
+                ? T.accentSoft
+                : T.surface,
             borderRadius: BorderRadius.circular(T.rMd),
             border: Border.all(
               color: widget.selected ? T.accent : T.line,
@@ -1235,6 +1239,7 @@ class _SegmentButtonState extends State<SegmentButton> {
               Text(
                 widget.label,
                 style: T.tBody.copyWith(
+                  color: widget.onTap == null ? T.muted : T.ink,
                   fontWeight: widget.selected ? T.wBold : T.wRegular,
                 ),
               ),

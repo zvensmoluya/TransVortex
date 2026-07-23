@@ -662,10 +662,23 @@ def _parse_asr_local(raw: Any, *, model: str) -> AsrLocalConfig:
     model_source = _to_str(local_raw.get("model_source"), "managed").strip().lower()
     if model_source not in ASR_MODEL_SOURCES:
         raise ValueError(f"Unsupported ASR local.model_source: {model_source}")
+    model_path = _to_str(local_raw.get("model_path"), "")
     return AsrLocalConfig(
         model_size=_to_str(local_raw.get("model_size"), model),
         model_source=model_source,
-        model_path=_to_str(local_raw.get("model_path"), ""),
+        model_path=model_path,
+        managed_model_size=_to_str(
+            local_raw.get("managed_model_size"),
+            model if model_source == "managed" else "",
+        ),
+        external_model_id=_to_str(
+            local_raw.get("external_model_id"),
+            model if model_source == "external" else "",
+        ),
+        external_model_path=_to_str(
+            local_raw.get("external_model_path"),
+            model_path if model_source == "external" else "",
+        ),
         device=_to_str(local_raw.get("device"), "auto"),
         compute_type=_to_str(local_raw.get("compute_type"), "auto"),
         max_initial_timestamp=_to_float(local_raw.get("max_initial_timestamp"), 30.0),

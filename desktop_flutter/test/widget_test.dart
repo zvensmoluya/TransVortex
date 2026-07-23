@@ -3691,14 +3691,13 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings reuses a model without exposing external Python', (
+  testWidgets('ASR settings shows an active verified model as enabled', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 620));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
-    Map<String, Object?>? savedDraft;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -3719,19 +3718,18 @@ void main() {
             'accelerators': [],
             'environments': [],
             'operations': [],
+            'registered_models': [
+              {
+                'model_id': 'large-v3',
+                'model_path': r'D:\Models\faster-whisper-large-v3',
+                'signature': 'fixture-signature',
+                'probe': {
+                  'model': {'device': 'cpu'},
+                },
+              },
+            ],
           },
         ).raw;
-      }
-      if (method == 'asr.model.probe') {
-        return {
-          'ok': true,
-          'code': 'ready',
-          'model': {'model_id': 'large-v3', 'model_path': params['model_path']},
-        };
-      }
-      if (method == 'asr.provider.save') {
-        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
-        return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -3751,18 +3749,9 @@ void main() {
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
-    expect(find.text('兼容 Whisper Large v3 · 本机兼容性测试通过'), findsOneWidget);
-
-    await tester.tap(find.text('验证并启用'));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    final local = Map<String, Object?>.from(savedDraft?['local'] as Map);
-    final runtime = Map<String, Object?>.from(savedDraft?['runtime'] as Map);
-    expect(local['model_source'], 'external');
-    expect(local['model_path'], r'D:\Models\faster-whisper-large-v3');
-    expect(runtime, {'source': 'managed', 'id': 'managed:faster-whisper'});
-    expect(find.textContaining('兼容 Whisper Large v3 已通过兼容性测试'), findsOneWidget);
+    expect(find.text('Whisper Large v3 · 本机兼容性测试通过'), findsOneWidget);
+    expect(find.text('已启用'), findsWidgets);
+    expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -3860,7 +3849,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('找到 2 个模型'), findsOneWidget);
-    expect(find.text('兼容 Whisper Small'), findsOneWidget);
+    expect(find.text('Whisper Small'), findsOneWidget);
     expect(find.text('自定义 Whisper'), findsOneWidget);
 
     await tester.tap(
@@ -3879,7 +3868,195 @@ void main() {
     expect(savedDraft!['model'], customId);
     expect(local['model_source'], 'external');
     expect(local['model_path'], customPath);
-    expect(find.textContaining('自定义 Whisper 已通过兼容性测试'), findsOneWidget);
+    expect(find.textContaining('自定义 Whisper 验证通过，已设为默认'), findsOneWidget);
+    expect(find.text('验证并启用'), findsNothing);
+    expect(find.text('已启用'), findsWidgets);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings validation pins its target and locks navigation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final probeResult = Completer<Map<String, Object?>>();
+    Map<String, Object?>? savedDraft;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          localModelSource: 'external',
+          localModelPath: r'D:\Models\small',
+          externalModelId: 'small',
+          externalModelPath: r'D:\Models\small',
+          localCanRun: false,
+          asrLocal: const {
+            'runtime': {
+              'id': 'managed:faster-whisper',
+              'version': '1.0.0',
+              'installed': true,
+              'artifact': {'published': true, 'size': 100},
+            },
+            'models': [],
+            'accelerators': [],
+            'environments': [],
+            'operations': [],
+          },
+        ).raw;
+      }
+      if (method == 'asr.model.probe') return probeResult.future;
+      if (method == 'asr.provider.save') {
+        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
+        return {'ok': true, 'provider': 'local'};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    await tester.tap(find.text('验证并启用'));
+    await tester.pump();
+
+    expect(find.text('验证中'), findsOneWidget);
+    final openAiButton = tester.widget<SegmentButton>(
+      find.ancestor(
+        of: find.text('OpenAI Whisper'),
+        matching: find.byType(SegmentButton),
+      ),
+    );
+    expect(openAiButton.onTap, isNull);
+
+    probeResult.complete({
+      'ok': true,
+      'code': 'ready',
+      'model': {
+        'model_id': 'small',
+        'model_path': r'D:\Models\small',
+        'device': 'cpu',
+      },
+    });
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final local = Map<String, Object?>.from(savedDraft!['local'] as Map);
+    expect(savedDraft!['name'], 'local');
+    expect(savedDraft!['model'], 'small');
+    expect(local['model_source'], 'external');
+    expect(local['model_path'], r'D:\Models\small');
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings keeps managed and external drafts independently', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var activeSource = 'external';
+    var activeModel = 'large-v3';
+    var activePath = r'D:\Models\large-v3';
+    var rememberedManaged = 'small';
+    var rememberedExternal = 'large-v3';
+    var rememberedExternalPath = r'D:\Models\large-v3';
+
+    Map<String, Object?> snapshot() => _desktopSnapshot(
+      managedAsr: true,
+      localModel: activeModel,
+      localModelSource: activeSource,
+      localModelPath: activePath,
+      managedModelSize: rememberedManaged,
+      externalModelId: rememberedExternal,
+      externalModelPath: rememberedExternalPath,
+      localCanRun: true,
+      asrLocal: const {
+        'runtime': {
+          'id': 'managed:faster-whisper',
+          'version': '1.0.0',
+          'installed': true,
+          'artifact': {'published': true, 'size': 100},
+        },
+        'models': [
+          {
+            'id': 'small',
+            'display_name': 'Whisper Small',
+            'installed': true,
+            'size': 100,
+          },
+        ],
+        'accelerators': [],
+        'environments': [],
+        'operations': [],
+        'registered_models': [
+          {
+            'model_id': 'large-v3',
+            'model_path': r'D:\Models\large-v3',
+            'signature': 'fixture-signature',
+            'probe': {
+              'model': {'device': 'cpu'},
+            },
+          },
+        ],
+      },
+    ).raw;
+
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return snapshot();
+      if (method == 'asr.provider.save') {
+        final draft = Map<String, Object?>.from(
+          params['provider_draft'] as Map,
+        );
+        final local = Map<String, Object?>.from(draft['local'] as Map);
+        activeSource = '${local['model_source']}';
+        activeModel = '${draft['model']}';
+        activePath = '${local['model_path']}';
+        rememberedManaged = '${local['managed_model_size']}';
+        rememberedExternal = '${local['external_model_id']}';
+        rememberedExternalPath = '${local['external_model_path']}';
+        return {'ok': true, 'provider': 'local'};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
+    await tester.tap(find.text('由 TransVortex 下载'));
+    await tester.pump();
+    expect(find.text('保存并切换'), findsOneWidget);
+
+    await tester.tap(find.text('保存并切换'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(activeSource, 'managed');
+    expect(rememberedManaged, 'small');
+    expect(rememberedExternal, 'large-v3');
+    expect(rememberedExternalPath, r'D:\Models\large-v3');
+
+    await tester.tap(find.text('使用已有模型'));
+    await tester.pump();
+    expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
+    expect(find.text('Whisper Large v3 · 本机兼容性测试通过'), findsOneWidget);
+    expect(find.text('保存并切换'), findsOneWidget);
+    expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -3959,10 +4136,22 @@ void main() {
     expect(find.text('正在下载 Whisper Large v3'), findsOneWidget);
     expect(find.text('识别引擎'), findsOneWidget);
     expect(find.text('识别模型'), findsOneWidget);
-    expect(find.text('校验并启用'), findsOneWidget);
+    expect(find.text('检查可用性'), findsOneWidget);
     expect(find.text('25 B / 100 B'), findsOneWidget);
     expect(find.textContaining('model.bin'), findsNothing);
     expect(find.text('取消下载'), findsOneWidget);
+
+    await tester.tap(find.text('OpenAI Whisper'));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('asr-background-operation')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('正在后台继续'), findsOneWidget);
+    expect(find.widgetWithText(Input, '服务地址 (Base URL)'), findsOneWidget);
+
+    await tester.tap(find.text('本机 Whisper'));
+    await tester.pump();
 
     await tester.tap(find.text('取消下载'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -4047,11 +4236,11 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 700));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('本机 Whisper 已启用'), findsOneWidget);
-    expect(find.textContaining('已下载并启用'), findsOneWidget);
+    expect(find.text('Whisper Large v3 已准备好'), findsOneWidget);
+    expect(find.textContaining('已下载，可在本机 Whisper 中启用'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 2300));
-    expect(find.text('本机 Whisper 已启用'), findsNothing);
+    expect(find.text('Whisper Large v3 已准备好'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -6116,6 +6305,10 @@ DesktopSnapshot _desktopSnapshot({
   String localModel = 'large-v3',
   String localModelSource = 'managed',
   String localModelPath = '',
+  String managedModelSize = '',
+  String externalModelId = '',
+  String externalModelPath = '',
+  bool? localCanRun,
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
   bool withRoutingFallback = false,
@@ -6386,6 +6579,12 @@ DesktopSnapshot _desktopSnapshot({
                   if (localModelSizeOnly) 'model_size': localModel,
                   'model_source': localModelSource,
                   if (localModelPath.isNotEmpty) 'model_path': localModelPath,
+                  if (managedModelSize.isNotEmpty)
+                    'managed_model_size': managedModelSize,
+                  if (externalModelId.isNotEmpty)
+                    'external_model_id': externalModelId,
+                  if (externalModelPath.isNotEmpty)
+                    'external_model_path': externalModelPath,
                 },
                 'has_key': true,
                 if (managedAsr)
@@ -6395,12 +6594,15 @@ DesktopSnapshot _desktopSnapshot({
                   },
                 if (managedAsr)
                   'readiness': {
-                    'state': localModelPath.isEmpty ? 'checking' : 'ready',
-                    'code': localModelPath.isEmpty
+                    'state': (localCanRun ?? localModelPath.isNotEmpty)
+                        ? 'ready'
+                        : 'checking',
+                    'code': !(localCanRun ?? localModelPath.isNotEmpty)
                         ? 'model_installing'
                         : 'ready',
-                    'can_run': localModelPath.isNotEmpty,
-                    'primary_action': localModelPath.isEmpty
+                    'can_run': localCanRun ?? localModelPath.isNotEmpty,
+                    'primary_action':
+                        !(localCanRun ?? localModelPath.isNotEmpty)
                         ? 'cancel_install'
                         : '',
                   },

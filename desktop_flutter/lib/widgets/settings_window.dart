@@ -117,6 +117,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
+  String _managedModelId = 'small';
+  String _externalDraftModelId = '';
+  String _savedAsrModelSource = 'managed';
+  String _savedManagedModelId = 'small';
+  String _savedExternalModelId = '';
+  String _savedExternalModelPath = '';
+  String _savedLocalDevice = 'cpu';
   String _locatedExternalModelId = '';
   String _detectedExternalModelId = '';
   AsrOperationStatus? _activeAsrOperation;
@@ -225,7 +232,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return Directory(root);
   }
 
-  Future<void> _loadConfig() async {
+  Future<void> _loadConfig({bool preserveAsrDraft = false}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -241,11 +248,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           _selectedDiagnosticTaskId = null;
         }
         if (_isAsr) {
-          _selectedAsrProvider = _asrSelectionIdForProvider(
-            snapshot,
-            snapshot.asrProviderName,
-          );
-          _loadAsrDraftFields();
+          if (!preserveAsrDraft) {
+            _selectedAsrProvider = _asrSelectionIdForProvider(
+              snapshot,
+              snapshot.asrProviderName,
+            );
+            _loadAsrDraftFields();
+          }
           _activeAsrOperation = snapshot.asrOperations
               .where((operation) => operation.active)
               .firstOrNull;
@@ -424,20 +433,33 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Widget _asrBody() {
+    final activeOperation = _activeAsrOperation;
+    final selectedKind = '${_asrDraft(_selectedAsrProvider)['kind']}';
+    final showBackgroundOperation =
+        activeOperation?.active == true && selectedKind != 'local_worker';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DefaultBar(
           text: _savedAsrHeaderLabel(),
-          busy: _loading || _savingAsr,
+          busy: _loading || _savingAsr || _probingAsrModel || _testingAsr,
           error: _error,
           message: _message,
         ),
         const SizedBox(height: T.s16),
         _SegmentedEngines(
           selected: _selectedAsrProvider,
-          onPick: _pickAsrProvider,
+          onPick: _savingAsr || _probingAsrModel || _testingAsr
+              ? null
+              : _pickAsrProvider,
         ),
+        if (showBackgroundOperation) ...[
+          const SizedBox(height: T.s12),
+          _AsrBackgroundOperation(
+            operation: activeOperation!,
+            onCancel: _cancelAsrOperation,
+          ),
+        ],
         const SizedBox(height: T.s16),
         Expanded(child: _asrDetails()),
       ],
@@ -531,7 +553,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final modelIds = models.isEmpty
         ? const ['small', 'medium', 'large-v3']
         : models.map((item) => item.id).toList(growable: false);
-    final editedModel = _model.text.trim();
+    final editedModel = _asrModelSource == 'external'
+        ? _externalDraftModelId.trim()
+        : _managedModelId.trim();
     final selectedModel =
         _asrModelSource == 'external' && editedModel.isNotEmpty
         ? editedModel
@@ -610,17 +634,29 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       );
     } else if (!active && _asrModelSource == 'external') {
       final runtimeReady = runtime?.installed == true;
+      final verified = _detectedExternalModelId.isNotEmpty;
       footer.add(
         ActionButton(
-          label: runtimeReady
+          label: currentReady
+              ? '已启用'
+              : runtimeReady
               ? _probingAsrModel
                     ? '验证中'
+                    : verified
+                    ? '保存并切换'
                     : '验证并启用'
               : '下载识别引擎',
           strong: true,
-          onTap: runtimeReady
+          onTap: currentReady
+              ? null
+              : runtimeReady
               ? _probingAsrModel || _externalModelPath.text.isEmpty
                     ? null
+                    : verified
+                    ? () => _saveAsrProvider(
+                        successMessage:
+                            '${_asrExternalModelLabel(_detectedExternalModelId)} 已设为默认。',
+                      )
                     : _probeManagedAsrModel
               : storageHasSpace
               ? () => _startAsrInstall('runtime')
@@ -670,7 +706,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       children: [
         _AsrSourceToggle(
           selected: _asrModelSource,
-          onChanged: _setAsrModelSource,
+          onChanged: _probingAsrModel || _savingAsr ? null : _setAsrModelSource,
         ),
         const SizedBox(height: T.s4),
         if (_asrModelSource == 'managed')
@@ -704,7 +740,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                 label: 'Whisper 模型',
                 value: selectedModel,
                 items: {for (final id in modelIds) id: _asrModelLabel(id)},
-                onChanged: _selectLocalWhisperModel,
+                onChanged: _probingAsrModel || _savingAsr
+                    ? null
+                    : _selectLocalWhisperModel,
               ),
             ),
             const SizedBox(width: T.s12),
@@ -817,31 +855,55 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       label: '运算方式',
       value: items.containsKey(_device.text) ? _device.text : 'cpu',
       items: items,
-      onChanged: (value) => setState(() {
-        _device.text = value;
-        _asrDraftDirty = true;
-      }),
+      onChanged: _probingAsrModel || _savingAsr
+          ? null
+          : (value) {
+              if (_probingAsrModel || _savingAsr) return;
+              setState(() {
+                _device.text = value;
+                if (_asrModelSource == 'external') {
+                  _detectedExternalModelId =
+                      _registeredExternalModelMatches(
+                        _externalDraftModelId,
+                        _externalModelPath.text,
+                      )
+                      ? _externalDraftModelId
+                      : '';
+                }
+                _asrDraftDirty = !_localDraftMatchesSaved();
+              });
+            },
     );
   }
 
   void _setAsrModelSource(String source) {
-    if (_asrModelSource == source) return;
+    if (_asrModelSource == source || _probingAsrModel || _savingAsr) return;
     setState(() {
+      if (_asrModelSource == 'managed') {
+        _managedModelId = _model.text.trim().isEmpty
+            ? _managedModelId
+            : _model.text.trim();
+      } else {
+        _externalDraftModelId = _model.text.trim().isEmpty
+            ? _externalDraftModelId
+            : _model.text.trim();
+      }
       _asrModelSource = source;
-      _asrDraftDirty = true;
+      _model.text = source == 'managed'
+          ? _managedModelId
+          : _externalDraftModelId;
+      _asrDraftDirty = !_localDraftMatchesSaved();
       _message = null;
       _error = null;
-      if (source == 'managed') {
-        _locatedExternalModelId = '';
-        _detectedExternalModelId = '';
-      }
     });
   }
 
   void _selectLocalWhisperModel(String modelId) {
+    if (_probingAsrModel || _savingAsr) return;
     setState(() {
+      _managedModelId = modelId;
       _model.text = modelId;
-      _asrDraftDirty = true;
+      _asrDraftDirty = !_localDraftMatchesSaved();
     });
   }
 
@@ -974,7 +1036,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   void _pickAsrProvider(String providerName) {
-    if (_activeAsrOperation?.active == true) return;
+    if (_savingAsr || _probingAsrModel || _testingAsr) return;
     setState(() {
       _selectedAsrProvider = providerName;
       _loadAsrDraftFields();
@@ -986,7 +1048,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   void _loadAsrDraftFields() {
     final draft = _asrDraft(_selectedAsrProvider, useEditedFields: false);
     _baseUrl.text = '${draft['base_url'] ?? ''}';
-    _model.text = '${draft['model'] ?? ''}';
+    final savedModel = '${draft['model'] ?? ''}'.trim();
     final local = _stringMap(draft['local']);
     final runtime = _stringMap(draft['runtime']);
     final runtimeSource = '${runtime['source'] ?? 'managed'}';
@@ -995,23 +1057,48 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         : runtimeSource == 'external'
         ? 'external'
         : 'managed';
-    if (draft['kind'] == 'local_worker' && _asrModelSource == 'managed') {
+    if (draft['kind'] == 'local_worker') {
       final availableModels =
           _snapshot?.asrModels.map((item) => item.id).toList() ??
           const <String>[];
-      if (availableModels.isNotEmpty &&
-          !availableModels.contains(_model.text)) {
-        _model.text = availableModels.contains('small')
-            ? 'small'
-            : availableModels.first;
-      }
+      final savedManaged = '${local['managed_model_size'] ?? ''}'.trim();
+      final managedCandidate = savedManaged.isNotEmpty
+          ? savedManaged
+          : _asrModelSource == 'managed'
+          ? savedModel
+          : 'small';
+      _managedModelId = availableModels.isEmpty
+          ? (managedCandidate.isEmpty ? 'small' : managedCandidate)
+          : availableModels.contains(managedCandidate)
+          ? managedCandidate
+          : availableModels.contains('small')
+          ? 'small'
+          : availableModels.first;
+      final activeExternalPath = '${local['model_path'] ?? ''}'.trim();
+      final rememberedExternalPath = '${local['external_model_path'] ?? ''}'
+          .trim();
+      _externalModelPath.text = _asrModelSource == 'external'
+          ? activeExternalPath
+          : rememberedExternalPath;
+      final rememberedExternalId = '${local['external_model_id'] ?? ''}'.trim();
+      _externalDraftModelId = rememberedExternalId.isNotEmpty
+          ? rememberedExternalId
+          : _asrModelSource == 'external'
+          ? savedModel
+          : '';
+      _model.text = _asrModelSource == 'external'
+          ? _externalDraftModelId
+          : _managedModelId;
+    } else {
+      _model.text = savedModel;
+      _externalModelPath.clear();
+      _externalDraftModelId = '';
     }
     _endpoint.text = '${draft['endpoint'] ?? '/v1/audio/transcriptions'}';
     final savedDevice = '${local['device'] ?? 'cpu'}';
     final hasInstalledNvidia =
         _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
     _device.text = savedDevice == 'cuda' && hasInstalledNvidia ? 'cuda' : 'cpu';
-    _externalModelPath.text = '${local['model_path'] ?? ''}';
     if (_externalModelPath.text.isEmpty && runtimeSource == 'external') {
       final environmentId = '${runtime['id'] ?? ''}';
       final savedEnvironment = _snapshot?.asrEnvironments.firstWhere(
@@ -1023,16 +1110,59 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           '${savedEnvironment?.modelPaths[_model.text.trim()] ?? ''}';
     }
     final readiness = _selectedAsrOption()?.readiness;
+    final externalRegistered = _registeredExternalModelMatches(
+      _externalDraftModelId,
+      _externalModelPath.text,
+    );
     _detectedExternalModelId =
-        _asrModelSource == 'external' && readiness?.canRun == true
-        ? _model.text.trim()
+        externalRegistered ||
+            (_asrModelSource == 'external' && readiness?.canRun == true)
+        ? _externalDraftModelId
         : '';
-    _locatedExternalModelId =
-        _asrModelSource == 'external' && _externalModelPath.text.isNotEmpty
-        ? _model.text.trim()
+    _locatedExternalModelId = _externalModelPath.text.isNotEmpty
+        ? _externalDraftModelId
         : '';
     _key.clear();
+    _savedAsrModelSource = _asrModelSource;
+    _savedManagedModelId = _managedModelId;
+    _savedExternalModelId = _externalDraftModelId;
+    _savedExternalModelPath = _externalModelPath.text.trim();
+    _savedLocalDevice = _device.text.trim();
     _asrDraftDirty = false;
+  }
+
+  bool _localDraftMatchesSaved() {
+    return _asrModelSource == _savedAsrModelSource &&
+        _managedModelId == _savedManagedModelId &&
+        _externalDraftModelId == _savedExternalModelId &&
+        _normalizedWindowsPath(_externalModelPath.text) ==
+            _normalizedWindowsPath(_savedExternalModelPath) &&
+        _device.text.trim() == _savedLocalDevice;
+  }
+
+  bool _registeredExternalModelMatches(String modelId, String modelPath) {
+    final normalizedId = modelId.trim();
+    final normalizedPath = _normalizedWindowsPath(modelPath);
+    if (normalizedId.isEmpty || normalizedPath.isEmpty) return false;
+    for (final value in _objectList(_snapshot?.asrLocal['registered_models'])) {
+      final row = _stringMap(value);
+      if ('${row['model_id'] ?? ''}'.trim() != normalizedId) continue;
+      if (_normalizedWindowsPath('${row['model_path'] ?? ''}') !=
+          normalizedPath) {
+        continue;
+      }
+      final verifiedDevice =
+          '${_stringMap(_stringMap(row['probe'])['model'])['device'] ?? ''}'
+              .trim();
+      final selectedDevice = _device.text.trim();
+      if (verifiedDevice.isNotEmpty &&
+          selectedDevice.isNotEmpty &&
+          verifiedDevice != selectedDevice) {
+        continue;
+      }
+      return '${row['signature'] ?? ''}'.trim().isNotEmpty;
+    }
+    return false;
   }
 
   void _markAsrDraftDirty() {
@@ -1044,8 +1174,14 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     });
   }
 
-  Future<void> _saveAsrProvider({String? successMessage}) async {
-    final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
+  Future<void> _saveAsrProvider({
+    String? successMessage,
+    String? providerNameOverride,
+    Map<String, Object?>? draftOverride,
+  }) async {
+    final providerName =
+        providerNameOverride ??
+        _asrProviderNameForSelection(_selectedAsrProvider);
     setState(() {
       _savingAsr = true;
       _error = null;
@@ -1054,7 +1190,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     try {
       final latest = await _client.desktopSnapshot();
       _snapshot = latest;
-      final draft = _asrDraft(providerName);
+      final draft = draftOverride ?? _asrDraft(providerName);
       await _client.asrProviderSave(
         providerDraft: draft,
         apiKey: _keyTextOrNull(),
@@ -1093,8 +1229,11 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Future<void> _startManagedAsrSetup() async {
-    final modelId = _model.text.trim().isEmpty ? 'small' : _model.text.trim();
+    final modelId = _managedModelId.trim().isEmpty
+        ? 'small'
+        : _managedModelId.trim();
     final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
+    final intendedDraft = _asrDraft(providerName);
     _asrOperationDismissTimer?.cancel();
     _asrOperationDismissTimer = null;
     setState(() {
@@ -1106,9 +1245,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final latest = await _client.desktopSnapshot();
       if (!mounted) return;
       setState(() => _snapshot = latest);
-      final draft = _asrDraft(providerName);
       await _client.asrProviderSave(
-        providerDraft: draft,
+        providerDraft: intendedDraft,
         expectedVersion: latest.pipelineFileVersion,
       );
       final operation = await _client.asrSetupStart(modelId);
@@ -1118,7 +1256,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _asrDraftDirty = false;
       });
       await widget.bridge.setAsrDefault(
-        '${_asrLabelForDraft(draft)} · ${_asrModelLabel(modelId)}',
+        '${_asrLabelForDraft(intendedDraft)} · ${_asrModelLabel(modelId)}',
         configured: false,
       );
       await widget.bridge.refreshServiceSnapshot();
@@ -1170,7 +1308,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       if (!operation.active) {
         _asrOperationPoll?.cancel();
         _asrOperationPoll = null;
-        await _loadConfig();
+        await _loadConfig(preserveAsrDraft: true);
         if (!mounted) return;
         await widget.bridge.refreshServiceSnapshot();
         if (!mounted) return;
@@ -1178,7 +1316,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           _activeAsrOperation = operation;
           if (operation.state == 'completed') {
             _message = operation.kind == 'setup'
-                ? '本机 Whisper 已下载并启用。'
+                ? _managedSetupIsCurrent(operation)
+                      ? '${_asrModelLabel(operation.itemId)} 已下载并设为默认。'
+                      : '${_asrModelLabel(operation.itemId)} 已下载，可在本机 Whisper 中启用。'
                 : '${_asrOperationLabel(operation.itemId)}下载完成。';
           } else if (operation.state == 'failed') {
             _error = null;
@@ -1196,6 +1336,21 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
     }
+  }
+
+  bool _managedSetupIsCurrent(AsrOperationStatus operation) {
+    if (operation.kind != 'setup') return false;
+    final snapshot = _snapshot;
+    final provider = snapshot == null
+        ? null
+        : _asrProviderByName(snapshot, snapshot.asrProviderName);
+    if (provider == null || provider.name.isEmpty || !provider.canRun) {
+      return false;
+    }
+    final local = _stringMap(provider.raw['local']);
+    return provider.kind == 'local_worker' &&
+        '${local['model_source'] ?? ''}' != 'external' &&
+        provider.model == operation.itemId;
   }
 
   void _scheduleAsrOperationDismiss(AsrOperationStatus operation) {
@@ -1242,6 +1397,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Future<void> _pickExternalModelPath() async {
+    if (_probingAsrModel || _savingAsr || _discoveringAsrModels) return;
     final path = await _directoryPicker('选择模型文件夹或它的上层文件夹');
     if (path == null || path.trim().isEmpty || !mounted) return;
     setState(() {
@@ -1276,6 +1432,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _externalModelPath.text = candidate.path;
         _model.text = candidate.modelId;
         _asrModelSource = 'external';
+        _externalDraftModelId = candidate.modelId;
         _locatedExternalModelId = candidate.modelId;
         _detectedExternalModelId = '';
         _asrDraftDirty = true;
@@ -1338,6 +1495,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Future<void> _probeManagedAsrModel() async {
+    final targetProvider = _asrProviderNameForSelection(_selectedAsrProvider);
+    final targetPath = _externalModelPath.text.trim();
+    final targetDevice = _device.text;
+    if (targetPath.isEmpty) return;
     setState(() {
       _probingAsrModel = true;
       _error = null;
@@ -1345,8 +1506,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     });
     try {
       final result = await _client.probeManagedAsrModel(
-        modelPath: _externalModelPath.text,
-        device: _device.text,
+        modelPath: targetPath,
+        device: targetDevice,
       );
       if (!mounted) return;
       if (result['ok'] == true) {
@@ -1358,12 +1519,16 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           setState(() {
             _locatedExternalModelId = modelId;
             _detectedExternalModelId = modelId;
+            _externalDraftModelId = modelId;
             _model.text = modelId;
             _asrModelSource = 'external';
             _asrDraftDirty = true;
           });
+          final verifiedDraft = _asrDraft(targetProvider);
           await _saveAsrProvider(
-            successMessage: '${_asrExternalModelLabel(modelId)} 已通过兼容性测试并设为默认。',
+            providerNameOverride: targetProvider,
+            draftOverride: verifiedDraft,
+            successMessage: '${_asrExternalModelLabel(modelId)} 验证通过，已设为默认。',
           );
         }
       } else {
@@ -1425,7 +1590,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final protocol = hasExisting
         ? existing.protocol
         : _defaultAsrProtocol(kind, selectedProvider);
-    final editedModel = useEditedFields ? _model.text.trim() : '';
+    final editedModel = useEditedFields
+        ? kind == 'local_worker'
+              ? _asrModelSource == 'external'
+                    ? _externalDraftModelId.trim()
+                    : _managedModelId.trim()
+              : _model.text.trim()
+        : '';
     final editedBaseUrl = useEditedFields ? _baseUrl.text.trim() : '';
     final editedEndpoint = useEditedFields ? _endpoint.text.trim() : '';
     final model = editedModel.isNotEmpty
@@ -1448,6 +1619,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     local['model_size'] = model;
     if (kind == 'local_worker' && useEditedFields) {
       local['model_source'] = _asrModelSource;
+      local['managed_model_size'] = _managedModelId;
+      local['external_model_id'] = _externalDraftModelId;
+      local['external_model_path'] = _externalModelPath.text.trim();
       local['model_path'] = _asrModelSource == 'external'
           ? _externalModelPath.text.trim()
           : '';
@@ -2258,6 +2432,14 @@ String _basename(String path) {
   return parts.isEmpty ? path : parts.last;
 }
 
+String _normalizedWindowsPath(String path) {
+  var value = path.trim().replaceAll('/', r'\');
+  while (value.endsWith(r'\') && value.length > 3) {
+    value = value.substring(0, value.length - 1);
+  }
+  return value.toLowerCase();
+}
+
 Color _diagnosticStatusColor(String status) {
   return switch (status) {
     'PASS' => T.ok,
@@ -2271,7 +2453,7 @@ class _SegmentedEngines extends StatelessWidget {
   const _SegmentedEngines({required this.selected, required this.onPick});
 
   final String selected;
-  final ValueChanged<String> onPick;
+  final ValueChanged<String>? onPick;
 
   @override
   Widget build(BuildContext context) {
@@ -2287,7 +2469,7 @@ class _SegmentedEngines extends StatelessWidget {
             label: item.$2,
             detail: item.$3,
             selected: selected == item.$1,
-            onTap: () => onPick(item.$1),
+            onTap: onPick == null ? null : () => onPick!(item.$1),
           ),
           const SizedBox(width: T.s8),
         ],
@@ -2307,7 +2489,7 @@ class _AsrSelect extends StatelessWidget {
   final String label;
   final String value;
   final Map<String, String> items;
-  final ValueChanged<String> onChanged;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2337,9 +2519,11 @@ class _AsrSelect extends StatelessWidget {
             child: Text(entry.value, overflow: TextOverflow.ellipsis),
           ),
       ],
-      onChanged: (next) {
-        if (next != null) onChanged(next);
-      },
+      onChanged: onChanged == null
+          ? null
+          : (next) {
+              if (next != null) onChanged!(next);
+            },
     );
   }
 }
@@ -2400,7 +2584,7 @@ class _AsrSourceToggle extends StatelessWidget {
   const _AsrSourceToggle({required this.selected, required this.onChanged});
 
   final String selected;
-  final ValueChanged<String> onChanged;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2418,13 +2602,13 @@ class _AsrSourceToggle extends StatelessWidget {
             label: '由 TransVortex 下载',
             detail: '自动管理',
             selected: selected == 'managed',
-            onTap: () => onChanged('managed'),
+            onTap: onChanged == null ? null : () => onChanged!('managed'),
           ),
           _AsrSourceChoice(
             label: '使用已有模型',
             detail: '自动查找',
             selected: selected == 'external',
-            onTap: () => onChanged('external'),
+            onTap: onChanged == null ? null : () => onChanged!('external'),
           ),
         ],
       ),
@@ -2443,7 +2627,7 @@ class _AsrSourceChoice extends StatefulWidget {
   final String label;
   final String detail;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   State<_AsrSourceChoice> createState() => _AsrSourceChoiceState();
@@ -2456,7 +2640,9 @@ class _AsrSourceChoiceState extends State<_AsrSourceChoice> {
   Widget build(BuildContext context) {
     return Expanded(
       child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+        cursor: widget.onTap == null
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
         child: GestureDetector(
@@ -2466,7 +2652,7 @@ class _AsrSourceChoiceState extends State<_AsrSourceChoice> {
             curve: Curves.easeOut,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: widget.selected || _hover
+              color: widget.selected || (_hover && widget.onTap != null)
                   ? T.accentSoft
                   : const Color(0x00000000),
               borderRadius: BorderRadius.circular(T.rSm),
@@ -2481,7 +2667,7 @@ class _AsrSourceChoiceState extends State<_AsrSourceChoice> {
                   child: Text(
                     widget.label,
                     style: T.tCaption.copyWith(
-                      color: T.ink,
+                      color: widget.onTap == null ? T.muted : T.ink,
                       fontWeight: widget.selected ? T.wBold : T.wRegular,
                     ),
                     overflow: TextOverflow.ellipsis,
@@ -2557,9 +2743,11 @@ class _AsrSetupOverview extends StatelessWidget {
           )
         : task?.state == 'completed'
         ? (
-            task?.kind == 'setup' ? '已启用' : '下载完成',
+            task?.kind == 'setup' && currentReady ? '已启用' : '下载完成',
             task?.kind == 'setup'
-                ? '$modelLabel · $deviceLabel'
+                ? currentReady
+                      ? '$modelLabel · $deviceLabel'
+                      : '$modelLabel 已可用，可按需设为默认'
                 : '${_asrOperationLabel(task!.itemId)}已可用',
             T.ok,
           )
@@ -2568,7 +2756,7 @@ class _AsrSetupOverview extends StatelessWidget {
         : task?.state == 'failed'
         ? ('需要处理', _asrOperationFailureMessage(task!), T.danger)
         : currentReady
-        ? ('可以开始', '当前使用：$modelLabel · $deviceLabel', T.ok)
+        ? ('已启用', '当前使用：$modelLabel · $deviceLabel', T.ok)
         : draftDirty
         ? ('待应用', '将切换为：$modelLabel · $deviceLabel', T.accentStrong)
         : ('尚未可用', '完成下载和校验后即可在本机识别', T.warn);
@@ -2928,6 +3116,63 @@ class _AsrSetupProgress extends StatelessWidget {
   }
 }
 
+class _AsrBackgroundOperation extends StatelessWidget {
+  const _AsrBackgroundOperation({
+    required this.operation,
+    required this.onCancel,
+  });
+
+  final AsrOperationStatus operation;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = operation.progress;
+    return Container(
+      key: const ValueKey('asr-background-operation'),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: T.accentSoft.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(T.rMd),
+        border: Border.all(color: T.accent.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.downloading_rounded,
+            size: 18,
+            color: T.accentStrong,
+          ),
+          const SizedBox(width: T.s8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_asrSetupTaskTitle(operation)}，正在后台继续',
+                  style: T.tCaption.copyWith(fontWeight: T.wBold),
+                ),
+                const SizedBox(height: T.s4),
+                LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 4,
+                  color: T.accent,
+                  backgroundColor: T.line,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: T.s12),
+          TextButton(
+            onPressed: operation.state == 'cancelling' ? null : onCancel,
+            child: Text(operation.state == 'cancelling' ? '正在取消' : '取消'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AsrSetupPhaseStrip extends StatelessWidget {
   const _AsrSetupPhaseStrip({required this.operation});
 
@@ -2935,7 +3180,7 @@ class _AsrSetupPhaseStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const labels = ['识别引擎', '识别模型', '校验并启用'];
+    const labels = ['识别引擎', '识别模型', '检查可用性'];
     final completed = operation.state == 'completed';
     return Row(
       children: [
@@ -3068,14 +3313,14 @@ String _asrSetupTaskTitle(AsrOperationStatus operation) {
     'cancelling' => '正在取消本机识别设置',
     'completed' =>
       operation.kind == 'setup'
-          ? '本机 Whisper 已启用'
+          ? '${_asrOperationLabel(operation.itemId)} 已准备好'
           : '${_asrOperationLabel(operation.itemId)}下载完成',
     'cancelled' => '本机识别下载已取消',
     'failed' => '本机识别设置需要处理',
     _ => switch (operation.phase) {
       'runtime' => '正在下载本地识别引擎',
       'model' => '正在下载 ${_asrOperationLabel(operation.itemId)}',
-      'activate' => '正在校验并启用本机识别',
+      'activate' => '正在检查本机识别可用性',
       _ => '正在下载 ${_asrOperationLabel(operation.itemId)}',
     },
   };
@@ -3089,7 +3334,7 @@ String _asrSetupPhaseLabel(AsrOperationStatus operation) {
   return switch (operation.phase) {
     'runtime' => '第 1 步，共 3 步 · 下载并校验识别引擎',
     'model' => '第 2 步，共 3 步 · 下载并校验识别模型',
-    'activate' => '第 3 步，共 3 步 · 校验并启用当前方案',
+    'activate' => '第 3 步，共 3 步 · 检查当前方案可用性',
     _ => '正在准备本机识别环境',
   };
 }
@@ -3201,12 +3446,7 @@ String _asrModelLabel(String modelId) {
 
 String _asrExternalModelLabel(String modelId) {
   if (modelId.startsWith('custom-')) return '自定义 Whisper';
-  return switch (modelId) {
-    'small' => '兼容 Whisper Small',
-    'medium' => '兼容 Whisper Medium',
-    'large-v3' => '兼容 Whisper Large v3',
-    _ => modelId,
-  };
+  return _asrModelLabel(modelId);
 }
 
 String _formatBytes(int bytes) {

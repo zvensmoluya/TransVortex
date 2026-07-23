@@ -113,6 +113,8 @@ def test_local_whisper_model_source_is_independent_from_runtime() -> None:
     assert provider.runtime.source == "managed"
     assert provider.local.model_source == "external"
     assert provider.local.model_path == r"D:\Models\faster-whisper-large-v3"
+    assert provider.local.external_model_id == "large-v3"
+    assert provider.local.external_model_path == r"D:\Models\faster-whisper-large-v3"
 
 
 def test_artifacts_directory_environment_overrides_workspace_yaml(
