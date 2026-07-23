@@ -25,7 +25,7 @@
 - ASR 原始响应、识别文本、质量信息、翻译状态和最终结果属于任务资料，不进入 Cache。最终字幕仍写入用户选择的输出目录。
 - 安装器会把工作数据位置作为独立步骤说明并允许选择，默认跟随程序安装目录的父目录，但不会放进会被整体升级替换的程序目录。检测到既有任务或缓存时继续沿用原位置，不做静默跨盘迁移。任务处理窗提供任务目录、结果目录和重新导出入口；开发期仓库 `artifacts/` 和旧 `.transvortex-desktop` 不会被正式模式自动导入。
 
-本机 Whisper 使用另一套独立位置。语音识别设置和“应用设置 > 存储与资源”在首次受管下载前都允许选择本地资源目录；该目录只承载 `Components`、`Models/faster-whisper` 和 `Downloads/ASR`。选择结果保存在 `%LOCALAPPDATA%\TransVortex\Config\asr_storage.json`，默认仍是 `%LOCALAPPDATA%\TransVortex`。入口始终显示；已有受管资源或断点时会说明阻塞原因，当前版本不自动迁移大文件。不要手工修改路径文件或移动目录。
+本机 Whisper 使用另一套独立位置。正式安装后，默认资源目录与程序目录同盘同级，例如程序安装在 `D:\TransVortex` 时使用 `D:\TransVortexResources`；开发环境仍可回退到应用数据根。该目录只承载 `Components`、`Models/faster-whisper` 和 `Downloads/ASR`。语音识别设置只在需要下载组件时显示下载目标和更改入口；“应用设置 > 识别资源”只管理已经下载的组件。选择结果保存在 `%LOCALAPPDATA%\TransVortex\Config\asr_storage.json`，并在重新安装时优先恢复。已有受管资源或断点时不会直接切换位置，当前版本不自动迁移大文件。不要手工修改路径文件或移动目录。
 
 开发和自动化可使用 `TRANSVORTEX_HOME` 整体覆盖桌面数据根。Local Service 的 `--artifacts-dir` / `--cache-dir` 及内部环境变量 `TRANSVORTEX_ARTIFACTS_DIR` / `TRANSVORTEX_CACHE_DIR` 用于把固定任务目录和缓存目录传给 Python worker，不是普通用户设置。
 

@@ -20,7 +20,6 @@ import '../services/settings_service_transport.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
-import 'asr_resource_management.dart';
 import 'settings_common.dart';
 import 'title_bar.dart';
 import 'translation_settings_view.dart';
@@ -114,6 +113,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _testingAsr = false;
   bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
+  bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
   String _managedModelId = 'small';
@@ -639,7 +639,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               ? '应用设置'
               : '下载并启用',
           strong: true,
-          onTap: _savingAsr || !storageHasSpace
+          onTap: _savingAsr || _changingAsrStorage || !storageHasSpace
               ? null
               : managedReady
               ? _saveAsrProvider
@@ -659,7 +659,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                     : '验证并启用'
               : '下载识别引擎',
           strong: true,
-          onTap: runtimeReady
+          onTap: _changingAsrStorage
+              ? null
+              : runtimeReady
               ? _probingAsrModel || _externalModelPath.text.isEmpty
                     ? null
                     : verified
@@ -759,17 +761,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             ],
           ),
         ),
-        const SizedBox(height: T.s16),
-        if (_snapshot case final resourceSnapshot?)
-          AsrResourceManagement(
-            client: _client,
-            bridge: widget.bridge,
-            snapshot: resourceSnapshot,
-            pathOpener: _pathOpener,
-            directoryPicker: _directoryPicker,
-            onResourcesChanged: () => _loadConfig(preserveAsrDraft: true),
-            embedded: true,
-          ),
       ],
     );
   }
@@ -807,6 +798,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           modelReady: model.installed,
           modelSize: model.size,
           storage: storage,
+          changingStorage: _changingAsrStorage,
+          onChangeStorage: storage.canChange ? _pickAsrDownloadStorage : null,
           requiredDownloadBytes:
               (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
               (model.installed ? 0 : model.size),
@@ -846,6 +839,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           modelSize: 0,
           externalModel: true,
           storage: storage,
+          changingStorage: _changingAsrStorage,
+          onChangeStorage: storage.canChange ? _pickAsrDownloadStorage : null,
           requiredDownloadBytes: runtime?.installed == true
               ? 0
               : runtime?.size ?? 0,
@@ -1116,6 +1111,31 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _message = null;
       _error = null;
     });
+  }
+
+  Future<void> _pickAsrDownloadStorage() async {
+    final storage = _snapshot?.asrStorage;
+    if (storage == null || !storage.canChange || _changingAsrStorage) return;
+    final selected = await _directoryPicker('选择识别组件下载位置');
+    if (selected == null || selected.trim().isEmpty || !mounted) return;
+    setState(() {
+      _changingAsrStorage = true;
+      _message = null;
+      _error = null;
+    });
+    try {
+      await _client.asrStorageSet(selected.trim());
+      await widget.bridge.refreshServiceSnapshot();
+      if (!mounted) return;
+      await _loadConfig(preserveAsrDraft: true, silent: true);
+      if (!mounted) return;
+      setState(() => _message = '下载位置已更改。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _changingAsrStorage = false);
+    }
   }
 
   Future<void> _saveAsrProvider({
@@ -2777,7 +2797,9 @@ class _AsrDownloadPlan extends StatelessWidget {
     required this.modelReady,
     required this.modelSize,
     required this.storage,
+    required this.changingStorage,
     required this.requiredDownloadBytes,
+    this.onChangeStorage,
     this.externalModel = false,
   });
 
@@ -2787,7 +2809,9 @@ class _AsrDownloadPlan extends StatelessWidget {
   final bool modelReady;
   final int modelSize;
   final AsrStorageOption storage;
+  final bool changingStorage;
   final int requiredDownloadBytes;
+  final VoidCallback? onChangeStorage;
   final bool externalModel;
 
   @override
@@ -2800,6 +2824,8 @@ class _AsrDownloadPlan extends StatelessWidget {
         ? '请重新连接目标磁盘或改选其他位置。'
         : !hasSpace
         ? '本次至少需要 ${_formatBytes(requiredBytes)}，请更改位置或清理目标盘。'
+        : !storage.canChange && storage.changeBlocker.isNotEmpty
+        ? _asrDownloadStorageBlocker(storage.changeBlocker)
         : '';
     if (runtimeReady && modelReady) return const SizedBox.shrink();
     return Container(
@@ -2831,6 +2857,52 @@ class _AsrDownloadPlan extends StatelessWidget {
                   : '需下载 ${_formatBytes(modelSize)}',
             ),
           ],
+          if (requiredDownloadBytes > 0) ...[
+            const SizedBox(height: T.s8),
+            Container(
+              key: const ValueKey('asr-download-storage'),
+              padding: const EdgeInsets.symmetric(
+                horizontal: T.s8,
+                vertical: T.s4,
+              ),
+              decoration: BoxDecoration(
+                color: T.surface.withValues(alpha: 0.82),
+                borderRadius: BorderRadius.circular(T.rSm),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.folder_outlined, size: 17, color: T.muted),
+                  const SizedBox(width: T.s8),
+                  Text('下载到', style: T.tCaption),
+                  const SizedBox(width: T.s8),
+                  Expanded(
+                    child: Tooltip(
+                      message: storage.root,
+                      child: Text(
+                        storage.root.isEmpty ? '位置尚未就绪' : storage.root,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tBody,
+                      ),
+                    ),
+                  ),
+                  if (storage.spaceKnown) ...[
+                    const SizedBox(width: T.s8),
+                    Text(
+                      '可用 ${_formatBytes(storage.freeBytes)}',
+                      style: T.tCaption,
+                    ),
+                  ],
+                  const SizedBox(width: T.s8),
+                  ActionButton(
+                    key: const ValueKey('asr-download-storage-change'),
+                    label: changingStorage ? '处理中' : '更改',
+                    onTap: changingStorage ? null : onChangeStorage,
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (storageHint.isNotEmpty) ...[
             const SizedBox(height: T.s8),
             Text(storageHint, style: T.tCaption.copyWith(color: T.danger)),
@@ -2840,6 +2912,15 @@ class _AsrDownloadPlan extends StatelessWidget {
     );
   }
 }
+
+String _asrDownloadStorageBlocker(String blocker) => switch (blocker) {
+  'active_operation' => '当前下载结束后可更改位置。',
+  'managed_resources_present' => '已有组件固定在此位置；删除后才能更改。',
+  'partial_downloads_present' => '清理未完成的下载后才能更改位置。',
+  'storage_config_invalid' => '当前下载位置无效。',
+  'storage_unreadable' => '当前下载位置暂时无法读取。',
+  _ => '当前暂时不能更改下载位置。',
+};
 
 class _AsrPlanRow extends StatelessWidget {
   const _AsrPlanRow({required this.label, required this.detail});

@@ -104,6 +104,35 @@ def test_cleanup_keeps_each_user_data_category_independent(tmp_path: Path) -> No
     assert credential_sentinel.read_bytes() == b"data"
 
 
+def test_removing_settings_preserves_asr_location_when_resources_are_kept(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "TransVortex"
+    storage_root = tmp_path / "TransVortexResources"
+    credential_file = tmp_path / ".transvortex" / "auth.json"
+    storage_config = app_root / "Config" / "asr_storage.json"
+    storage_config.parent.mkdir(parents=True)
+    storage_config.write_text(
+        json.dumps({"schema_version": 1, "storage_root": str(storage_root)}),
+        encoding="utf-8",
+    )
+    ordinary_setting = _write(app_root / "Config" / "pipeline.yaml")
+    resource = _write(
+        storage_root / "Models" / "faster-whisper" / "small" / "model.bin"
+    )
+
+    report = cleanup_uninstall_data(
+        app_data_root=app_root,
+        credential_file=credential_file,
+        options=UninstallCleanupOptions(remove_settings=True),
+    )
+
+    assert report["ok"] is True
+    assert not ordinary_setting.exists()
+    assert storage_config.is_file()
+    assert resource.is_file()
+
+
 def test_custom_workspace_is_inspected_and_removed_without_touching_siblings(
     tmp_path: Path,
 ) -> None:

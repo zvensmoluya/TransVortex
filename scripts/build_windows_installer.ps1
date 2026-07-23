@@ -192,6 +192,10 @@ $workspaceStorageModule = Join-Path $payloadRoot "runtime\python\Lib\site-packag
 if (-not (Test-Path -LiteralPath $workspaceStorageModule)) {
     throw "Installer payload is missing the workspace storage module. Rebuild the app runtime with -BuildAppRuntime."
 }
+$asrStorageModule = Join-Path $payloadRoot "runtime\python\Lib\site-packages\transvortex\app\asr_storage.py"
+if (-not (Test-Path -LiteralPath $asrStorageModule)) {
+    throw "Installer payload is missing the ASR storage module. Rebuild the app runtime with -BuildAppRuntime."
+}
 $powershellPayloads = @(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File -Filter "*.ps1")
 if ($powershellPayloads.Count -gt 0) {
     throw "Installer payload must not contain end-user PowerShell scripts: $($powershellPayloads.FullName -join ', ')"

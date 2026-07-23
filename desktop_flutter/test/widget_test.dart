@@ -903,6 +903,44 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('empty managed resources do not expose a storage location', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final asrLocal = _managedAsrResources(modelInstalled: false);
+    asrLocal['runtime'] = {
+      ...Map<String, Object?>.from(asrLocal['runtime']! as Map),
+      'installed': false,
+    };
+    final snapshot = _desktopSnapshot(asrLocal: asrLocal);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 360,
+          child: AsrResourceManagement(
+            client: AppServiceClient(
+              _FakeTransport({'desktop.snapshot': snapshot.raw}),
+            ),
+            bridge: WindowStateBridge.main(WindowStateStore()),
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('暂无已下载的识别组件'), findsOneWidget);
+    expect(find.text(r'D:\TransVortex-ASR'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('asr-resource-change-storage')),
+      findsNothing,
+    );
+    expectNoFlutterException();
+  });
+
   testWidgets('standalone managed resources stay idle without a trigger', (
     tester,
   ) async {
@@ -3749,49 +3787,51 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings exposes managed resource cleanup inline', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(760, 560));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final store = WindowStateStore();
-    final bridge = WindowStateBridge.main(store);
-    bridge.attachServiceCaller((method, params) async {
-      if (method == 'desktop.snapshot') {
-        return _desktopSnapshot(
-          managedAsr: true,
-          localModel: 'small',
-          asrLocal: _managedAsrResources(),
-        ).raw;
-      }
-      throw RpcRemoteException('method_not_found', method);
-    });
+  testWidgets(
+    'ASR settings leaves installed resource cleanup to app settings',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(760, 560));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') {
+          return _desktopSnapshot(
+            managedAsr: true,
+            localModel: 'small',
+            asrLocal: _managedAsrResources(),
+          ).raw;
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
 
-    await tester.pumpWidget(
-      TransVortexApp(
-        windowType: AppWindowType.asrSettings,
-        store: store,
-        bridge: bridge,
-      ),
-    );
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.asrSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('本次设置'), findsNothing);
-    expect(find.textContaining('复用现有'), findsNothing);
-    expect(find.textContaining('当前版本不会'), findsNothing);
-    expect(find.byKey(const ValueKey('asr-resource-manager')), findsOneWidget);
-    expect(find.text('Whisper Small'), findsWidgets);
-    expect(
-      find.byKey(const ValueKey('asr-resource-remove-model-small')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('application-settings-window')),
-      findsNothing,
-    );
-    expectNoFlutterException();
-  });
+      expect(find.text('本次设置'), findsNothing);
+      expect(find.textContaining('复用现有'), findsNothing);
+      expect(find.textContaining('当前版本不会'), findsNothing);
+      expect(find.byKey(const ValueKey('asr-resource-manager')), findsNothing);
+      expect(find.text('Whisper Small'), findsWidgets);
+      expect(
+        find.byKey(const ValueKey('asr-resource-remove-model-small')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('asr-download-storage')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('application-settings-window')),
+        findsNothing,
+      );
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets('ASR settings keeps a bounded layout in wide windows', (
     tester,
@@ -3834,7 +3874,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
-    final asrLocal = _managedAsrResources();
+    final asrLocal = _managedAsrResources(modelInstalled: false);
     asrLocal['storage'] = {
       ...Map<String, Object?>.from(asrLocal['storage']! as Map),
       'can_change': false,
@@ -3863,10 +3903,10 @@ void main() {
 
     expect(find.textContaining('当前版本不会'), findsNothing);
     final change = tester.widget<ActionButton>(
-      find.byKey(const ValueKey('asr-resource-change-storage')),
+      find.byKey(const ValueKey('asr-download-storage-change')),
     );
     expect(change.onTap, isNull);
-    expect(find.textContaining('删除下方已下载资源后'), findsOneWidget);
+    expect(find.textContaining('已有组件固定在此位置'), findsOneWidget);
     expect(find.text('更改识别资源位置'), findsNothing);
     expectNoFlutterException();
   });
@@ -4771,9 +4811,9 @@ void main() {
     expect(find.textContaining('可用 20.0 GB'), findsOneWidget);
 
     await tester.ensureVisible(
-      find.byKey(const ValueKey('asr-resource-change-storage')),
+      find.byKey(const ValueKey('asr-download-storage-change')),
     );
-    await tester.tap(find.byKey(const ValueKey('asr-resource-change-storage')));
+    await tester.tap(find.byKey(const ValueKey('asr-download-storage-change')));
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));
 
@@ -4781,7 +4821,7 @@ void main() {
       {'storage_root': selectedRoot},
     ]);
     expect(find.textContaining(selectedRoot), findsWidgets);
-    expect(find.text('默认'), findsOneWidget);
+    expect(find.text('默认'), findsNothing);
     expectNoFlutterException();
   });
 

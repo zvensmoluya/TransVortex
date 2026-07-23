@@ -538,6 +538,7 @@ $requiredRuntimePaths = @(
     "python\python.exe",
     "python\pythonw.exe",
     "python\Lib\site-packages\transvortex\app_service.py",
+    "python\Lib\site-packages\transvortex\app\asr_storage.py",
     "python\Lib\site-packages\transvortex\protocol\agent_setup.py",
     "python\Lib\site-packages\transvortex\resources\asr_components.json"
 )
@@ -654,6 +655,7 @@ $requiredPaths = @(
     "runtime\python\Lib\site-packages\transvortex\app_service.py",
     "runtime\python\Lib\site-packages\transvortex\protocol\agent_setup.py",
     "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
+    "runtime\python\Lib\site-packages\transvortex\app\asr_storage.py",
     "runtime\python\Lib\site-packages\transvortex\app\asr_operations.py",
     "runtime\python\Lib\site-packages\transvortex\core\whisper_host.py",
     "runtime\python\Lib\site-packages\transvortex\resources\asr_components.json",

@@ -21,7 +21,6 @@ from ..utils import FileLock, read_json, utc_now_iso, write_json
 from .models import NetworkConfig
 from .asr_runtime import (
     AsrRuntimePaths,
-    ASR_STORAGE_CONFIG_VERSION,
     asr_storage_content_blocker,
     asr_storage_status,
     asr_runtime_paths,
@@ -31,6 +30,7 @@ from .asr_runtime import (
     required_asr_disk_bytes,
     whisper_host_script,
 )
+from .asr_storage import save_asr_storage
 
 
 ACTIVE_OPERATION_STATES = {"queued", "running", "cancelling"}
@@ -287,18 +287,11 @@ class AsrOperationManager:
                 with probe.open("xb") as handle:
                     handle.write(b"ok")
                 probe.unlink()
-                self.paths.config_root.mkdir(parents=True, exist_ok=True)
-                if candidate == self.paths.app_data_root:
-                    if self.paths.storage_config_file.exists():
-                        self.paths.storage_config_file.unlink()
-                else:
-                    write_json(
-                        self.paths.storage_config_file,
-                        {
-                            "schema_version": ASR_STORAGE_CONFIG_VERSION,
-                            "storage_root": str(candidate),
-                        },
-                    )
+                save_asr_storage(
+                    config_root=self.paths.config_root,
+                    storage_root=candidate,
+                    update_windows_registry=True,
+                )
             except OSError as exc:
                 raise AsrOperationError(
                     "storage_root_unwritable",

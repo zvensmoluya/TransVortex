@@ -14,10 +14,8 @@ import 'settings_common.dart';
 typedef AsrStorageDirectoryPicker =
     Future<String?> Function(String dialogTitle);
 
-/// Direct management for ASR resources downloaded and owned by TransVortex.
-///
-/// This surface is intentionally reusable: application settings and the ASR
-/// workflow can both expose it without routing users through one another.
+/// The single inventory and cleanup surface for ASR resources downloaded and
+/// owned by TransVortex.
 class AsrResourceManagement extends StatefulWidget {
   const AsrResourceManagement({
     super.key,
@@ -29,7 +27,6 @@ class AsrResourceManagement extends StatefulWidget {
     this.onResourcesChanged,
     this.snapshot,
     this.showHeader = true,
-    this.embedded = false,
   });
 
   final AppServiceClient client;
@@ -40,7 +37,6 @@ class AsrResourceManagement extends StatefulWidget {
   final Future<void> Function()? onResourcesChanged;
   final DesktopSnapshot? snapshot;
   final bool showHeader;
-  final bool embedded;
 
   @override
   State<AsrResourceManagement> createState() => _AsrResourceManagementState();
@@ -270,13 +266,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
     return FilePicker.platform.getDirectoryPath(dialogTitle: dialogTitle);
   }
 
-  Future<void> _resetStorage() async {
-    final defaultRoot = _snapshot?.asrStorage.defaultRoot.trim() ?? '';
-    if (defaultRoot.isEmpty || _changingStorage) return;
-    await _setStorage(defaultRoot, reset: true);
-  }
-
-  Future<void> _setStorage(String path, {bool reset = false}) async {
+  Future<void> _setStorage(String path) async {
     setState(() {
       _mutationRevision += 1;
       _changingStorage = true;
@@ -290,7 +280,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
       await widget.onResourcesChanged?.call();
       if (!mounted) return;
       setState(() {
-        _message = reset ? '识别资源已恢复到默认位置。' : '识别资源将保存到：${storage.root}';
+        _message = '识别组件将保存到：${storage.root}';
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -314,24 +304,27 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (widget.showHeader) ...[
-          Text('本机识别资源', style: T.tSection),
+          Text('识别资源', style: T.tSection),
           const SizedBox(height: T.s8),
         ],
-        _StorageSummary(
-          storage: storage,
-          changing: _changingStorage,
-          onChange: interactionBusy || !storage.canChange ? null : _pickStorage,
-          onReset: storage.customized && storage.canChange
-              ? _resetStorage
-              : null,
-          onOpen: storage.root.trim().isEmpty ? null : _openStorage,
-        ),
-        if (!storage.canChange && storage.changeBlocker.isNotEmpty) ...[
+        if (resources.isNotEmpty) ...[
+          Text('保存位置', style: T.tSection),
           const SizedBox(height: T.s8),
-          Text(
-            _storageChangeBlocker(storage.changeBlocker),
-            style: T.tCaption.copyWith(color: T.warn),
+          _StorageSummary(
+            storage: storage,
+            changing: _changingStorage,
+            onChange: interactionBusy || !storage.canChange
+                ? null
+                : _pickStorage,
+            onOpen: storage.root.trim().isEmpty ? null : _openStorage,
           ),
+          if (!storage.canChange && storage.changeBlocker.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            Text(
+              _storageChangeBlocker(storage.changeBlocker),
+              style: T.tCaption.copyWith(color: T.warn),
+            ),
+          ],
         ],
         if (_hasActiveOperation) ...[
           const SizedBox(height: T.s8),
@@ -359,16 +352,17 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
           const SizedBox(height: T.s8),
           Text(_message!, style: T.tCaption.copyWith(color: T.ok)),
         ],
-        const SizedBox(height: T.s16),
-        Row(
-          children: [
-            Expanded(child: Text('已下载资源', style: T.tSection)),
-            if (resources.isNotEmpty)
+        if (resources.isNotEmpty) ...[
+          const SizedBox(height: T.s16),
+          Row(
+            children: [
+              Expanded(child: Text('已下载的识别组件', style: T.tSection)),
               Text('${resources.length} 项', style: T.tCaption),
-          ],
-        ),
-        const SizedBox(height: T.s8),
-        if (widget.embedded) resourceList else Expanded(child: resourceList),
+            ],
+          ),
+          const SizedBox(height: T.s8),
+        ],
+        Expanded(child: resourceList),
       ],
     );
   }
@@ -383,10 +377,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
     if (resources.isEmpty) return const _EmptyManagedResources();
     return ListView.separated(
       padding: EdgeInsets.zero,
-      shrinkWrap: widget.embedded,
-      physics: widget.embedded
-          ? const NeverScrollableScrollPhysics()
-          : const ClampingScrollPhysics(),
+      physics: const ClampingScrollPhysics(),
       itemCount: resources.length,
       separatorBuilder: (_, _) => const SizedBox(height: T.s8),
       itemBuilder: (context, index) {
@@ -407,14 +398,12 @@ class _StorageSummary extends StatelessWidget {
     required this.storage,
     required this.changing,
     required this.onChange,
-    required this.onReset,
     required this.onOpen,
   });
 
   final AsrStorageOption storage;
   final bool changing;
   final VoidCallback? onChange;
-  final VoidCallback? onReset;
   final VoidCallback? onOpen;
 
   @override
@@ -465,14 +454,6 @@ class _StorageSummary extends StatelessWidget {
                 label: changing ? '处理中' : '更改',
                 onTap: changing ? null : onChange,
               ),
-              if (onReset != null) ...[
-                const SizedBox(width: T.s8),
-                ActionButton(
-                  key: const ValueKey('asr-resource-reset-storage'),
-                  label: '默认',
-                  onTap: changing ? null : onReset,
-                ),
-              ],
               if (onOpen != null) ...[
                 const SizedBox(width: T.s8),
                 ActionButton(label: '打开', onTap: onOpen),
@@ -580,7 +561,7 @@ class _EmptyManagedResources extends StatelessWidget {
         children: [
           const Icon(Icons.inventory_2_outlined, size: 20, color: T.muted),
           const SizedBox(width: T.s8),
-          Text('还没有应用下载的识别资源', style: T.tBody),
+          Expanded(child: Text('暂无已下载的识别组件', style: T.tBody)),
         ],
       ),
     );

@@ -371,7 +371,10 @@ def test_asr_storage_root_can_change_before_managed_downloads(tmp_path: Path) ->
 
     assert reset["customized"] is False
     assert manager.paths.storage_root == app_root.resolve()
-    assert not (config_root / "asr_storage.json").exists()
+    assert json.loads((config_root / "asr_storage.json").read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "storage_root": str(app_root.resolve()),
+    }
 
 
 def test_asr_storage_change_requires_migration_when_managed_data_exists(tmp_path: Path) -> None:

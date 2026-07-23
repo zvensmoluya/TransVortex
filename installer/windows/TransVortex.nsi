@@ -125,6 +125,7 @@ Var WorkspaceBrowseButton
 Var WorkspaceNoticeLabel
 Var WorkspaceRoot
 Var WorkspaceLocked
+Var AsrStorageRoot
 Var CleanupDialog
 Var CleanupAsrCheckbox
 Var CleanupSettingsCheckbox
@@ -372,6 +373,42 @@ workspace_config_ready:
   Push "ok"
 FunctionEnd
 
+Function ResolveAsrStorageRoot
+  StrCpy $AsrStorageRoot ""
+  ReadRegStr $AsrStorageRoot HKCU "${APP_REGISTRY_KEY}" "AsrStorageLocation"
+  StrCmp $AsrStorageRoot "" check_legacy_asr_storage asr_storage_root_done
+
+check_legacy_asr_storage:
+  IfFileExists "$LOCALAPPDATA\TransVortex\Components\*.*" use_profile_asr_storage
+  IfFileExists "$LOCALAPPDATA\TransVortex\Models\faster-whisper\*.*" use_profile_asr_storage
+  IfFileExists "$LOCALAPPDATA\TransVortex\Downloads\ASR\*.*" use_profile_asr_storage
+  ${GetParent} "$INSTDIR" $0
+  StrCmp $0 "" use_profile_asr_storage
+  StrCpy $AsrStorageRoot "$0\TransVortexResources"
+  Goto asr_storage_root_done
+
+use_profile_asr_storage:
+  StrCpy $AsrStorageRoot "$LOCALAPPDATA\TransVortex"
+
+asr_storage_root_done:
+FunctionEnd
+
+Function WriteAsrStorageConfig
+  Call ResolveAsrStorageRoot
+  StrCmp $AsrStorageRoot "" asr_storage_config_failed
+  ClearErrors
+  ExecWait '"$INSTDIR\runtime\python\pythonw.exe" -B -m transvortex.app.asr_storage --config-root "$LOCALAPPDATA\TransVortex\Config" --default-storage-root "$AsrStorageRoot"' $0
+  IfErrors asr_storage_config_failed
+  StrCmp $0 "0" asr_storage_config_ready asr_storage_config_failed
+
+asr_storage_config_failed:
+  Push "failed"
+  Return
+
+asr_storage_config_ready:
+  Push "ok"
+FunctionEnd
+
 Function ValidateStagingPayload
   IfFileExists "$StagingDir\TransVortex.exe" +2
     Abort "安装内容不完整：缺少 TransVortex.exe"
@@ -391,6 +428,8 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少卸载清理组件"
   IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py" +2
     Abort "安装内容不完整：缺少工作区配置组件"
+  IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\asr_storage.py" +2
+    Abort "安装内容不完整：缺少识别资源位置组件"
   ReadINIStr $0 "$StagingDir\.transvortex-install.ini" "Install" "AppId"
   StrCmp $0 "${APP_ID}" +2
     Abort "安装内容不完整：缺少安装归属标记"
@@ -474,6 +513,16 @@ no_current_install:
 workspace_config_ready_after_swap:
 
   SetDetailsPrint textonly
+  DetailPrint "正在准备识别资源位置…"
+  SetDetailsPrint none
+  Call WriteAsrStorageConfig
+  Pop $0
+  StrCmp $0 "ok" asr_storage_config_ready_after_swap
+  Goto post_asr_storage_config_failed
+
+asr_storage_config_ready_after_swap:
+
+  SetDetailsPrint textonly
   DetailPrint "正在创建开始菜单入口…"
   SetDetailsPrint none
   SetOutPath "$INSTDIR"
@@ -506,6 +555,10 @@ workspace_config_ready_after_swap:
 post_workspace_config_failed:
   Call RollBackPayload
   Abort "无法准备工作数据位置。请确认所选磁盘已连接且目录可写。已恢复此前安装。"
+
+post_asr_storage_config_failed:
+  Call RollBackPayload
+  Abort "无法准备识别资源位置。请确认安装磁盘已连接且目录可写。已恢复此前安装。"
 
 post_swap_failed:
   Call RollBackPayload
@@ -803,6 +856,10 @@ Section "Uninstall"
   StrCmp $CleanupRemoveTasks "1" 0 preserve_workspace_location
   DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"
 preserve_workspace_location:
+  StrCmp $CleanupRemoveAsr "1" 0 preserve_asr_storage_location
+  StrCmp $CleanupRemoveSettings "1" 0 preserve_asr_storage_location
+  DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "AsrStorageLocation"
+preserve_asr_storage_location:
   DeleteRegKey /ifempty HKCU "${APP_REGISTRY_KEY}"
   RMDir /r "$INSTDIR"
   RMDir /r "$INSTDIR.__staging"

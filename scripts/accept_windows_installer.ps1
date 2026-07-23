@@ -95,6 +95,7 @@ function Assert-InstalledLayout {
         "runtime\python\pythonw.exe",
         "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py",
         "runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py",
+        "runtime\python\Lib\site-packages\transvortex\app\asr_storage.py",
         "tools\ffmpeg\ffmpeg_runtime.json",
         "tools\ffmpeg\bin\ffmpeg.exe",
         "tools\ffmpeg\bin\ffprobe.exe",

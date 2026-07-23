@@ -12,6 +12,7 @@ from typing import Iterable
 
 
 ASR_STORAGE_CONFIG_VERSION = 1
+ASR_STORAGE_CONFIG_NAME = "asr_storage.json"
 WORKSPACE_STORAGE_CONFIG_VERSION = 1
 WORKSPACE_MARKER_NAME = ".transvortex-workspace.json"
 
@@ -93,7 +94,12 @@ def cleanup_uninstall_data(
         _remove_empty_directories((workspace_root, app_root / "Workspace"))
 
     if options.remove_settings:
-        _remove_target(app_root / "Config", removed=removed, errors=errors)
+        _remove_settings(
+            app_root,
+            preserve_asr_storage=not options.remove_asr_resources,
+            removed=removed,
+            errors=errors,
+        )
 
     if options.remove_credentials:
         _remove_target(credential_path, removed=removed, errors=errors)
@@ -288,6 +294,31 @@ def _remove_target(path: Path, *, removed: list[str], errors: list[str]) -> None
         removed.append(str(path))
     except OSError as exc:
         errors.append(f"{path}: {exc}")
+
+
+def _remove_settings(
+    app_root: Path,
+    *,
+    preserve_asr_storage: bool,
+    removed: list[str],
+    errors: list[str],
+) -> None:
+    config_root = app_root / "Config"
+    if not preserve_asr_storage:
+        _remove_target(config_root, removed=removed, errors=errors)
+        return
+    if not config_root.is_dir():
+        return
+    try:
+        children = tuple(config_root.iterdir())
+    except OSError as exc:
+        errors.append(f"{config_root}: {exc}")
+        return
+    for child in children:
+        if child.name.casefold() == ASR_STORAGE_CONFIG_NAME:
+            continue
+        _remove_target(child, removed=removed, errors=errors)
+    _remove_empty_directories((config_root,))
 
 
 def _retry_readonly_removal(function: object, path: str, _error: object) -> None:
