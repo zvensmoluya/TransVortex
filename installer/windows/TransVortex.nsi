@@ -359,7 +359,7 @@ Function WriteWorkspaceConfig
   CreateDirectory "$LOCALAPPDATA\TransVortex\Config"
   IfErrors workspace_config_failed
   ClearErrors
-  ExecWait '"$INSTDIR\runtime\python\python.exe" -B -m transvortex.app.workspace_storage --config-root "$LOCALAPPDATA\TransVortex\Config" --workspace-root "$WorkspaceRoot"' $0
+  ExecWait '"$INSTDIR\runtime\python\pythonw.exe" -B -m transvortex.app.workspace_storage --config-root "$LOCALAPPDATA\TransVortex\Config" --workspace-root "$WorkspaceRoot"' $0
   IfErrors workspace_config_failed
   StrCmp $0 "0" workspace_config_ready workspace_config_failed
 
@@ -377,6 +377,8 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少 TransVortex.exe"
   IfFileExists "$StagingDir\runtime\python\python.exe" +2
     Abort "安装内容不完整：缺少固定 Python runtime"
+  IfFileExists "$StagingDir\runtime\python\pythonw.exe" +2
+    Abort "安装内容不完整：缺少无窗口 Python runtime"
   IfFileExists "$StagingDir\runtime\app_runtime.json" +2
     Abort "安装内容不完整：缺少 Python runtime 清单"
   IfFileExists "$StagingDir\tools\ffmpeg\bin\ffmpeg.exe" +2
@@ -572,9 +574,9 @@ Function un.CleanupPageCreate
   StrCpy $6 "0 B"
   StrCpy $7 "0"
   StrCpy $8 ""
-  IfFileExists "$INSTDIR\runtime\python\python.exe" 0 cleanup_inspection_unavailable
+  IfFileExists "$INSTDIR\runtime\python\pythonw.exe" 0 cleanup_inspection_unavailable
 
-  ExecWait '"$INSTDIR\runtime\python\python.exe" -m transvortex.app.uninstall_cleanup --inspect --app-data-root "$LOCALAPPDATA\TransVortex" --credential-file "$PROFILE\.transvortex\auth.json" --report-ini "$CleanupReport"' $0
+  ExecWait '"$INSTDIR\runtime\python\pythonw.exe" -B -m transvortex.app.uninstall_cleanup --inspect --app-data-root "$LOCALAPPDATA\TransVortex" --credential-file "$PROFILE\.transvortex\auth.json" --report-ini "$CleanupReport"' $0
   IfFileExists "$CleanupReport" 0 cleanup_inspection_unavailable
   ReadINIStr $1 "$CleanupReport" "Summary" "asr_root"
   ReadINIStr $2 "$CleanupReport" "Summary" "asr_size"
@@ -618,7 +620,7 @@ cleanup_inspection_ready:
   ${NSD_CreateCheckbox} 0 80u 100% 12u "删除任务工作区与恢复缓存（约 $6，不可撤销）"
   Pop $CleanupTasksCheckbox
   SetCtlColors $CleanupTasksCheckbox "2E2A33" "FAF8FC"
-  ${NSD_CreateCheckbox} 0 102u 100% 12u "删除保存的服务凭据（也会影响 CLI / Agent）"
+  ${NSD_CreateCheckbox} 0 102u 100% 12u "删除保存的服务凭据"
   Pop $CleanupCredentialsCheckbox
   SetCtlColors $CleanupCredentialsCheckbox "2E2A33" "FAF8FC"
 
@@ -736,7 +738,7 @@ run_selected_cleanup:
   SetDetailsPrint textonly
   DetailPrint "正在清理所选本地内容…"
   SetDetailsPrint none
-  IfFileExists "$INSTDIR\runtime\python\python.exe" cleanup_helper_ready cleanup_helper_missing
+  IfFileExists "$INSTDIR\runtime\python\pythonw.exe" cleanup_helper_ready cleanup_helper_missing
 
 cleanup_helper_ready:
   InitPluginsDir
@@ -752,7 +754,7 @@ cleanup_helper_ready:
   StrCmp $CleanupRemoveCredentials "1" 0 +2
   StrCpy $CleanupArgs '$CleanupArgs --remove-credentials'
   ClearErrors
-  ExecWait '"$INSTDIR\runtime\python\python.exe" -m transvortex.app.uninstall_cleanup $CleanupArgs' $0
+  ExecWait '"$INSTDIR\runtime\python\pythonw.exe" -B -m transvortex.app.uninstall_cleanup $CleanupArgs' $0
   IfErrors cleanup_failed
   IfFileExists "$CleanupReport" 0 cleanup_failed
   ReadINIStr $CleanupMessage "$CleanupReport" "Summary" "message"

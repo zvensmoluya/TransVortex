@@ -82,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 - TransVortex 下载的语音识别 runtime、模型和断点缓存：检测到内容时默认勾选，并显示估算大小与当前资源位置。
 - 应用设置与识别登记状态：默认保留。
 - 任务工作区与恢复缓存：默认保留，选择删除时再次确认不可恢复。
-- 用户级 `~/.transvortex/auth.json` 凭据：默认保留，选择删除时明确说明 CLI / Agent 也会受影响。
+- 用户级 `~/.transvortex/auth.json` 凭据：默认保留；选择删除后，重新安装应用时需要重新配置服务凭据。
 
 卸载器先读取 `Config/asr_storage.json` 和 `Config/workspace_storage.json`，再处理配置删除，因此可以找到独立的 ASR 资源位置和工作数据位置。自选工作区还必须带有安装器写入的 `.transvortex-workspace.json` 归属标记，卸载器才会清理其中的 `Tasks` 和 `Cache`。它不会删除用户选择的根目录中的其他文件、原地使用的外部模型、原始媒体或已导出的字幕。配置损坏或归属标记缺失时只检查安全的默认位置并给出残留提示，不扩大删除范围。保留任务时同时保留工作区位置登记，重新安装后仍能找到原任务。
 

@@ -180,6 +180,10 @@ $payloadManifest = Get-Content -LiteralPath $payloadManifestPath -Encoding utf8 
 if ($payloadManifest.package_type -ne "installer_payload" -or -not [bool]$payloadManifest.ffmpeg_included) {
     throw "Installer payload manifest does not describe the required fixed runtime layout."
 }
+$windowlessPython = Join-Path $payloadRoot "runtime\python\pythonw.exe"
+if (-not (Test-Path -LiteralPath $windowlessPython)) {
+    throw "Installer payload is missing pythonw.exe for windowless maintenance tasks."
+}
 $uninstallCleanupModule = Join-Path $payloadRoot "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py"
 if (-not (Test-Path -LiteralPath $uninstallCleanupModule)) {
     throw "Installer payload is missing the uninstall cleanup module. Rebuild the app runtime with -BuildAppRuntime."

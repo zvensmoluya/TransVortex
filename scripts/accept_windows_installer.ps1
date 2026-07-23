@@ -92,6 +92,7 @@ function Assert-InstalledLayout {
         "data\flutter_assets\FontManifest.json",
         "runtime\app_runtime.json",
         "runtime\python\python.exe",
+        "runtime\python\pythonw.exe",
         "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py",
         "runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py",
         "tools\ffmpeg\ffmpeg_runtime.json",

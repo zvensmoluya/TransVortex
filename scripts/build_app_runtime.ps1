@@ -129,6 +129,10 @@ Invoke-Checked -FileName $PythonCommand -Arguments @(
 )
 
 $runtimePython = Join-Path $runtimeStage "python.exe"
+$runtimePythonw = Join-Path $runtimeStage "pythonw.exe"
+if (-not (Test-Path -LiteralPath $runtimePythonw)) {
+    throw "Embedded app runtime is missing pythonw.exe."
+}
 Invoke-Checked -FileName $runtimePython -Arguments @(
     "-B", "-I", "-c",
     "import httpx, yaml, transvortex; from transvortex.app.desktop_api import PROTOCOL_VERSION; print(transvortex.__version__); print(PROTOCOL_VERSION)"
@@ -174,6 +178,7 @@ $manifest = [ordered]@{
     platform = "windows-x64"
     protocol_version = [int]$metadata.protocol_version
     python = "python\python.exe"
+    pythonw = "python\pythonw.exe"
     python_version = [string]$metadata.python_version
     python_implementation = [string]$metadata.python_implementation
     python_architecture = [string]$metadata.python_architecture
@@ -200,6 +205,7 @@ $report = [ordered]@{
     ok = $true
     runtime_root = $outputRootFull
     python_executable = Join-Path $runtimeRoot "python.exe"
+    pythonw_executable = Join-Path $runtimeRoot "pythonw.exe"
     manifest_path = $manifestPath
     app_version = [string]$metadata.app_version
     protocol_version = [int]$metadata.protocol_version
