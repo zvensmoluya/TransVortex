@@ -738,6 +738,84 @@ def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypat
     assert local.model_path == ""
 
 
+def test_app_service_switches_workspace_storage_when_runtime_is_idle(tmp_path: Path, monkeypatch) -> None:
+    config_root = tmp_path / "Config"
+    config_root.mkdir()
+    _write_config(config_root)
+    workspace_root = tmp_path / "NewWorkspace"
+    (workspace_root / "Tasks").mkdir(parents=True)
+    (workspace_root / "Cache").mkdir()
+    captured: dict[str, Path] = {}
+    monkeypatch.setattr(
+        "transvortex.app.workspace_storage._write_windows_registry_location",
+        lambda path: captured.update(path=path),
+    )
+    service = DesktopApi(root_dir=config_root)
+
+    response = handle_line(
+        service,
+        _request("workspace.storage.set", {"workspace_root": str(workspace_root)}),
+        root_dir=config_root,
+    )
+
+    assert response["result"]["ok"] is True
+    assert response["result"]["restart_required"] is True
+    assert captured["path"] == workspace_root
+    assert json.loads((config_root / "workspace_storage.json").read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "workspace_root": str(workspace_root),
+    }
+    assert json.loads(
+        (workspace_root / ".transvortex-workspace.json").read_text(encoding="utf-8")
+    ) == {"schema_version": 1, "app_id": "TransVortex"}
+
+
+def test_app_service_rejects_workspace_with_unrelated_files(tmp_path: Path, monkeypatch) -> None:
+    config_root = tmp_path / "Config"
+    config_root.mkdir()
+    _write_config(config_root)
+    workspace_root = tmp_path / "Occupied"
+    workspace_root.mkdir()
+    (workspace_root / "personal.txt").write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(
+        "transvortex.app.workspace_storage._write_windows_registry_location",
+        lambda _path: None,
+    )
+    service = DesktopApi(root_dir=config_root)
+
+    response = handle_line(
+        service,
+        _request("workspace.storage.set", {"workspace_root": str(workspace_root)}),
+        root_dir=config_root,
+    )
+
+    assert response["error"]["code"] == "workspace_target_not_empty"
+    assert (workspace_root / "personal.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_app_service_rejects_workspace_switch_with_queued_task(tmp_path: Path, monkeypatch) -> None:
+    config_root = tmp_path / "Config"
+    config_root.mkdir()
+    _write_config(config_root)
+    store = TaskStore(config_root / "artifacts")
+    store.save_task(_task_record(input_file="queued.mp4"))
+    store.update_task_status("task1", "QUEUED")
+    monkeypatch.setattr(
+        "transvortex.app.workspace_storage._write_windows_registry_location",
+        lambda _path: None,
+    )
+    service = DesktopApi(root_dir=config_root)
+
+    response = handle_line(
+        service,
+        _request("workspace.storage.set", {"workspace_root": str(tmp_path / "Next")}),
+        root_dir=config_root,
+    )
+
+    assert response["error"]["code"] == "workspace_busy"
+    assert not (config_root / "workspace_storage.json").exists()
+
+
 def test_app_service_subprocess_smoke(tmp_path: Path) -> None:
     _write_config(tmp_path)
     request = _request("desktop.ping") + "\n"

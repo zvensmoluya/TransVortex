@@ -13,10 +13,12 @@ import 'package:transvortex_desktop_flutter/model/window_state.dart';
 import 'package:transvortex_desktop_flutter/services/app_service_client.dart';
 import 'package:transvortex_desktop_flutter/services/current_window_controls.dart';
 import 'package:transvortex_desktop_flutter/services/directory_probe.dart';
+import 'package:transvortex_desktop_flutter/services/desktop_app_paths.dart';
 import 'package:transvortex_desktop_flutter/services/local_service_controller.dart';
 import 'package:transvortex_desktop_flutter/services/path_opener.dart';
 import 'package:transvortex_desktop_flutter/services/task_notification_service.dart';
 import 'package:transvortex_desktop_flutter/services/window_state_bridge.dart';
+import 'package:transvortex_desktop_flutter/services/workspace_data_manager.dart';
 import 'package:transvortex_desktop_flutter/theme/tokens.dart';
 import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
 import 'package:transvortex_desktop_flutter/widgets/application_network_settings.dart';
@@ -394,6 +396,7 @@ void main() {
             child: ApplicationSettingsPanel(
               bridge: bridge,
               service: service,
+              workspaceOperations: _FakeWorkspaceDataOperations(),
               onClose: () {},
             ),
           ),
@@ -409,7 +412,8 @@ void main() {
       expect(find.text('应用设置'), findsOneWidget);
       expect(find.text('网络'), findsOneWidget);
       expect(find.text('网络与代理'), findsOneWidget);
-      expect(find.text('存储与资源'), findsOneWidget);
+      expect(find.text('工作数据'), findsOneWidget);
+      expect(find.text('识别资源'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('application-settings-drag-area')),
         findsOneWidget,
@@ -420,11 +424,27 @@ void main() {
       expect(find.text('刷新'), findsNothing);
       expect(find.byKey(const ValueKey('asr-resource-refresh')), findsNothing);
 
-      await tester.tap(find.text('存储与资源'));
+      await tester.tap(find.text('工作数据'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('workspace-data-management')),
+        findsOneWidget,
+      );
+      expect(find.textContaining(r'D:\TransVortexData'), findsOneWidget);
+
+      await tester.tap(find.text('识别资源'));
       await tester.pumpAndSettle();
       expect(find.text('Whisper Small'), findsOneWidget);
       expect(find.text('刷新'), findsNothing);
 
+      await tester.drag(
+        find.descendant(
+          of: find.byKey(const ValueKey('asr-resource-manager')),
+          matching: find.byType(ListView),
+        ),
+        const Offset(0, -80),
+      );
+      await tester.pump();
       await tester.tap(
         find.byKey(const ValueKey('asr-resource-remove-model-small')),
       );
@@ -505,6 +525,117 @@ void main() {
     });
     expect(find.textContaining('127.0.0.1:7890'), findsWidgets);
     expect(find.text('刷新'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('application settings migrates workspace and reloads service', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(480, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final operations = _FakeWorkspaceDataOperations();
+    String? savedWorkspace;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'workspace.storage.set') {
+        savedWorkspace = '${params['workspace_root']}';
+        operations.root = savedWorkspace!;
+        return {
+          'ok': true,
+          'workspace_root': savedWorkspace,
+          'restart_required': true,
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    final service = _readyController();
+    addTearDown(service.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 480,
+          height: 520,
+          child: ApplicationSettingsPanel(
+            bridge: bridge,
+            service: service,
+            workspaceOperations: operations,
+            directoryPicker: (_) async => r'E:\TransVortexData',
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('工作数据'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('workspace-change-location')));
+    await tester.pumpAndSettle();
+    expect(find.text('迁移工作数据？'), findsOneWidget);
+    await tester.tap(find.text('开始迁移'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(savedWorkspace, r'E:\TransVortexData');
+    expect(operations.copiedTarget, r'E:\TransVortexData');
+    expect(operations.removedSource, isTrue);
+    expect(find.textContaining(r'E:\TransVortexData'), findsWidgets);
+    expect(find.textContaining('工作数据已迁移到'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('workspace migration rolls back when the RPC reply is lost', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(480, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    final operations = _FakeWorkspaceDataOperations();
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'workspace.storage.set') {
+        operations.root = '${params['workspace_root']}';
+        throw RpcRemoteException('connection_lost', '本地服务连接已中断。');
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    final service = _readyController();
+    addTearDown(service.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 480,
+          height: 520,
+          child: ApplicationSettingsPanel(
+            bridge: bridge,
+            service: service,
+            workspaceOperations: operations,
+            directoryPicker: (_) async => r'E:\TransVortexData',
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('工作数据'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('workspace-change-location')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开始迁移'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(operations.restoredConfiguration, isTrue);
+    expect(operations.discardedTarget, isTrue);
+    expect(operations.removedSource, isFalse);
+    expect(operations.root, r'D:\TransVortexData');
+    expect(find.text('本地服务连接已中断。'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -6687,6 +6818,66 @@ Map<String, Object?> _task({
     if (settings.isNotEmpty) 'settings': settings,
     if (progressDetail.isNotEmpty) 'progress_detail': progressDetail,
   };
+}
+
+class _FakeWorkspaceDataOperations implements WorkspaceDataOperations {
+  String root = r'D:\TransVortexData';
+  String? copiedTarget;
+  bool removedSource = false;
+  bool restoredConfiguration = false;
+  bool discardedTarget = false;
+
+  @override
+  DesktopAppPaths currentPaths() => DesktopAppPaths(
+    appDataRoot: Directory(r'D:\AppData\TransVortex'),
+    configRoot: Directory(r'D:\AppData\TransVortex\Config'),
+    workspaceRoot: Directory(root),
+    tasksRoot: Directory('$root\\Tasks'),
+    cacheRoot: Directory('$root\\Cache'),
+  );
+
+  @override
+  Future<WorkspaceDataStatus> inspect() async => WorkspaceDataStatus(
+    root: root,
+    tasksBytes: 2048,
+    cacheBytes: 1024,
+    taskCount: 2,
+  );
+
+  @override
+  Future<void> clearCache() async {}
+
+  @override
+  Future<WorkspaceMigrationReceipt> copyTo(
+    String targetPath, {
+    WorkspaceCopyProgress? onProgress,
+  }) async {
+    copiedTarget = targetPath;
+    onProgress?.call(3072, 3072);
+    return WorkspaceMigrationReceipt(
+      sourceRoot: Directory(root),
+      targetRoot: Directory(targetPath),
+      configFile: File(r'D:\AppData\TransVortex\Config\workspace_storage.json'),
+      previousConfig: null,
+      targetExisted: false,
+    );
+  }
+
+  @override
+  Future<void> discardCopiedTarget(WorkspaceMigrationReceipt receipt) async {
+    discardedTarget = true;
+  }
+
+  @override
+  Future<void> removeMigratedSource(WorkspaceMigrationReceipt receipt) async {
+    removedSource = true;
+  }
+
+  @override
+  Future<void> restoreConfiguration(WorkspaceMigrationReceipt receipt) async {
+    restoredConfiguration = true;
+    root = receipt.sourceRoot.path;
+  }
 }
 
 class _FakeMainWindowSurfaceController implements MainWindowSurfaceController {

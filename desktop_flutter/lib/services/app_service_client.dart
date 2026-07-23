@@ -925,6 +925,14 @@ class AppServiceClient {
       const Duration(seconds: 2),
     );
   }
+
+  Future<Map<String, Object?>> setWorkspaceStorage(String workspaceRoot) async {
+    return _stringMap(
+      await _transport.call('workspace.storage.set', {
+        'workspace_root': workspaceRoot,
+      }),
+    );
+  }
 }
 
 class ServiceInfo {

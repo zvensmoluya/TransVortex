@@ -56,6 +56,7 @@ from .desktop_requests import normalize_input_type, resume_request_from_payload,
 from .doctor import doctor_report
 from .media_inspect import inspect_media_source
 from .network_admin import save_network_config
+from .workspace_storage import WorkspaceStorageError, save_workspace_storage
 
 
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
@@ -68,6 +69,7 @@ SERVICE_CAPABILITIES = [
     "derived_translation",
     "provider_admin",
     "network_settings",
+    "workspace_storage",
     "asr_provider_admin",
     "asr_component_manager",
     "asr_storage_settings",
@@ -130,6 +132,7 @@ class DesktopApi:
             "auth.list": self.auth_list,
             "auth.set": self.auth_set,
             "network.settings.save": self.network_settings_save,
+            "workspace.storage.set": self.workspace_storage_set,
             "provider.probe": self.provider_probe,
             "provider.save": self.provider_save,
             "provider.delete": self.provider_delete,
@@ -325,6 +328,37 @@ class DesktopApi:
             proxy_port=_optional_int(params, "proxy_port", "proxyPort", default=0),
             expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
         )
+
+    def workspace_storage_set(self, params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        runtime = TaskRuntime(config.pipeline.artifacts_dir).snapshot()
+        if runtime.get("active") or runtime.get("queued"):
+            raise DesktopApiError(
+                "workspace_busy",
+                "Wait for active and queued tasks before changing the workspace",
+            )
+        workspace_root = Path(_required_text(params, "workspace_root", "workspaceRoot")).expanduser()
+        unexpected = _unexpected_workspace_entries(workspace_root)
+        if unexpected:
+            raise DesktopApiError(
+                "workspace_target_not_empty",
+                "The selected workspace contains unrelated files",
+                details={"entries": unexpected},
+            )
+        try:
+            config_file = save_workspace_storage(
+                config_root=self.root_dir,
+                workspace_root=workspace_root,
+                update_windows_registry=True,
+            )
+        except (OSError, WorkspaceStorageError) as exc:
+            raise DesktopApiError("workspace_storage_invalid", str(exc)) from exc
+        return {
+            "ok": True,
+            "workspace_root": str(workspace_root.resolve()),
+            "config_file": str(config_file),
+            "restart_required": True,
+        }
 
     def provider_probe(self, params: dict[str, Any]) -> dict[str, Any]:
         return probe_provider(
@@ -858,6 +892,18 @@ def _has_task_dirs(artifacts_dir: Path) -> bool:
         return any(child.is_dir() and (child / "task.json").exists() for child in artifacts_dir.iterdir())
     except Exception:
         return False
+
+
+def _unexpected_workspace_entries(workspace_root: Path) -> list[str]:
+    if not workspace_root.exists():
+        return []
+    if not workspace_root.is_dir():
+        return [workspace_root.name]
+    allowed = {"tasks", "cache", ".transvortex-workspace.json"}
+    try:
+        return sorted(child.name for child in workspace_root.iterdir() if child.name.casefold() not in allowed)
+    except OSError as exc:
+        raise DesktopApiError("workspace_storage_invalid", str(exc)) from exc
 
 
 def _request_param(params: dict[str, Any]) -> dict[str, Any]:

@@ -310,7 +310,7 @@ Function WorkspacePageCreate
   StrCmp $WorkspaceLocked "1" 0 show_workspace_dialog
   EnableWindow $WorkspacePathInput 0
   EnableWindow $WorkspaceBrowseButton 0
-  ${NSD_SetText} $WorkspaceNoticeLabel "检测到已有任务或缓存，安装器将继续使用当前位置，不会静默迁移数据。安装后可先清理或完成任务，再调整存储策略。"
+  ${NSD_SetText} $WorkspaceNoticeLabel "检测到已有任务或缓存，安装器将继续使用当前位置，不会在安装期间搬动数据。安装后可在“应用设置 → 工作数据”中查看占用、清理缓存或迁移位置。"
 
 show_workspace_dialog:
   nsDialogs::Show

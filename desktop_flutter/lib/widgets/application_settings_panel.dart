@@ -6,26 +6,33 @@ import '../services/local_service_controller.dart';
 import '../services/path_opener.dart';
 import '../services/settings_service_transport.dart';
 import '../services/window_state_bridge.dart';
+import '../services/workspace_data_manager.dart';
 import '../theme/tokens.dart';
 import 'application_network_settings.dart';
 import 'asr_resource_management.dart';
 import 'settings_common.dart';
 import 'title_bar.dart';
+import 'workspace_data_management.dart';
 
-enum _ApplicationSettingsSection { network, resources }
+enum _ApplicationSettingsSection { network, workspace, resources }
 
 extension on _ApplicationSettingsSection {
   String get headerLabel => switch (this) {
     _ApplicationSettingsSection.network => '网络与代理',
-    _ApplicationSettingsSection.resources => '存储与资源',
+    _ApplicationSettingsSection.workspace => '工作数据',
+    _ApplicationSettingsSection.resources => '识别资源',
   };
 }
 
 const _applicationSettingsTabs = [
   SettingsTabOption(value: _ApplicationSettingsSection.network, label: '网络'),
   SettingsTabOption(
+    value: _ApplicationSettingsSection.workspace,
+    label: '工作数据',
+  ),
+  SettingsTabOption(
     value: _ApplicationSettingsSection.resources,
-    label: '存储与资源',
+    label: '识别资源',
   ),
 ];
 
@@ -38,6 +45,9 @@ class ApplicationSettingsPanel extends StatefulWidget {
     this.pathOpener,
     this.entranceAnimation,
     this.overlay = false,
+    this.workspaceOperations,
+    this.directoryPicker,
+    this.onWorkspaceBusyChanged,
   });
 
   final WindowStateBridge bridge;
@@ -46,6 +56,9 @@ class ApplicationSettingsPanel extends StatefulWidget {
   final PathOpener? pathOpener;
   final Animation<double>? entranceAnimation;
   final bool overlay;
+  final WorkspaceDataOperations? workspaceOperations;
+  final WorkspaceDirectoryPicker? directoryPicker;
+  final ValueChanged<bool>? onWorkspaceBusyChanged;
 
   @override
   State<ApplicationSettingsPanel> createState() =>
@@ -186,11 +199,24 @@ class _ApplicationSettingsPanelState extends State<ApplicationSettingsPanel> {
               bridge: widget.bridge,
               service: widget.service,
             ),
+            _ApplicationSettingsSection.workspace => Align(
+              alignment: Alignment.topCenter,
+              child: WorkspaceDataManagement(
+                client: _client,
+                service: widget.service,
+                operations: widget.workspaceOperations,
+                pathOpener: widget.pathOpener,
+                directoryPicker: widget.directoryPicker,
+                onBusyChanged: widget.onWorkspaceBusyChanged,
+                onWorkspaceChanged: widget.bridge.refreshServiceSnapshot,
+              ),
+            ),
             _ApplicationSettingsSection.resources => AsrResourceManagement(
               client: _client,
               bridge: widget.bridge,
               service: widget.service,
               pathOpener: widget.pathOpener,
+              directoryPicker: widget.directoryPicker,
               showHeader: false,
             ),
           },

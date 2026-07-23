@@ -25,6 +25,7 @@ import 'services/path_opener.dart';
 import 'services/smoke_render_capture.dart';
 import 'services/task_notification_service.dart';
 import 'services/window_state_bridge.dart';
+import 'services/workspace_data_manager.dart';
 import 'theme/tokens.dart';
 import 'widgets/application_settings_panel.dart';
 import 'widgets/job_line.dart';
@@ -146,6 +147,7 @@ class TransVortexApp extends StatelessWidget {
     this.pathOpener,
     this.directoryProbe,
     this.directoryPicker,
+    this.workspaceDataOperations,
     this.mainWindowSurfaceController,
     this.smoke,
   });
@@ -160,6 +162,7 @@ class TransVortexApp extends StatelessWidget {
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
   final SettingsDirectoryPicker? directoryPicker;
+  final WorkspaceDataOperations? workspaceDataOperations;
   final MainWindowSurfaceController? mainWindowSurfaceController;
   final AppSmokeArgs? smoke;
 
@@ -228,6 +231,8 @@ class TransVortexApp extends StatelessWidget {
           desktopTrayService: desktopTrayService,
           taskNotificationService: taskNotificationService,
           pathOpener: pathOpener,
+          directoryPicker: directoryPicker,
+          workspaceDataOperations: workspaceDataOperations,
           mainWindowSurfaceController: mainWindowSurfaceController,
           smoke: smoke,
         ),
@@ -262,6 +267,8 @@ class MainScreen extends StatefulWidget {
     this.desktopTrayService,
     this.taskNotificationService,
     this.pathOpener,
+    this.directoryPicker,
+    this.workspaceDataOperations,
     this.mainWindowSurfaceController,
     this.smoke,
   });
@@ -272,6 +279,8 @@ class MainScreen extends StatefulWidget {
   final DesktopTrayService? desktopTrayService;
   final TaskNotificationService? taskNotificationService;
   final PathOpener? pathOpener;
+  final SettingsDirectoryPicker? directoryPicker;
+  final WorkspaceDataOperations? workspaceDataOperations;
   final MainWindowSurfaceController? mainWindowSurfaceController;
   final AppSmokeArgs? smoke;
 
@@ -303,6 +312,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   bool _applicationSettingsUseOverlay = false;
   bool _applicationSettingsChanging = false;
   bool _applicationSettingsClosing = false;
+  bool _workspaceManagementBusy = false;
   Rect? _applicationSettingsOriginalBounds;
   Rect? _applicationSettingsExpectedBounds;
   late final AnimationController _applicationSettingsAnimation =
@@ -1596,6 +1606,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 clipBehavior: Clip.hardEdge,
                 children: [
                   mainWorkspace,
+                  if (_workspaceManagementBusy)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: mainWindowSize.width,
+                      height: mainWindowSize.height,
+                      child: const AbsorbPointer(
+                        child: ColoredBox(color: Color(0x14000000)),
+                      ),
+                    ),
                   if (settingsOpen)
                     Positioned(
                       left: mainWindowSize.width,
@@ -1693,7 +1713,10 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         );
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: _applicationSettingsChanging || _applicationSettingsClosing
+          onTap:
+              _applicationSettingsChanging ||
+                  _applicationSettingsClosing ||
+                  _workspaceManagementBusy
               ? null
               : () => unawaited(_closeApplicationSettings()),
           child: ColoredBox(
@@ -1711,9 +1734,18 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         bridge: widget.bridge,
         service: _service,
         pathOpener: widget.pathOpener,
+        workspaceOperations: widget.workspaceDataOperations,
+        directoryPicker: widget.directoryPicker,
+        onWorkspaceBusyChanged: (busy) {
+          if (!mounted || _workspaceManagementBusy == busy) return;
+          setState(() => _workspaceManagementBusy = busy);
+        },
         entranceAnimation: _applicationSettingsAnimation,
         overlay: _applicationSettingsUseOverlay,
-        onClose: () => unawaited(_closeApplicationSettings()),
+        onClose: () {
+          if (_workspaceManagementBusy) return;
+          unawaited(_closeApplicationSettings());
+        },
       ),
     );
   }
