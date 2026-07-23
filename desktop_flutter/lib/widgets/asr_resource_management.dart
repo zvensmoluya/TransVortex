@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../services/app_service_client.dart';
@@ -9,6 +10,9 @@ import '../services/settings_error.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
 import 'settings_common.dart';
+
+typedef AsrStorageDirectoryPicker =
+    Future<String?> Function(String dialogTitle);
 
 /// Direct management for ASR resources downloaded and owned by TransVortex.
 ///
@@ -21,6 +25,7 @@ class AsrResourceManagement extends StatefulWidget {
     required this.bridge,
     this.service,
     this.pathOpener,
+    this.directoryPicker,
     this.onResourcesChanged,
     this.showHeader = true,
   });
@@ -29,6 +34,7 @@ class AsrResourceManagement extends StatefulWidget {
   final WindowStateBridge bridge;
   final LocalServiceController? service;
   final PathOpener? pathOpener;
+  final AsrStorageDirectoryPicker? directoryPicker;
   final Future<void> Function()? onResourcesChanged;
   final bool showHeader;
 
@@ -39,6 +45,7 @@ class AsrResourceManagement extends StatefulWidget {
 class _AsrResourceManagementState extends State<AsrResourceManagement> {
   DesktopSnapshot? _snapshot;
   bool _loading = false;
+  bool _changingStorage = false;
   String? _removingKey;
   String? _message;
   String? _error;
@@ -252,6 +259,49 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
     }
   }
 
+  Future<void> _pickStorage() async {
+    final storage = _snapshot?.asrStorage;
+    if (storage == null || !storage.canChange || _changingStorage) return;
+    final path = await (widget.directoryPicker ?? _pickDirectory)(
+      '选择识别资源保存文件夹',
+    );
+    if (path == null || path.trim().isEmpty || !mounted) return;
+    await _setStorage(path.trim());
+  }
+
+  Future<String?> _pickDirectory(String dialogTitle) {
+    return FilePicker.platform.getDirectoryPath(dialogTitle: dialogTitle);
+  }
+
+  Future<void> _resetStorage() async {
+    final defaultRoot = _snapshot?.asrStorage.defaultRoot.trim() ?? '';
+    if (defaultRoot.isEmpty || _changingStorage) return;
+    await _setStorage(defaultRoot, reset: true);
+  }
+
+  Future<void> _setStorage(String path, {bool reset = false}) async {
+    setState(() {
+      _changingStorage = true;
+      _message = null;
+      _error = null;
+    });
+    try {
+      final storage = await widget.client.asrStorageSet(path);
+      if (mounted) await _load(clearFeedback: false);
+      await widget.bridge.refreshServiceSnapshot();
+      await widget.onResourcesChanged?.call();
+      if (!mounted) return;
+      setState(() {
+        _message = reset ? '识别资源已恢复到默认位置。' : '识别资源将保存到：${storage.root}';
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _changingStorage = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final snapshot = _snapshot;
@@ -259,7 +309,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         ? const <_ManagedAsrResource>[]
         : _resources(snapshot);
     final storage = snapshot?.asrStorage ?? const AsrStorageOption();
-    final busy = _loading || _removingKey != null;
+    final busy = _loading || _removingKey != null || _changingStorage;
     return Column(
       key: const ValueKey('asr-resource-manager'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -275,8 +325,20 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         ],
         _StorageSummary(
           storage: storage,
+          changing: _changingStorage,
+          onChange: storage.canChange ? _pickStorage : null,
+          onReset: storage.customized && storage.canChange
+              ? _resetStorage
+              : null,
           onOpen: storage.root.trim().isEmpty ? null : _openStorage,
         ),
+        if (storage.changeBlocker.isNotEmpty) ...[
+          const SizedBox(height: T.s8),
+          Text(
+            _storageChangeHint(storage.changeBlocker),
+            style: T.tCaption.copyWith(color: T.warn),
+          ),
+        ],
         if (_hasActiveOperation) ...[
           const SizedBox(height: T.s8),
           Text(
@@ -331,9 +393,18 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
 }
 
 class _StorageSummary extends StatelessWidget {
-  const _StorageSummary({required this.storage, required this.onOpen});
+  const _StorageSummary({
+    required this.storage,
+    required this.changing,
+    required this.onChange,
+    required this.onReset,
+    required this.onOpen,
+  });
 
   final AsrStorageOption storage;
+  final bool changing;
+  final VoidCallback? onChange;
+  final VoidCallback? onReset;
   final VoidCallback? onOpen;
 
   @override
@@ -350,37 +421,70 @@ class _StorageSummary extends StatelessWidget {
         border: Border.all(color: T.line),
         borderRadius: BorderRadius.circular(T.rSm),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.storage_rounded, size: 19, color: T.muted),
-          const SizedBox(width: T.s8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('识别资源位置', style: T.tCaption),
-                Tooltip(
-                  message: root,
-                  child: Text(
-                    root.isEmpty ? '位置尚未就绪' : root,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: T.tBody,
-                  ),
+          Row(
+            children: [
+              const Icon(Icons.storage_rounded, size: 19, color: T.muted),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('识别资源位置', style: T.tCaption),
+                    Tooltip(
+                      message: root,
+                      child: Text(
+                        root.isEmpty ? '位置尚未就绪' : root,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.tBody,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: T.s8),
+          Row(
+            children: [
+              Expanded(child: Text(space, style: T.tCaption)),
+              ActionButton(
+                key: const ValueKey('asr-resource-change-storage'),
+                label: changing ? '处理中' : '更改',
+                onTap: changing ? null : onChange,
+              ),
+              if (onReset != null) ...[
+                const SizedBox(width: T.s8),
+                ActionButton(
+                  key: const ValueKey('asr-resource-reset-storage'),
+                  label: '默认',
+                  onTap: changing ? null : onReset,
                 ),
               ],
-            ),
+              if (onOpen != null) ...[
+                const SizedBox(width: T.s8),
+                ActionButton(label: '打开', onTap: onOpen),
+              ],
+            ],
           ),
-          const SizedBox(width: T.s8),
-          Text(space, style: T.tCaption),
-          if (onOpen != null) ...[
-            const SizedBox(width: T.s8),
-            ActionButton(label: '打开', onTap: onOpen),
-          ],
         ],
       ),
     );
   }
+}
+
+String _storageChangeHint(String blocker) {
+  return switch (blocker) {
+    'active_operation' => '当前下载或资源操作完成后才能更改保存位置。',
+    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。请先删除受管资源，再更改保存位置。',
+    'partial_downloads_present' => '当前位置保留了下载断点；继续下载会复用这里，清理断点后才能更改。',
+    'storage_config_invalid' => '保存位置配置无效，请重新选择。',
+    'storage_unreadable' => '当前位置暂时无法读取，请重新连接磁盘或选择其他位置。',
+    _ => '当前暂时不能更改识别资源位置。',
+  };
 }
 
 class _ResourceRow extends StatelessWidget {

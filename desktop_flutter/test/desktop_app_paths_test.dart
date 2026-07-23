@@ -16,6 +16,10 @@ void main() {
     expect(paths.appDataRoot.path, contains(r'AppData\Local\TransVortex'));
     expect(paths.configRoot.path, endsWith('Config'));
     expect(
+      paths.workspaceRoot.path,
+      endsWith('TransVortex${Platform.pathSeparator}Workspace'),
+    );
+    expect(
       paths.tasksRoot.path,
       endsWith('Workspace${Platform.pathSeparator}Tasks'),
     );
@@ -36,7 +40,64 @@ void main() {
 
     expect(paths.appDataRoot.path, r'D:\tvx-home');
     expect(paths.configRoot.path, r'D:\tvx-home\Config');
+    expect(paths.workspaceRoot.path, r'D:\tvx-home\Workspace');
     expect(paths.tasksRoot.path, r'D:\tvx-home\Workspace\Tasks');
     expect(paths.cacheRoot.path, r'D:\tvx-home\Workspace\Cache');
+  });
+
+  test('workspace config keeps task data outside the user profile', () {
+    final localAppData = Directory.systemTemp.createTempSync(
+      'transvortex-paths-',
+    );
+    addTearDown(() => localAppData.deleteSync(recursive: true));
+    final configRoot = Directory(
+      '${localAppData.path}${Platform.pathSeparator}TransVortex'
+      '${Platform.pathSeparator}Config',
+    )..createSync(recursive: true);
+    File(
+      '${configRoot.path}${Platform.pathSeparator}$workspaceStorageConfigName',
+    ).writeAsStringSync(
+      '{"schema_version":1,"workspace_root":"D:\\\\TransVortexData"}',
+    );
+
+    final paths = DesktopAppPaths.system(
+      environment: {
+        'LOCALAPPDATA': localAppData.path,
+        'USERPROFILE': r'C:\Users\demo',
+      },
+      platform: DesktopHostPlatform.windows,
+    );
+
+    expect(paths.configRoot.path, startsWith(localAppData.path));
+    expect(paths.workspaceRoot.path, r'D:\TransVortexData');
+    expect(paths.tasksRoot.path, r'D:\TransVortexData\Tasks');
+    expect(paths.cacheRoot.path, r'D:\TransVortexData\Cache');
+  });
+
+  test('invalid workspace config falls back to app data', () {
+    final localAppData = Directory.systemTemp.createTempSync(
+      'transvortex-paths-',
+    );
+    addTearDown(() => localAppData.deleteSync(recursive: true));
+    final configRoot = Directory(
+      '${localAppData.path}${Platform.pathSeparator}TransVortex'
+      '${Platform.pathSeparator}Config',
+    )..createSync(recursive: true);
+    File(
+      '${configRoot.path}${Platform.pathSeparator}$workspaceStorageConfigName',
+    ).writeAsStringSync('{"schema_version":2,"workspace_root":"D:\\\\Data"}');
+
+    final paths = DesktopAppPaths.system(
+      environment: {
+        'LOCALAPPDATA': localAppData.path,
+        'USERPROFILE': r'C:\Users\demo',
+      },
+      platform: DesktopHostPlatform.windows,
+    );
+
+    expect(
+      paths.workspaceRoot.path,
+      endsWith('TransVortex${Platform.pathSeparator}Workspace'),
+    );
   });
 }

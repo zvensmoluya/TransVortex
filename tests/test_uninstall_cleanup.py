@@ -104,6 +104,71 @@ def test_cleanup_keeps_each_user_data_category_independent(tmp_path: Path) -> No
     assert credential_sentinel.read_bytes() == b"data"
 
 
+def test_custom_workspace_is_inspected_and_removed_without_touching_siblings(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "TransVortex"
+    workspace_root = tmp_path / "TransVortexData"
+    credential_file = tmp_path / ".transvortex" / "auth.json"
+    config_file = app_root / "Config" / "workspace_storage.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps({"schema_version": 1, "workspace_root": str(workspace_root)}),
+        encoding="utf-8",
+    )
+    _write(
+        workspace_root / ".transvortex-workspace.json",
+        json.dumps({"schema_version": 1, "app_id": "TransVortex"}).encode(),
+    )
+    task = _write(workspace_root / "Tasks" / "task-1" / "result.srt", b"task")
+    cache = _write(workspace_root / "Cache" / "task-1.wav", b"cache")
+    sibling = _write(workspace_root / "keep-user-file.txt", b"keep")
+
+    inspection = inspect_uninstall_data(
+        app_data_root=app_root,
+        credential_file=credential_file,
+    )
+
+    assert inspection["workspace_root"] == str(workspace_root)
+    assert inspection["tasks_present"] is True
+    assert inspection["task_bytes"] == 9
+
+    report = cleanup_uninstall_data(
+        app_data_root=app_root,
+        credential_file=credential_file,
+        options=UninstallCleanupOptions(remove_tasks=True),
+    )
+
+    assert report["ok"] is True
+    assert not task.exists()
+    assert not cache.exists()
+    assert sibling.read_bytes() == b"keep"
+    assert config_file.is_file()
+
+
+def test_custom_workspace_without_ownership_marker_is_not_removed(tmp_path: Path) -> None:
+    app_root = tmp_path / "TransVortex"
+    workspace_root = tmp_path / "OtherApplicationData"
+    credential_file = tmp_path / ".transvortex" / "auth.json"
+    config_file = app_root / "Config" / "workspace_storage.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(
+        json.dumps({"schema_version": 1, "workspace_root": str(workspace_root)}),
+        encoding="utf-8",
+    )
+    unrelated = _write(workspace_root / "Tasks" / "important.txt", b"keep")
+
+    report = cleanup_uninstall_data(
+        app_data_root=app_root,
+        credential_file=credential_file,
+        options=UninstallCleanupOptions(remove_tasks=True),
+    )
+
+    assert report["ok"] is True
+    assert unrelated.read_bytes() == b"keep"
+    assert "仅检查默认位置" in str(report["warning"])
+
+
 def test_invalid_storage_config_never_expands_the_cleanup_scope(tmp_path: Path) -> None:
     app_root = tmp_path / "TransVortex"
     credential_file = tmp_path / ".transvortex" / "auth.json"

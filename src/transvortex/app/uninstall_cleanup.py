@@ -12,6 +12,8 @@ from typing import Iterable
 
 
 ASR_STORAGE_CONFIG_VERSION = 1
+WORKSPACE_STORAGE_CONFIG_VERSION = 1
+WORKSPACE_MARKER_NAME = ".transvortex-workspace.json"
 
 
 class UninstallCleanupError(RuntimeError):
@@ -30,16 +32,19 @@ def inspect_uninstall_data(*, app_data_root: Path, credential_file: Path) -> dic
     app_root = _validated_app_data_root(app_data_root)
     credential_path = _validated_absolute_file(credential_file, "credential_file")
     storage_root, storage_warning = _configured_asr_storage_root(app_root)
+    workspace_root, workspace_warning = _configured_workspace_root(app_root)
     asr_targets = _asr_resource_targets(app_root, storage_root)
-    task_targets = _task_targets(app_root)
+    task_targets = _task_targets(app_root, workspace_root)
     asr_bytes = sum(_path_size(path) for path in asr_targets)
     task_bytes = sum(_path_size(path) for path in task_targets)
     config_root = app_root / "Config"
+    warnings = [value for value in (storage_warning, workspace_warning) if value]
     return {
-        "ok": not bool(storage_warning),
-        "warning": storage_warning,
+        "ok": not warnings,
+        "warning": "；".join(warnings),
         "app_data_root": str(app_root),
         "asr_storage_root": str(storage_root),
+        "workspace_root": str(workspace_root),
         "asr_resource_bytes": asr_bytes,
         "asr_resource_size_label": _format_bytes(asr_bytes),
         "asr_resources_present": any(_path_exists(path) for path in asr_targets),
@@ -65,6 +70,7 @@ def cleanup_uninstall_data(
     app_root = Path(str(inspection["app_data_root"]))
     credential_path = Path(str(inspection["credential_file"]))
     storage_root = Path(str(inspection["asr_storage_root"]))
+    workspace_root = Path(str(inspection["workspace_root"]))
     removed: list[str] = []
     errors: list[str] = []
 
@@ -82,9 +88,9 @@ def cleanup_uninstall_data(
         )
 
     if options.remove_tasks:
-        for target in _task_targets(app_root):
+        for target in _task_targets(app_root, workspace_root):
             _remove_target(target, removed=removed, errors=errors)
-        _remove_empty_directories((app_root / "Workspace",))
+        _remove_empty_directories((workspace_root, app_root / "Workspace"))
 
     if options.remove_settings:
         _remove_target(app_root / "Config", removed=removed, errors=errors)
@@ -151,6 +157,36 @@ def _configured_asr_storage_root(app_root: Path) -> tuple[Path, str]:
         return app_root, f"无法读取自选识别资源位置；仅检查默认位置：{exc}"
 
 
+def _configured_workspace_root(app_root: Path) -> tuple[Path, str]:
+    default_root = app_root / "Workspace"
+    config_file = app_root / "Config" / "workspace_storage.json"
+    if not config_file.is_file():
+        return default_root, ""
+    try:
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("expected an object")
+        if int(payload.get("schema_version") or 0) != WORKSPACE_STORAGE_CONFIG_VERSION:
+            raise ValueError("unsupported schema")
+        raw_root = str(payload.get("workspace_root") or "").strip()
+        if not raw_root:
+            raise ValueError("workspace_root is empty")
+        workspace_root = _validated_absolute_directory(Path(raw_root), "workspace_root")
+        if os.path.normcase(str(workspace_root)) != os.path.normcase(str(default_root)):
+            marker = json.loads(
+                (workspace_root / WORKSPACE_MARKER_NAME).read_text(encoding="utf-8")
+            )
+            if not isinstance(marker, dict):
+                raise ValueError("workspace marker must be an object")
+            if int(marker.get("schema_version") or 0) != WORKSPACE_STORAGE_CONFIG_VERSION:
+                raise ValueError("workspace marker schema is unsupported")
+            if marker.get("app_id") != "TransVortex":
+                raise ValueError("workspace marker ownership does not match")
+        return workspace_root, ""
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, UninstallCleanupError) as exc:
+        return default_root, f"无法读取工作数据位置；仅检查默认位置：{exc}"
+
+
 def _asr_resource_targets(app_root: Path, storage_root: Path) -> tuple[Path, ...]:
     roots = [app_root]
     if os.path.normcase(str(storage_root)) != os.path.normcase(str(app_root)):
@@ -167,11 +203,14 @@ def _asr_resource_targets(app_root: Path, storage_root: Path) -> tuple[Path, ...
     return tuple(targets)
 
 
-def _task_targets(app_root: Path) -> tuple[Path, ...]:
-    return (
-        _safe_child(app_root, "Workspace", "Tasks"),
-        _safe_child(app_root, "Workspace", "Cache"),
-    )
+def _task_targets(app_root: Path, workspace_root: Path) -> tuple[Path, ...]:
+    roots = [app_root / "Workspace"]
+    if os.path.normcase(str(workspace_root)) != os.path.normcase(str(roots[0])):
+        roots.append(workspace_root)
+    targets: list[Path] = []
+    for root in roots:
+        targets.extend((_safe_child(root, "Tasks"), _safe_child(root, "Cache")))
+    return tuple(targets)
 
 
 def _safe_child(root: Path, *parts: str) -> Path:
@@ -291,6 +330,7 @@ def _write_ini_report(path: Path, report: dict[str, object]) -> None:
         "status": "ok" if bool(report.get("ok")) else "error",
         "message": "；".join(errors or warnings),
         "asr_root": str(report.get("asr_storage_root") or ""),
+        "workspace_root": str(report.get("workspace_root") or ""),
         "asr_size": str(report.get("asr_resource_size_label") or "0 B"),
         "asr_present": "1" if bool(report.get("asr_resources_present")) else "0",
         "settings_present": "1" if bool(report.get("settings_present")) else "0",

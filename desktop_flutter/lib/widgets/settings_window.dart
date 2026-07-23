@@ -869,6 +869,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             client: _client,
             bridge: widget.bridge,
             pathOpener: _pathOpener,
+            directoryPicker: _directoryPicker,
             onResourcesChanged: _loadConfig,
           ),
         ),
@@ -2747,19 +2748,18 @@ class _AsrDownloadPlan extends StatelessWidget {
                     fontWeight: hasSpace ? T.wRegular : T.wBold,
                   ),
                 ),
-                if (onChangeStorage != null) ...[
-                  const SizedBox(width: T.s4),
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(0, 22),
-                      padding: const EdgeInsets.symmetric(horizontal: T.s4),
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    onPressed: changingStorage ? null : onChangeStorage,
-                    child: Text(changingStorage ? '处理中' : '更改'),
+                const SizedBox(width: T.s4),
+                TextButton(
+                  key: const ValueKey('asr-change-storage'),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 22),
+                    padding: const EdgeInsets.symmetric(horizontal: T.s4),
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                ],
+                  onPressed: changingStorage ? null : onChangeStorage,
+                  child: Text(changingStorage ? '处理中' : '更改'),
+                ),
                 if (onResetStorage != null) ...[
                   TextButton(
                     style: TextButton.styleFrom(
@@ -3108,8 +3108,8 @@ String _asrOperationFailureMessage(AsrOperationStatus operation) {
 String _asrStorageChangeHint(String blocker) {
   return switch (blocker) {
     'active_operation' => '当前任务完成后才能更改保存位置。',
-    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。',
-    'partial_downloads_present' => '已有下载断点；继续下载时仍会复用当前位置。',
+    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。请先到“管理已下载资源”删除受管资源。',
+    'partial_downloads_present' => '已有下载断点；继续下载时仍会复用当前位置，清理后才能更改。',
     'storage_config_invalid' => '保存位置配置需要重新选择。',
     'storage_unreadable' => '当前位置暂时无法读取。',
     _ => '',

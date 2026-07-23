@@ -95,8 +95,9 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 !define MUI_PAGE_HEADER_TEXT "选择程序安装位置"
 !define MUI_PAGE_HEADER_SUBTEXT "这里只存放程序文件；模型和任务使用独立的用户数据位置。"
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom WorkspacePageCreate WorkspacePageLeave
 !define MUI_PAGE_HEADER_TEXT "正在准备 TransVortex"
-!define MUI_PAGE_HEADER_SUBTEXT "安装固定运行环境、媒体工具和开始菜单入口。"
+!define MUI_PAGE_HEADER_SUBTEXT "安装固定运行环境、媒体工具，并准备工作数据位置。"
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TITLE "TransVortex 已准备好"
 !define MUI_FINISHPAGE_TEXT "安装已经完成。首次启动后可配置翻译服务，并按需准备本机语音识别资源。"
@@ -118,6 +119,12 @@ Var StagingDir
 Var PreviousDir
 Var HadPreviousInstall
 Var ShortcutBackup
+Var WorkspaceDialog
+Var WorkspacePathInput
+Var WorkspaceBrowseButton
+Var WorkspaceNoticeLabel
+Var WorkspaceRoot
+Var WorkspaceLocked
 Var CleanupDialog
 Var CleanupAsrCheckbox
 Var CleanupSettingsCheckbox
@@ -231,6 +238,140 @@ Function DirectoryPageLeave
   Call CheckInstallDirectorySafety
 FunctionEnd
 
+Function ResolveWorkspaceRoot
+  StrCmp $WorkspaceRoot "" 0 workspace_root_done
+  StrCpy $WorkspaceLocked "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} "$0" "/WORKSPACEROOT=" $1
+  IfErrors workspace_root_from_registry
+  StrCmp $1 "" workspace_root_from_registry
+  StrCpy $WorkspaceRoot "$1"
+  Goto check_workspace_content
+
+workspace_root_from_registry:
+  ReadRegStr $WorkspaceRoot HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"
+  StrCmp $WorkspaceRoot "" check_legacy_workspace check_workspace_content
+
+check_legacy_workspace:
+  IfFileExists "$LOCALAPPDATA\TransVortex\Workspace\Tasks\*.*" use_legacy_workspace
+  IfFileExists "$LOCALAPPDATA\TransVortex\Workspace\Cache\*.*" use_legacy_workspace
+  ${GetParent} "$INSTDIR" $0
+  StrCmp $0 "" use_profile_workspace
+  StrCpy $WorkspaceRoot "$0\TransVortexData"
+  Goto workspace_root_done
+
+use_profile_workspace:
+  StrCpy $WorkspaceRoot "$LOCALAPPDATA\TransVortex\Workspace"
+  Goto workspace_root_done
+
+use_legacy_workspace:
+  StrCpy $WorkspaceRoot "$LOCALAPPDATA\TransVortex\Workspace"
+  StrCpy $WorkspaceLocked "1"
+  Goto workspace_root_done
+
+check_workspace_content:
+  IfFileExists "$WorkspaceRoot\Tasks\*.*" lock_workspace_root
+  IfFileExists "$WorkspaceRoot\Cache\*.*" lock_workspace_root workspace_root_done
+
+lock_workspace_root:
+  StrCpy $WorkspaceLocked "1"
+
+workspace_root_done:
+FunctionEnd
+
+Function WorkspacePageCreate
+  !insertmacro MUI_HEADER_TEXT "选择工作数据位置" "任务资料和临时媒体可能持续增长，请确认保存磁盘。"
+  Call ResolveWorkspaceRoot
+  nsDialogs::Create 1018
+  Pop $WorkspaceDialog
+  ${If} $WorkspaceDialog == error
+    Abort
+  ${EndIf}
+  SetCtlColors $WorkspaceDialog "" "FAF8FC"
+
+  ${NSD_CreateLabel} 0 0 100% 30u "这里保存任务状态、识别与翻译中间资料，以及可恢复的临时音频；配置和凭据仍保存在 Windows 用户目录。"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+
+  ${NSD_CreateLabel} 0 40u 100% 12u "工作数据文件夹"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+  ${NSD_CreateText} 0 56u 78% 13u "$WorkspaceRoot"
+  Pop $WorkspacePathInput
+  ${NSD_CreateButton} 80% 55u 20% 15u "浏览…"
+  Pop $WorkspaceBrowseButton
+  ${NSD_OnClick} $WorkspaceBrowseButton SelectWorkspaceDirectory
+
+  ${NSD_CreateLabel} 0 80u 100% 34u "程序升级不会删除这个文件夹。语音识别运行组件和模型使用应用内单独设置的资源位置。"
+  Pop $WorkspaceNoticeLabel
+  SetCtlColors $WorkspaceNoticeLabel "5F5965" "FAF8FC"
+
+  StrCmp $WorkspaceLocked "1" 0 show_workspace_dialog
+  EnableWindow $WorkspacePathInput 0
+  EnableWindow $WorkspaceBrowseButton 0
+  ${NSD_SetText} $WorkspaceNoticeLabel "检测到已有任务或缓存，安装器将继续使用当前位置，不会静默迁移数据。安装后可先清理或完成任务，再调整存储策略。"
+
+show_workspace_dialog:
+  nsDialogs::Show
+FunctionEnd
+
+Function SelectWorkspaceDirectory
+  ${NSD_GetText} $WorkspacePathInput $0
+  nsDialogs::SelectFolderDialog "选择 TransVortex 工作数据文件夹" "$0"
+  Pop $1
+  StrCmp $1 "error" workspace_browse_done
+  StrCmp $1 "" workspace_browse_done
+  ${NSD_SetText} $WorkspacePathInput "$1"
+workspace_browse_done:
+FunctionEnd
+
+Function ValidateWorkspaceRoot
+  StrCmp $WorkspaceRoot "" workspace_invalid
+  ${GetRoot} "$WorkspaceRoot" $0
+  StrCmp $0 "" workspace_invalid
+  System::Call 'kernel32::lstrcmpiW(w "$WorkspaceRoot", w "$0") i .r1'
+  IntCmp $1 0 workspace_invalid
+  System::Call 'kernel32::lstrcmpiW(w "$WorkspaceRoot", w "$INSTDIR") i .r1'
+  IntCmp $1 0 workspace_inside_install
+  System::Call 'shlwapi::PathIsPrefixW(w "$INSTDIR", w "$WorkspaceRoot") i .r1'
+  IntCmp $1 0 workspace_valid workspace_inside_install workspace_inside_install
+
+workspace_invalid:
+  Abort "请选择一个专用的工作数据文件夹，不能直接使用磁盘根目录。"
+
+workspace_inside_install:
+  Abort "工作数据不能放在程序安装目录中；程序升级会整体替换该目录。请选择同级或其他位置。"
+
+workspace_valid:
+FunctionEnd
+
+Function WorkspacePageLeave
+  StrCmp $WorkspaceLocked "1" workspace_page_validate
+  ${NSD_GetText} $WorkspacePathInput $WorkspaceRoot
+workspace_page_validate:
+  Call ValidateWorkspaceRoot
+FunctionEnd
+
+Function WriteWorkspaceConfig
+  CreateDirectory "$WorkspaceRoot"
+  IfErrors workspace_config_failed
+  CreateDirectory "$LOCALAPPDATA\TransVortex\Config"
+  IfErrors workspace_config_failed
+  ClearErrors
+  ExecWait '"$INSTDIR\runtime\python\python.exe" -B -m transvortex.app.workspace_storage --config-root "$LOCALAPPDATA\TransVortex\Config" --workspace-root "$WorkspaceRoot"' $0
+  IfErrors workspace_config_failed
+  StrCmp $0 "0" workspace_config_ready workspace_config_failed
+
+workspace_config_failed:
+  Push "failed"
+  Return
+
+workspace_config_ready:
+  WriteRegStr HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation" "$WorkspaceRoot"
+  Push "ok"
+FunctionEnd
+
 Function ValidateStagingPayload
   IfFileExists "$StagingDir\TransVortex.exe" +2
     Abort "安装内容不完整：缺少 TransVortex.exe"
@@ -246,6 +387,8 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少 FFmpeg runtime 清单"
   IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py" +2
     Abort "安装内容不完整：缺少卸载清理组件"
+  IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py" +2
+    Abort "安装内容不完整：缺少工作区配置组件"
   ReadINIStr $0 "$StagingDir\.transvortex-install.ini" "Install" "AppId"
   StrCmp $0 "${APP_ID}" +2
     Abort "安装内容不完整：缺少安装归属标记"
@@ -272,6 +415,8 @@ Section "${APP_NAME}" SecMain
   SetDetailsPrint none
   Call NormalizeInstallDirectory
   Call CheckInstallDirectorySafety
+  Call ResolveWorkspaceRoot
+  Call ValidateWorkspaceRoot
   StrCpy $StagingDir "$INSTDIR.__staging"
   StrCpy $PreviousDir "$INSTDIR.__previous"
   StrCpy $HadPreviousInstall "0"
@@ -317,6 +462,16 @@ no_current_install:
   IfErrors restore_after_swap_failure
 
   SetDetailsPrint textonly
+  DetailPrint "正在准备工作数据位置…"
+  SetDetailsPrint none
+  Call WriteWorkspaceConfig
+  Pop $0
+  StrCmp $0 "ok" workspace_config_ready_after_swap
+  Goto post_workspace_config_failed
+
+workspace_config_ready_after_swap:
+
+  SetDetailsPrint textonly
   DetailPrint "正在创建开始菜单入口…"
   SetDetailsPrint none
   SetOutPath "$INSTDIR"
@@ -345,6 +500,10 @@ no_current_install:
   SetDetailsPrint textonly
   DetailPrint "TransVortex 已准备好。"
   Goto install_complete
+
+post_workspace_config_failed:
+  Call RollBackPayload
+  Abort "无法准备工作数据位置。请确认所选磁盘已连接且目录可写。已恢复此前安装。"
 
 post_swap_failed:
   Call RollBackPayload
@@ -638,7 +797,11 @@ Section "Uninstall"
   SetDetailsPrint none
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
-  DeleteRegKey HKCU "${APP_REGISTRY_KEY}"
+  DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
+  StrCmp $CleanupRemoveTasks "1" 0 preserve_workspace_location
+  DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"
+preserve_workspace_location:
+  DeleteRegKey /ifempty HKCU "${APP_REGISTRY_KEY}"
   RMDir /r "$INSTDIR"
   RMDir /r "$INSTDIR.__staging"
   RMDir /r "$INSTDIR.__previous"

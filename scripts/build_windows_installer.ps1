@@ -184,6 +184,10 @@ $uninstallCleanupModule = Join-Path $payloadRoot "runtime\python\Lib\site-packag
 if (-not (Test-Path -LiteralPath $uninstallCleanupModule)) {
     throw "Installer payload is missing the uninstall cleanup module. Rebuild the app runtime with -BuildAppRuntime."
 }
+$workspaceStorageModule = Join-Path $payloadRoot "runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py"
+if (-not (Test-Path -LiteralPath $workspaceStorageModule)) {
+    throw "Installer payload is missing the workspace storage module. Rebuild the app runtime with -BuildAppRuntime."
+}
 $powershellPayloads = @(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File -Filter "*.ps1")
 if ($powershellPayloads.Count -gt 0) {
     throw "Installer payload must not contain end-user PowerShell scripts: $($powershellPayloads.FullName -join ', ')"
@@ -258,6 +262,11 @@ $report = [ordered]@{
     install_scope = "per_user"
     default_install_root = "%LOCALAPPDATA%\Programs\TransVortex"
     dedicated_install_subdirectory = $true
+    workspace_location_selected_during_install = $true
+    workspace_default_follows_install_parent = $true
+    workspace_separate_from_install_root = $true
+    workspace_config = "%LOCALAPPDATA%\TransVortex\Config\workspace_storage.json"
+    silent_workspace_switch = "/WORKSPACEROOT=<path>"
     unsafe_existing_directory_rejected = $true
     install_path_change_requires_uninstall = $true
     end_user_powershell_required = $false

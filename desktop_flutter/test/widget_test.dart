@@ -621,6 +621,120 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('managed resource storage keeps blocked change entry visible', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 420));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final asrLocal = _managedAsrResources();
+    asrLocal['storage'] = {
+      ...Map<String, Object?>.from(asrLocal['storage']! as Map),
+      'customized': true,
+      'can_change': false,
+      'change_blocker': 'managed_resources_present',
+    };
+    final snapshot = _desktopSnapshot(
+      managedAsr: true,
+      localModel: 'small',
+      asrLocal: asrLocal,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 420,
+          child: AsrResourceManagement(
+            client: AppServiceClient(
+              _FakeTransport({'desktop.snapshot': snapshot.raw}),
+            ),
+            bridge: WindowStateBridge.main(WindowStateStore()),
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final change = tester.widget<ActionButton>(
+      find.byKey(const ValueKey('asr-resource-change-storage')),
+    );
+    expect(change.onTap, isNull);
+    expect(find.text('更改'), findsOneWidget);
+    expect(find.textContaining('请先删除受管资源'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('managed resource storage changes from application settings', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(448, 420));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const selectedRoot = r'E:\TransVortex-ASR';
+    var currentRoot = r'D:\TransVortex-ASR';
+    var refreshes = 0;
+    final storageCalls = <Map<String, Object?>>[];
+    final bridge = WindowStateBridge.main(WindowStateStore());
+
+    Map<String, Object?> currentAsrLocal() {
+      final value = _managedAsrResources(modelInstalled: false);
+      value['storage'] = {
+        ...Map<String, Object?>.from(value['storage']! as Map),
+        'root': currentRoot,
+        'default_root': r'C:\TransVortex-ASR',
+        'customized': currentRoot != r'C:\TransVortex-ASR',
+        'can_change': true,
+        'change_blocker': '',
+      };
+      return value;
+    }
+
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: currentAsrLocal(),
+        ).raw;
+      }
+      if (method == 'asr.storage.set') {
+        storageCalls.add(Map<String, Object?>.from(params));
+        currentRoot = '${params['storage_root']}';
+        return Map<String, Object?>.from(currentAsrLocal()['storage']! as Map);
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    bridge.attachServiceRefresher(() async {
+      refreshes += 1;
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 448,
+          height: 420,
+          child: AsrResourceManagement(
+            client: AppServiceClient(WindowBridgeTransport(bridge)),
+            bridge: bridge,
+            directoryPicker: (_) async => selectedRoot,
+            showHeader: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('asr-resource-change-storage')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(storageCalls, [
+      {'storage_root': selectedRoot},
+    ]);
+    expect(find.textContaining(selectedRoot), findsWidgets);
+    expect(refreshes, 1);
+    expectNoFlutterException();
+  });
+
   testWidgets('standalone managed resources resync external changes', (
     tester,
   ) async {

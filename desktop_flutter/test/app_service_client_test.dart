@@ -2108,6 +2108,7 @@ DesktopAppPaths _desktopPaths(Directory appDataRoot) {
   return DesktopAppPaths(
     appDataRoot: appDataRoot,
     configRoot: Directory('${appDataRoot.path}${Platform.pathSeparator}Config'),
+    workspaceRoot: workspaceRoot,
     tasksRoot: Directory('${workspaceRoot.path}${Platform.pathSeparator}Tasks'),
     cacheRoot: Directory('${workspaceRoot.path}${Platform.pathSeparator}Cache'),
   );

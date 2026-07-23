@@ -71,7 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 
 `-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。公开发布仍需 Authenticode 签名、FFmpeg 完整对应源码托管，以及干净 Windows 环境的首启和真实媒体任务验收。
 
-安装器始终使用专用的 `TransVortex` 安装目录：如果用户选择的是其他父目录，会在其中创建 `TransVortex` 子目录；如果目标目录非空且没有有效的安装归属标记，安装器会拒绝覆盖。检测到已有安装时，升级必须沿用原安装路径；如需更换路径，应先卸载旧版本，避免遗留两套程序或误删无关文件。
+安装器始终使用专用的 `TransVortex` 程序目录：如果用户选择的是其他父目录，会在其中创建 `TransVortex` 子目录；如果目标目录非空且没有有效的安装归属标记，安装器会拒绝覆盖。随后以独立页面选择工作数据位置，明确说明任务状态、中间资料和可恢复临时媒体可能持续增长。新安装默认使用程序目录同级的 `TransVortexData`，但不把可变数据放进升级时整体替换的程序目录；配置和凭据仍固定在用户目录。检测到已有任务或缓存时沿用原工作区，不静默迁移。检测到已有安装时，升级必须沿用原程序路径；如需更换路径，应先卸载旧版本，避免遗留两套程序或误删无关文件。
 
 安装器与卸载器使用和 Flutter 一致的瓷白、柔墨、草莓粉及浅青品牌资产。公开界面隐藏逐文件 DLL 与 staging 路径，只显示准备目录、安装运行环境、校验内容和创建入口等产品阶段；失败信息仍保留具体恢复原因。欢迎图与顶部图由 `scripts/build_brand_assets.ps1` 从仓库内 SVG 确定性生成，不引入另一套图标或插画语言。
 
@@ -84,7 +84,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 - 任务工作区与恢复缓存：默认保留，选择删除时再次确认不可恢复。
 - 用户级 `~/.transvortex/auth.json` 凭据：默认保留，选择删除时明确说明 CLI / Agent 也会受影响。
 
-卸载器先读取 `Config/asr_storage.json`，再处理配置删除，因此可以找到用户首次下载前选择的独立 ASR 资源位置。它只删除该位置下的 `Components`、`Models/faster-whisper` 与 `Downloads/ASR`，同时清理默认位置可能残留的同名受管目录；不会删除用户选择的资源根、其中的其他文件、原地使用的外部模型、原始媒体或已导出的字幕。配置损坏时只检查默认位置并给出残留提示，不扩大删除范围。
+卸载器先读取 `Config/asr_storage.json` 和 `Config/workspace_storage.json`，再处理配置删除，因此可以找到独立的 ASR 资源位置和工作数据位置。自选工作区还必须带有安装器写入的 `.transvortex-workspace.json` 归属标记，卸载器才会清理其中的 `Tasks` 和 `Cache`。它不会删除用户选择的根目录中的其他文件、原地使用的外部模型、原始媒体或已导出的字幕。配置损坏或归属标记缺失时只检查安全的默认位置并给出残留提示，不扩大删除范围。保留任务时同时保留工作区位置登记，重新安装后仍能找到原任务。
 
 静默卸载 `/S` 继续默认保留全部用户数据，自动化只有显式传入 `/REMOVEASR`、`/REMOVESETTINGS`、`/REMOVETASKS` 或 `/REMOVECREDENTIALS` 才执行相应清理。清理失败不阻止程序文件卸载，但返回退出码 `20` 并在交互模式中显示残留原因。该策略把“移除可重新下载资源”“重置应用”“删除工作成果”和“删除共享凭据”保持为不同产品概念，不使用一个含义含混的“删除所有用户数据”。
 

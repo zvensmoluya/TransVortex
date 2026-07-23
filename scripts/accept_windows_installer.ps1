@@ -93,6 +93,7 @@ function Assert-InstalledLayout {
         "runtime\app_runtime.json",
         "runtime\python\python.exe",
         "runtime\python\Lib\site-packages\transvortex\app\uninstall_cleanup.py",
+        "runtime\python\Lib\site-packages\transvortex\app\workspace_storage.py",
         "tools\ffmpeg\ffmpeg_runtime.json",
         "tools\ffmpeg\bin\ffmpeg.exe",
         "tools\ffmpeg\bin\ffprobe.exe",
@@ -459,6 +460,7 @@ $userDataSentinel = Join-Path $userDataSentinelRoot "preserve.txt"
 $serviceRoot = Join-Path $acceptanceRoot "service"
 $isolatedProfile = Join-Path $acceptanceRoot "profile"
 $isolatedLocalAppData = Join-Path $acceptanceRoot "local-app-data"
+$workspaceRoot = Join-Path $acceptanceRoot "workspace"
 $unsafeParent = Join-Path $acceptanceRoot "unsafe-parent"
 $unsafeTarget = Join-Path $unsafeParent "TransVortex"
 $unsafeSentinel = Join-Path $unsafeTarget "unrelated-user-file.txt"
@@ -477,7 +479,7 @@ Set-Content -LiteralPath $userDataSentinel -Value $acceptanceId -Encoding utf8
 try {
     New-Item -ItemType Directory -Force -Path $unsafeTarget | Out-Null
     Set-Content -LiteralPath $unsafeSentinel -Value $acceptanceId -Encoding utf8
-    $unsafeDirectoryExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$unsafeParent")
+    $unsafeDirectoryExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$unsafeParent")
     if ($unsafeDirectoryExit -ne 11) {
         throw "Unsafe non-application directory returned $unsafeDirectoryExit instead of 11."
     }
@@ -489,7 +491,7 @@ try {
         throw "Unsafe-directory protection changed the unrelated sentinel."
     }
 
-    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
+    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
     if ($freshInstallExit -ne 0) {
         throw "Fresh silent install failed with exit code $freshInstallExit"
     }
@@ -499,6 +501,10 @@ try {
     $registry = Get-ItemProperty -LiteralPath $uninstallKey
     if (-not [string]::Equals((Get-FullPath -Path $registry.InstallLocation), $installFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Uninstall registry InstallLocation does not match the acceptance root."
+    }
+    $appRegistry = Get-ItemProperty -LiteralPath $appKey
+    if (-not [string]::Equals((Get-FullPath -Path $appRegistry.WorkspaceLocation), (Get-FullPath -Path $workspaceRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Workspace registry location does not match the acceptance root."
     }
     if (-not (Test-Path -LiteralPath $shortcutPath)) {
         throw "Start menu shortcut was not created."
@@ -511,14 +517,14 @@ try {
     $serviceReport = Invoke-InstalledServiceCheck -Root $installFullPath -ServiceRoot $serviceRoot -IsolatedProfile $isolatedProfile -TimeoutSeconds $ServiceTimeoutSeconds
     $uninstallCleanupReport = Invoke-InstalledUninstallCleanupCheck -Root $installFullPath -AcceptanceRoot $acceptanceRoot
 
-    $pathChangeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$relocatedParent")
+    $pathChangeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$relocatedParent")
     if ($pathChangeExit -ne 12 -or (Test-Path -LiteralPath $relocatedTarget)) {
         throw "Installed-path change protection failed. Exit=$pathChangeExit"
     }
 
     $obsoleteMarker = Join-Path $installFullPath "obsolete-upgrade-marker.txt"
     Set-Content -LiteralPath $obsoleteMarker -Value "must be removed" -Encoding utf8
-    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
+    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
     if ($upgradeExit -ne 0) {
         throw "Silent upgrade failed with exit code $upgradeExit"
     }
@@ -535,7 +541,7 @@ try {
     $mutex = [System.Threading.Mutex]::OpenExisting("Local\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B")
     $mutex.Dispose()
 
-    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
+    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
     if ($blockedUpgradeExit -ne 10) {
         throw "Running-process install protection returned $blockedUpgradeExit instead of 10."
     }
@@ -565,8 +571,12 @@ try {
     if (Test-Path -LiteralPath $installFullPath) {
         throw "Install root remains after uninstall: $installFullPath"
     }
-    if ((Test-Path -LiteralPath $uninstallKey) -or (Test-Path -LiteralPath $appKey)) {
-        throw "Installer registry keys remain after uninstall."
+    if (Test-Path -LiteralPath $uninstallKey) {
+        throw "Uninstall registry key remains after uninstall."
+    }
+    $preservedWorkspace = (Get-ItemProperty -LiteralPath $appKey).WorkspaceLocation
+    if (-not [string]::Equals((Get-FullPath -Path $preservedWorkspace), (Get-FullPath -Path $workspaceRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Uninstall did not preserve the selected workspace location."
     }
     if (Test-Path -LiteralPath $shortcutPath) {
         throw "Start menu shortcut remains after uninstall."
@@ -606,7 +616,8 @@ try {
         running_uninstall_block_exit_code = $blockedUninstallExit
         uninstall_exit_code = $uninstallExit
         uninstall_removed_install_root = $true
-        uninstall_removed_registry = $true
+        uninstall_removed_program_registry = $true
+        uninstall_preserved_workspace_registry = $true
         uninstall_removed_shortcut = $true
         uninstall_preserved_user_data = $true
         silent_uninstall_cleanup_default = "preserve"
@@ -643,6 +654,9 @@ try {
     if ((Test-Path -LiteralPath $acceptanceRoot) -and ($acceptanceSucceeded -or -not $KeepInstallOnFailure)) {
         Assert-PathInsideDirectory -Path $acceptanceRoot -Directory $env:TEMP
         Remove-Item -LiteralPath $acceptanceRoot -Recurse -Force
+    }
+    if ((-not $KeepInstallOnFailure -or $acceptanceSucceeded) -and (Test-Path -LiteralPath $appKey)) {
+        Remove-Item -LiteralPath $appKey -Recurse -Force
     }
 }
 
