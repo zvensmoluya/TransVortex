@@ -14,6 +14,7 @@ class TitleBar extends StatelessWidget {
     this.onMenu,
     this.onClose,
     this.menuKey,
+    this.menuAnchorKey,
     this.canMaximize = false,
   });
 
@@ -22,6 +23,7 @@ class TitleBar extends StatelessWidget {
   final VoidCallback? onMenu;
   final VoidCallback? onClose;
   final Key? menuKey;
+  final GlobalKey? menuAnchorKey;
   final bool canMaximize;
 
   @override
@@ -37,7 +39,8 @@ class TitleBar extends StatelessWidget {
         children: [
           // 左侧品牌区整体作为拖拽区。
           Expanded(
-            child: DragToMoveArea(
+            child: WindowDragArea(
+              allowMaximize: canMaximize,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: T.s16),
                 child: Row(
@@ -69,7 +72,14 @@ class TitleBar extends StatelessWidget {
             ),
           ),
           if (onMenu != null)
-            _ChromeButton(key: menuKey, glyph: _Glyph.menu, onTap: onMenu!),
+            SizedBox(
+              key: menuAnchorKey,
+              child: _ChromeButton(
+                key: menuKey,
+                glyph: _Glyph.menu,
+                onTap: onMenu!,
+              ),
+            ),
           _ChromeButton(glyph: _Glyph.min, onTap: windowManager.minimize),
           if (canMaximize)
             _ChromeButton(glyph: _Glyph.max, onTap: _toggleMaximized),
@@ -80,6 +90,35 @@ class TitleBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _toggleMaximized() async {
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+  }
+}
+
+class WindowDragArea extends StatelessWidget {
+  const WindowDragArea({
+    super.key,
+    required this.child,
+    this.allowMaximize = false,
+  });
+
+  final Widget child;
+  final bool allowMaximize;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: (_) => windowManager.startDragging(),
+      onDoubleTap: allowMaximize ? _toggleMaximized : null,
+      child: child,
     );
   }
 

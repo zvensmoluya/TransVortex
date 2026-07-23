@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -26,8 +27,34 @@ import 'package:transvortex_desktop_flutter/widgets/application_settings_panel.d
 import 'package:transvortex_desktop_flutter/widgets/asr_resource_management.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
+import 'package:transvortex_desktop_flutter/widgets/title_bar.dart';
 
 void main() {
+  testWidgets('fixed title bars ignore double-click maximize', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: TitleBar())),
+    );
+
+    final fixedDrag = tester.widget<GestureDetector>(
+      find.descendant(
+        of: find.byType(WindowDragArea),
+        matching: find.byType(GestureDetector),
+      ),
+    );
+    expect(fixedDrag.onDoubleTap, isNull);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: TitleBar(canMaximize: true))),
+    );
+    final maximizableDrag = tester.widget<GestureDetector>(
+      find.descendant(
+        of: find.byType(WindowDragArea),
+        matching: find.byType(GestureDetector),
+      ),
+    );
+    expect(maximizableDrag.onDoubleTap, isNotNull);
+  });
+
   test('tray reports the active ASR setup phase', () {
     final model = AsrOperationStatus.fromJson({
       'id': 'asr_setup',
@@ -411,7 +438,7 @@ void main() {
       );
       expect(find.text('应用设置'), findsOneWidget);
       expect(find.text('网络'), findsOneWidget);
-      expect(find.text('网络与代理'), findsOneWidget);
+      expect(find.text('连接方式'), findsOneWidget);
       expect(find.text('工作数据'), findsOneWidget);
       expect(find.text('识别资源'), findsOneWidget);
       expect(
@@ -741,18 +768,27 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Whisper Small'), findsOneWidget);
+    expect(
+      tester
+          .widget<ActionButton>(
+            find.byKey(const ValueKey('asr-resource-remove-model-small')),
+          )
+          .onTap,
+      isNotNull,
+    );
     expect(find.text('刷新'), findsNothing);
 
     await service.refresh();
     await tester.pump();
 
     expect(find.text('Whisper Small'), findsNothing);
-    expect(find.text('本机 Whisper 运行组件'), findsOneWidget);
+    expect(find.text('本机 Whisper'), findsOneWidget);
+    expect(find.text('本机 Whisper 运行组件'), findsNothing);
     expect(find.text('刷新'), findsNothing);
     expectNoFlutterException();
   });
 
-  testWidgets('managed resource storage keeps blocked change entry visible', (
+  testWidgets('managed resource storage explains a blocked change inline', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(448, 420));
@@ -787,12 +823,13 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
+    expect(find.text('更改'), findsOneWidget);
     final change = tester.widget<ActionButton>(
       find.byKey(const ValueKey('asr-resource-change-storage')),
     );
     expect(change.onTap, isNull);
-    expect(find.text('更改'), findsOneWidget);
-    expect(find.textContaining('请先删除受管资源'), findsOneWidget);
+    expect(find.textContaining('删除下方已下载资源后'), findsOneWidget);
+    expect(find.text('更改识别资源位置'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -866,7 +903,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('standalone managed resources resync external changes', (
+  testWidgets('standalone managed resources stay idle without a trigger', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(448, 360));
@@ -876,17 +913,7 @@ void main() {
       localModel: 'small',
       asrLocal: _managedAsrResources(),
     );
-    final updated = _desktopSnapshot(
-      managedAsr: true,
-      localModel: 'small',
-      asrLocal: _managedAsrResources(modelInstalled: false),
-    );
-    final transport = _FakeTransport(
-      {'desktop.snapshot': updated.raw},
-      sequences: {
-        'desktop.snapshot': [initial.raw, updated.raw],
-      },
-    );
+    final transport = _FakeTransport({'desktop.snapshot': initial.raw});
 
     await tester.pumpWidget(
       MaterialApp(
@@ -903,11 +930,31 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Whisper Small'), findsOneWidget);
+    expect(
+      tester
+          .widget<ActionButton>(
+            find.byKey(const ValueKey('asr-resource-remove-model-small')),
+          )
+          .onTap,
+      isNotNull,
+    );
 
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Whisper Small'), findsNothing);
+    expect(find.text('Whisper Small'), findsOneWidget);
+    expect(
+      tester
+          .widget<ActionButton>(
+            find.byKey(const ValueKey('asr-resource-remove-model-small')),
+          )
+          .onTap,
+      isNotNull,
+    );
+    expect(
+      transport.calls.where((method) => method == 'desktop.snapshot').length,
+      1,
+    );
     expect(find.text('刷新'), findsNothing);
     expectNoFlutterException();
   });
@@ -1169,7 +1216,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('应用设置'), findsOneWidget);
-    expect(find.text('网络与代理'), findsOneWidget);
+    expect(find.text('连接方式'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('application-settings-transition')),
       findsNothing,
@@ -1246,6 +1293,27 @@ void main() {
       expect(find.text('应用设置'), findsOneWidget);
       expect(find.text('翻译模型设置'), findsNothing);
       expect(find.text('语音识别设置'), findsNothing);
+      expect(
+        tester.getCenter(find.byKey(const ValueKey('main-menu-button'))).dx,
+        lessThan(mainWindowSize.width),
+      );
+      expect(
+        tester
+            .getCenter(find.byKey(const ValueKey('application-settings-close')))
+            .dx,
+        greaterThan(mainWindowSize.width),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('main-menu-button')));
+      await tester.pump();
+      expect(
+        tester
+            .getCenter(find.byKey(const ValueKey('main-menu-translation')))
+            .dx,
+        lessThan(mainWindowSize.width),
+      );
+      await tester.tapAt(const Offset(24, 120));
+      await tester.pump();
 
       await tester.tap(
         find.byKey(const ValueKey('application-settings-close')),
@@ -1536,14 +1604,26 @@ void main() {
     await tester.tap(find.text('自动识别'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('源语言'), findsOneWidget);
-    activatePopupMenuItem(tester, const ValueKey('source-language-ja'));
+    expect(find.textContaining('判断原始语言'), findsOneWidget);
+    expect(find.text('常用语言'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('source-language-ja')));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('简体中文'));
+    final targetLanguageTrigger = find.text('简体中文');
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(targetLanguageTrigger));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('目标语：简体中文'), findsOneWidget);
+
+    await tester.tap(targetLanguageTrigger);
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('目标语：简体中文'), findsNothing);
     expect(find.text('目标语言'), findsOneWidget);
-    activatePopupMenuItem(tester, const ValueKey('target-language-en'));
+    expect(find.byKey(const ValueKey('target-language-auto')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('target-language-en')));
     await tester.pump(const Duration(milliseconds: 100));
+    await mouse.removePointer();
 
     await tester.tap(find.text('开始译制'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -3658,7 +3738,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('保存并切换'));
+    await tester.tap(find.text('应用设置'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -3669,7 +3749,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings directly opens managed resource cleanup', (
+  testWidgets('ASR settings exposes managed resource cleanup inline', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
@@ -3697,14 +3777,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.byKey(const ValueKey('asr-manage-resources')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('asr-manage-resources')));
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.text('管理本机识别资源'), findsOneWidget);
+    expect(find.text('本次设置'), findsNothing);
+    expect(find.textContaining('复用现有'), findsNothing);
+    expect(find.textContaining('当前版本不会'), findsNothing);
     expect(find.byKey(const ValueKey('asr-resource-manager')), findsOneWidget);
     expect(find.text('Whisper Small'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('asr-resource-remove-model-small')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('application-settings-window')),
       findsNothing,
@@ -3712,7 +3793,85 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings window mirrors local model_size into editor', (
+  testWidgets('ASR settings keeps a bounded layout in wide windows', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(),
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final configuration = find.byKey(const ValueKey('asr-local-configuration'));
+    expect(configuration, findsOneWidget);
+    expect(tester.getSize(configuration).width, 860);
+    expect(tester.getCenter(configuration).dx, closeTo(960, 1));
+    expect(find.byType(SegmentButton), findsNWidgets(3));
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR storage blocker is explained inline', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    final asrLocal = _managedAsrResources();
+    asrLocal['storage'] = {
+      ...Map<String, Object?>.from(asrLocal['storage']! as Map),
+      'can_change': false,
+      'change_blocker': 'managed_resources_present',
+    };
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: asrLocal,
+        ).raw;
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.textContaining('当前版本不会'), findsNothing);
+    final change = tester.widget<ActionButton>(
+      find.byKey(const ValueKey('asr-resource-change-storage')),
+    );
+    expect(change.onTap, isNull);
+    expect(find.textContaining('删除下方已下载资源后'), findsOneWidget);
+    expect(find.text('更改识别资源位置'), findsNothing);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings window omits the legacy default banner', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
@@ -3736,9 +3895,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('默认识别：'), findsOneWidget);
-    expect(find.textContaining('large-v3'), findsWidgets);
-    expect(find.text('Whisper Large v3'), findsWidgets);
+    expect(find.textContaining('默认识别：'), findsNothing);
+    expect(find.text('本机 Whisper'), findsWidgets);
     expectNoFlutterException();
   });
 
@@ -3766,7 +3924,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.textContaining('默认识别：本机'), findsOneWidget);
+      expect(find.textContaining('默认识别：'), findsNothing);
       expect(find.text('本机 Whisper'), findsWidgets);
       expect(find.text('OpenAI Whisper'), findsOneWidget);
       expect(find.text('FunASR'), findsOneWidget);
@@ -3818,7 +3976,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('尚未保存'), findsOneWidget);
-    expect(find.textContaining('默认识别：本机'), findsOneWidget);
+    expect(find.textContaining('默认识别：'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -3875,13 +4033,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('由 TransVortex 下载'), findsOneWidget);
-    expect(find.text('使用已有模型'), findsOneWidget);
+    expect(find.text('应用下载'), findsOneWidget);
+    expect(find.text('已有模型'), findsOneWidget);
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
-    expect(find.text('Whisper Large v3 · 本机兼容性测试通过'), findsOneWidget);
-    expect(find.text('已启用'), findsWidgets);
+    expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
+    expect(find.text('已启用'), findsNothing);
     expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });
@@ -3976,7 +4134,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
-    await tester.tap(find.text('查找模型'));
+    await tester.tap(find.text('选择'));
     await tester.pumpAndSettle();
 
     expect(find.text('找到 2 个模型'), findsOneWidget);
@@ -4001,7 +4159,7 @@ void main() {
     expect(local['model_path'], customPath);
     expect(find.textContaining('自定义 Whisper 验证通过，已设为默认'), findsOneWidget);
     expect(find.text('验证并启用'), findsNothing);
-    expect(find.text('已启用'), findsWidgets);
+    expect(find.text('已启用'), findsNothing);
     expectNoFlutterException();
   });
 
@@ -4169,11 +4327,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
-    await tester.tap(find.text('由 TransVortex 下载'));
+    await tester.tap(find.text('应用下载'));
     await tester.pump();
-    expect(find.text('保存并切换'), findsOneWidget);
+    expect(find.text('应用设置'), findsOneWidget);
 
-    await tester.tap(find.text('保存并切换'));
+    await tester.tap(find.text('应用设置'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -4182,11 +4340,11 @@ void main() {
     expect(rememberedExternal, 'large-v3');
     expect(rememberedExternalPath, r'D:\Models\large-v3');
 
-    await tester.tap(find.text('使用已有模型'));
+    await tester.tap(find.text('已有模型'));
     await tester.pump();
     expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
-    expect(find.text('Whisper Large v3 · 本机兼容性测试通过'), findsOneWidget);
-    expect(find.text('保存并切换'), findsOneWidget);
+    expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
+    expect(find.text('应用设置'), findsOneWidget);
     expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });
@@ -4517,7 +4675,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('由 TransVortex 下载'), findsOneWidget);
+    expect(find.text('应用下载'), findsOneWidget);
     expect(find.text('Whisper Small'), findsWidgets);
     expect(find.text('CPU（推荐）'), findsOneWidget);
     expect(find.text('下载并启用'), findsOneWidget);
@@ -4612,7 +4770,10 @@ void main() {
     expect(find.text('更改'), findsOneWidget);
     expect(find.textContaining('可用 20.0 GB'), findsOneWidget);
 
-    await tester.tap(find.text('更改'));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('asr-resource-change-storage')),
+    );
+    await tester.tap(find.byKey(const ValueKey('asr-resource-change-storage')));
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));
 

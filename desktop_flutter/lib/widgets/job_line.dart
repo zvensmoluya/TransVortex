@@ -6,6 +6,7 @@ import '../model/main_window_controller.dart';
 import '../model/task_labels.dart';
 import '../theme/tokens.dart';
 import 'designed_tooltip.dart';
+import 'language_picker.dart';
 
 class JobLine extends StatelessWidget {
   const JobLine({
@@ -13,8 +14,8 @@ class JobLine extends StatelessWidget {
     required this.view,
     required this.onPickTranslation,
     required this.onPickAsr,
-    required this.onPickSourceLanguage,
-    required this.onPickTargetLanguage,
+    required this.onSelectSourceLanguage,
+    required this.onSelectTargetLanguage,
     required this.onPickBilingual,
     required this.onPickFormats,
     required this.onToggleTerms,
@@ -25,8 +26,8 @@ class JobLine extends StatelessWidget {
   final MainWindowViewModel view;
   final VoidCallback onPickTranslation;
   final VoidCallback onPickAsr;
-  final VoidCallback onPickSourceLanguage;
-  final VoidCallback onPickTargetLanguage;
+  final ValueChanged<String> onSelectSourceLanguage;
+  final ValueChanged<String> onSelectTargetLanguage;
   final VoidCallback onPickBilingual;
   final VoidCallback onPickFormats;
   final VoidCallback onToggleTerms;
@@ -48,10 +49,22 @@ class JobLine extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(view.hasSource ? '会按' : '新任务会按', style: T.tBody),
-            _Word(
-              label: languageLabel(view.sourceLang),
-              tooltip: '源语：${languageLabel(view.sourceLang)}',
-              onPick: onPickSourceLanguage,
+            LanguagePickerAnchor(
+              title: '源语言',
+              description: '选择片源中使用的原始语言',
+              current: view.sourceLang,
+              options: sourceLanguageOptions,
+              keyPrefix: 'source-language',
+              showAutoDetect: true,
+              autoDetectDescription: view.requiresAsr
+                  ? '由识别引擎判断原始语言'
+                  : '根据字幕内容判断原始语言',
+              onSelected: onSelectSourceLanguage,
+              triggerBuilder: (openMenu) => _Word(
+                label: languageLabel(view.sourceLang),
+                tooltip: '源语：${languageLabel(view.sourceLang)}',
+                onPick: openMenu,
+              ),
             ),
             if (view.requiresAsr) ...[
               const Text('源语，语音用', style: T.tBody),
@@ -77,10 +90,18 @@ class JobLine extends StatelessWidget {
                   : onConfigureTranslation,
             ),
             const Text('翻译成', style: T.tBody),
-            _Word(
-              label: languageLabel(view.targetLang),
-              tooltip: '目标语：${languageLabel(view.targetLang)}',
-              onPick: onPickTargetLanguage,
+            LanguagePickerAnchor(
+              title: '目标语言',
+              description: '选择字幕需要翻译成的语言',
+              current: view.targetLang,
+              options: targetLanguageOptions,
+              keyPrefix: 'target-language',
+              onSelected: onSelectTargetLanguage,
+              triggerBuilder: (openMenu) => _Word(
+                label: languageLabel(view.targetLang),
+                tooltip: '目标语：${languageLabel(view.targetLang)}',
+                onPick: openMenu,
+              ),
             ),
           ],
         ),

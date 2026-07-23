@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../services/app_service_client.dart';
 import '../services/local_service_controller.dart';
@@ -15,14 +14,6 @@ import 'title_bar.dart';
 import 'workspace_data_management.dart';
 
 enum _ApplicationSettingsSection { network, workspace, resources }
-
-extension on _ApplicationSettingsSection {
-  String get headerLabel => switch (this) {
-    _ApplicationSettingsSection.network => '网络与代理',
-    _ApplicationSettingsSection.workspace => '工作数据',
-    _ApplicationSettingsSection.resources => '识别资源',
-  };
-}
 
 const _applicationSettingsTabs = [
   SettingsTabOption(value: _ApplicationSettingsSection.network, label: '网络'),
@@ -84,10 +75,7 @@ class _ApplicationSettingsPanelState extends State<ApplicationSettingsPanel> {
   Widget build(BuildContext context) {
     final content = Column(
       children: [
-        _ApplicationSettingsHeader(
-          sectionLabel: _section.headerLabel,
-          onClose: widget.onClose,
-        ),
+        _ApplicationSettingsHeader(onClose: widget.onClose),
         Padding(
           padding: const EdgeInsets.fromLTRB(T.s16, T.s12, T.s16, 0),
           child: Align(
@@ -227,12 +215,8 @@ class _ApplicationSettingsPanelState extends State<ApplicationSettingsPanel> {
 }
 
 class _ApplicationSettingsHeader extends StatelessWidget {
-  const _ApplicationSettingsHeader({
-    required this.sectionLabel,
-    required this.onClose,
-  });
+  const _ApplicationSettingsHeader({required this.onClose});
 
-  final String sectionLabel;
   final VoidCallback onClose;
 
   @override
@@ -246,7 +230,7 @@ class _ApplicationSettingsHeader extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: DragToMoveArea(
+            child: WindowDragArea(
               key: const ValueKey('application-settings-drag-area'),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: T.s16),
@@ -258,25 +242,6 @@ class _ApplicationSettingsHeader extends StatelessWidget {
                       '应用设置',
                       style: T.tBrand.copyWith(
                         color: T.ink.withValues(alpha: 0.86),
-                      ),
-                    ),
-                    const SizedBox(width: T.s12),
-                    Container(width: 1, height: 14, color: T.line),
-                    const SizedBox(width: T.s12),
-                    Flexible(
-                      child: AnimatedSwitcher(
-                        duration:
-                            MediaQuery.maybeOf(context)?.disableAnimations ==
-                                true
-                            ? Duration.zero
-                            : const Duration(milliseconds: 150),
-                        child: Text(
-                          sectionLabel,
-                          key: ValueKey(sectionLabel),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: T.tCaption,
-                        ),
                       ),
                     ),
                   ],

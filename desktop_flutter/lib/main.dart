@@ -111,29 +111,6 @@ Future<void> _showConfiguredWindowAfterFirstRaster(
   }
 }
 
-const List<String> _sourceLanguageOptions = [
-  'auto',
-  'ja',
-  'en',
-  'zh-CN',
-  'zh-TW',
-  'ko',
-  'fr',
-  'de',
-  'es',
-];
-
-const List<String> _targetLanguageOptions = [
-  'zh-CN',
-  'zh-TW',
-  'en',
-  'ja',
-  'ko',
-  'fr',
-  'de',
-  'es',
-];
-
 class TransVortexApp extends StatelessWidget {
   const TransVortexApp({
     super.key,
@@ -295,6 +272,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   SmokeWindowsNotificationSink? _smokeNotificationSink;
   late final TaskNotificationObserver _notificationObserver;
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'main-smoke-render');
+  final GlobalKey _mainMenuAnchorKey = GlobalKey(
+    debugLabel: 'main-menu-anchor',
+  );
   final Map<String, WindowController> _toolWindows = {};
   DesktopTrayService? _trayService;
   StreamSubscription<DesktopTrayAction>? _trayActionSubscription;
@@ -1682,6 +1662,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                 children: [
                   TitleBar(
                     menuKey: const ValueKey('main-menu-button'),
+                    menuAnchorKey: _mainMenuAnchorKey,
                     onMenu: () => unawaited(_showChromeMenu()),
                   ),
                   Expanded(
@@ -1763,8 +1744,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             view: view,
             onPickTranslation: _pickTranslation,
             onPickAsr: _pickAsr,
-            onPickSourceLanguage: _pickSourceLanguage,
-            onPickTargetLanguage: _pickTargetLanguage,
+            onSelectSourceLanguage: _controller.setSourceLang,
+            onSelectTargetLanguage: _controller.setTargetLang,
             onPickBilingual: _pickBilingual,
             onPickFormats: _pickFormats,
             onToggleTerms: _toggleTerms,
@@ -2074,10 +2055,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _showChromeMenu() async {
+    final anchorContext = _mainMenuAnchorKey.currentContext;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final anchor = anchorContext?.findRenderObject() as RenderBox?;
+    if (overlay == null || anchor == null || !anchor.hasSize) return;
+    final anchorRect = Rect.fromPoints(
+      anchor.localToGlobal(Offset.zero, ancestor: overlay),
+      anchor.localToGlobal(
+        anchor.size.bottomRight(Offset.zero),
+        ancestor: overlay,
+      ),
+    );
     final selected = await showMenu<String>(
       context: context,
       color: T.surface,
-      position: const RelativeRect.fromLTRB(560, 40, 28, 0),
+      position: RelativeRect.fromRect(anchorRect, Offset.zero & overlay.size),
       items: [
         _menuItem('translation', '翻译模型设置'),
         _menuItem('asr', '语音识别设置'),
@@ -2304,28 +2297,6 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       anchorRect: anchorRect,
     );
     if (selected != null) _controller.selectReasoningEffortValue(selected);
-  }
-
-  Future<void> _pickSourceLanguage() async {
-    final selected = await _showOptionMenu<String>(
-      title: '源语言',
-      options: _sourceLanguageOptions,
-      emptyLabel: '',
-      labelOf: languageLabel,
-      keyOf: (value) => ValueKey('source-language-$value'),
-    );
-    if (selected != null) _controller.setSourceLang(selected);
-  }
-
-  Future<void> _pickTargetLanguage() async {
-    final selected = await _showOptionMenu<String>(
-      title: '目标语言',
-      options: _targetLanguageOptions,
-      emptyLabel: '',
-      labelOf: languageLabel,
-      keyOf: (value) => ValueKey('target-language-$value'),
-    );
-    if (selected != null) _controller.setTargetLang(selected);
   }
 
   Future<void> _pickBilingual() async {

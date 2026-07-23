@@ -116,6 +116,9 @@ Future<void> configureCurrentWindow(AppWindowArgs args) async {
   await windowManager.setHasShadow(false);
   await windowManager.setResizable(geometry.resizable);
   await windowManager.setMaximizable(geometry.maximizable);
+  if (!geometry.maximizable && await windowManager.isMaximized()) {
+    await windowManager.unmaximize();
+  }
   if (geometry.position != null) {
     await windowManager.setPosition(geometry.position!);
   } else if (geometry.alignment != null) {

@@ -121,7 +121,13 @@ class _DesignedTooltipState extends State<DesignedTooltip> {
     return MouseRegion(
       onEnter: (_) => _scheduleShow(),
       onExit: (_) => _hide(),
-      child: Semantics(tooltip: widget.message, child: widget.child),
+      child: Listener(
+        // A click commonly opens another overlay. Cancel both a visible
+        // tooltip and its delayed timer before that overlay is inserted so
+        // the two transient surfaces cannot cover one another.
+        onPointerDown: (_) => _hide(),
+        child: Semantics(tooltip: widget.message, child: widget.child),
+      ),
     );
   }
 }

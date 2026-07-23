@@ -114,7 +114,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _testingAsr = false;
   bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
-  bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
   String _managedModelId = 'small';
@@ -131,6 +130,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   Timer? _asrOperationDismissTimer;
   bool _loadingDiagnosticTasks = false;
   bool _loadingDiagnosticResult = false;
+  int _configLoadRevision = 0;
+  int _visibleConfigLoads = 0;
 
   bool get _isTranslation => widget.type == AppWindowType.translationSettings;
   bool get _isAsr => widget.type == AppWindowType.asrSettings;
@@ -185,6 +186,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   void onWindowFocus() {
     final controller = _translationController;
     if (controller != null) unawaited(controller.syncNetworkSettings());
+    if (_isAsr && widget.smoke == null) {
+      unawaited(_loadConfig(preserveAsrDraft: true, silent: true));
+    }
   }
 
   Future<void> _initTranslation(
@@ -232,14 +236,21 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return Directory(root);
   }
 
-  Future<void> _loadConfig({bool preserveAsrDraft = false}) async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _loadConfig({
+    bool preserveAsrDraft = false,
+    bool silent = false,
+  }) async {
+    final revision = ++_configLoadRevision;
+    if (!silent) {
+      _visibleConfigLoads += 1;
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final snapshot = await _client.desktopSnapshot();
-      if (!mounted) return;
+      if (!mounted || revision != _configLoadRevision) return;
       setState(() {
         _snapshot = snapshot;
         if (widget.type == AppWindowType.diagnostics) {
@@ -267,20 +278,23 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       }
       _syncMainLabels(snapshot);
       if (widget.smoke != null) {
-        if (mounted) setState(() => _loading = false);
         await _writeSettingsSmokeReport(snapshot);
       }
     } on Object catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = _friendlySettingsError(error);
-        _loading = false;
-      });
-      if (widget.smoke != null) {
+      if (!mounted || revision != _configLoadRevision) return;
+      if (!silent) {
+        setState(() => _error = _friendlySettingsError(error));
+      }
+      if (!silent && widget.smoke != null) {
         await _writeSettingsSmokeReport(null, error: error);
       }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (!silent) {
+        _visibleConfigLoads -= 1;
+        if (mounted && _visibleConfigLoads == 0) {
+          setState(() => _loading = false);
+        }
+      }
     }
   }
 
@@ -388,7 +402,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     };
     final status = switch (widget.type) {
       AppWindowType.translationSettings => '配好模型服务，选定默认模型',
-      AppWindowType.asrSettings => '视频没有现成字幕时，用它把语音转成字幕',
+      AppWindowType.asrSettings => '',
       AppWindowType.diagnostics => '检查本机运行环境、配置和翻译服务协议',
       AppWindowType.taskProcessing => '查看、修复和审看最近任务',
       AppWindowType.main => '',
@@ -405,7 +419,16 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                 padding: const EdgeInsets.fromLTRB(T.s32, T.s16, T.s32, T.s24),
                 child: switch (widget.type) {
                   AppWindowType.translationSettings => _translationBody(),
-                  AppWindowType.asrSettings => _asrBody(),
+                  AppWindowType.asrSettings => LayoutBuilder(
+                    builder: (context, constraints) => Align(
+                      alignment: Alignment.topCenter,
+                      child: SizedBox(
+                        width: constraints.maxWidth.clamp(0, 860).toDouble(),
+                        height: constraints.maxHeight,
+                        child: _asrBody(),
+                      ),
+                    ),
+                  ),
                   AppWindowType.diagnostics => _diagnosticsBody(),
                   AppWindowType.taskProcessing => _diagnosticsBody(),
                   AppWindowType.main => _diagnosticsBody(),
@@ -437,22 +460,21 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final selectedKind = '${_asrDraft(_selectedAsrProvider)['kind']}';
     final showBackgroundOperation =
         activeOperation?.active == true && selectedKind != 'local_worker';
+    final busy = _loading || _savingAsr || _probingAsrModel || _testingAsr;
+    final showFeedback = busy || _error != null || _message != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        DefaultBar(
-          text: _savedAsrHeaderLabel(),
-          busy: _loading || _savingAsr || _probingAsrModel || _testingAsr,
-          error: _error,
-          message: _message,
-        ),
-        const SizedBox(height: T.s16),
         _SegmentedEngines(
           selected: _selectedAsrProvider,
           onPick: _savingAsr || _probingAsrModel || _testingAsr
               ? null
               : _pickAsrProvider,
         ),
+        if (showFeedback) ...[
+          const SizedBox(height: T.s8),
+          _AsrFeedbackBar(busy: busy, error: _error, message: _message),
+        ],
         if (showBackgroundOperation) ...[
           const SizedBox(height: T.s12),
           _AsrBackgroundOperation(
@@ -592,12 +614,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         (_asrModelSource == 'external'
             ? _detectedExternalModelId.isNotEmpty
             : managedReady);
-    final overviewModelLabel = _asrModelSource == 'external'
-        ? _locatedExternalModelId.isEmpty
-              ? '待查找已有模型'
-              : _asrExternalModelLabel(_locatedExternalModelId)
-        : _asrModelLabel(selectedModel);
-
     final footer = <Widget>[];
     if (operation != null && !operation.active) {
       if (operation.state == 'failed' || operation.state == 'cancelled') {
@@ -610,7 +626,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         );
         footer.add(ActionButton(label: '调整设置', onTap: _dismissAsrOperation));
       }
-    } else if (!active && _asrModelSource == 'managed') {
+    } else if (!active && _asrModelSource == 'managed' && !currentReady) {
       footer.add(
         ActionButton(
           label: _savingAsr
@@ -620,36 +636,30 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               : !storageHasSpace
               ? '保存空间不足'
               : managedReady
-              ? currentReady
-                    ? '已启用'
-                    : '保存并切换'
+              ? '应用设置'
               : '下载并启用',
           strong: true,
-          onTap: _savingAsr || currentReady || !storageHasSpace
+          onTap: _savingAsr || !storageHasSpace
               ? null
               : managedReady
               ? _saveAsrProvider
               : _startManagedAsrSetup,
         ),
       );
-    } else if (!active && _asrModelSource == 'external') {
+    } else if (!active && _asrModelSource == 'external' && !currentReady) {
       final runtimeReady = runtime?.installed == true;
       final verified = _detectedExternalModelId.isNotEmpty;
       footer.add(
         ActionButton(
-          label: currentReady
-              ? '已启用'
-              : runtimeReady
+          label: runtimeReady
               ? _probingAsrModel
                     ? '验证中'
                     : verified
-                    ? '保存并切换'
+                    ? '应用设置'
                     : '验证并启用'
               : '下载识别引擎',
           strong: true,
-          onTap: currentReady
-              ? null
-              : runtimeReady
+          onTap: runtimeReady
               ? _probingAsrModel || _externalModelPath.text.isEmpty
                     ? null
                     : verified
@@ -668,14 +678,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return ToolPanel(
       footer: footer,
       children: [
-        _AsrSetupOverview(
-          modelLabel: overviewModelLabel,
-          deviceLabel: _asrDeviceLabel(_device.text),
-          currentReady: currentReady,
-          draftDirty: _asrDraftDirty,
-          operation: operation,
-        ),
-        const SizedBox(height: T.s4),
         if (operation != null)
           _AsrSetupProgress(
             operation: operation,
@@ -704,21 +706,70 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _AsrSourceToggle(
-          selected: _asrModelSource,
-          onChanged: _probingAsrModel || _savingAsr ? null : _setAsrModelSource,
+        Container(
+          key: const ValueKey('asr-local-configuration'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(T.s16),
+          decoration: BoxDecoration(
+            color: T.surface,
+            border: Border.all(color: T.line),
+            borderRadius: BorderRadius.circular(T.rMd),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: T.accentSoft,
+                      borderRadius: BorderRadius.circular(T.rMd),
+                    ),
+                    child: const Icon(
+                      Icons.tune_rounded,
+                      size: 18,
+                      color: T.accentStrong,
+                    ),
+                  ),
+                  const SizedBox(width: T.s8),
+                  Expanded(
+                    child: _AsrSourceToggle(
+                      selected: _asrModelSource,
+                      onChanged: _probingAsrModel || _savingAsr
+                          ? null
+                          : _setAsrModelSource,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: T.s12),
+              if (_asrModelSource == 'managed')
+                _managedWhisperModelSettings(
+                  modelIds,
+                  selectedModel,
+                  runtime: runtime,
+                  model: model,
+                  storage: storage,
+                )
+              else
+                _externalWhisperModelSettings(runtime, storage),
+            ],
+          ),
         ),
-        const SizedBox(height: T.s4),
-        if (_asrModelSource == 'managed')
-          _managedWhisperModelSettings(
-            modelIds,
-            selectedModel,
-            runtime: runtime,
-            model: model,
-            storage: storage,
-          )
-        else
-          _externalWhisperModelSettings(runtime, storage),
+        const SizedBox(height: T.s16),
+        if (_snapshot case final resourceSnapshot?)
+          AsrResourceManagement(
+            client: _client,
+            bridge: widget.bridge,
+            snapshot: resourceSnapshot,
+            pathOpener: _pathOpener,
+            directoryPicker: _directoryPicker,
+            onResourcesChanged: () => _loadConfig(preserveAsrDraft: true),
+            embedded: true,
+          ),
       ],
     );
   }
@@ -730,7 +781,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     required AsrComponentOption model,
     required AsrStorageOption storage,
   }) {
-    final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
       children: [
         Row(
@@ -756,17 +806,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           modelLabel: _asrModelLabel(selectedModel),
           modelReady: model.installed,
           modelSize: model.size,
-          appDataRoot: '${paths['app_data_root'] ?? ''}',
           storage: storage,
           requiredDownloadBytes:
               (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
               (model.installed ? 0 : model.size),
-          changingStorage: _changingAsrStorage,
-          onManageResources: _showAsrResourceManagement,
-          onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
-          onResetStorage: storage.customized && storage.canChange
-              ? _resetAsrStorageRoot
-              : null,
         ),
       ],
     );
@@ -776,49 +819,23 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     AsrComponentOption? runtime,
     AsrStorageOption storage,
   ) {
-    final paths = _stringMap(_snapshot?.asrLocal['paths']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: ReadonlyRow(
-                label: '模型位置',
-                value: _externalModelPath.text.isEmpty
-                    ? '尚未查找'
-                    : _externalModelPath.text,
-              ),
-            ),
-            const SizedBox(width: T.s12),
-            ActionButton(
-              label: _discoveringAsrModels ? '查找中' : '查找模型',
-              onTap: _discoveringAsrModels || _probingAsrModel
-                  ? null
-                  : _pickExternalModelPath,
-            ),
-          ],
+        _AsrExternalModelPicker(
+          path: _externalModelPath.text,
+          modelLabel: _locatedExternalModelId.isEmpty
+              ? ''
+              : _asrExternalModelLabel(_locatedExternalModelId),
+          verified: _detectedExternalModelId.isNotEmpty,
+          busy: _discoveringAsrModels,
+          onPick: _discoveringAsrModels || _probingAsrModel
+              ? null
+              : _pickExternalModelPath,
         ),
-        if (_locatedExternalModelId.isNotEmpty &&
-            _detectedExternalModelId.isEmpty) ...[
-          const SizedBox(height: T.s8),
-          ReadonlyRow(
-            label: '找到模型',
-            value:
-                '${_asrExternalModelLabel(_locatedExternalModelId)} · 等待兼容性测试',
-          ),
-        ],
-        if (_detectedExternalModelId.isNotEmpty) ...[
-          const SizedBox(height: T.s8),
-          ReadonlyRow(
-            label: '验证结果',
-            value:
-                '${_asrExternalModelLabel(_detectedExternalModelId)} · 本机兼容性测试通过',
-          ),
-        ],
-        const SizedBox(height: T.s12),
+        const SizedBox(height: T.s8),
         SizedBox(width: 220, child: _asrDeviceSelect()),
-        const SizedBox(height: T.s12),
+        const SizedBox(height: T.s8),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
           runtimeSize: runtime?.size ?? 0,
@@ -827,18 +844,11 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               : _asrExternalModelLabel(_locatedExternalModelId),
           modelReady: _detectedExternalModelId.isNotEmpty,
           modelSize: 0,
-          appDataRoot: '${paths['app_data_root'] ?? ''}',
           externalModel: true,
           storage: storage,
           requiredDownloadBytes: runtime?.installed == true
               ? 0
               : runtime?.size ?? 0,
-          changingStorage: _changingAsrStorage,
-          onManageResources: _showAsrResourceManagement,
-          onChangeStorage: storage.canChange ? _pickAsrStorageRoot : null,
-          onResetStorage: storage.customized && storage.canChange
-              ? _resetAsrStorageRoot
-              : null,
         ),
       ],
     );
@@ -905,72 +915,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _model.text = modelId;
       _asrDraftDirty = !_localDraftMatchesSaved();
     });
-  }
-
-  Future<void> _pickAsrStorageRoot() async {
-    final path = await _directoryPicker('选择识别资源保存文件夹');
-    if (path == null || path.trim().isEmpty || !mounted) return;
-    await _setAsrStorageRoot(path.trim());
-  }
-
-  Future<void> _showAsrResourceManagement() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: T.surface,
-        surfaceTintColor: T.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(T.rMd),
-          side: const BorderSide(color: T.line),
-        ),
-        title: Text('管理本机识别资源', style: T.tSection),
-        content: SizedBox(
-          width: 620,
-          height: 410,
-          child: AsrResourceManagement(
-            client: _client,
-            bridge: widget.bridge,
-            pathOpener: _pathOpener,
-            directoryPicker: _directoryPicker,
-            onResourcesChanged: _loadConfig,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('完成'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _resetAsrStorageRoot() async {
-    final defaultRoot = _snapshot?.asrStorage.defaultRoot.trim() ?? '';
-    if (defaultRoot.isEmpty) return;
-    await _setAsrStorageRoot(defaultRoot, reset: true);
-  }
-
-  Future<void> _setAsrStorageRoot(String path, {bool reset = false}) async {
-    setState(() {
-      _changingAsrStorage = true;
-      _error = null;
-      _message = null;
-    });
-    try {
-      final storage = await _client.asrStorageSet(path);
-      await _loadConfig();
-      if (!mounted) return;
-      setState(() {
-        _message = reset ? '识别资源已恢复到默认位置。' : '识别资源将保存到：${storage.root}';
-      });
-      await widget.bridge.refreshServiceSnapshot();
-    } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _error = _friendlySettingsError(error));
-    } finally {
-      if (mounted) setState(() => _changingAsrStorage = false);
-    }
   }
 
   Widget _diagnosticsBody() {
@@ -1763,23 +1707,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     };
   }
 
-  String _asrHeaderLabel(String providerName) {
-    final draft = _asrDraft(providerName, useEditedFields: false);
-    final model = '${draft['model']}';
-    final modelLabel = model.startsWith('custom-')
-        ? _asrModelLabel(model)
-        : model;
-    return '${_asrLabelForDraft(draft)} · $modelLabel';
-  }
-
-  String _savedAsrHeaderLabel() {
-    final snapshot = _snapshot;
-    if (snapshot == null) return '默认识别：正在读取';
-    final providerName = snapshot.asrProviderName;
-    if (providerName == null || providerName.isEmpty) return '默认识别：尚未设置';
-    return '默认识别：${_asrHeaderLabel(providerName)}';
-  }
-
   String? _keyTextOrNull() {
     final text = _key.text.trim();
     return text.isEmpty ? null : text;
@@ -2449,6 +2376,65 @@ Color _diagnosticStatusColor(String status) {
   };
 }
 
+class _AsrFeedbackBar extends StatelessWidget {
+  const _AsrFeedbackBar({
+    required this.busy,
+    required this.error,
+    required this.message,
+  });
+
+  final bool busy;
+  final String? error;
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = busy
+        ? '正在同步…'
+        : error?.trim().isNotEmpty == true
+        ? error!.trim()
+        : message?.trim() ?? '';
+    final color = !busy && error?.trim().isNotEmpty == true
+        ? T.danger
+        : T.accentStrong;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(T.rSm),
+      ),
+      child: Row(
+        children: [
+          if (busy)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 1.6),
+            )
+          else
+            Icon(
+              error?.trim().isNotEmpty == true
+                  ? Icons.error_outline_rounded
+                  : Icons.check_circle_outline_rounded,
+              size: 16,
+              color: color,
+            ),
+          const SizedBox(width: T.s8),
+          Expanded(
+            child: Text(
+              text,
+              style: T.tCaption.copyWith(color: color),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SegmentedEngines extends StatelessWidget {
   const _SegmentedEngines({required this.selected, required this.onPick});
 
@@ -2464,14 +2450,17 @@ class _SegmentedEngines extends StatelessWidget {
     ];
     return Row(
       children: [
-        for (final item in items) ...[
-          SegmentButton(
-            label: item.$2,
-            detail: item.$3,
-            selected: selected == item.$1,
-            onTap: onPick == null ? null : () => onPick!(item.$1),
+        for (var index = 0; index < items.length; index++) ...[
+          if (index > 0) const SizedBox(width: T.s8),
+          Expanded(
+            child: SegmentButton(
+              width: double.infinity,
+              label: items[index].$2,
+              detail: items[index].$3,
+              selected: selected == items[index].$1,
+              onTap: onPick == null ? null : () => onPick!(items[index].$1),
+            ),
           ),
-          const SizedBox(width: T.s8),
         ],
       ],
     );
@@ -2599,14 +2588,12 @@ class _AsrSourceToggle extends StatelessWidget {
       child: Row(
         children: [
           _AsrSourceChoice(
-            label: '由 TransVortex 下载',
-            detail: '自动管理',
+            label: '应用下载',
             selected: selected == 'managed',
             onTap: onChanged == null ? null : () => onChanged!('managed'),
           ),
           _AsrSourceChoice(
-            label: '使用已有模型',
-            detail: '自动查找',
+            label: '已有模型',
             selected: selected == 'external',
             onTap: onChanged == null ? null : () => onChanged!('external'),
           ),
@@ -2619,13 +2606,11 @@ class _AsrSourceToggle extends StatelessWidget {
 class _AsrSourceChoice extends StatefulWidget {
   const _AsrSourceChoice({
     required this.label,
-    required this.detail,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
-  final String detail;
   final bool selected;
   final VoidCallback? onTap;
 
@@ -2660,21 +2645,13 @@ class _AsrSourceChoiceState extends State<_AsrSourceChoice> {
                 color: widget.selected ? T.accent : const Color(0x00000000),
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Flexible(
-                  child: Text(
-                    widget.label,
-                    style: T.tCaption.copyWith(
-                      color: widget.onTap == null ? T.muted : T.ink,
-                      fontWeight: widget.selected ? T.wBold : T.wRegular,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Text(' · ${widget.detail}', style: T.tCaption),
-              ],
+            child: Text(
+              widget.label,
+              style: T.tCaption.copyWith(
+                color: widget.onTap == null ? T.muted : T.ink,
+                fontWeight: widget.selected ? T.wBold : T.wRegular,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ),
@@ -2717,89 +2694,75 @@ class _AsrStatusChip extends StatelessWidget {
   }
 }
 
-class _AsrSetupOverview extends StatelessWidget {
-  const _AsrSetupOverview({
+class _AsrExternalModelPicker extends StatelessWidget {
+  const _AsrExternalModelPicker({
+    required this.path,
     required this.modelLabel,
-    required this.deviceLabel,
-    required this.currentReady,
-    required this.draftDirty,
-    required this.operation,
+    required this.verified,
+    required this.busy,
+    required this.onPick,
   });
 
+  final String path;
   final String modelLabel;
-  final String deviceLabel;
-  final bool currentReady;
-  final bool draftDirty;
-  final AsrOperationStatus? operation;
+  final bool verified;
+  final bool busy;
+  final VoidCallback? onPick;
 
   @override
   Widget build(BuildContext context) {
-    final task = operation;
-    final (status, detail, color) = task?.active == true
-        ? (
-            task!.state == 'cancelling' ? '正在取消' : '正在配置',
-            _asrSetupPhaseLabel(task),
-            T.accentStrong,
-          )
-        : task?.state == 'completed'
-        ? (
-            task?.kind == 'setup' && currentReady ? '已启用' : '下载完成',
-            task?.kind == 'setup'
-                ? currentReady
-                      ? '$modelLabel · $deviceLabel'
-                      : '$modelLabel 已可用，可按需设为默认'
-                : '${_asrOperationLabel(task!.itemId)}已可用',
-            T.ok,
-          )
-        : task?.state == 'cancelled'
-        ? ('已取消', '已下载部分将在下次继续时复用', T.warn)
-        : task?.state == 'failed'
-        ? ('需要处理', _asrOperationFailureMessage(task!), T.danger)
-        : currentReady
-        ? ('已启用', '当前使用：$modelLabel · $deviceLabel', T.ok)
-        : draftDirty
-        ? ('待应用', '将切换为：$modelLabel · $deviceLabel', T.accentStrong)
-        : ('尚未可用', '完成下载和校验后即可在本机识别', T.warn);
+    final hasPath = path.trim().isNotEmpty;
+    final status = !hasPath
+        ? '选择已有的 Whisper 模型文件夹'
+        : verified
+        ? '$modelLabel · 可在本机运行'
+        : modelLabel.isEmpty
+        ? '等待识别模型'
+        : '$modelLabel · 等待兼容性测试';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
       decoration: BoxDecoration(
         color: T.surface,
+        border: Border.all(color: verified ? T.ok : T.line),
         borderRadius: BorderRadius.circular(T.rMd),
-        border: Border.all(color: T.line),
       ),
       child: Row(
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: T.skySoft.withValues(alpha: 0.64),
-              borderRadius: BorderRadius.circular(T.rSm),
-              border: Border.all(color: T.sky.withValues(alpha: 0.46)),
-            ),
-            child: const Icon(Icons.graphic_eq_rounded, color: T.ink, size: 22),
+          Icon(
+            verified
+                ? Icons.check_circle_outline_rounded
+                : Icons.folder_outlined,
+            size: 19,
+            color: verified ? T.ok : T.muted,
           ),
-          const SizedBox(width: T.s12),
+          const SizedBox(width: T.s8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '本机 Whisper',
-                  style: T.tBody.copyWith(fontWeight: T.wBold),
+                Tooltip(
+                  message: path,
+                  child: Text(
+                    hasPath ? path : '尚未选择',
+                    style: T.tBody,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  '$detail；音频不会上传。',
-                  style: T.tCaption,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(status, style: T.tCaption),
               ],
             ),
           ),
-          const SizedBox(width: T.s12),
-          _AsrStatusChip(label: status, color: color),
+          const SizedBox(width: T.s8),
+          ActionButton(
+            label: busy
+                ? '查找中'
+                : hasPath
+                ? '重新选择'
+                : '选择',
+            onTap: onPick,
+          ),
         ],
       ),
     );
@@ -2813,13 +2776,8 @@ class _AsrDownloadPlan extends StatelessWidget {
     required this.modelLabel,
     required this.modelReady,
     required this.modelSize,
-    required this.appDataRoot,
     required this.storage,
     required this.requiredDownloadBytes,
-    required this.changingStorage,
-    required this.onManageResources,
-    required this.onChangeStorage,
-    required this.onResetStorage,
     this.externalModel = false,
   });
 
@@ -2828,152 +2786,54 @@ class _AsrDownloadPlan extends StatelessWidget {
   final String modelLabel;
   final bool modelReady;
   final int modelSize;
-  final String appDataRoot;
   final AsrStorageOption storage;
   final int requiredDownloadBytes;
-  final bool changingStorage;
-  final VoidCallback onManageResources;
-  final VoidCallback? onChangeStorage;
-  final VoidCallback? onResetStorage;
   final bool externalModel;
 
   @override
   Widget build(BuildContext context) {
-    final storageRoot = storage.root.isEmpty ? appDataRoot : storage.root;
     final storageAvailable =
         storage.configError.isEmpty && storage.diskError.isEmpty;
     final hasSpace = storage.hasSpaceFor(requiredDownloadBytes);
     final requiredBytes = storage.requiredBytesFor(requiredDownloadBytes);
-    final spaceLabel = !storageAvailable
-        ? '位置不可用'
-        : !storage.spaceKnown
-        ? '空间待检查'
-        : hasSpace
-        ? '可用 ${_formatBytes(storage.freeBytes)}'
-        : '仅余 ${_formatBytes(storage.freeBytes)}';
     final storageHint = !storageAvailable
         ? '请重新连接目标磁盘或改选其他位置。'
         : !hasSpace
         ? '本次至少需要 ${_formatBytes(requiredBytes)}，请更改位置或清理目标盘。'
-        : _asrStorageChangeHint(storage.changeBlocker);
+        : '';
+    if (runtimeReady && modelReady) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: T.s4),
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: T.line),
-          bottom: BorderSide(color: T.line),
-        ),
+      margin: const EdgeInsets.only(top: T.s8),
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: T.skySoft.withValues(alpha: 0.42),
+        border: Border.all(color: T.line),
+        borderRadius: BorderRadius.circular(T.rSm),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '本次设置',
-                  style: T.tCaption.copyWith(fontWeight: T.wBold, color: T.ink),
-                ),
-              ),
-              TextButton(
-                key: const ValueKey('asr-manage-resources'),
-                style: TextButton.styleFrom(
-                  minimumSize: const Size(0, 24),
-                  padding: const EdgeInsets.symmetric(horizontal: T.s4),
-                  visualDensity: VisualDensity.compact,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: onManageResources,
-                child: const Text('管理已下载资源'),
-              ),
-            ],
-          ),
-          const SizedBox(height: T.s4),
-          _AsrPlanRow(
-            label: '本地识别引擎',
-            detail: runtimeReady
-                ? '已安装，将复用现有版本'
-                : runtimeSize > 0
-                ? '需要下载 ${_formatBytes(runtimeSize)}'
-                : '需要下载并校验',
-            ready: runtimeReady,
-          ),
-          const SizedBox(height: T.s4),
-          _AsrPlanRow(
-            label: modelLabel,
-            detail: externalModel
-                ? modelReady
-                      ? '已验证，将原地使用，不复制模型'
-                      : '选择目录后验证，不复制模型'
-                : modelReady
-                ? '已安装，将复用现有模型'
-                : '需要下载 ${_formatBytes(modelSize)}',
-            ready: modelReady,
-          ),
-          if (storageRoot.isNotEmpty) ...[
-            const SizedBox(height: T.s4),
-            Row(
-              children: [
-                const Icon(Icons.storage_rounded, size: 17, color: T.muted),
-                const SizedBox(width: T.s8),
-                Expanded(
-                  child: Tooltip(
-                    message: storageRoot,
-                    child: Text(
-                      '识别资源：$storageRoot',
-                      style: T.tCaption,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: T.s8),
-                Text(
-                  spaceLabel,
-                  style: T.tCaption.copyWith(
-                    color: hasSpace ? T.muted : T.danger,
-                    fontWeight: hasSpace ? T.wRegular : T.wBold,
-                  ),
-                ),
-                const SizedBox(width: T.s4),
-                TextButton(
-                  key: const ValueKey('asr-change-storage'),
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 22),
-                    padding: const EdgeInsets.symmetric(horizontal: T.s4),
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: changingStorage ? null : onChangeStorage,
-                  child: Text(changingStorage ? '处理中' : '更改'),
-                ),
-                if (onResetStorage != null) ...[
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(0, 22),
-                      padding: const EdgeInsets.symmetric(horizontal: T.s4),
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    onPressed: changingStorage ? null : onResetStorage,
-                    child: const Text('默认'),
-                  ),
-                ],
-              ],
+          if (!runtimeReady) ...[
+            _AsrPlanRow(
+              label: '本地识别引擎',
+              detail: runtimeSize > 0
+                  ? '需下载 ${_formatBytes(runtimeSize)}'
+                  : '需要准备',
             ),
-            if (storageHint.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(left: 25),
-                child: Text(
-                  storageHint,
-                  style: T.tCaption.copyWith(
-                    color: hasSpace ? T.muted : T.danger,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
+          ],
+          if (!modelReady) ...[
+            if (!runtimeReady) const SizedBox(height: T.s4),
+            _AsrPlanRow(
+              label: modelLabel,
+              detail: externalModel
+                  ? '选择模型并完成兼容性测试'
+                  : '需下载 ${_formatBytes(modelSize)}',
+            ),
+          ],
+          if (storageHint.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            Text(storageHint, style: T.tCaption.copyWith(color: T.danger)),
           ],
         ],
       ),
@@ -2982,27 +2842,16 @@ class _AsrDownloadPlan extends StatelessWidget {
 }
 
 class _AsrPlanRow extends StatelessWidget {
-  const _AsrPlanRow({
-    required this.label,
-    required this.detail,
-    required this.ready,
-  });
+  const _AsrPlanRow({required this.label, required this.detail});
 
   final String label;
   final String detail;
-  final bool ready;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(
-          ready
-              ? Icons.check_circle_outline_rounded
-              : Icons.arrow_downward_rounded,
-          size: 18,
-          color: ready ? T.ok : T.accentStrong,
-        ),
+        Icon(Icons.arrow_downward_rounded, size: 18, color: T.accentStrong),
         const SizedBox(width: T.s8),
         SizedBox(width: 150, child: Text(label, style: T.tBody)),
         Expanded(
@@ -3302,11 +3151,6 @@ String _asrOperationLabel(String itemId) {
   };
 }
 
-String _asrDeviceLabel(String device) => switch (device) {
-  'cuda' => 'NVIDIA',
-  _ => 'CPU',
-};
-
 String _asrSetupTaskTitle(AsrOperationStatus operation) {
   return switch (operation.state) {
     'queued' => '本机识别设置即将开始',
@@ -3347,17 +3191,6 @@ String _asrOperationFailureMessage(AsrOperationStatus operation) {
     'download_failed' || 'download_incomplete' => '下载没有完成，请检查网络设置后重试。',
     'operation_interrupted' => '上次下载意外中断，可以从已保留的安全断点继续。',
     _ => operation.message.trim().isEmpty ? '本机识别设置失败，请重试。' : operation.message,
-  };
-}
-
-String _asrStorageChangeHint(String blocker) {
-  return switch (blocker) {
-    'active_operation' => '当前任务完成后才能更改保存位置。',
-    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。请先到“管理已下载资源”删除受管资源。',
-    'partial_downloads_present' => '已有下载断点；继续下载时仍会复用当前位置，清理后才能更改。',
-    'storage_config_invalid' => '保存位置配置需要重新选择。',
-    'storage_unreadable' => '当前位置暂时无法读取。',
-    _ => '',
   };
 }
 

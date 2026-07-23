@@ -27,7 +27,9 @@ class AsrResourceManagement extends StatefulWidget {
     this.pathOpener,
     this.directoryPicker,
     this.onResourcesChanged,
+    this.snapshot,
     this.showHeader = true,
+    this.embedded = false,
   });
 
   final AppServiceClient client;
@@ -36,7 +38,9 @@ class AsrResourceManagement extends StatefulWidget {
   final PathOpener? pathOpener;
   final AsrStorageDirectoryPicker? directoryPicker;
   final Future<void> Function()? onResourcesChanged;
+  final DesktopSnapshot? snapshot;
   final bool showHeader;
+  final bool embedded;
 
   @override
   State<AsrResourceManagement> createState() => _AsrResourceManagementState();
@@ -49,15 +53,15 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
   String? _removingKey;
   String? _message;
   String? _error;
-  Timer? _standaloneSyncTimer;
   int _serviceRevision = 0;
+  int _mutationRevision = 0;
 
   @override
   void initState() {
     super.initState();
-    _snapshot = widget.service?.snapshot.desktopSnapshot;
+    _snapshot = widget.snapshot ?? widget.service?.snapshot.desktopSnapshot;
     widget.service?.addListener(_syncFromService);
-    _load();
+    if (widget.snapshot == null) _load();
   }
 
   @override
@@ -67,13 +71,17 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
       oldWidget.service?.removeListener(_syncFromService);
       widget.service?.addListener(_syncFromService);
       _syncFromService();
-      _scheduleAutomaticSync();
+    }
+    if (!identical(oldWidget.snapshot, widget.snapshot) &&
+        widget.snapshot != null) {
+      _serviceRevision += 1;
+      _snapshot = widget.snapshot;
+      if (_error != null) _error = null;
     }
   }
 
   @override
   void dispose() {
-    _standaloneSyncTimer?.cancel();
     widget.service?.removeListener(_syncFromService);
     super.dispose();
   }
@@ -86,12 +94,12 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
       _snapshot = next;
       if (_error != null) _error = null;
     });
-    _scheduleAutomaticSync();
   }
 
   Future<void> _load({bool clearFeedback = true}) async {
     if (!mounted || _loading) return;
     final serviceRevision = _serviceRevision;
+    final mutationRevision = _mutationRevision;
     setState(() {
       _loading = true;
       if (clearFeedback) {
@@ -101,18 +109,25 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
     });
     try {
       final snapshot = await widget.client.desktopSnapshot();
-      if (!mounted || serviceRevision != _serviceRevision) return;
+      if (!mounted ||
+          serviceRevision != _serviceRevision ||
+          mutationRevision != _mutationRevision) {
+        return;
+      }
       setState(() {
         _snapshot = snapshot;
         _error = null;
       });
     } on Object catch (error) {
-      if (!mounted || serviceRevision != _serviceRevision) return;
+      if (!mounted ||
+          serviceRevision != _serviceRevision ||
+          mutationRevision != _mutationRevision) {
+        return;
+      }
       setState(() => _error = friendlySettingsError(error));
     } finally {
       if (mounted) {
         setState(() => _loading = false);
-        _scheduleAutomaticSync();
       }
     }
   }
@@ -131,10 +146,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         _ManagedAsrResource(
           kind: 'runtime',
           component: runtime!,
-          label: '本机 Whisper 运行组件',
-          detail: runtime.version.isEmpty
-              ? 'TransVortex 管理的隔离运行环境'
-              : '版本 ${runtime.version} · 隔离运行环境',
+          label: '本机 Whisper',
           active: localWhisperActive,
         ),
       );
@@ -145,9 +157,6 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
           kind: 'model',
           component: model,
           label: _modelLabel(model),
-          detail: model.revision.isEmpty
-              ? '由 TransVortex 下载的模型'
-              : '固定版本 ${_shortRevision(model.revision)}',
           active: snapshot.asrModel == model.id,
         ),
       );
@@ -162,9 +171,6 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
           label: accelerator.displayName.isEmpty
               ? 'NVIDIA 加速组件'
               : accelerator.displayName,
-          detail: accelerator.version.isEmpty
-              ? '本机识别加速依赖'
-              : '版本 ${accelerator.version} · 本机识别加速依赖',
           active: false,
         ),
       );
@@ -206,6 +212,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
   Future<void> _remove(_ManagedAsrResource resource) async {
     final key = resource.key;
     setState(() {
+      _mutationRevision += 1;
       _removingKey = key;
       _message = null;
       _error = null;
@@ -237,16 +244,6 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
 
   bool get _hasActiveOperation =>
       _snapshot?.asrOperations.any((operation) => operation.active) ?? false;
-
-  void _scheduleAutomaticSync() {
-    _standaloneSyncTimer?.cancel();
-    _standaloneSyncTimer = null;
-    if (!mounted || widget.service != null) return;
-    _standaloneSyncTimer = Timer(const Duration(seconds: 2), () {
-      _standaloneSyncTimer = null;
-      if (mounted) unawaited(_load(clearFeedback: false));
-    });
-  }
 
   Future<void> _openStorage() async {
     final root = _snapshot?.asrStorage.root.trim() ?? '';
@@ -281,6 +278,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
 
   Future<void> _setStorage(String path, {bool reset = false}) async {
     setState(() {
+      _mutationRevision += 1;
       _changingStorage = true;
       _message = null;
       _error = null;
@@ -309,33 +307,29 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
         ? const <_ManagedAsrResource>[]
         : _resources(snapshot);
     final storage = snapshot?.asrStorage ?? const AsrStorageOption();
-    final busy = _loading || _removingKey != null || _changingStorage;
+    final interactionBusy = _removingKey != null || _changingStorage;
+    final resourceList = _buildResourceList(resources, interactionBusy);
     return Column(
       key: const ValueKey('asr-resource-manager'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (widget.showHeader) ...[
           Text('本机识别资源', style: T.tSection),
-          const SizedBox(height: 2),
-          Text('只管理由 TransVortex 下载的文件，不会删除用户自己的模型。', style: T.tCaption),
-          const SizedBox(height: T.s12),
-        ] else ...[
-          Text('只显示由 TransVortex 下载的文件；用户自己的模型不会被列出或删除。', style: T.tCaption),
-          const SizedBox(height: T.s12),
+          const SizedBox(height: T.s8),
         ],
         _StorageSummary(
           storage: storage,
           changing: _changingStorage,
-          onChange: storage.canChange ? _pickStorage : null,
+          onChange: interactionBusy || !storage.canChange ? null : _pickStorage,
           onReset: storage.customized && storage.canChange
               ? _resetStorage
               : null,
           onOpen: storage.root.trim().isEmpty ? null : _openStorage,
         ),
-        if (storage.changeBlocker.isNotEmpty) ...[
+        if (!storage.canChange && storage.changeBlocker.isNotEmpty) ...[
           const SizedBox(height: T.s8),
           Text(
-            _storageChangeHint(storage.changeBlocker),
+            _storageChangeBlocker(storage.changeBlocker),
             style: T.tCaption.copyWith(color: T.warn),
           ),
         ],
@@ -354,7 +348,7 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
             runSpacing: T.s8,
             children: [
               Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
-              if (!busy)
+              if (!_loading && !interactionBusy)
                 ActionButton(
                   label: '重试同步',
                   onTap: () => _load(clearFeedback: false),
@@ -365,29 +359,45 @@ class _AsrResourceManagementState extends State<AsrResourceManagement> {
           const SizedBox(height: T.s8),
           Text(_message!, style: T.tCaption.copyWith(color: T.ok)),
         ],
-        const SizedBox(height: T.s12),
-        Expanded(
-          child: _loading && snapshot == null
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-              : resources.isEmpty
-              ? const _EmptyManagedResources()
-              : ListView.separated(
-                  padding: EdgeInsets.zero,
-                  itemCount: resources.length,
-                  separatorBuilder: (_, _) =>
-                      const Divider(height: 1, color: T.line),
-                  itemBuilder: (context, index) {
-                    final resource = resources[index];
-                    return _ResourceRow(
-                      resource: resource,
-                      removing: _removingKey == resource.key,
-                      removeEnabled: !busy && !_hasActiveOperation,
-                      onRemove: () => _requestRemove(resource),
-                    );
-                  },
-                ),
+        const SizedBox(height: T.s16),
+        Row(
+          children: [
+            Expanded(child: Text('已下载资源', style: T.tSection)),
+            if (resources.isNotEmpty)
+              Text('${resources.length} 项', style: T.tCaption),
+          ],
         ),
+        const SizedBox(height: T.s8),
+        if (widget.embedded) resourceList else Expanded(child: resourceList),
       ],
+    );
+  }
+
+  Widget _buildResourceList(
+    List<_ManagedAsrResource> resources,
+    bool interactionBusy,
+  ) {
+    if (_loading && _snapshot == null) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    if (resources.isEmpty) return const _EmptyManagedResources();
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      shrinkWrap: widget.embedded,
+      physics: widget.embedded
+          ? const NeverScrollableScrollPhysics()
+          : const ClampingScrollPhysics(),
+      itemCount: resources.length,
+      separatorBuilder: (_, _) => const SizedBox(height: T.s8),
+      itemBuilder: (context, index) {
+        final resource = resources[index];
+        return _ResourceRow(
+          resource: resource,
+          enabled: !interactionBusy && !_hasActiveOperation,
+          removing: _removingKey == resource.key,
+          onRemove: () => _requestRemove(resource),
+        );
+      },
     );
   }
 }
@@ -415,7 +425,7 @@ class _StorageSummary extends StatelessWidget {
         : '剩余空间待检查';
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(T.s12),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
       decoration: BoxDecoration(
         color: T.lilacSoft.withValues(alpha: 0.58),
         border: Border.all(color: T.line),
@@ -432,14 +442,13 @@ class _StorageSummary extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('识别资源位置', style: T.tCaption),
                     Tooltip(
                       message: root,
                       child: Text(
                         root.isEmpty ? '位置尚未就绪' : root,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: T.tBody,
+                        style: T.tBody.copyWith(fontWeight: T.wMedium),
                       ),
                     ),
                   ],
@@ -447,7 +456,7 @@ class _StorageSummary extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: T.s8),
+          const SizedBox(height: T.s4),
           Row(
             children: [
               Expanded(child: Text(space, style: T.tCaption)),
@@ -476,37 +485,32 @@ class _StorageSummary extends StatelessWidget {
   }
 }
 
-String _storageChangeHint(String blocker) {
-  return switch (blocker) {
-    'active_operation' => '当前下载或资源操作完成后才能更改保存位置。',
-    'managed_resources_present' => '已有识别资源；当前版本不会自动搬动大文件。请先删除受管资源，再更改保存位置。',
-    'partial_downloads_present' => '当前位置保留了下载断点；继续下载会复用这里，清理断点后才能更改。',
-    'storage_config_invalid' => '保存位置配置无效，请重新选择。',
-    'storage_unreadable' => '当前位置暂时无法读取，请重新连接磁盘或选择其他位置。',
-    _ => '当前暂时不能更改识别资源位置。',
-  };
-}
-
 class _ResourceRow extends StatelessWidget {
   const _ResourceRow({
     required this.resource,
+    required this.enabled,
     required this.removing,
-    required this.removeEnabled,
     required this.onRemove,
   });
 
   final _ManagedAsrResource resource;
+  final bool enabled;
   final bool removing;
-  final bool removeEnabled;
   final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
-    final sizeLabel = resource.component.size > 0
-        ? ' · 约 ${formatResourceBytes(resource.component.size)}'
-        : '';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: T.s12),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
+      decoration: BoxDecoration(
+        color: resource.active
+            ? T.accentSoft.withValues(alpha: 0.28)
+            : T.surface,
+        border: Border.all(
+          color: resource.active ? T.accent.withValues(alpha: 0.55) : T.line,
+        ),
+        borderRadius: BorderRadius.circular(T.rSm),
+      ),
       child: Row(
         children: [
           Container(
@@ -531,7 +535,7 @@ class _ResourceRow extends StatelessWidget {
                     if (resource.active) ...[
                       const SizedBox(width: T.s8),
                       Text(
-                        '当前使用',
+                        '使用中',
                         style: T.tCaption.copyWith(color: T.accentStrong),
                       ),
                     ],
@@ -539,7 +543,7 @@ class _ResourceRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${resource.detail}$sizeLabel',
+                  '${_resourceTypeLabel(resource.kind)} · ${formatResourceBytes(resource.component.size)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: T.tCaption,
@@ -547,13 +551,11 @@ class _ResourceRow extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: T.s12),
-          FeedbackActionButton(
+          const SizedBox(width: T.s8),
+          ActionButton(
             key: ValueKey('asr-resource-remove-${resource.key}'),
             label: removing ? '删除中' : '删除',
-            danger: true,
-            busy: removing,
-            onTap: removeEnabled && !removing ? onRemove : null,
+            onTap: enabled ? onRemove : null,
           ),
         ],
       ),
@@ -566,15 +568,19 @@ class _EmptyManagedResources extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(T.s16),
+      decoration: BoxDecoration(
+        color: T.surface,
+        border: Border.all(color: T.line),
+        borderRadius: BorderRadius.circular(T.rSm),
+      ),
+      child: Row(
         children: [
-          const Icon(Icons.inventory_2_outlined, size: 28, color: T.muted),
-          const SizedBox(height: T.s8),
-          Text('没有由 TransVortex 下载的识别资源', style: T.tBody),
-          const SizedBox(height: T.s4),
-          Text('当前无需清理。', style: T.tCaption),
+          const Icon(Icons.inventory_2_outlined, size: 20, color: T.muted),
+          const SizedBox(width: T.s8),
+          Text('还没有应用下载的识别资源', style: T.tBody),
         ],
       ),
     );
@@ -586,14 +592,12 @@ class _ManagedAsrResource {
     required this.kind,
     required this.component,
     required this.label,
-    required this.detail,
     required this.active,
   });
 
   final String kind;
   final AsrComponentOption component;
   final String label;
-  final String detail;
   final bool active;
 
   String get key => '$kind-${component.id}';
@@ -616,10 +620,21 @@ String _modelLabel(AsrComponentOption model) {
   };
 }
 
-String _shortRevision(String revision) {
-  final value = revision.trim();
-  return value.length <= 12 ? value : value.substring(0, 12);
-}
+String _resourceTypeLabel(String kind) => switch (kind) {
+  'runtime' => '运行组件',
+  'model' => '识别模型',
+  'accelerator' => '加速组件',
+  _ => '识别资源',
+};
+
+String _storageChangeBlocker(String blocker) => switch (blocker) {
+  'active_operation' => '完成当前下载后可更改保存位置。',
+  'managed_resources_present' => '删除下方已下载资源后可更改保存位置。',
+  'partial_downloads_present' => '清理未完成的下载后可更改保存位置。',
+  'storage_config_invalid' => '当前保存位置无效，请先检查磁盘。',
+  'storage_unreadable' => '当前位置暂时无法读取，请重新连接磁盘。',
+  _ => '当前暂时不能更改保存位置。',
+};
 
 String _removeConsequence(_ManagedAsrResource resource) {
   return switch (resource.kind) {

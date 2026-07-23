@@ -1194,11 +1194,13 @@ class SegmentButton extends StatefulWidget {
     required this.detail,
     required this.selected,
     required this.onTap,
+    this.width = 150,
   });
   final String label;
   final String detail;
   final bool selected;
   final VoidCallback? onTap;
+  final double width;
 
   @override
   State<SegmentButton> createState() => _SegmentButtonState();
@@ -1218,7 +1220,7 @@ class _SegmentButtonState extends State<SegmentButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          width: 150,
+          width: widget.width,
           padding: const EdgeInsets.symmetric(
             horizontal: T.s12,
             vertical: T.s8,
