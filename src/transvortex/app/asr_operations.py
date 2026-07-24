@@ -60,11 +60,13 @@ class AsrOperationManager:
         catalog: dict[str, Any] | None = None,
         client_factory: Callable[[], httpx.Client] | None = None,
         network: NetworkConfig | None = None,
+        persist_install_locations: bool = False,
     ) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.paths = asr_runtime_paths(self.root_dir, app_data_root=app_data_root)
         self.catalog = catalog or load_asr_catalog()
         self.network = network or NetworkConfig()
+        self._persist_install_locations = persist_install_locations
         self._client_factory = client_factory or self._default_client
         self._lock = threading.RLock()
         self._cancel_events: dict[str, threading.Event] = {}
@@ -306,7 +308,7 @@ class AsrOperationManager:
                 save_asr_storage(
                     config_root=self.paths.config_root,
                     storage_root=candidate,
-                    update_windows_registry=True,
+                    update_windows_registry=self._persist_install_locations,
                 )
             except OSError as exc:
                 raise AsrOperationError(

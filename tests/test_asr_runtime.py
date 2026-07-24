@@ -397,6 +397,11 @@ def test_asr_storage_change_requires_migration_when_managed_data_exists(tmp_path
 
 
 def test_asr_disk_check_uses_selected_storage_root(tmp_path: Path, monkeypatch) -> None:
+    registry_writes: list[Path] = []
+    monkeypatch.setattr(
+        "transvortex.app.asr_storage.write_windows_registry_location",
+        lambda path: registry_writes.append(path),
+    )
     manager = AsrOperationManager(root_dir=tmp_path, catalog=_catalog())
     target = tmp_path / "large-drive" / "TransVortex-ASR"
     manager.set_storage_root(str(target))
@@ -411,6 +416,25 @@ def test_asr_disk_check_uses_selected_storage_root(tmp_path: Path, monkeypatch) 
     manager._check_disk_space(1024)
 
     assert checked == [target.resolve()]
+    assert registry_writes == []
+
+
+def test_asr_storage_root_syncs_installer_hint_only_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    registry_writes: list[Path] = []
+    monkeypatch.setattr(
+        "transvortex.app.asr_storage.write_windows_registry_location",
+        lambda path: registry_writes.append(path),
+    )
+    target = tmp_path / "large-drive" / "TransVortex-ASR"
+    manager = AsrOperationManager(
+        root_dir=tmp_path,
+        catalog=_catalog(),
+        persist_install_locations=True,
+    )
+
+    manager.set_storage_root(str(target))
+
+    assert registry_writes == [target.resolve()]
 
 
 def test_component_archive_rejects_path_traversal(tmp_path: Path) -> None:

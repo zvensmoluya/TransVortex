@@ -86,5 +86,27 @@ def test_installer_acceptance_checks_new_default_storage_layout() -> None:
 
     assert '$workspaceRoot = Join-Path $productRoot "Data"' in acceptance
     assert '$asrStorageRoot = Join-Path $productRoot "Resources"' in acceptance
-    assert "Default workspace does not match the product Data directory." in acceptance
+    assert "Installed workspace does not match the product Data directory." in acceptance
     assert "Default ASR storage does not match the product Resources directory." in acceptance
+    assert '"explicit_product_data_due_to_legacy_workspace"' in acceptance
+    assert "clean_profile_default_workspace_exercised" in acceptance
+
+
+def test_installer_acceptance_restores_preexisting_config_state() -> None:
+    acceptance = (ROOT / "scripts" / "accept_windows_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function Restore-ConfigState" in acceptance
+    assert 'Join-Path $configRoot "workspace_storage.json"' in acceptance
+    assert 'Join-Path $configRoot "asr_storage.json"' in acceptance
+    assert "preexisting_config_restored = $true" in acceptance
+    suspend_start = acceptance.index("$configSnapshotReady = $true")
+    install_start = acceptance.index("New-Item -ItemType Directory -Force -Path $unsafeTarget")
+    assert (
+        acceptance.index(
+            "Remove-Item -LiteralPath $snapshot.Path -Force",
+            suspend_start,
+        )
+        < install_start
+    )

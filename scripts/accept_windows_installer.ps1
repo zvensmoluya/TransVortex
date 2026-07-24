@@ -53,6 +53,32 @@ function Write-Utf8NoBom {
     )
 }
 
+function Restore-ConfigState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Snapshots,
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigRoot,
+        [Parameter(Mandatory = $true)]
+        [bool]$ConfigRootExisted
+    )
+
+    foreach ($snapshot in $Snapshots) {
+        if ([bool]$snapshot.Existed) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $snapshot.Path) | Out-Null
+            Copy-Item -LiteralPath $snapshot.Backup -Destination $snapshot.Path -Force
+        } elseif (Test-Path -LiteralPath $snapshot.Path) {
+            Remove-Item -LiteralPath $snapshot.Path -Force
+        }
+    }
+    if (-not $ConfigRootExisted -and (Test-Path -LiteralPath $ConfigRoot)) {
+        $remaining = @(Get-ChildItem -LiteralPath $ConfigRoot -Force)
+        if ($remaining.Count -eq 0) {
+            Remove-Item -LiteralPath $ConfigRoot -Force
+        }
+    }
+}
+
 function Get-EffectiveInstallRoot {
     param(
         [Parameter(Mandatory = $true)]
@@ -513,6 +539,21 @@ $agentEntryRoot = Join-Path $env:LOCALAPPDATA "TransVortex\Agent"
 $agentEntryDocument = Join-Path $agentEntryRoot "README.md"
 $agentEntryState = Join-Path $agentEntryRoot "current.json"
 $configRoot = Join-Path $env:LOCALAPPDATA "TransVortex\Config"
+$configRootExisted = Test-Path -LiteralPath $configRoot
+$configBackupRoot = Join-Path $acceptanceRoot "config-backup"
+$configSnapshots = @(
+    [pscustomobject]@{
+        Path = Join-Path $configRoot "workspace_storage.json"
+        Backup = Join-Path $configBackupRoot "workspace_storage.json"
+        Existed = Test-Path -LiteralPath (Join-Path $configRoot "workspace_storage.json")
+    },
+    [pscustomobject]@{
+        Path = Join-Path $configRoot "asr_storage.json"
+        Backup = Join-Path $configBackupRoot "asr_storage.json"
+        Existed = Test-Path -LiteralPath (Join-Path $configRoot "asr_storage.json")
+    }
+)
+$configSnapshotReady = $false
 if (Test-Path -LiteralPath $defaultProductRoot) {
     throw "Refusing automated acceptance while the default TransVortex product root exists: $defaultProductRoot"
 }
@@ -533,6 +574,16 @@ $isolatedProfile = Join-Path $acceptanceRoot "profile"
 $isolatedLocalAppData = Join-Path $acceptanceRoot "local-app-data"
 $workspaceRoot = Join-Path $productRoot "Data"
 $asrStorageRoot = Join-Path $productRoot "Resources"
+$legacyWorkspaceRoot = Join-Path $env:LOCALAPPDATA "TransVortex\Workspace"
+$legacyWorkspaceDataPresent = (
+    @(Get-ChildItem -LiteralPath (Join-Path $legacyWorkspaceRoot "Tasks") -Force -ErrorAction SilentlyContinue).Count -gt 0 -or
+    @(Get-ChildItem -LiteralPath (Join-Path $legacyWorkspaceRoot "Cache") -Force -ErrorAction SilentlyContinue).Count -gt 0
+)
+$workspaceSelectionMode = if ($legacyWorkspaceDataPresent) {
+    "explicit_product_data_due_to_legacy_workspace"
+} else {
+    "modern_default"
+}
 $unsafeParent = Join-Path $acceptanceRoot "unsafe-parent"
 $unsafeTarget = Join-Path $unsafeParent "TransVortex\App"
 $unsafeSentinel = Join-Path $unsafeTarget "unrelated-user-file.txt"
@@ -550,6 +601,19 @@ New-Item -ItemType Directory -Force -Path $userDataSentinelRoot | Out-Null
 Set-Content -LiteralPath $userDataSentinel -Value $acceptanceId -Encoding utf8
 
 try {
+    New-Item -ItemType Directory -Force -Path $configBackupRoot | Out-Null
+    foreach ($snapshot in $configSnapshots) {
+        if ([bool]$snapshot.Existed) {
+            Copy-Item -LiteralPath $snapshot.Path -Destination $snapshot.Backup -Force
+        }
+    }
+    $configSnapshotReady = $true
+    foreach ($snapshot in $configSnapshots) {
+        if (Test-Path -LiteralPath $snapshot.Path) {
+            Remove-Item -LiteralPath $snapshot.Path -Force
+        }
+    }
+
     New-Item -ItemType Directory -Force -Path $unsafeTarget | Out-Null
     Set-Content -LiteralPath $unsafeSentinel -Value $acceptanceId -Encoding utf8
     $unsafeDirectoryExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$unsafeParent")
@@ -564,7 +628,12 @@ try {
         throw "Unsafe-directory protection changed the unrelated sentinel."
     }
 
-    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
+    $freshInstallArguments = @("/S")
+    if ($legacyWorkspaceDataPresent) {
+        $freshInstallArguments += "/WORKSPACEROOT=$workspaceRoot"
+    }
+    $freshInstallArguments += "/D=$installerRequestedPath"
+    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList $freshInstallArguments
     if ($freshInstallExit -ne 0) {
         throw "Fresh silent install failed with exit code $freshInstallExit"
     }
@@ -578,7 +647,7 @@ try {
     }
     $appRegistry = Get-ItemProperty -LiteralPath $appKey
     if (-not [string]::Equals((Get-FullPath -Path $appRegistry.WorkspaceLocation), (Get-FullPath -Path $workspaceRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Default workspace does not match the product Data directory."
+        throw "Installed workspace does not match the product Data directory."
     }
     if (-not [string]::Equals((Get-FullPath -Path $appRegistry.AsrStorageLocation), (Get-FullPath -Path $asrStorageRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Default ASR storage does not match the product Resources directory."
@@ -670,6 +739,12 @@ try {
         throw "Uninstall changed the user-data sentinel."
     }
 
+    Restore-ConfigState `
+        -Snapshots $configSnapshots `
+        -ConfigRoot $configRoot `
+        -ConfigRootExisted $configRootExisted
+    $configSnapshotReady = $false
+
     $report = [ordered]@{
         ok = $true
         installer_sha256 = $actualInstallerHash
@@ -680,7 +755,9 @@ try {
         custom_install_root = $true
         dedicated_install_subdirectory = $true
         unified_product_root = $true
-        default_workspace_is_product_data = $true
+        workspace_is_product_data = $true
+        workspace_selection_mode = $workspaceSelectionMode
+        clean_profile_default_workspace_exercised = (-not $legacyWorkspaceDataPresent)
         default_asr_storage_is_product_resources = $true
         unsafe_directory_block_exit_code = $unsafeDirectoryExit
         unsafe_directory_preserved = $true
@@ -706,6 +783,7 @@ try {
         uninstall_preserved_workspace_registry = $true
         uninstall_removed_shortcut = $true
         uninstall_preserved_user_data = $true
+        preexisting_config_restored = $true
         silent_uninstall_cleanup_default = "preserve"
         signed = [bool]$installerManifest.signed
         public_release_ready = $false
@@ -727,6 +805,12 @@ try {
         if (Test-Path -LiteralPath $uninstaller) {
             try { Invoke-WaitingProcess -FilePath $uninstaller -ArgumentList @("/S") | Out-Null } catch {}
         }
+    }
+    if ($configSnapshotReady) {
+        Restore-ConfigState `
+            -Snapshots $configSnapshots `
+            -ConfigRoot $configRoot `
+            -ConfigRootExisted $configRootExisted
     }
     if ($hadShortcut -and (Test-Path -LiteralPath $shortcutBackup)) {
         Copy-Item -LiteralPath $shortcutBackup -Destination $shortcutPath -Force

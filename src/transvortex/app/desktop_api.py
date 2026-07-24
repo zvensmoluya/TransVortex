@@ -109,13 +109,18 @@ class DesktopApi:
         pump_status: Callable[[], dict[str, Any]] | None = None,
         task_ready_callback: Callable[[str], None] | None = None,
         shutdown_callback: Callable[[], None] | None = None,
+        persist_install_locations: bool = False,
     ) -> None:
         self.root_dir = root_dir
         self.providers_file = providers_file
         self._pump_status = pump_status
         self._task_ready_callback = task_ready_callback
         self._shutdown_callback = shutdown_callback
-        self._asr_operation_manager = AsrOperationManager(root_dir=root_dir)
+        self._persist_install_locations = persist_install_locations
+        self._asr_operation_manager = AsrOperationManager(
+            root_dir=root_dir,
+            persist_install_locations=persist_install_locations,
+        )
         self.shutdown_requested = False
 
     def dispatch(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -368,7 +373,7 @@ class DesktopApi:
             config_file = save_workspace_storage(
                 config_root=self.root_dir,
                 workspace_root=workspace_root,
-                update_windows_registry=True,
+                update_windows_registry=self._persist_install_locations,
             )
         except (OSError, WorkspaceStorageError) as exc:
             raise DesktopApiError("workspace_storage_invalid", str(exc)) from exc

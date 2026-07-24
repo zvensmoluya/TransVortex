@@ -52,9 +52,11 @@ def main(argv: list[str] | None = None) -> None:
         cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ[CACHE_DIR_ENV] = str(cache_dir)
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
+    persist_install_locations = False
     if not args.no_pump:
         try:
             reconcile_installed_agent_entry(config_root=root)
+            persist_install_locations = True
         except AgentEntryError as exc:
             if exc.code != "agent_install_not_registered":
                 print(f"Agent entry reconciliation failed: {exc.code}", file=sys.stderr, flush=True)
@@ -69,6 +71,7 @@ def main(argv: list[str] | None = None) -> None:
         pump_status=pump.status,
         task_ready_callback=pump.allow_task,
         shutdown_callback=pump.stop,
+        persist_install_locations=persist_install_locations,
     )
     if not args.no_pump:
         pump.start()

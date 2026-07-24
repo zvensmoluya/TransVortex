@@ -776,7 +776,7 @@ def test_app_service_switches_workspace_storage_when_runtime_is_idle(tmp_path: P
         "transvortex.app.workspace_storage._write_windows_registry_location",
         lambda path: captured.update(path=path),
     )
-    service = DesktopApi(root_dir=config_root)
+    service = DesktopApi(root_dir=config_root, persist_install_locations=True)
 
     response = handle_line(
         service,
@@ -794,6 +794,31 @@ def test_app_service_switches_workspace_storage_when_runtime_is_idle(tmp_path: P
     assert json.loads(
         (workspace_root / ".transvortex-workspace.json").read_text(encoding="utf-8")
     ) == {"schema_version": 1, "app_id": "TransVortex"}
+
+
+def test_app_service_source_workspace_switch_does_not_sync_installer_hint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_root = tmp_path / "Config"
+    config_root.mkdir()
+    _write_config(config_root)
+    workspace_root = tmp_path / "NewWorkspace"
+    registry_writes: list[Path] = []
+    monkeypatch.setattr(
+        "transvortex.app.workspace_storage._write_windows_registry_location",
+        lambda path: registry_writes.append(path),
+    )
+    service = DesktopApi(root_dir=config_root)
+
+    response = handle_line(
+        service,
+        _request("workspace.storage.set", {"workspace_root": str(workspace_root)}),
+        root_dir=config_root,
+    )
+
+    assert response["result"]["ok"] is True
+    assert registry_writes == []
 
 
 def test_app_service_rejects_workspace_with_unrelated_files(tmp_path: Path, monkeypatch) -> None:
