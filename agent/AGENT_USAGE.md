@@ -31,6 +31,9 @@ transvortex probe-provider --strict
 `agent-info --json`, `doctor --json`, `asr setup-plan --json`, and
 `asr setup-verify --json --strict` must be treated as secret-free structured
 metadata; still apply a field allowlist before forwarding third-party output.
+CLI JSON and JSONL stdout is ASCII-safe JSON: non-ASCII text is represented with
+JSON escapes and is restored by any conforming JSON parser, independent of the
+active Windows console code page.
 `doctor` reports local runtime/config health. `probe-provider` validates the
 translation-provider URL, payload, and response mapping locally; it does not
 send a network request. It is not an ASR route probe.

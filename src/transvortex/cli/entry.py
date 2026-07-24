@@ -193,18 +193,12 @@ _CURRENT_ROOT: Path | None = None
 
 def _print_json(data: object) -> None:
     payload = redact(data, root_dir=_CURRENT_ROOT)
-    try:
-        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
-    except UnicodeEncodeError:
-        print(json.dumps(payload, ensure_ascii=True, indent=2), flush=True)
+    print(json.dumps(payload, ensure_ascii=True, indent=2), flush=True)
 
 
 def _print_jsonl_event(event: dict[str, Any]) -> None:
     payload = redact(event, root_dir=_CURRENT_ROOT)
-    try:
-        print(json.dumps(payload, ensure_ascii=False), flush=True)
-    except UnicodeEncodeError:
-        print(json.dumps(payload, ensure_ascii=True), flush=True)
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def _print_jsonl_error(task_id: str | None, err: dict[str, Any]) -> None:
@@ -1093,7 +1087,7 @@ def main() -> None:
             if args.json:
                 _print_json(payload)
             else:
-                print(json.dumps(redact(payload, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
+                _print_json(payload)
             if payload.get("ok") is not True:
                 raise SystemExit(1)
             return
@@ -1104,7 +1098,7 @@ def main() -> None:
         if args.json:
             _print_json(payload)
         else:
-            print(json.dumps(redact(payload, root_dir=_CURRENT_ROOT), ensure_ascii=False, indent=2))
+            _print_json(payload)
         if args.strict and payload.get("ok") is not True:
             raise SystemExit(1)
         return
@@ -1411,7 +1405,7 @@ def main() -> None:
         while True:
             events = store.read_events(args.task_id)
             for event in events[emitted:]:
-                print(json.dumps(event, ensure_ascii=False), flush=True)
+                _print_jsonl_event(event)
             emitted = len(events)
             if not args.follow:
                 return

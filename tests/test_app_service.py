@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+import transvortex.app_service as app_service_module
 from transvortex.app.desktop_api import DesktopApi, task_payload
 from transvortex.app.config import load_app_config
 from transvortex.app.asr_runtime import load_asr_catalog
@@ -893,6 +894,26 @@ def test_app_service_subprocess_no_pump_health(tmp_path: Path) -> None:
     lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
     assert lines[0]["result"]["pump"]["running"] is False
     assert lines[1]["result"]["shutdown"] == "requested"
+    assert proc.stderr == ""
+
+
+def test_app_service_no_pump_skips_agent_entry_reconciliation(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    reconciliation_calls: list[Path] = []
+    monkeypatch.setattr(
+        app_service_module,
+        "reconcile_installed_agent_entry",
+        lambda *, config_root: reconciliation_calls.append(config_root),
+    )
+    monkeypatch.setattr(
+        app_service_module,
+        "serve",
+        lambda _service, *, root_dir: None,
+    )
+
+    app_service_module.main(["--root", str(tmp_path), "--no-pump"])
+
+    assert reconciliation_calls == []
 
 
 def test_app_service_subprocess_uses_explicit_artifacts_directory(tmp_path: Path) -> None:

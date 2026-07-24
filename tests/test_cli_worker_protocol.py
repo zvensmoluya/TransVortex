@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from transvortex.cli import main
+from transvortex.cli.entry import _print_json, _print_jsonl_event
 from transvortex.app.desktop_requests import (
     RequestValidationError,
     resume_request_from_payload,
@@ -42,12 +43,45 @@ routing:
     )
 
 
+def test_machine_json_output_is_ascii_safe(capsys) -> None:
+    payload = {"hint_zh": "中文诊断", "label": "识别资源"}
+
+    _print_json(payload)
+    json_output = capsys.readouterr().out
+    assert json_output.isascii()
+    assert json.loads(json_output) == payload
+
+    event = {"type": "progress", "task_id": "t1", "message": "处理中"}
+    _print_jsonl_event(event)
+    jsonl_output = capsys.readouterr().out
+    assert jsonl_output.isascii()
+    assert json.loads(jsonl_output) == event
+
+
+def test_machine_json_subprocess_is_ascii_without_encoding_environment() -> None:
+    env = os.environ.copy()
+    env.pop("PYTHONIOENCODING", None)
+    env.pop("PYTHONUTF8", None)
+    code = "from transvortex.cli.entry import _print_json; _print_json({'hint_zh': '中文诊断'})"
+
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        env=env,
+        timeout=10,
+        check=True,
+    )
+
+    assert proc.stdout.isascii()
+    assert json.loads(proc.stdout.decode("ascii")) == {"hint_zh": "中文诊断"}
+
+
 def test_status_events_and_cancel_cli_json(tmp_path: Path, monkeypatch, capsys) -> None:
     _write_config(tmp_path)
     store = TaskStore(tmp_path / "artifacts")
     task = TaskRecord(
         task_id="t1",
-        input_file="demo.mp4",
+        input_file="中文视频.mp4",
         source_lang="en",
         target_lang="zh-CN",
         bilingual=False,
@@ -57,24 +91,30 @@ def test_status_events_and_cancel_cli_json(tmp_path: Path, monkeypatch, capsys) 
     )
     store.save_task(task)
     TaskRuntime(tmp_path / "artifacts").register_worker(task_id="t1", pid=os.getpid(), owner="test")
-    store.append_event("t1", "stage", stage="ASR", message="working", progress=0.25)
+    store.append_event("t1", "stage", stage="ASR", message="处理中", progress=0.25)
 
     monkeypatch.setattr(
         "sys.argv",
         ["transvortex", "--root", str(tmp_path), "status", "--task-id", "t1", "--json"],
     )
     main()
-    payload = json.loads(capsys.readouterr().out)
+    status_output = capsys.readouterr().out
+    assert status_output.isascii()
+    payload = json.loads(status_output)
     assert payload["task_id"] == "t1"
     assert payload["status"] == "ASR"
+    assert payload["input_file"] == "中文视频.mp4"
 
     monkeypatch.setattr(
         "sys.argv",
         ["transvortex", "--root", str(tmp_path), "events", "--task-id", "t1"],
     )
     main()
-    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    events_output = capsys.readouterr().out
+    assert events_output.isascii()
+    events = [json.loads(line) for line in events_output.splitlines()]
     assert any(event["type"] == "stage" for event in events)
+    assert any(event["message"] == "处理中" for event in events)
 
     monkeypatch.setattr(
         "sys.argv",

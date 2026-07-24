@@ -52,13 +52,14 @@ def main(argv: list[str] | None = None) -> None:
         cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ[CACHE_DIR_ENV] = str(cache_dir)
     providers_file = Path(args.providers_file).resolve() if args.providers_file else None
-    try:
-        reconcile_installed_agent_entry(config_root=root)
-    except AgentEntryError as exc:
-        if exc.code != "agent_install_not_registered":
-            print(f"Agent entry reconciliation failed: {exc.code}", file=sys.stderr, flush=True)
-    except OSError:
-        print("Agent entry reconciliation failed: filesystem_error", file=sys.stderr, flush=True)
+    if not args.no_pump:
+        try:
+            reconcile_installed_agent_entry(config_root=root)
+        except AgentEntryError as exc:
+            if exc.code != "agent_install_not_registered":
+                print(f"Agent entry reconciliation failed: {exc.code}", file=sys.stderr, flush=True)
+        except OSError:
+            print("Agent entry reconciliation failed: filesystem_error", file=sys.stderr, flush=True)
     if artifacts_dir is not None and cache_dir is not None:
         cleanup_completed_task_caches(artifacts_dir, cache_dir)
     pump = LocalServicePump(root_dir=root, providers_file=providers_file, explicit_queue_only=True)
