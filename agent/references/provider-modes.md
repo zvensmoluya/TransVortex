@@ -1,71 +1,44 @@
-# TransVortex ASR route reference
+# TransVortex ASR Provider Modes And Resource Sources
 
-Use this file after discovery when an Agent must explain or choose an ASR route. Use `documents.usage` from `current.json` as the source of truth for CLI syntax and task artifacts; in a source checkout that file is [`../AGENT_USAGE.md`](../AGENT_USAGE.md). If a command or field is not advertised by `agent-info --json`, do not invent it; return `blocked` with a concrete compatibility note.
+ASR 的执行位置与资源从哪里取得必须分别判断。先读 `setup-plan` 的 `provider_mode`，再看 `resources` 中每项的 `source`。
 
-## Route decision
+## 执行模式
 
-| Route | Data path | Strength | Main caveat |
+| `provider_mode` | 执行位置 | 本地资源要求 |
+| --- | --- | --- |
+| `local_worker` | TransVortex 启动固定协议的本机 Whisper worker | 需要产品 runtime 和模型；GPU 加速可选 |
+| `local_service` | TransVortex 调用 loopback ASR 服务 | 服务自行管理模型与运行环境 |
+| `remote_provider` | TransVortex 调用远程转录服务 | 不需要本地模型或 GPU |
+
+`provider_mode` 不因模型来自已有目录而改变。使用外部模型的本机识别仍然是 `local_worker`，不是一条 `reuse_model` 路线。
+
+## Local Worker 资源
+
+| 资源 | 产品来源 | 外部来源 | 接入方式 |
 | --- | --- | --- | --- |
-| `managed` | TransVortex user data -> pinned local runtime/model | Reproducible and supported by the desktop app | Large download; CUDA still depends on a compatible NVIDIA driver |
-| `reuse_model` | Existing model directory loaded by a supported runtime | Avoids a second multi-GB model download | The source directory must remain user-owned and unchanged; compatibility must be probed |
-| `local_service` | TransVortex -> localhost ASR endpoint | Reuses a user's running FunASR or compatible server | Endpoint lifecycle and protocol differences must be explicit |
-| `remote_provider` | TransVortex -> hosted transcription endpoint | No local model or GPU required | Network, quota, cost, privacy, and credentials need user consent |
-| `cli_external` | CLI/Agent -> user's explicit Python environment | Useful for development and existing automation | Not the default Flutter product path; provenance and upgrades are user responsibility |
+| runtime | `managed`，TransVortex 固定并安装 | 仅 CLI/开发兼容，不向普通用户推广 | 托管 `setup-apply` |
+| model | `managed` | Agent 或用户准备的 CTranslate2 Whisper 目录 | `model-register` 后 `resources-activate` |
+| accelerator | `managed` | Agent 或用户准备的兼容 NVIDIA 用户态库目录 | `accelerator-register` 后 `resources-activate` |
+| NVIDIA driver | 不由 TransVortex 管理 | 系统资源，由 Agent 或用户按本机情况准备 | 由 CUDA probe 验证 |
 
-## Managed Whisper
+模型和 accelerator 的来源互不绑定。以下组合都合法：
 
-Use only the current TransVortex component catalog or a contract snapshot produced by TransVortex. The plan should identify:
+- 托管模型 + 托管 accelerator；
+- 外部模型 + 托管 accelerator；
+- 托管模型 + 外部 accelerator；
+- 外部模型 + 外部 accelerator；
+- CPU 模式，不使用 accelerator。
 
-- runtime component and version;
-- accelerator component and version, if CUDA is selected;
-- model ID, revision, expected file list, sizes, and SHA-256 values;
-- target user data root and cache location;
-- selected `device` and `compute_type`.
+TransVortex 管理自己下载的资源。外部资源只保存路径、指纹、兼容信息和 probe 结果；应用删除资源、清理组件或卸载时不删除外部目录。目录内容变化后登记会失效，需要重新 probe/register。
 
-Install components in the user-scoped TransVortex data directory. Do not use the system Python, the repository virtual environment, or an unpinned `pip install`. A complete `.part` cache may be reused only after size and hash validation. A successful download is not a successful installation until readiness and a minimal transcription probe pass.
+## Local Service
 
-The NVIDIA driver is a system dependency. Installing user-space CUDA libraries does not install, upgrade, or repair the driver. If the driver is missing or incompatible, stop with `needs_user` and describe the approved driver path and possible reboot.
+`local_service` 用于 loopback 地址上的 FunASR 或兼容服务。模型、Python、CUDA 和服务生命周期都属于该服务，不混入 TransVortex local worker 的资源契约。使用服务自己的协议和模型标识，并用广告的 ASR `provider-test` 验证。
 
-## Reusing an existing model
+## Remote Provider
 
-Use `reuse_model` only after read-only discovery identifies a plausible Faster-Whisper/CTranslate2 model directory. The Agent must:
+`remote_provider` 用于用户选择的托管转录端点。Provider YAML 只保存 endpoint、model、`env_key` 和 `credential_id` 等非敏感配置，凭据由统一 resolver 取得。当前 provider probe 会发送生成的短音频，并可能产生服务费用。
 
-1. Ask the user to confirm the path if discovery found more than one candidate.
-2. Check that required model files are readable and that the directory has no unsafe reparse/link escape.
-3. Compute a fingerprint or the exact file hashes required by the advertised probe.
-4. Run TransVortex's supported environment/model probe with the intended device and compute type.
-5. Register only metadata (path, model ID/revision if known, file fingerprint, probe timestamp).
+## External Python Compatibility
 
-Never copy, move, delete, rename, upgrade, or write into the source model directory. If it changes later, mark the registration stale and ask for a new probe. Do not claim that an arbitrary model format is compatible merely because its folder name contains `whisper`.
-
-## Local ASR service
-
-Use `local_service` only for a server bound to a loopback address. Configure any LAN or public endpoint as `remote_provider`, because media leaves the local process boundary. The configuration must state:
-
-- endpoint and protocol (`funasr_openai`, `openai_transcriptions`, or another advertised protocol);
-- model identifier;
-- whether authentication is `none`, an environment key, or a credential ID;
-- health/readiness behavior and timeout.
-
-Treat localhost FunASR as a local/self-hosted provider, not a cloud provider. Check endpoint reachability and protocol shape before sending media. A health check alone is insufficient; use the smallest provider probe supported by the server. Do not start an untrusted binary or silently install a server as part of discovery.
-
-## Remote provider
-
-Use `remote_provider` when the user intentionally chooses a hosted ASR endpoint. Keep provider YAML limited to endpoint, model, `env_key`, and `credential_id`; resolve actual secrets through TransVortex's user-level credential store. Validate those fields offline first. The current ASR connection probe uploads generated media, so request separate network, media, and cost confirmation before running it.
-
-The report may include provider name, endpoint host, model ID, protocol, status code, and latency, but never API keys, authorization headers, full request bodies, or sensitive response text. A valid translation provider does not prove that an ASR provider is configured; test the selected ASR provider separately.
-
-## External Python / CLI compatibility
-
-`cli_external` is a compatibility route for an explicit user path or development workflow. Record the executable path, executable hash, Python version, package versions, model path, device, and probe result. Do not silently promote it to the Flutter managed runtime. If the desktop application does not advertise external runtime support, keep the result CLI-only and explain the boundary.
-
-## Failure handling
-
-Return a structured state rather than guessing:
-
-- `needs_user`: a choice, secret setup, administrator approval, reboot, cost approval, or path confirmation is required;
-- `blocked`: the current Agent cannot access the machine, the command is not advertised, the asset is unpublished/untrusted, or a safety check cannot be satisfied;
-- `failed`: an approved action ran but returned an error; preserve its JSON diagnostics and do not retry destructive steps automatically;
-- `ready`: the selected route passed TransVortex readiness and the minimal probe.
-
-When multiple routes are viable, leave the current working route unchanged and present a ranked plan. A setup Agent is an assistant, not the authority that changes the user's provider silently.
+显式外部 Python 环境仍可服务旧 CLI、自动化和开发验收，但它不是第四种 provider mode，也不是桌面 Agent 环境准备的资源选项。桌面设置保存 local worker 时恢复产品托管 runtime；Agent 应准备模型或 accelerator，而不是替用户拼装另一套 Python runtime。

@@ -7,9 +7,16 @@ from typing import Any
 import yaml
 
 from ..utils import to_plain
-from .config import _parse_asr_provider
+from .config import _parse_asr_provider, load_app_config
 from .credentials import auth_file_path, resolve_credential, write_auth_credential
 from .models import AsrProviderConfig, NetworkConfig
+from .asr_runtime import (
+    asr_provider_readiness,
+    load_asr_catalog,
+    model_catalog_entry,
+    registered_external_accelerator,
+    registered_external_model,
+)
 
 
 ASR_PROVIDER_DEFAULTS = {
@@ -186,6 +193,19 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
         else:
             runtime.pop("id", None)
         row["runtime"] = runtime
+        accelerator = dict(_as_dict(draft.get("accelerator")))
+        accelerator_source = _text(accelerator, "source", default="managed")
+        accelerator["source"] = accelerator_source
+        accelerator_id = _text(
+            accelerator,
+            "id",
+            default="nvidia-cuda12" if accelerator_source == "managed" else "",
+        )
+        if accelerator_id:
+            accelerator["id"] = accelerator_id
+        else:
+            accelerator.pop("id", None)
+        row["accelerator"] = accelerator
 
     for key in ("execution", "chunking", "preprocessing", "request"):
         value = draft.get(key)
@@ -272,4 +292,127 @@ def save_asr_provider_config(
         "credential_id": credential_id,
         "has_key": has_key,
         "credential_source": credential_source,
+    }
+
+
+def activate_asr_resources(
+    *,
+    root_dir: Path,
+    providers_file: Path | None = None,
+    provider_name: str = "",
+    managed_model_id: str = "",
+    model_registration_id: str = "",
+    managed_accelerator_id: str = "",
+    accelerator_registration_id: str = "",
+    device: str = "",
+    compute_type: str = "",
+    expected_version: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach verified resources to a local worker without exposing raw YAML edits."""
+
+    if managed_model_id and model_registration_id:
+        raise ValueError("Choose either a managed model or an external model registration")
+    if managed_accelerator_id and accelerator_registration_id:
+        raise ValueError("Choose either a managed accelerator or an external accelerator registration")
+    normalized_device = device.strip().lower()
+    normalized_compute_type = compute_type.strip()
+    if normalized_device and normalized_device not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"Unsupported ASR device: {normalized_device}")
+    if not any(
+        (
+            managed_model_id,
+            model_registration_id,
+            managed_accelerator_id,
+            accelerator_registration_id,
+            normalized_device,
+            normalized_compute_type,
+        )
+    ):
+        raise ValueError("At least one resource or local worker setting is required")
+    config = load_app_config(root_dir=root_dir, providers_file=providers_file)
+    selected_name = provider_name.strip() or config.pipeline.asr_provider
+    provider = config.asr_providers.get(selected_name)
+    if provider is None:
+        raise ValueError(f"ASR provider not found: {selected_name}")
+    if provider.kind != "local_worker":
+        raise ValueError("ASR resources can only be attached to a local worker provider")
+    catalog = load_asr_catalog()
+    draft = to_plain(provider)
+    draft.pop("network", None)
+    draft["runtime"] = {"source": "managed", "id": "managed:faster-whisper"}
+    local = dict(draft.get("local") or {})
+
+    if managed_model_id:
+        if model_catalog_entry(catalog, managed_model_id) is None:
+            raise ValueError(f"Managed ASR model not found: {managed_model_id}")
+        draft["model"] = managed_model_id
+        local.update(
+            {
+                "model_size": managed_model_id,
+                "model_source": "managed",
+                "managed_model_size": managed_model_id,
+                "model_path": "",
+            }
+        )
+    elif model_registration_id:
+        model = registered_external_model(root_dir=root_dir, registration_id=model_registration_id)
+        if model is None:
+            raise ValueError(f"External ASR model registration is missing or stale: {model_registration_id}")
+        model_id = str(model.get("model_id") or "")
+        model_path = str(model.get("model_path") or "")
+        draft["model"] = model_id
+        local.update(
+            {
+                "model_size": model_id,
+                "model_source": "external",
+                "external_model_id": model_id,
+                "external_model_path": model_path,
+                "model_path": model_path,
+            }
+        )
+    if normalized_device:
+        local["device"] = normalized_device
+    if normalized_compute_type:
+        local["compute_type"] = normalized_compute_type
+    draft["local"] = local
+
+    if managed_accelerator_id:
+        accelerator = next(
+            (
+                item
+                for item in catalog.get("accelerators") or []
+                if isinstance(item, dict) and str(item.get("id") or "") == managed_accelerator_id
+            ),
+            None,
+        )
+        if accelerator is None:
+            raise ValueError(f"Managed ASR accelerator not found: {managed_accelerator_id}")
+        draft["accelerator"] = {"source": "managed", "id": managed_accelerator_id}
+    elif accelerator_registration_id:
+        accelerator = registered_external_accelerator(
+            root_dir=root_dir,
+            registration_id=accelerator_registration_id,
+        )
+        if accelerator is None:
+            raise ValueError(
+                f"External ASR accelerator registration is missing or stale: {accelerator_registration_id}"
+            )
+        draft["accelerator"] = {"source": "external", "id": accelerator_registration_id}
+
+    saved = save_asr_provider_config(
+        root_dir=root_dir,
+        provider_draft=draft,
+        expected_version=expected_version,
+    )
+    refreshed = load_app_config(root_dir=root_dir, providers_file=providers_file)
+    active = refreshed.asr_providers[selected_name]
+    return {
+        **saved,
+        "model_source": active.local.model_source,
+        "model": active.model,
+        "accelerator_source": active.accelerator.source,
+        "accelerator_id": active.accelerator.id,
+        "device": active.local.device,
+        "compute_type": active.local.compute_type,
+        "readiness": asr_provider_readiness(active, root_dir=root_dir),
     }

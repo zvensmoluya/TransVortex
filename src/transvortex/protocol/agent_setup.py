@@ -1,10 +1,9 @@
-"""Machine-readable environment setup contracts for local Agents.
+"""Machine-readable environment and resource contracts for local Agents.
 
-The setup contract is deliberately read-only.  It describes the active ASR
-provider, the pinned managed assets, and the checks an Agent can perform.  It
-does not install packages, invoke pip, mutate configuration, or expose
-credential values.  A future ``apply`` command can consume this contract, but
-for now Agents use it to plan work and ask the user for confirmation.
+The plan itself is read-only. It separates the ASR execution mode from each
+resource's source and advertises the exact TransVortex commands available for
+managed apply, external registration, activation, and verification. Agents may
+use their own local tools to inspect the host and prepare external resources.
 """
 
 from __future__ import annotations
@@ -42,40 +41,28 @@ from ..utils import read_json
 from ..utils import utc_now_iso
 
 
-AGENT_SETUP_SCHEMA_VERSION = 1
+AGENT_SETUP_SCHEMA_VERSION = 2
 AGENT_SETUP_CONTRACT = "transvortex.agent_setup"
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _PROVIDER_TEST_MAX_AGE_SECONDS = 24 * 60 * 60
 
-# These are policy names, not shell commands.  Keeping them stable lets a
-# Skill/Plugin translate the contract into its own preferred workflow without
-# granting the Agent permission to invent package installation commands.
+# These are product operations. The Agent may use its own local tools for
+# environment preparation, while TransVortex commands still come from the
+# advertised capability contract.
 ALLOWED_ACTIONS = [
-    "inspect_platform",
-    "inspect_gpu_and_driver",
-    "inspect_existing_asr",
-    "read_transvortex_catalog",
-    "read_installed_component_state",
-    "request_pinned_catalog_asset_download_after_confirmation",
-    "verify_sha256_before_use",
-    "request_user_scoped_managed_install_after_confirmation",
-    "run_transvortex_readiness_probe",
-    "register_user_approved_existing_asr",
-    "write_config_only_after_user_confirmation",
+    "inspect_local_environment",
+    "apply_transvortex_managed_resource",
+    "prepare_external_model",
+    "prepare_external_accelerator",
+    "prepare_system_acceleration",
+    "register_external_resource",
+    "activate_registered_resource",
+    "run_transvortex_verification",
 ]
 
 FORBIDDEN_ACTIONS = [
-    "global_pip_install",
-    "modify_system_python",
-    "use_unpinned_download_url",
-    "download_or_execute_untrusted_script",
-    "read_or_print_secret_values",
-    "write_api_keys_to_provider_yaml",
-    "change_nvidia_driver_without_user_approval",
-    "delete_existing_asr_or_model_without_user_approval",
-    "invent_unadvertised_apply_command",
-    "probe_remote_media_without_user_confirmation",
-    "guess_unadvertised_local_service_endpoint",
+    "invent_unadvertised_transvortex_command",
+    "write_secret_values_to_configuration_or_reports",
     "claim_success_without_transvortex_verify",
 ]
 
@@ -321,6 +308,8 @@ def _provider_payload(provider: Any, *, root_dir: Path | None = None) -> dict[st
         "model": str(provider.model),
         "runtime_source": str(runtime.source),
         "runtime_id": str(runtime.id),
+        "accelerator_source": str(provider.accelerator.source) if is_local_worker else "",
+        "accelerator_id": str(provider.accelerator.id) if is_local_worker else "",
         "model_source": str(local.model_source) if is_local_worker else "",
         "model_path_configured": bool(str(local.model_path or "").strip()) if is_local_worker else False,
         "device": str(local.device) if is_local_worker else "",
@@ -346,27 +335,19 @@ def _provider_payload(provider: Any, *, root_dir: Path | None = None) -> dict[st
     return payload
 
 
-def _provider_route(provider: Any) -> str | None:
-    """Map an observed provider configuration to the public setup route names."""
+def _provider_mode(provider: Any) -> str | None:
+    """Map configuration to an execution mode, independent of resource sources."""
 
     if isinstance(provider, dict):
         kind = str(provider.get("kind") or "")
-        model_source = str(provider.get("model_source") or "")
-        runtime_source = str(provider.get("runtime_source") or "")
     else:
         kind = str(getattr(provider, "kind", "") or "")
-        model_source = str(getattr(getattr(provider, "local", None), "model_source", "") or "")
-        runtime_source = str(getattr(getattr(provider, "runtime", None), "source", "") or "")
     if kind == "remote":
         return "remote_provider"
     if kind == "local_server":
         return "local_service"
-    if kind == "local_worker":
-        return "managed" if model_source == "managed" and runtime_source == "managed" else (
-            "reuse_model" if model_source == "external" else "cli_external"
-        )
-    if kind in {"local_inprocess", "local_external"}:
-        return "cli_external"
+    if kind in {"local_worker", "local_inprocess", "local_external"}:
+        return "local_worker"
     return None
 
 
@@ -377,59 +358,51 @@ def _component_requirements(provider: Any, snapshot: dict[str, Any] | None = Non
         return False, False, False
     runtime_required = str(provider.runtime.source) == "managed"
     model_required = str(provider.local.model_source) == "managed"
+    accelerator_source = str(provider.accelerator.source or "managed")
+    accelerator_id = str(provider.accelerator.id or "nvidia-cuda12")
+    accelerator_selected = accelerator_source == "external" or any(
+        isinstance(row, dict)
+        and str(row.get("id") or "") == accelerator_id
+        and row.get("installed") is True
+        for row in _list_value((snapshot or {}).get("accelerators"))
+    )
     accelerator_required = runtime_required and (
         str(provider.local.device) == "cuda"
-        or (
-            str(provider.local.device) == "auto"
-            and any(
-                isinstance(row, dict)
-                and str(row.get("id") or "") == "nvidia-cuda12"
-                and row.get("installed") is True
-                for row in _list_value((snapshot or {}).get("accelerators"))
-            )
-        )
+        or (str(provider.local.device) == "auto" and accelerator_selected)
     )
     return runtime_required, accelerator_required, model_required
 
 
-def _route_alternatives(
+def _mode_alternatives(
     provider: Any,
     blockers: list[dict[str, str]],
     *,
     current: dict[str, Any],
     requirements: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    observed = _provider_route(provider) if provider is not None else None
+    observed = _provider_mode(provider) if provider is not None else None
     candidates: list[tuple[str | None, list[str]]] = [(observed, ["active_provider_configuration"])]
-    if isinstance(requirements.get("runtime"), dict):
-        candidates.append(("managed", ["trusted_component_catalog"]))
-    if _list_value(current.get("registered_models")):
-        candidates.append(("reuse_model", ["registered_external_model"]))
-    if _list_value(current.get("environment_candidates")):
-        candidates.append(("cli_external", ["registered_external_environment"]))
     unique: list[tuple[str, list[str]]] = []
-    for route, evidence in candidates:
-        if route and not any(existing == route for existing, _ in unique):
-            unique.append((route, evidence))
+    for mode, evidence in candidates:
+        if mode and not any(existing == mode for existing, _ in unique):
+            unique.append((mode, evidence))
     blocker_codes = [str(item.get("code") or "") for item in blockers if isinstance(item, dict)]
     reasons = {
-        "managed": "TransVortex supported user-scoped runtime and model path",
-        "reuse_model": "Reuse a user-owned compatible model without moving it",
+        "local_worker": "Run the fixed TransVortex Whisper worker with independently sourced resources",
         "local_service": "Connect to a user-provided local ASR service",
         "remote_provider": "Use a user-selected hosted ASR provider",
-        "cli_external": "Register an explicitly selected external Python environment",
     }
     result: list[dict[str, Any]] = []
-    for rank, (route, evidence) in enumerate(unique, start=1):
+    for rank, (mode, evidence) in enumerate(unique, start=1):
         result.append(
             {
-                "route": route,
+                "provider_mode": mode,
                 "rank": rank,
-                "reason": reasons[route],
-                "observed": route == observed,
-                "availability": "observed" if route == observed else "detected_candidate",
+                "reason": reasons[mode],
+                "observed": mode == observed,
+                "availability": "observed" if mode == observed else "detected_candidate",
                 "evidence": evidence,
-                "blocking": blocker_codes if route == observed else ["user_confirmation_required"],
+                "blocking": blocker_codes if mode == observed else ["user_confirmation_required"],
             }
         )
     return result
@@ -439,10 +412,12 @@ def _plan_actions(
     *,
     provider: Any,
     requirements: dict[str, Any],
+    current: dict[str, Any],
+    resources: dict[str, Any],
     root: Path,
     providers_file: Path,
 ) -> list[dict[str, Any]]:
-    """Describe bounded actions without advertising an unimplemented apply command."""
+    """Describe who prepares, owns, registers, and verifies each resource."""
 
     def asr_argv(*parts: str) -> list[str]:
         return [
@@ -458,6 +433,10 @@ def _plan_actions(
         {
             "id": "discover",
             "kind": "read_only_discovery",
+            "resource": "environment",
+            "operation": "inspect",
+            "executor": "transvortex",
+            "ownership": "none",
             "description": "Read TransVortex configuration, catalog, and installed ASR state",
             "mutating": False,
             "requires_confirmation": False,
@@ -471,9 +450,64 @@ def _plan_actions(
             "rollback": "No changes are made",
         }
     ]
+    provider_mode = _provider_mode(provider)
+    if provider_mode == "local_worker":
+        actions.append(
+            {
+                "id": "inspect_host_environment",
+                "kind": "agent_environment_inspection",
+                "resource": "environment",
+                "operation": "inspect",
+                "executor": "agent",
+                "ownership": "system",
+                "description": "Inspect the local GPU, driver, storage, and reusable resource directories",
+                "mutating": False,
+                "requires_confirmation": False,
+                "requires_admin": False,
+                "requires_restart": False,
+                "requires_network": False,
+                "may_cost_money": False,
+                "expected_outputs": ["host capability summary", "candidate model and accelerator locations"],
+                "rollback": "No changes are made",
+            }
+        )
+        driver = resources.get("driver") if isinstance(resources.get("driver"), dict) else {}
+        if driver.get("state") == "inspect":
+            actions.append(
+                {
+                    "id": "prepare_system_acceleration",
+                    "kind": "agent_system_prepare",
+                    "resource": "driver",
+                    "operation": "prepare",
+                    "executor": "agent",
+                    "ownership": "system",
+                    "description": "Inspect and prepare the NVIDIA driver state required by this machine",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": True,
+                    "requires_restart": True,
+                    "requires_network": True,
+                    "may_cost_money": False,
+                    "expected_outputs": ["NVIDIA driver state compatible with the requested CUDA runtime"],
+                    "rollback": "System driver changes remain outside TransVortex resource management",
+                }
+            )
     runtime_required = isinstance(requirements.get("runtime"), dict)
     accelerator_required = isinstance(requirements.get("accelerator"), dict)
     model_required = isinstance(requirements.get("model"), dict)
+    runtime_needs_action = (resources.get("runtime") or {}).get("state") != "ready"
+    model_needs_action = (resources.get("model") or {}).get("state") != "ready"
+    accelerator_needs_action = (resources.get("accelerator") or {}).get("state") == "needs_preparation"
+    model_source = (
+        str(provider.local.model_source or "managed")
+        if provider_mode == "local_worker"
+        else ""
+    )
+    accelerator_source = (
+        str(provider.accelerator.source or "managed")
+        if provider_mode == "local_worker"
+        else ""
+    )
     def pinned_component(requirement: Any) -> bool:
         if not isinstance(requirement, dict):
             return False
@@ -503,11 +537,15 @@ def _plan_actions(
             )
         )
 
-    if runtime_required and pinned_component(requirements.get("runtime")):
+    if runtime_required and runtime_needs_action and pinned_component(requirements.get("runtime")):
         actions.append(
             {
                 "id": "install_runtime",
                 "kind": "managed_component_install",
+                "resource": "runtime",
+                "operation": "apply",
+                "executor": "transvortex",
+                "ownership": "transvortex",
                 "description": "Install the catalog-pinned Whisper runtime in the user data root",
                 "mutating": True,
                 "requires_confirmation": True,
@@ -516,15 +554,26 @@ def _plan_actions(
                 "requires_network": True,
                 "may_cost_money": False,
                 "inputs": {"requirement": requirements.get("runtime") or {}, "root": str(root)},
+                "command": "transvortex --root <config-root> asr setup-apply --resource runtime --providers-file <providers-file> --json",
+                "argv": asr_argv("setup-apply", "--resource", "runtime"),
                 "expected_outputs": ["runtime marker", "user-scoped runtime directory"],
                 "rollback": "Remove only an incomplete managed operation through the advertised TransVortex operation API",
             }
         )
-    if accelerator_required and pinned_component(requirements.get("accelerator")):
+    if (
+        accelerator_required
+        and accelerator_needs_action
+        and accelerator_source == "managed"
+        and pinned_component(requirements.get("accelerator"))
+    ):
         actions.append(
             {
                 "id": "install_accelerator",
                 "kind": "managed_component_install",
+                "resource": "accelerator",
+                "operation": "apply",
+                "executor": "transvortex",
+                "ownership": "transvortex",
                 "description": "Install the catalog-pinned user-space CUDA component",
                 "mutating": True,
                 "requires_confirmation": True,
@@ -533,15 +582,163 @@ def _plan_actions(
                 "requires_network": True,
                 "may_cost_money": False,
                 "inputs": {"requirement": requirements.get("accelerator") or {}, "root": str(root)},
+                "command": "transvortex --root <config-root> asr setup-apply --resource accelerator --item-id <accelerator-id> --providers-file <providers-file> --json",
+                "argv": asr_argv(
+                    "setup-apply",
+                    "--resource",
+                    "accelerator",
+                    "--item-id",
+                    str((requirements.get("accelerator") or {}).get("id") or "nvidia-cuda12"),
+                ),
                 "expected_outputs": ["accelerator marker", "user-scoped CUDA component directory"],
                 "rollback": "Remove only the managed component through the advertised TransVortex operation API",
             }
         )
-    if model_required and pinned_model(requirements.get("model")):
+    elif (
+        accelerator_required
+        and accelerator_needs_action
+        and isinstance(requirements.get("accelerator"), dict)
+    ):
+        actions.extend(
+            [
+                {
+                    "id": "prepare_accelerator",
+                    "kind": "agent_resource_prepare",
+                    "resource": "accelerator",
+                    "operation": "prepare",
+                    "executor": "agent",
+                    "ownership": "external",
+                    "description": "Prepare the compatible NVIDIA user-space libraries with the Agent's local tools",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": True,
+                    "may_cost_money": False,
+                    "inputs": {"requirement": requirements.get("accelerator") or {}},
+                    "expected_outputs": ["external NVIDIA package root with the advertised DLL layout"],
+                    "rollback": "Remove only the external directory created by the Agent for this plan",
+                },
+                {
+                    "id": "register_accelerator",
+                    "kind": "external_resource_register",
+                    "resource": "accelerator",
+                    "operation": "register",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Probe and register the prepared accelerator directory",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": [
+                        *asr_argv("accelerator-register", "--accelerator-root", "<accelerator-root>"),
+                    ],
+                    "expected_outputs": ["external accelerator registration ID", "CUDA probe result"],
+                    "rollback": "Remove the registration from configuration; external files remain untouched",
+                },
+                {
+                    "id": "activate_accelerator",
+                    "kind": "resource_activation",
+                    "resource": "accelerator",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Select the registered accelerator for the active local worker",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": [
+                        *asr_argv(
+                            "resources-activate",
+                            "--accelerator-registration-id",
+                            "<accelerator-registration-id>",
+                        ),
+                    ],
+                    "expected_outputs": ["active provider references the external accelerator registration"],
+                    "rollback": "Select a different registered or managed accelerator; external files remain untouched",
+                },
+            ]
+        )
+    if model_source == "external" and model_needs_action:
+        actions.extend(
+            [
+                {
+                    "id": "prepare_model",
+                    "kind": "agent_resource_prepare",
+                    "resource": "model",
+                    "operation": "prepare",
+                    "executor": "agent",
+                    "ownership": "external",
+                    "description": "Prepare a compatible CTranslate2 Whisper model with the Agent's local tools",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": True,
+                    "may_cost_money": False,
+                    "inputs": {"model_id": str(provider.model or "")},
+                    "expected_outputs": ["external model directory containing config.json and model.bin"],
+                    "rollback": "Remove only the external directory created by the Agent for this plan",
+                },
+                {
+                    "id": "register_model",
+                    "kind": "external_resource_register",
+                    "resource": "model",
+                    "operation": "register",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Load-test and register the prepared model directory",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": [*asr_argv("model-register", "--model-path", "<model-path>")],
+                    "expected_outputs": ["external model registration ID", "model load and transcription probe result"],
+                    "rollback": "Remove the registration from configuration; external files remain untouched",
+                },
+                {
+                    "id": "activate_model",
+                    "kind": "resource_activation",
+                    "resource": "model",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Select the registered model for the active local worker",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": [
+                        *asr_argv(
+                            "resources-activate",
+                            "--model-registration-id",
+                            "<model-registration-id>",
+                        ),
+                    ],
+                    "expected_outputs": ["active provider references the external model registration"],
+                    "rollback": "Select a different registered or managed model; external files remain untouched",
+                },
+            ]
+        )
+    elif model_required and model_needs_action and pinned_model(requirements.get("model")):
         actions.append(
             {
                 "id": "install_model",
                 "kind": "managed_model_install",
+                "resource": "model",
+                "operation": "apply",
+                "executor": "transvortex",
+                "ownership": "transvortex",
                 "description": "Install the selected model revision after hash confirmation",
                 "mutating": True,
                 "requires_confirmation": True,
@@ -550,28 +747,75 @@ def _plan_actions(
                 "requires_network": True,
                 "may_cost_money": False,
                 "inputs": {"requirement": requirements.get("model") or {}, "root": str(root)},
+                "command": "transvortex --root <config-root> asr setup-apply --resource model --item-id <model-id> --providers-file <providers-file> --json",
+                "argv": asr_argv(
+                    "setup-apply",
+                    "--resource",
+                    "model",
+                    "--item-id",
+                    str((requirements.get("model") or {}).get("id") or ""),
+                ),
                 "expected_outputs": ["model marker", "verified model files"],
                 "rollback": "Remove only the managed model through the advertised TransVortex operation API",
             }
         )
-    route = _provider_route(provider)
-    if route in {"local_service", "remote_provider"}:
+    readiness = current.get("readiness") if isinstance(current.get("readiness"), dict) else {}
+    if provider_mode == "local_worker" and str(readiness.get("code") or "") in {
+        "hardware_incompatible",
+        "compute_type_incompatible",
+    }:
+        actions.append(
+            {
+                "id": "configure_local_worker_device",
+                "kind": "resource_activation",
+                "resource": "configuration",
+                "operation": "activate",
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "description": "Select a device and compute type compatible with the inspected machine",
+                "mutating": True,
+                "requires_confirmation": False,
+                "requires_admin": False,
+                "requires_restart": False,
+                "requires_network": False,
+                "may_cost_money": False,
+                "argv_template": [
+                    *asr_argv(
+                        "resources-activate",
+                        "--device",
+                        "<auto|cpu|cuda>",
+                        "--compute-type",
+                        "<compute-type>",
+                    ),
+                ],
+                "expected_outputs": ["active local worker device settings", "updated readiness result"],
+                "rollback": "Select the previous device and compute type through the same activation command",
+            }
+        )
+    if (
+        provider_mode in {"local_service", "remote_provider"}
+        and not _provider_test_success(current.get("provider_test"))
+    ):
         probe_args = ["provider-test", "--confirm-network"]
         probe_command = "transvortex --root <config-root> asr provider-test --confirm-network --providers-file <providers-file> --json"
-        if route == "remote_provider":
+        if provider_mode == "remote_provider":
             probe_args.extend(["--confirm-media", "--confirm-cost"])
             probe_command = "transvortex --root <config-root> asr provider-test --confirm-network --confirm-media --confirm-cost --providers-file <providers-file> --json"
         actions.append(
             {
                 "id": "route_probe",
                 "kind": "authorized_route_probe",
+                "resource": "provider",
+                "operation": "verify",
+                "executor": "transvortex",
+                "ownership": "external",
                 "description": "Run the minimal ASR route probe after separate network/privacy confirmation",
                 "mutating": True,
                 "requires_confirmation": True,
                 "requires_admin": False,
                 "requires_restart": False,
                 "requires_network": True,
-                "may_cost_money": route == "remote_provider",
+                "may_cost_money": provider_mode == "remote_provider",
                 "command": probe_command,
                 "argv": asr_argv(*probe_args),
                 "expected_outputs": ["provider test result with code=ready"],
@@ -582,6 +826,10 @@ def _plan_actions(
         {
             "id": "verify",
             "kind": "strict_read_only_verification",
+            "resource": "configuration",
+            "operation": "verify",
+            "executor": "transvortex",
+            "ownership": "transvortex",
             "description": "Re-read readiness and managed integrity after approved actions",
             "mutating": False,
             "requires_confirmation": False,
@@ -599,28 +847,48 @@ def _plan_actions(
 
 
 def _applicable_success_conditions(provider: Any, current: dict[str, Any] | None = None) -> list[str]:
-    route = _provider_route(provider) if provider is not None else None
+    provider_mode = _provider_mode(provider) if provider is not None else None
     kind = str(provider.get("kind") or "") if isinstance(provider, dict) else str(getattr(provider, "kind", "") or "")
     conditions = ["transvortex_asr_readiness_can_run", "no_secret_value_is_written_to_the_setup_report"]
-    if route == "managed":
-        conditions.extend(["managed_runtime_marker_matches_catalog", "selected_model_files_match_catalog_hashes"])
+    if provider_mode == "local_worker":
+        runtime_source = str(provider.get("runtime_source") or "") if isinstance(provider, dict) else str(provider.runtime.source)
+        model_source = str(provider.get("model_source") or "") if isinstance(provider, dict) else str(provider.local.model_source)
+        if runtime_source == "managed":
+            conditions.append("managed_runtime_marker_matches_catalog")
+        if model_source == "managed":
+            conditions.append("selected_model_files_match_catalog_hashes")
+        else:
+            conditions.append("external_model_registration_and_probe_pass")
         device = str(provider.get("device") or "") if isinstance(provider, dict) else str(getattr(provider.local, "device", "") or "")
+        accelerator_source = (
+            str(provider.get("accelerator_source") or "managed")
+            if isinstance(provider, dict)
+            else str(provider.accelerator.source or "managed")
+        )
+        accelerator_id = (
+            str(provider.get("accelerator_id") or "nvidia-cuda12")
+            if isinstance(provider, dict)
+            else str(provider.accelerator.id or "nvidia-cuda12")
+        )
         accelerator_used = device == "cuda" or (
             device == "auto"
-            and any(
-                isinstance(row, dict)
-                and str(row.get("id") or "") == "nvidia-cuda12"
-                and row.get("installed") is True
-                for row in _list_value((current or {}).get("accelerators"))
+            and (
+                accelerator_source == "external"
+                or any(
+                    isinstance(row, dict)
+                    and str(row.get("id") or "") == accelerator_id
+                    and row.get("installed") is True
+                    for row in _list_value((current or {}).get("accelerators"))
+                )
             )
         )
         if accelerator_used:
-            conditions.append("required_accelerator_and_cuda_probe_pass")
-    elif route == "reuse_model":
-        conditions.append("existing_external_asr_is_registered_and_protocol_compatible")
-    elif route in {"local_service", "remote_provider"}:
-        conditions.append("existing_external_asr_is_registered_and_protocol_compatible")
-    elif route == "cli_external" and kind == "local_worker":
+            conditions.append(
+                "external_accelerator_registration_and_cuda_probe_pass"
+                if accelerator_source == "external"
+                else "managed_accelerator_and_cuda_probe_pass"
+            )
+    elif provider_mode in {"local_service", "remote_provider"}:
         conditions.append("existing_external_asr_is_registered_and_protocol_compatible")
     if kind == "local_worker":
         conditions.append("local_worker_protocol_and_model_probe_pass")
@@ -973,6 +1241,23 @@ def _snapshot_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         )
+    registered_accelerators: list[dict[str, Any]] = []
+    for raw in _list_value(snapshot.get("registered_accelerators")):
+        if not isinstance(raw, dict):
+            continue
+        packages = raw.get("packages") if isinstance(raw.get("packages"), dict) else {}
+        registered_accelerators.append(
+            {
+                "id": str(raw.get("id") or ""),
+                "accelerator_id": str(raw.get("accelerator_id") or ""),
+                "root": str(raw.get("root") or ""),
+                "version": str(raw.get("version") or ""),
+                "packages": {str(key): str(value) for key, value in sorted(packages.items())},
+                "signature": str(raw.get("signature") or ""),
+                "updated_at": str(raw.get("updated_at") or ""),
+                "probe": _hardware_payload(raw.get("probe")),
+            }
+        )
     return {
         "paths": {
             str(key): str(value)
@@ -983,6 +1268,232 @@ def _snapshot_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
         "accelerators": accelerators,
         "models": models,
         "registered_models": registered_models,
+        "registered_accelerators": registered_accelerators,
+    }
+
+
+def _resource_contract(
+    provider: Any,
+    *,
+    current: dict[str, Any],
+    requirements: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe resource sources independently from the ASR execution mode."""
+
+    mode = _provider_mode(provider) if provider is not None else None
+    if mode != "local_worker":
+        return {
+            "provider": {
+                "source": "external",
+                "ownership": "external",
+                "executor": "transvortex",
+                "state": "configured" if mode else "missing",
+                "operations": ["verify"],
+            }
+        }
+
+    runtime_source = str(provider.runtime.source or "managed")
+    runtime_id = str(provider.runtime.id or "managed:faster-whisper")
+    runtime_current = current.get("runtime") if isinstance(current.get("runtime"), dict) else {}
+    environments = _list_value(current.get("environment_candidates"))
+    external_runtime = next(
+        (
+            row
+            for row in environments
+            if isinstance(row, dict) and str(row.get("id") or "") == runtime_id
+        ),
+        None,
+    )
+    runtime_ready = (
+        runtime_current.get("installed") is True
+        if runtime_source == "managed"
+        else isinstance(external_runtime, dict)
+        and isinstance(external_runtime.get("probe"), dict)
+        and external_runtime["probe"].get("ok") is True
+    )
+
+    model_source = str(provider.local.model_source or "managed")
+    model_id = str(provider.model or "")
+    model_path = str(provider.local.model_path or "")
+    if model_source == "managed":
+        model_current = next(
+            (
+                row
+                for row in _list_value(current.get("models"))
+                if isinstance(row, dict) and str(row.get("id") or "") == model_id
+            ),
+            None,
+        )
+        model_ready = isinstance(model_current, dict) and model_current.get("installed") is True
+        model_registration_id = ""
+    else:
+        model_current = next(
+            (
+                row
+                for row in _list_value(current.get("registered_models"))
+                if isinstance(row, dict)
+                and str(row.get("model_id") or "") == model_id
+                and str(row.get("model_path") or "") == model_path
+            ),
+            None,
+        )
+        model_ready = (
+            isinstance(model_current, dict)
+            and isinstance(model_current.get("probe"), dict)
+            and model_current["probe"].get("ok") is True
+        )
+        model_registration_id = str(model_current.get("id") or "") if isinstance(model_current, dict) else ""
+
+    accelerator_source = str(provider.accelerator.source or "managed")
+    accelerator_id = str(provider.accelerator.id or "nvidia-cuda12")
+    if accelerator_source == "managed":
+        accelerator_current = next(
+            (
+                row
+                for row in _list_value(current.get("accelerators"))
+                if isinstance(row, dict) and str(row.get("id") or "") == accelerator_id
+            ),
+            None,
+        )
+        accelerator_ready = isinstance(accelerator_current, dict) and accelerator_current.get("installed") is True
+    else:
+        accelerator_current = next(
+            (
+                row
+                for row in _list_value(current.get("registered_accelerators"))
+                if isinstance(row, dict) and str(row.get("id") or "") == accelerator_id
+            ),
+            None,
+        )
+        accelerator_ready = (
+            isinstance(accelerator_current, dict)
+            and isinstance(accelerator_current.get("probe"), dict)
+            and accelerator_current["probe"].get("ok") is True
+        )
+
+    accelerator_requested = isinstance(requirements.get("accelerator"), dict)
+    readiness = current.get("readiness") if isinstance(current.get("readiness"), dict) else {}
+    readiness_code = str(readiness.get("code") or "")
+    if readiness.get("can_run") is True:
+        runtime_ready = True
+        model_ready = True
+        if accelerator_requested:
+            accelerator_ready = True
+    if readiness_code in {
+        "model_path_missing",
+        "model_path_unavailable",
+        "model_unverified",
+        "model_mismatch",
+        "model_changed",
+        "model_missing",
+        "unsupported_model",
+    }:
+        model_ready = False
+    accelerator_state = (
+        "not_requested"
+        if not accelerator_requested
+        else ("ready" if accelerator_ready else "needs_preparation")
+    )
+    if accelerator_requested and readiness_code in {
+        "device_unavailable",
+        "accelerator_changed",
+        "accelerator_installing",
+    }:
+        accelerator_state = "needs_preparation"
+    elif accelerator_requested and readiness_code in {
+        "hardware_untested",
+        "hardware_incompatible",
+        "compute_type_incompatible",
+    }:
+        accelerator_state = "needs_verification"
+    return {
+        "runtime": {
+            "source": runtime_source,
+            "selected_id": runtime_id,
+            "ownership": "transvortex" if runtime_source == "managed" else "external",
+            "executor": "transvortex",
+            "state": "ready" if runtime_ready else "needs_preparation",
+            "product_source": "managed",
+            "support_level": "product" if runtime_source == "managed" else "cli_compatibility",
+            "operations": ["apply", "verify"] if runtime_source == "managed" else ["verify"],
+            "source_options": [
+                {
+                    "source": "managed",
+                    "ownership": "transvortex",
+                    "prepare_executor": "transvortex",
+                    "operations": ["apply", "verify"],
+                }
+            ],
+        },
+        "model": {
+            "source": model_source,
+            "selected_id": model_id,
+            "registration_id": model_registration_id,
+            "ownership": "transvortex" if model_source == "managed" else "external",
+            "prepare_executor": "transvortex" if model_source == "managed" else "agent",
+            "state": "ready" if model_ready else "needs_preparation",
+            "supported_sources": ["managed", "external"],
+            "operations": ["apply", "verify"]
+            if model_source == "managed"
+            else ["prepare", "register", "activate", "verify"],
+            "source_options": [
+                {
+                    "source": "managed",
+                    "ownership": "transvortex",
+                    "prepare_executor": "transvortex",
+                    "operations": ["apply", "verify"],
+                },
+                {
+                    "source": "external",
+                    "ownership": "external",
+                    "prepare_executor": "agent",
+                    "operations": ["prepare", "register", "activate", "verify"],
+                },
+            ],
+        },
+        "accelerator": {
+            "source": accelerator_source,
+            "selected_id": accelerator_id,
+            "ownership": "transvortex" if accelerator_source == "managed" else "external",
+            "prepare_executor": "transvortex" if accelerator_source == "managed" else "agent",
+            "state": accelerator_state,
+            "supported_sources": ["managed", "external"],
+            "operations": ["apply", "verify"]
+            if accelerator_source == "managed"
+            else ["prepare", "register", "activate", "verify"],
+            "source_options": [
+                {
+                    "source": "managed",
+                    "ownership": "transvortex",
+                    "prepare_executor": "transvortex",
+                    "operations": ["apply", "verify"],
+                },
+                {
+                    "source": "external",
+                    "ownership": "external",
+                    "prepare_executor": "agent",
+                    "operations": ["prepare", "register", "activate", "verify"],
+                },
+            ],
+        },
+        "driver": {
+            "source": "system",
+            "ownership": "system",
+            "executor": "agent",
+            "state": (
+                "not_requested"
+                if not accelerator_requested
+                else ("ready" if readiness.get("can_run") is True else "inspect")
+            ),
+            "operations": ["inspect", "prepare"] if accelerator_requested else [],
+        },
+        "configuration": {
+            "source": "transvortex",
+            "ownership": "transvortex",
+            "executor": "transvortex",
+            "state": "configured",
+            "operations": ["activate", "verify"],
+        },
     }
 
 
@@ -1103,7 +1614,11 @@ def _managed_blockers(provider: Any, readiness: dict[str, Any], snapshot: dict[s
         model_row = next((row for row in model_rows if isinstance(row, dict) and str(row.get("id") or "") == model_id), None)
         if not isinstance(model_row, dict) or model_row.get("installed") is not True:
             blockers.append(_blocking_item("model_not_installed", f"Managed model is not installed: {model_id}", action="install_model"))
-    if provider.runtime.source == "managed" and provider.local.device == "cuda":
+    if (
+        provider.runtime.source == "managed"
+        and provider.accelerator.source == "managed"
+        and provider.local.device == "cuda"
+    ):
         accelerators = _list_value(snapshot.get("accelerators"))
         accelerator = next(
             (row for row in accelerators if isinstance(row, dict) and str(row.get("id") or "") == "nvidia-cuda12"),
@@ -1213,7 +1728,7 @@ def setup_failure_payload(*, kind: str, root_dir: Path, code: str = "setup_contr
                 "model_files": {"status": "not_checked"},
                 "hashes_not_checked": [],
             },
-            "route": None,
+            "provider_mode": None,
             "plan_id": "",
         }
     plan_id = "setup-error-" + hashlib.sha256(f"{root_dir}:{code}".encode("utf-8")).hexdigest()[:12]
@@ -1223,16 +1738,16 @@ def setup_failure_payload(*, kind: str, root_dir: Path, code: str = "setup_contr
         "generated_at": utc_now_iso(),
         "product": {"name": "transvortex", "version": _package_version()},
         "platform": {"system": platform.system().lower(), "machine": platform.machine().lower(), "disk": {"free_bytes": None, "total_bytes": None}},
-        "route": None,
-        "observed_route": None,
+        "provider_mode": None,
         "alternatives": [],
         "plan_id": plan_id,
-        "current": {"readiness": readiness, "runtime": {}, "accelerators": [], "models": [], "registered_models": [], "environment_candidates": [], "provider_test": None},
+        "current": {"readiness": readiness, "runtime": {}, "accelerators": [], "registered_accelerators": [], "models": [], "registered_models": [], "environment_candidates": [], "provider_test": None},
         "requirements": {"runtime": None, "accelerator": None, "model": None, "available_models": []},
+        "resources": {},
         "allowed_actions": list(ALLOWED_ACTIONS),
         "forbidden_actions": list(FORBIDDEN_ACTIONS),
         "verification": {"command": "", "argv": [], "read_only": True, "network_access": False},
-        "plan": {"plan_id": plan_id, "created_at": utc_now_iso(), "route": None, "actions": [], "rollback": []},
+        "plan": {"plan_id": plan_id, "created_at": utc_now_iso(), "provider_mode": None, "actions": [], "rollback": []},
     }
 
 
@@ -1258,6 +1773,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             },
             "runtime": {},
             "accelerators": [],
+            "registered_accelerators": [],
             "models": [],
             "environment_candidates": [],
         }
@@ -1340,6 +1856,13 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "model_missing",
         "device_unavailable",
         "hardware_untested",
+        "accelerator_changed",
+        "model_path_missing",
+        "model_path_unavailable",
+        "model_unverified",
+        "model_changed",
+        "hardware_incompatible",
+        "compute_type_incompatible",
     }:
         plan_status = "blocked"
     requirements = {
@@ -1357,6 +1880,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "paths": safe_snapshot.get("paths", {}),
         "runtime": safe_snapshot.get("runtime", {}),
         "accelerators": safe_snapshot.get("accelerators", []),
+        "registered_accelerators": safe_snapshot.get("registered_accelerators", []),
         "models": safe_snapshot.get("models", []),
         "registered_models": safe_snapshot.get("registered_models", []),
         "environment_candidates": environment_candidates,
@@ -1366,14 +1890,17 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             else None
         ),
     }
+    resources = _resource_contract(provider, current=current, requirements=requirements)
     actions = _plan_actions(
         provider=provider,
         requirements=requirements,
+        current=current,
+        resources=resources,
         root=root,
         providers_file=context["providers_file"],
     )
-    alternatives = _route_alternatives(provider, blockers, current=current, requirements=requirements)
-    observed_route = _provider_route(provider) if provider is not None else None
+    alternatives = _mode_alternatives(provider, blockers, current=current, requirements=requirements)
+    provider_mode = _provider_mode(provider) if provider is not None else None
     plan_identity = {
         "contract": AGENT_SETUP_CONTRACT,
         "schema_version": AGENT_SETUP_SCHEMA_VERSION,
@@ -1385,14 +1912,14 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             "can_run": readiness.get("can_run") is True,
         },
         "requirements": requirements,
+        "resources": resources,
         "blocking_codes": [str(item.get("code") or "") for item in blockers],
     }
     plan_id = "setup-" + hashlib.sha256(json.dumps(plan_identity, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
     plan = {
         "plan_id": plan_id,
         "created_at": utc_now_iso(),
-        "route": None,
-        "observed_route": observed_route,
+        "provider_mode": provider_mode,
         "actions": actions,
         "rollback": [
             "Do not delete or overwrite user-owned model directories",
@@ -1413,13 +1940,13 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "platform": _platform_payload(paths.app_data_root),
         "root_dir": str(root),
         "providers_file": str(context["providers_file"]),
-        "route": None,
-        "observed_route": observed_route,
+        "provider_mode": provider_mode,
         "alternatives": alternatives,
         "plan_id": plan_id,
         "active_asr": active_asr,
         "current": current,
         "requirements": requirements,
+        "resources": resources,
         "allowed_actions": list(ALLOWED_ACTIONS),
         "forbidden_actions": list(FORBIDDEN_ACTIONS),
         "blocking_items": blockers,
@@ -1428,13 +1955,15 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "agent_commands": {
             "plan": "transvortex --root <config-root> asr setup-plan --providers-file <providers-file> --json",
             "verify": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
-            "doctor": "transvortex --root <config-root> doctor --providers-file <providers-file> --json",
+            "apply_managed": "transvortex --root <config-root> asr setup-apply --resource <resource> --item-id <item-id> --providers-file <providers-file> --json",
+            "register_model": "transvortex --root <config-root> asr model-register --model-path <model-path> --providers-file <providers-file> --json",
+            "register_accelerator": "transvortex --root <config-root> asr accelerator-register --accelerator-root <accelerator-root> --providers-file <providers-file> --json",
+            "activate": "transvortex --root <config-root> asr resources-activate <resource-selection-or-device-settings> --providers-file <providers-file> --json",
             "protocol": "transvortex --root <config-root> agent-info --json",
         },
         "agent_argv": {
             "plan": [*agent_cli_prefix, "asr", "setup-plan", "--providers-file", str(context["providers_file"]), "--json"],
             "verify": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
-            "doctor": [*agent_cli_prefix, "doctor", "--providers-file", str(context["providers_file"]), "--json"],
             "protocol": [*agent_cli_prefix, "agent-info", "--json"],
         },
         "verification": {
@@ -1525,7 +2054,7 @@ def _integrity_payload(plan: dict[str, Any]) -> dict[str, Any]:
     is_local_worker = active.get("kind") == "local_worker"
     runtime_required = is_local_worker and active.get("runtime_source") == "managed"
     model_required = is_local_worker and active.get("model_source") == "managed"
-    accelerator_required = runtime_required and (
+    accelerator_required = runtime_required and active.get("accelerator_source") == "managed" and (
         active.get("device") == "cuda"
         or (
             active.get("device") == "auto"
@@ -1727,7 +2256,19 @@ def _local_worker_probe(plan: dict[str, Any], integrity: dict[str, Any]) -> dict
 
     accelerator_root: Path | None = None
     accelerator_req = requirements.get("accelerator") if isinstance(requirements.get("accelerator"), dict) else None
-    if accelerator_req is not None:
+    if accelerator_req is not None and active.get("accelerator_source") == "external":
+        accelerator_id = str(active.get("accelerator_id") or "")
+        registered = next(
+            (
+                row
+                for row in _list_value(current.get("registered_accelerators"))
+                if isinstance(row, dict) and str(row.get("id") or "") == accelerator_id
+            ),
+            None,
+        )
+        raw_root = str(registered.get("root") or "") if isinstance(registered, dict) else ""
+        accelerator_root = Path(raw_root) if raw_root else None
+    elif accelerator_req is not None:
         components_raw = str(paths.get("components_root") or "")
         if components_raw:
             accelerator_root = _resolved_child(
@@ -1736,7 +2277,14 @@ def _local_worker_probe(plan: dict[str, Any], integrity: dict[str, Any]) -> dict
             )
     if python_executable is None or not python_executable.is_file() or model_path is None or not model_path.is_dir():
         return {"status": "fail", "code": "runtime_probe_inputs_missing"}
-    if any(_is_reparse_path(candidate) for path in (python_executable, model_path) for candidate in (path, *path.parents)):
+    probe_paths = [python_executable, model_path]
+    if accelerator_root is not None:
+        probe_paths.append(accelerator_root)
+    if any(
+        _is_reparse_path(candidate)
+        for path in probe_paths
+        for candidate in (path, *path.parents)
+    ):
         return {"status": "fail", "code": "runtime_probe_path_unsafe"}
     try:
         raw = probe_python_environment(
@@ -1828,11 +2376,14 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
         active = plan["active_asr"]
         accelerator_used = active.get("device") == "cuda" or (
             active.get("device") == "auto"
-            and any(
-                isinstance(row, dict)
-                and str(row.get("id") or "") == "nvidia-cuda12"
-                and row.get("installed") is True
-                for row in _list_value(plan["current"].get("accelerators"))
+            and (
+                active.get("accelerator_source") == "external"
+                or any(
+                    isinstance(row, dict)
+                    and str(row.get("id") or "") == str(active.get("accelerator_id") or "nvidia-cuda12")
+                    and row.get("installed") is True
+                    for row in _list_value(plan["current"].get("accelerators"))
+                )
             )
         )
         if active.get("kind") == "local_worker":
@@ -1878,9 +2429,14 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
                     "message": "Managed runtime marker matches the catalog" if integrity["runtime_marker"].get("status") == "pass" else "Managed runtime marker was not verified",
                 }
             )
-            if accelerator_used:
+            if accelerator_used and active.get("accelerator_source") == "managed":
                 accelerator = next(
-                    (row for row in _list_value(plan["current"].get("accelerators")) if isinstance(row, dict) and str(row.get("id") or "") == "nvidia-cuda12"),
+                    (
+                        row
+                        for row in _list_value(plan["current"].get("accelerators"))
+                        if isinstance(row, dict)
+                        and str(row.get("id") or "") == str(active.get("accelerator_id") or "nvidia-cuda12")
+                    ),
                     None,
                 )
                 accelerator_installed = isinstance(accelerator, dict) and accelerator.get("installed") is True
@@ -1898,6 +2454,26 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
                         "status": integrity_status(integrity["accelerator_marker"], accelerator_installed),
                         "code": "accelerator_marker_matches_catalog" if integrity["accelerator_marker"].get("status") == "pass" else "accelerator_marker_not_verified",
                         "message": "NVIDIA accelerator marker matches the catalog" if integrity["accelerator_marker"].get("status") == "pass" else "NVIDIA accelerator marker was not verified",
+                    }
+                )
+            elif accelerator_used:
+                accelerator_id = str(active.get("accelerator_id") or "")
+                accelerator = next(
+                    (
+                        row
+                        for row in _list_value(plan["current"].get("registered_accelerators"))
+                        if isinstance(row, dict) and str(row.get("id") or "") == accelerator_id
+                    ),
+                    None,
+                )
+                probe = accelerator.get("probe") if isinstance(accelerator, dict) and isinstance(accelerator.get("probe"), dict) else {}
+                accelerator_ready = isinstance(accelerator, dict) and probe.get("ok") is True
+                checks.append(
+                    {
+                        "id": "external_accelerator",
+                        "status": "pass" if accelerator_ready else "fail",
+                        "code": "accelerator_registration_ready" if accelerator_ready else "accelerator_registration_missing",
+                        "message": "External accelerator registration passed" if accelerator_ready else "External accelerator registration did not pass",
                     }
                 )
         if active.get("kind") == "local_worker" and active.get("model_source") == "managed":
@@ -1941,6 +2517,7 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
         "managed_runtime": "install_runtime",
         "managed_model": "install_model",
         "cuda_accelerator": "install_accelerator",
+        "external_accelerator": "register_accelerator",
     }
     for item in checks:
         if item.get("status") not in {"fail", "not_run"}:
@@ -1983,7 +2560,7 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
             plan.get("active_asr") if isinstance(plan.get("active_asr"), dict) else None,
             plan.get("current") if isinstance(plan.get("current"), dict) else None,
         ),
-        "route": _provider_route(plan.get("active_asr")) if isinstance(plan.get("active_asr"), dict) else None,
+        "provider_mode": plan.get("provider_mode"),
         "plan_id": plan.get("plan_id"),
         "read_only": True,
     }

@@ -11,7 +11,7 @@ from transvortex.app.config import (
     apply_route_overrides,
     load_app_config,
 )
-from transvortex.app.asr_admin import draft_to_asr_provider_config
+from transvortex.app.asr_admin import activate_asr_resources, draft_to_asr_provider_config
 from transvortex.memory.plan import resolve_memory_plan
 
 
@@ -102,6 +102,7 @@ def test_local_whisper_model_source_is_independent_from_runtime() -> None:
             "protocol": "faster_whisper",
             "model": "large-v3",
             "runtime": {"source": "managed", "id": "managed:faster-whisper"},
+            "accelerator": {"source": "external", "id": "external:nvidia-test"},
             "local": {
                 "model_source": "external",
                 "model_path": r"D:\Models\faster-whisper-large-v3",
@@ -111,10 +112,44 @@ def test_local_whisper_model_source_is_independent_from_runtime() -> None:
     )
 
     assert provider.runtime.source == "managed"
+    assert provider.accelerator.source == "external"
+    assert provider.accelerator.id == "external:nvidia-test"
     assert provider.local.model_source == "external"
     assert provider.local.model_path == r"D:\Models\faster-whisper-large-v3"
     assert provider.local.external_model_id == "large-v3"
     assert provider.local.external_model_path == r"D:\Models\faster-whisper-large-v3"
+
+
+def test_asr_resource_activation_can_apply_local_worker_device_settings(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr: {provider: local_whisper}
+asr_providers:
+  - name: local_whisper
+    kind: local_worker
+    protocol: faster_whisper
+    model: small
+    runtime: {source: managed, id: managed:faster-whisper}
+    local: {model_source: managed, device: auto, compute_type: auto}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = activate_asr_resources(
+        root_dir=tmp_path,
+        device="cpu",
+        compute_type="int8",
+    )
+    provider = load_app_config(root_dir=tmp_path).asr_providers["local_whisper"]
+
+    assert result["ok"] is True
+    assert result["device"] == "cpu"
+    assert result["compute_type"] == "int8"
+    assert provider.runtime.source == "managed"
+    assert provider.local.device == "cpu"
+    assert provider.local.compute_type == "int8"
 
 
 def test_artifacts_directory_environment_overrides_workspace_yaml(

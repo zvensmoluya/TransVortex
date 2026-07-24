@@ -29,6 +29,13 @@ ASR_MIN_FREE_SPACE_RESERVE = 256 * 1024 * 1024
 ASR_MODEL_SEARCH_MAX_DEPTH = 6
 ASR_MODEL_SEARCH_MAX_DIRECTORIES = 4096
 ASR_MODEL_SEARCH_MAX_RESULTS = 32
+NVIDIA_ACCELERATOR_ID = "nvidia-cuda12"
+NVIDIA_ACCELERATOR_DLL_DIRECTORIES = (
+    ("nvidia", "cuda_runtime", "bin"),
+    ("nvidia", "cuda_nvrtc", "bin"),
+    ("nvidia", "cublas", "bin"),
+    ("nvidia", "cudnn", "bin"),
+)
 
 
 @dataclass(frozen=True)
@@ -137,7 +144,7 @@ def load_asr_runtime_state(paths: AsrRuntimePaths) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return _empty_runtime_state()
     payload.setdefault("schema_version", ASR_RUNTIME_STATE_VERSION)
-    for key in ("environments", "models", "provider_tests"):
+    for key in ("environments", "models", "accelerators", "provider_tests"):
         if not isinstance(payload.get(key), dict):
             payload[key] = {}
     return payload
@@ -154,6 +161,7 @@ def _empty_runtime_state() -> dict[str, Any]:
         "schema_version": ASR_RUNTIME_STATE_VERSION,
         "environments": {},
         "models": {},
+        "accelerators": {},
         "provider_tests": {},
     }
 
@@ -201,6 +209,10 @@ def asr_runtime_snapshot(
         "registered_models": sorted(
             [dict(value, id=key) for key, value in (state.get("models") or {}).items() if isinstance(value, dict)],
             key=lambda item: str(item.get("model_path") or "").lower(),
+        ),
+        "registered_accelerators": sorted(
+            [dict(value, id=key) for key, value in (state.get("accelerators") or {}).items() if isinstance(value, dict)],
+            key=lambda item: str(item.get("root") or "").lower(),
         ),
         "environments": sorted(
             [dict(value, id=key) for key, value in (state.get("environments") or {}).items() if isinstance(value, dict)],
@@ -406,12 +418,25 @@ def _worker_readiness(
                 if _active_operation(paths, "model", provider.model):
                     return _readiness("checking", "model_installing", False, "cancel_install")
                 return _readiness("needs_action", "model_missing", False, "install_model")
-        accelerator = _accelerator_marker_by_id(paths, catalog, "nvidia-cuda12")
-        if provider.local.device == "cuda" or (provider.local.device == "auto" and accelerator is not None):
+        accelerator = _selected_accelerator(provider, paths, catalog)
+        accelerator_requested = provider.local.device == "cuda" or (
+            provider.local.device == "auto"
+            and (accelerator is not None or provider.accelerator.source == "external")
+        )
+        if accelerator_requested:
             if accelerator is None:
-                if _active_operation(paths, "accelerator", "nvidia-cuda12"):
+                if (
+                    provider.accelerator.source == "managed"
+                    and _active_operation(paths, "accelerator", provider.accelerator.id or NVIDIA_ACCELERATOR_ID)
+                ):
                     return _readiness("checking", "accelerator_installing", False, "cancel_install")
-                return _readiness("needs_action", "device_unavailable", False, "install_accelerator")
+                external_record = (
+                    _registered_accelerator_record(paths, provider.accelerator.id)
+                    if provider.accelerator.source == "external"
+                    else None
+                )
+                code = "accelerator_changed" if external_record is not None else "device_unavailable"
+                return _readiness("needs_action", code, False, "choose_accelerator")
             hardware = accelerator.get("hardware_probe") if isinstance(accelerator.get("hardware_probe"), dict) else {}
             if not hardware:
                 return _readiness("needs_action", "hardware_untested", False, "test_hardware")
@@ -445,6 +470,8 @@ def _worker_readiness(
                 "model_source": provider.local.model_source,
                 "model": provider.model,
                 "model_path": str(model_path),
+                "accelerator_source": str(accelerator.get("source") or provider.accelerator.source) if accelerator else "none",
+                "accelerator_id": str(accelerator.get("id") or provider.accelerator.id) if accelerator else "",
             },
         )
 
@@ -763,13 +790,123 @@ def save_external_environment(
     return dict(record, id=environment_id)
 
 
-def probe_managed_model(
+def probe_external_accelerator(
+    *,
+    root_dir: Path,
+    accelerator_root: Path,
+    accelerator_id: str = NVIDIA_ACCELERATOR_ID,
+    compute_type: str = "auto",
+    save: bool = False,
+    timeout_seconds: float = 120.0,
+    app_data_root: Path | None = None,
+) -> dict[str, Any]:
+    """Probe an Agent- or user-prepared NVIDIA library directory."""
+
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    catalog = load_asr_catalog()
+    accelerator = _accelerator_catalog_entry(catalog, accelerator_id)
+    if accelerator is None:
+        return {
+            "ok": False,
+            "code": "unsupported_accelerator",
+            "message": f"Unsupported ASR accelerator: {accelerator_id}",
+        }
+    try:
+        resolved_root = Path(accelerator_root).expanduser().resolve()
+    except OSError as exc:
+        return {"ok": False, "code": "accelerator_path_unavailable", "message": str(exc)}
+    if not resolved_root.is_dir():
+        return {
+            "ok": False,
+            "code": "accelerator_path_unavailable",
+            "message": f"Accelerator directory not found: {resolved_root}",
+        }
+    missing = _missing_accelerator_dll_directories(resolved_root)
+    if missing:
+        return {
+            "ok": False,
+            "code": "accelerator_layout_invalid",
+            "message": "The accelerator directory is missing required NVIDIA DLL directories",
+            "missing": missing,
+            "root": str(resolved_root),
+        }
+    signature = _external_accelerator_signature(resolved_root)
+    if not signature:
+        return {
+            "ok": False,
+            "code": "accelerator_layout_invalid",
+            "message": "No NVIDIA DLLs were found in the accelerator directory",
+            "root": str(resolved_root),
+        }
+    runtime_marker = _managed_runtime_marker(paths, catalog)
+    if runtime_marker is None:
+        artifact = (catalog.get("runtime") or {}).get("artifact") or {}
+        code = "runtime_missing" if artifact.get("published") else "runtime_unpublished"
+        return {
+            "ok": False,
+            "code": code,
+            "message": "Install the TransVortex Whisper runtime before probing an accelerator",
+            "root": str(resolved_root),
+        }
+    runtime_root = paths.components_root / "faster-whisper" / str(runtime_marker.get("version") or "")
+    python_executable = runtime_root / str(runtime_marker.get("python") or "python.exe")
+    probe = probe_python_environment(
+        python_executable,
+        device="cuda",
+        compute_type=compute_type,
+        accelerator_root=resolved_root,
+        timeout_seconds=timeout_seconds,
+    )
+    cuda = probe.get("cuda") if isinstance(probe.get("cuda"), dict) else {}
+    if probe.get("ok") is not True or cuda.get("available") is not True:
+        return {
+            "ok": False,
+            "code": str(probe.get("code") or "accelerator_probe_failed"),
+            "message": str(probe.get("message") or "The NVIDIA accelerator could not be loaded"),
+            "root": str(resolved_root),
+            "probe": probe,
+        }
+    if signature != _external_accelerator_signature(resolved_root):
+        return {
+            "ok": False,
+            "code": "accelerator_changed",
+            "message": "The accelerator directory changed while it was being probed",
+            "root": str(resolved_root),
+        }
+    record = {
+        "source": "external",
+        "accelerator_id": accelerator_id,
+        "version": str(accelerator.get("version") or ""),
+        "root": str(resolved_root),
+        "packages": dict(accelerator.get("packages") or {}),
+        "signature": signature,
+        "probe": probe,
+        "updated_at": utc_now_iso(),
+    }
+    registration_id = _external_accelerator_key(accelerator_id, resolved_root)
+    if save:
+        paths.state_file.parent.mkdir(parents=True, exist_ok=True)
+        state = load_asr_runtime_state(paths)
+        state.setdefault("accelerators", {})[registration_id] = record
+        save_asr_runtime_state(paths, state)
+    return {
+        "ok": True,
+        "code": "ready",
+        "accelerator": dict(record, id=registration_id),
+        "saved": save,
+        "probe": probe,
+    }
+
+
+def probe_external_model(
     *,
     root_dir: Path,
     model_path: Path,
     device: str = "auto",
     compute_type: str = "auto",
+    accelerator_root: Path | None = None,
     timeout_seconds: float = 120.0,
+    save: bool = True,
     app_data_root: Path | None = None,
 ) -> dict[str, Any]:
     paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
@@ -826,14 +963,18 @@ def probe_managed_model(
         }
     runtime_root = paths.components_root / "faster-whisper" / str(marker.get("version") or "")
     executable = runtime_root / str(marker.get("python") or "python.exe")
-    accelerator_root = _managed_accelerator_root(paths, catalog, "nvidia-cuda12")
+    resolved_accelerator_root = (
+        Path(accelerator_root).expanduser().resolve()
+        if accelerator_root is not None
+        else _managed_accelerator_root(paths, catalog, NVIDIA_ACCELERATOR_ID)
+    )
     probe = probe_python_environment(
         executable,
         model_id=model_id,
         model_path=resolved_model,
         device=device,
         compute_type=compute_type,
-        accelerator_root=accelerator_root,
+        accelerator_root=resolved_accelerator_root,
         timeout_seconds=timeout_seconds,
     )
     if probe.get("ok") is not True:
@@ -854,15 +995,29 @@ def probe_managed_model(
             "model_id": model_id,
             "model_path": str(resolved_model),
         }
-    record = _save_registered_model(
-        paths,
-        model_id=model_id,
-        model_path=resolved_model,
-        probe=probe,
-        signature=final_signature,
-        identity=identity,
-    )
-    return {"ok": True, "code": "ready", "model": record, "probe": probe}
+    if save:
+        record = _save_registered_model(
+            paths,
+            model_id=model_id,
+            model_path=resolved_model,
+            probe=probe,
+            signature=final_signature,
+            identity=identity,
+        )
+    else:
+        record = {
+            "id": _external_model_key(resolved_model),
+            "model_id": model_id,
+            "model_path": str(resolved_model),
+            "display_name": str(identity.get("display_name") or model_id),
+            "catalog_model_id": str(identity.get("catalog_model_id") or ""),
+            "catalog_config_match": identity.get("catalog_config_match") is True,
+            "model_format": str(identity.get("model_format") or "ctranslate2"),
+            "config_sha256": str(identity.get("config_sha256") or ""),
+            "signature": final_signature,
+            "probe": probe,
+        }
+    return {"ok": True, "code": "ready", "model": record, "saved": save, "probe": probe}
 
 
 def discover_external_models(
@@ -1102,6 +1257,73 @@ def _external_model_signature(model_path: Path) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _external_accelerator_key(accelerator_id: str, root: Path) -> str:
+    normalized = os.path.normcase(str(root.expanduser().resolve()))
+    digest = hashlib.sha256(f"{accelerator_id}\0{normalized}".encode("utf-8")).hexdigest()[:16]
+    return f"external:{accelerator_id}:{digest}"
+
+
+def _missing_accelerator_dll_directories(root: Path) -> list[str]:
+    missing: list[str] = []
+    for parts in NVIDIA_ACCELERATOR_DLL_DIRECTORIES:
+        directory = root.joinpath(*parts)
+        try:
+            has_dll = directory.is_dir() and any(path.is_file() for path in directory.glob("*.dll"))
+        except OSError:
+            has_dll = False
+        if not has_dll:
+            missing.append("/".join(parts))
+    return missing
+
+
+def _external_accelerator_signature(root: Path) -> str:
+    rows: list[tuple[str, int, int]] = []
+    for parts in NVIDIA_ACCELERATOR_DLL_DIRECTORIES:
+        directory = root.joinpath(*parts)
+        try:
+            files = sorted(directory.glob("*.dll"), key=lambda path: path.name.lower())
+        except OSError:
+            return ""
+        if not files:
+            return ""
+        for path in files:
+            try:
+                stat = path.stat()
+            except OSError:
+                return ""
+            rows.append((path.relative_to(root).as_posix(), stat.st_size, stat.st_mtime_ns))
+    raw = json.dumps(rows, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest() if rows else ""
+
+
+def _registered_accelerator_record(paths: AsrRuntimePaths, registration_id: str) -> dict[str, Any] | None:
+    state = load_asr_runtime_state(paths)
+    accelerators = state.get("accelerators")
+    record = accelerators.get(registration_id) if isinstance(accelerators, dict) else None
+    return record if isinstance(record, dict) else None
+
+
+def _valid_external_accelerator_record(paths: AsrRuntimePaths, registration_id: str) -> dict[str, Any] | None:
+    record = _registered_accelerator_record(paths, registration_id)
+    if record is None:
+        return None
+    probe = record.get("probe") if isinstance(record.get("probe"), dict) else {}
+    cuda = probe.get("cuda") if isinstance(probe.get("cuda"), dict) else {}
+    if probe.get("ok") is not True or cuda.get("available") is not True:
+        return None
+    raw_root = str(record.get("root") or "")
+    if not raw_root:
+        return None
+    try:
+        root = Path(raw_root).expanduser().resolve()
+    except OSError:
+        return None
+    signature = _external_accelerator_signature(root) if root.is_dir() else ""
+    if not signature or signature != str(record.get("signature") or ""):
+        return None
+    return dict(record, id=registration_id, root=str(root))
+
+
 def _registered_model_record(paths: AsrRuntimePaths, model_path: Path) -> dict[str, Any] | None:
     state = load_asr_runtime_state(paths)
     models = state.get("models")
@@ -1109,6 +1331,41 @@ def _registered_model_record(paths: AsrRuntimePaths, model_path: Path) -> dict[s
         return None
     record = models.get(_external_model_key(model_path))
     return record if isinstance(record, dict) else None
+
+
+def registered_external_model(
+    *,
+    root_dir: Path,
+    registration_id: str,
+    app_data_root: Path | None = None,
+) -> dict[str, Any] | None:
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    state = load_asr_runtime_state(paths)
+    record = (state.get("models") or {}).get(registration_id)
+    if not isinstance(record, dict):
+        return None
+    probe = record.get("probe") if isinstance(record.get("probe"), dict) else {}
+    if probe.get("ok") is not True:
+        return None
+    raw_path = str(record.get("model_path") or "")
+    try:
+        model_path = Path(raw_path).expanduser().resolve()
+    except OSError:
+        return None
+    signature = _external_model_signature(model_path) if model_path.is_dir() else ""
+    if not signature or signature != str(record.get("signature") or ""):
+        return None
+    return dict(record, id=registration_id, model_path=str(model_path))
+
+
+def registered_external_accelerator(
+    *,
+    root_dir: Path,
+    registration_id: str,
+    app_data_root: Path | None = None,
+) -> dict[str, Any] | None:
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    return _valid_external_accelerator_record(paths, registration_id)
 
 
 def _save_registered_model(
@@ -1144,6 +1401,17 @@ def _save_registered_model(
 def model_catalog_entry(catalog: dict[str, Any], model_id: str) -> dict[str, Any] | None:
     return next(
         (item for item in catalog.get("models") or [] if isinstance(item, dict) and item.get("id") == model_id),
+        None,
+    )
+
+
+def _accelerator_catalog_entry(catalog: dict[str, Any], accelerator_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in catalog.get("accelerators") or []
+            if isinstance(item, dict) and item.get("id") == accelerator_id
+        ),
         None,
     )
 
@@ -1238,6 +1506,32 @@ def _managed_accelerator_root(
     )
 
 
+def _selected_accelerator(
+    provider: AsrProviderConfig,
+    paths: AsrRuntimePaths,
+    catalog: dict[str, Any],
+) -> dict[str, Any] | None:
+    source = str(provider.accelerator.source or "managed")
+    accelerator_id = str(provider.accelerator.id or NVIDIA_ACCELERATOR_ID)
+    if source == "external":
+        record = _valid_external_accelerator_record(paths, accelerator_id)
+        if record is None:
+            return None
+        probe = record.get("probe") if isinstance(record.get("probe"), dict) else {}
+        return dict(record, source="external", hardware_probe=probe)
+    marker = _accelerator_marker_by_id(paths, catalog, accelerator_id)
+    accelerator = _accelerator_catalog_entry(catalog, accelerator_id)
+    if marker is None or accelerator is None:
+        return None
+    root = (
+        paths.components_root
+        / "accelerators"
+        / accelerator_id
+        / str(accelerator.get("version") or "")
+    )
+    return dict(marker, source="managed", root=str(root))
+
+
 def _external_model_path(environment: dict[str, Any], model_id: str) -> Path | None:
     raw = (environment.get("model_paths") or {}).get(model_id)
     if not raw:
@@ -1266,11 +1560,13 @@ def resolve_whisper_runtime(
         else:
             model = model_catalog_entry(catalog, provider.model) or {}
             model_path = managed_model_path(paths, model)
-        accelerator = _accelerator_marker_by_id(paths, catalog, "nvidia-cuda12")
+        accelerator = _selected_accelerator(provider, paths, catalog)
         return {
             "python_executable": str(python_executable),
             "model_path": str(model_path),
             "accelerator_root": str(accelerator.get("root") or "") if accelerator else "",
+            "accelerator_source": str(accelerator.get("source") or "") if accelerator else "",
+            "accelerator_id": str(accelerator.get("id") or provider.accelerator.id) if accelerator else "",
             "runtime_source": "managed",
         }
     state = load_asr_runtime_state(paths)

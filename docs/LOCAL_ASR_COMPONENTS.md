@@ -28,6 +28,8 @@ FunASR、本机 Whisper 和 OpenAI Whisper 互不回退。本机 Whisper 任务�
 
 模型与运行组件分开安装和删除。Flutter 始终使用 TransVortex 管理的隔离运行组件，不要求用户选择 `python.exe`，也不会在用户环境中执行 `pip install` 或升级依赖。
 
+Agent 环境准备沿用同一 runtime 边界，但模型和 GPU 加速资源分别支持 `managed` 与 `external` 来源。Agent 可以使用自己的工具下载或准备外部资源；随后由 TransVortex 固定 runtime 完成 probe/register，并通过 `resources-activate` 写入资源引用。外部模型与 NVIDIA 用户态库目录始终由用户或 Agent 所在环境管理，应用的组件删除与卸载不会删除这些目录。
+
 “使用已有模型”只复用兼容的 faster-whisper / CTranslate2 模型目录。用户可以选择模型目录或包含模型的上层目录；后端在最多 6 层、4096 个目录和 32 个结果的边界内查找含可读 `config.json` 与 `model.bin` 的候选，跳过符号链接，避免无边界扫描。候选仍需由受管运行组件真实加载并完成最小转录，验证成功后只登记模型规格、原目录和关键文件指纹；不会复制、移动、删除或重新下载该目录。目录不可访问或关键文件发生变化后必须重新验证。
 
 受管下载模型继续按清单固定 revision、大小和 SHA-256；已有模型不再用官方 `config.json` 哈希作为硬性准入条件。配置与清单相符时只登记为对应的兼容规格，其他实际可加载的模型登记为自定义模型，因此转换为 CTranslate2 的客户微调 Whisper 可以使用；原始 PyTorch / Transformers 权重仍需先转换。外部 Python 环境仅保留给 CLI 和开发兼容路径，不进入 Flutter 产品界面。

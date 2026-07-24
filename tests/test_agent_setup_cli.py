@@ -83,13 +83,15 @@ def test_agent_info_advertises_read_only_setup_contract(tmp_path: Path) -> None:
     payload = agent_info_payload(root_dir=tmp_path)
 
     assert payload["setup_contract"]["contract"] == "transvortex.agent_setup"
-    assert payload["setup_contract"]["schema_version"] == 1
+    assert payload["setup_contract"]["schema_version"] == 2
     assert payload["installation"]["config_root"] == str(tmp_path.resolve())
     assert payload["installation"]["capabilities_argv"][-2:] == ["agent-info", "--json"]
     assert payload["recommended_argv"][1][-2:] == ["setup-plan", "--json"]
     assert "transvortex asr setup-plan --json" in payload["recommended_workflow"]
     assert payload["commands"]["asr setup-plan"]["read_only"] is True
     assert payload["commands"]["asr setup-verify"]["supports_strict"] is True
+    assert payload["commands"]["asr setup-apply"]["executor"] == "transvortex"
+    assert payload["commands"]["asr model-register"]["ownership"] == "external"
 
 
 def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> None:
@@ -102,7 +104,7 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
 
     payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file)
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["contract"] == "transvortex.agent_setup"
     assert payload["kind"] == "setup_plan"
     assert payload["ok"] is True
@@ -110,12 +112,16 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
     assert payload["read_only"] is True
     assert payload["network_access"] is False
     assert payload["active_asr"]["runtime_source"] == "managed"
+    assert payload["provider_mode"] == "local_worker"
+    assert "route" not in payload
     assert payload["active_asr"]["credential_required"] is False
     assert payload["active_asr"]["credential_configured"] is False
     assert payload["requirements"]["runtime"]["id"] == "managed:faster-whisper"
     assert payload["requirements"]["model"]["id"] == "large-v3"
-    assert "global_pip_install" in payload["forbidden_actions"]
-    assert "verify_sha256_before_use" in payload["allowed_actions"]
+    assert "invent_unadvertised_transvortex_command" in payload["forbidden_actions"]
+    assert "prepare_external_model" in payload["allowed_actions"]
+    assert payload["resources"]["runtime"]["product_source"] == "managed"
+    assert payload["resources"]["model"]["source"] == "managed"
     assert payload["current"]["environment_candidates"][0]["id"] == "external:test"
     assert "super-secret-value" not in json.dumps(payload, ensure_ascii=False)
 
@@ -184,6 +190,116 @@ def test_setup_cli_nested_commands_and_legacy_asr_parser(tmp_path: Path, monkeyp
     assert payload["providers_file"] == str(providers_file.resolve())
 
 
+def test_setup_apply_cli_waits_for_managed_operation(tmp_path: Path, monkeypatch, capsys) -> None:
+    providers_file = _write_setup_config(tmp_path)
+
+    class FakeManager:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start_install(self, kind: str, item_id: str = "") -> dict:
+            assert (kind, item_id) == ("model", "small")
+            return {"id": "asr_test"}
+
+        def wait(self, operation_id: str) -> dict:
+            assert operation_id == "asr_test"
+            return {"id": operation_id, "state": "completed"}
+
+    monkeypatch.setattr("transvortex.cli.entry.AsrOperationManager", FakeManager)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "asr",
+            "setup-apply",
+            "--resource",
+            "model",
+            "--item-id",
+            "small",
+            "--providers-file",
+            str(providers_file),
+            "--json",
+        ],
+    )
+
+    main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] == "managed_apply"
+    assert payload["ok"] is True
+    assert payload["executor"] == "transvortex"
+
+
+def test_external_resource_cli_registers_and_activates(tmp_path: Path, monkeypatch, capsys) -> None:
+    providers_file = _write_setup_config(tmp_path)
+    captured: dict[str, object] = {}
+
+    def register_model(**kwargs):  # noqa: ANN003
+        captured["model"] = kwargs
+        return {"ok": True, "code": "ready", "model": {"id": "external:model"}}
+
+    monkeypatch.setattr("transvortex.cli.entry.probe_external_model", register_model)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "asr",
+            "model-register",
+            "--model-path",
+            str(tmp_path / "model"),
+            "--providers-file",
+            str(providers_file),
+            "--json",
+        ],
+    )
+
+    main()
+
+    model_payload = json.loads(capsys.readouterr().out)
+    assert model_payload["kind"] == "model_register"
+    assert model_payload["ownership"] == "external"
+    assert captured["model"]["save"] is True
+
+    def activate(**kwargs):  # noqa: ANN003
+        captured["activation"] = kwargs
+        return {"ok": True, "readiness": {"can_run": True}}
+
+    monkeypatch.setattr("transvortex.cli.entry.activate_asr_resources", activate)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "asr",
+            "resources-activate",
+            "--model-registration-id",
+            "external:model",
+            "--device",
+            "cuda",
+            "--compute-type",
+            "float16",
+            "--providers-file",
+            str(providers_file),
+            "--json",
+        ],
+    )
+
+    main()
+
+    activation_payload = json.loads(capsys.readouterr().out)
+    assert activation_payload["kind"] == "resources_activate"
+    assert activation_payload["ok"] is True
+    assert captured["activation"]["model_registration_id"] == "external:model"
+    assert captured["activation"]["device"] == "cuda"
+    assert captured["activation"]["compute_type"] == "float16"
+    assert captured["activation"]["providers_file"] == providers_file.resolve()
+
+
 def test_setup_verify_strict_returns_nonzero(tmp_path: Path, monkeypatch, capsys) -> None:
     providers_file = _write_setup_config(tmp_path)
     monkeypatch.setattr(
@@ -222,6 +338,102 @@ def test_setup_plan_keeps_readiness_failures_structured(tmp_path: Path, monkeypa
     assert payload["current"]["readiness"]["code"] == "readiness_probe_failed"
     assert any(item["code"] == "readiness_probe_failed" for item in payload["blocking_items"])
     assert "probe-secret-value" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_ready_setup_plan_does_not_repeat_resource_install_actions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    providers_file = _write_setup_config(tmp_path)
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup.asr_provider_readiness",
+        lambda *_args, **_kwargs: {
+            "state": "ready",
+            "code": "ready",
+            "can_run": True,
+            "primary_action": "",
+            "checked_at": "2026-07-24T00:00:00+00:00",
+            "details": {},
+        },
+    )
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup.asr_runtime_snapshot",
+        lambda _root: {
+            "paths": {},
+            "runtime": {"id": "managed:faster-whisper", "installed": True},
+            "accelerators": [],
+            "models": [{"id": "large-v3", "installed": True}],
+            "registered_models": [],
+            "registered_accelerators": [],
+            "environments": [],
+        },
+    )
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file)
+
+    action_ids = {action["id"] for action in payload["plan"]["actions"]}
+    assert payload["ready"] is True
+    assert payload["resources"]["runtime"]["state"] == "ready"
+    assert payload["resources"]["model"]["state"] == "ready"
+    assert "install_runtime" not in action_ids
+    assert "install_model" not in action_ids
+    assert {"discover", "inspect_host_environment", "verify"} <= action_ids
+
+
+def test_hardware_incompatibility_is_an_agent_action_not_a_blocked_plan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    providers_file = _write_setup_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr: {provider: local_whisper}
+asr_providers:
+  - name: local_whisper
+    kind: local_worker
+    protocol: faster_whisper
+    model: small
+    runtime: {source: managed, id: managed:faster-whisper}
+    accelerator: {source: managed, id: nvidia-cuda12}
+    local: {model_source: managed, device: cuda, compute_type: float16}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup.asr_provider_readiness",
+        lambda *_args, **_kwargs: {
+            "state": "unavailable",
+            "code": "hardware_incompatible",
+            "can_run": False,
+            "primary_action": "choose_device",
+            "checked_at": "2026-07-24T00:00:00+00:00",
+            "details": {},
+        },
+    )
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup.asr_runtime_snapshot",
+        lambda _root: {
+            "paths": {},
+            "runtime": {"id": "managed:faster-whisper", "installed": True},
+            "accelerators": [{"id": "nvidia-cuda12", "installed": True}],
+            "models": [{"id": "small", "installed": True}],
+            "registered_models": [],
+            "registered_accelerators": [],
+            "environments": [],
+        },
+    )
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file)
+
+    action_ids = {action["id"] for action in payload["plan"]["actions"]}
+    assert payload["plan_status"] == "needs_action"
+    assert payload["resources"]["driver"]["state"] == "inspect"
+    assert payload["resources"]["accelerator"]["state"] == "needs_verification"
+    assert "prepare_system_acceleration" in action_ids
+    assert "configure_local_worker_device" in action_ids
+    assert "install_accelerator" not in action_ids
+    assert "install_model" not in action_ids
 
 
 def test_setup_verify_requires_a_remote_route_probe(tmp_path: Path, monkeypatch) -> None:
@@ -285,6 +497,11 @@ asr_providers:
 
     assert plan["requirements"]["runtime"] is not None
     assert plan["requirements"]["model"] is None
+    assert plan["provider_mode"] == "local_worker"
+    assert plan["resources"]["model"]["source"] == "external"
+    assert {"prepare_model", "register_model", "activate_model"} <= {
+        action["id"] for action in plan["plan"]["actions"]
+    }
     assert "model_not_installed" not in {item["code"] for item in plan["blocking_items"]}
     assert "managed_model" not in {item["id"] for item in verify["checks"]}
 

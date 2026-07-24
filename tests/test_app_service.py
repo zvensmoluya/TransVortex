@@ -119,6 +119,8 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert "runtime_pump" in info["result"]["capabilities"]
     assert "derived_translation" in info["result"]["capabilities"]
     assert "asr_model_discovery" in info["result"]["capabilities"]
+    assert "asr_accelerator_probe" in info["result"]["capabilities"]
+    assert "asr_resource_activation" in info["result"]["capabilities"]
     assert "agent_entry" in info["result"]["capabilities"]
     assert health["result"]["status"] == "healthy"
     assert health["result"]["pump"]["running"] is True
@@ -428,7 +430,7 @@ def test_app_service_validates_existing_model_with_managed_runtime(tmp_path: Pat
             },
         }
 
-    monkeypatch.setattr("transvortex.app.desktop_api.probe_managed_model", fake_probe)
+    monkeypatch.setattr("transvortex.app.desktop_api.probe_external_model", fake_probe)
 
     response = handle_line(
         service,

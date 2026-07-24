@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:transvortex:agent-setup-contract:1",
+  "$id": "urn:transvortex:agent-setup-contract:2",
   "title": "TransVortex Agent setup contract",
   "description": "Versioned, secret-free payload emitted by TransVortex setup-plan/setup-verify and the compatible plan envelope an Agent may produce.",
   "type": "object",
   "required": ["schema_version", "contract", "kind"],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
+    "schema_version": {"type": "integer", "const": 2},
     "contract": {"type": "string", "const": "transvortex.agent_setup"},
-    "kind": {"type": "string", "enum": ["setup_plan", "setup_verify", "provider_test", "agent_plan", "agent_result"]},
+    "kind": {"type": "string", "enum": ["setup_plan", "setup_verify", "managed_apply", "model_probe", "model_register", "accelerator_probe", "accelerator_register", "resources_activate", "provider_test", "agent_plan", "agent_result"]},
     "ok": {"type": "boolean", "description": "For setup_plan, the contract was generated; for setup_verify/provider_test, the verification or probe succeeded."},
     "ready": {"type": "boolean", "description": "Whether a generated setup_plan has no blocking items and is ready for use."},
     "network_access": {"type": "boolean"},
@@ -22,12 +22,17 @@
     "active_asr": {"oneOf": [{"$ref": "#/$defs/asr"}, {"type": "null"}]},
     "current": {"$ref": "#/$defs/current"},
     "requirements": {"$ref": "#/$defs/requirements"},
+    "resources": {"$ref": "#/$defs/resources"},
     "allowed_actions": {"type": "array", "items": {"type": "string"}},
     "forbidden_actions": {"type": "array", "items": {"type": "string"}},
     "blocking_items": {"type": "array", "items": {"$ref": "#/$defs/blocking_item"}},
     "success_conditions": {"type": "array", "items": {"type": "string"}},
     "verification": {"$ref": "#/$defs/verification"},
     "executes_local_code": {"type": "boolean"},
+    "executor": {"type": "string", "enum": ["transvortex", "agent"]},
+    "ownership": {"type": "string", "enum": ["transvortex", "external", "system"]},
+    "resource": {"type": "string"},
+    "operation": {"type": ["object", "string", "null"], "additionalProperties": true},
     "agent_commands": {"type": "object", "additionalProperties": {"type": "string"}},
     "agent_argv": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "config_error": {"type": "string"},
@@ -39,7 +44,7 @@
     "integrity": {"$ref": "#/$defs/integrity"},
     "read_only": {"type": "boolean"},
     "status": {"type": "string", "enum": ["ready", "needs_user", "blocked", "failed"]},
-    "route": {"oneOf": [{"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]}, {"type": "null"}]},
+    "provider_mode": {"oneOf": [{"type": "string", "enum": ["local_worker", "local_service", "remote_provider"]}, {"type": "null"}]},
     "alternatives": {"type": "array", "items": {"$ref": "#/$defs/alternative"}},
     "plan_id": {"type": "string"},
     "actions": {"type": "array", "items": {"$ref": "#/$defs/action_result"}},
@@ -64,12 +69,13 @@
           "platform",
           "root_dir",
           "active_asr",
-          "route",
+          "provider_mode",
           "alternatives",
           "plan_id",
           "plan",
           "current",
           "requirements",
+          "resources",
           "allowed_actions",
           "forbidden_actions",
           "blocking_items",
@@ -77,8 +83,7 @@
           "verification",
           "read_only",
           "network_access"
-        ],
-        "properties": {"route": {"type": "null"}}
+        ]
       }
     },
     {
@@ -111,7 +116,7 @@
     {
       "if": {"properties": {"kind": {"const": "agent_result"}}, "required": ["kind"]},
       "then": {
-        "required": ["status", "route", "actions", "verification", "next", "errors"]
+        "required": ["status", "provider_mode", "actions", "verification", "next", "errors"]
       }
     },
     {
@@ -130,11 +135,10 @@
       },
       "then": {
         "properties": {
-          "route": {"not": {"type": "null"}},
+          "provider_mode": {"not": {"type": "null"}},
           "verification": {
-            "required": ["doctor", "readiness", "probe"],
+            "required": ["readiness", "probe"],
             "properties": {
-              "doctor": {"const": "pass"},
               "readiness": {"const": "pass"},
               "probe": {"const": "pass"}
             }
@@ -257,6 +261,8 @@
         "model": {"type": "string"},
         "runtime_source": {"type": "string"},
         "runtime_id": {"type": "string"},
+        "accelerator_source": {"type": "string", "enum": ["managed", "external", ""]},
+        "accelerator_id": {"type": "string"},
         "model_source": {"type": "string"},
         "model_path_configured": {"type": "boolean"},
         "device": {"type": "string"},
@@ -293,6 +299,7 @@
         "accelerators": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "models": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "registered_models": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "registered_accelerators": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "environment_candidates": {"type": "array", "items": {"$ref": "#/$defs/environment"}},
         "provider_test": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]}
       },
@@ -305,6 +312,34 @@
         "accelerator": {"oneOf": [{"$ref": "#/$defs/requirement"}, {"type": "null"}]},
         "model": {"oneOf": [{"$ref": "#/$defs/model_requirement"}, {"type": "null"}]},
         "available_models": {"type": "array", "items": {"$ref": "#/$defs/model_requirement"}}
+      },
+      "additionalProperties": true
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "runtime": {"$ref": "#/$defs/resource"},
+        "model": {"$ref": "#/$defs/resource"},
+        "accelerator": {"$ref": "#/$defs/resource"},
+        "driver": {"$ref": "#/$defs/resource"},
+        "configuration": {"$ref": "#/$defs/resource"},
+        "provider": {"$ref": "#/$defs/resource"}
+      },
+      "additionalProperties": true
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string"},
+        "selected_id": {"type": "string"},
+        "registration_id": {"type": "string"},
+        "ownership": {"type": "string", "enum": ["transvortex", "external", "system"]},
+        "executor": {"type": "string", "enum": ["transvortex", "agent"]},
+        "prepare_executor": {"type": "string", "enum": ["transvortex", "agent"]},
+        "state": {"type": "string"},
+        "operations": {"type": "array", "items": {"type": "string"}},
+        "supported_sources": {"type": "array", "items": {"type": "string", "enum": ["managed", "external", "system"]}},
+        "source_options": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
       },
       "additionalProperties": true
     },
@@ -373,7 +408,7 @@
     "requested": {
       "type": "object",
       "properties": {
-        "route": {"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external", "auto"]},
+        "provider_mode": {"type": "string", "enum": ["local_worker", "local_service", "remote_provider", "auto"]},
         "model_id": {"type": "string"},
         "model_revision": {"type": "string"},
         "device": {"type": "string", "enum": ["auto", "cuda", "cpu"]},
@@ -384,9 +419,9 @@
     },
     "alternative": {
       "type": "object",
-      "required": ["route", "rank", "reason"],
+      "required": ["provider_mode", "rank", "reason"],
       "properties": {
-        "route": {"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]},
+        "provider_mode": {"type": "string", "enum": ["local_worker", "local_service", "remote_provider"]},
         "rank": {"type": "integer", "minimum": 1},
         "reason": {"type": "string"},
         "observed": {"type": "boolean"},
@@ -409,11 +444,11 @@
     },
     "plan": {
       "type": "object",
-      "required": ["plan_id", "created_at", "route", "actions", "rollback"],
+      "required": ["plan_id", "created_at", "provider_mode", "actions", "rollback"],
       "properties": {
         "plan_id": {"type": "string"},
         "created_at": {"type": "string", "format": "date-time"},
-        "route": {"oneOf": [{"type": "string", "enum": ["managed", "reuse_model", "local_service", "remote_provider", "cli_external"]}, {"type": "null"}]},
+        "provider_mode": {"oneOf": [{"type": "string", "enum": ["local_worker", "local_service", "remote_provider"]}, {"type": "null"}]},
         "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
         "rollback": {"type": "array", "items": {"type": "string"}}
       },
@@ -436,6 +471,10 @@
       "properties": {
         "id": {"type": "string"},
         "kind": {"type": "string"},
+        "resource": {"type": "string", "enum": ["environment", "runtime", "model", "accelerator", "driver", "configuration", "provider"]},
+        "operation": {"type": "string", "enum": ["inspect", "prepare", "apply", "register", "activate", "verify"]},
+        "executor": {"type": "string", "enum": ["transvortex", "agent"]},
+        "ownership": {"type": "string", "enum": ["transvortex", "external", "system", "none"]},
         "description": {"type": "string"},
         "mutating": {"type": "boolean"},
         "requires_confirmation": {"type": "boolean"},
@@ -445,6 +484,7 @@
         "may_cost_money": {"type": "boolean"},
         "command": {"type": "string"},
         "argv": {"type": "array", "items": {"type": "string"}},
+        "argv_template": {"type": "array", "items": {"type": "string"}},
         "inputs": {"type": "object", "additionalProperties": true},
         "expected_outputs": {"type": "array", "items": {"type": "string"}},
         "rollback": {"type": "string"}
@@ -502,7 +542,7 @@
       "type": "object",
       "properties": {
         "status": {"type": "string", "enum": ["ready", "needs_user", "blocked", "failed"]},
-        "route": {"type": "string"},
+        "provider_mode": {"type": "string"},
         "actions": {"type": "array", "items": {"$ref": "#/$defs/action_result"}},
         "verification": {"type": "object", "additionalProperties": true},
         "next": {"type": "array", "items": {"type": "string"}},

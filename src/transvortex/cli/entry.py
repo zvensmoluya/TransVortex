@@ -19,6 +19,8 @@ from ..artifacts.result_workspace import (
 from ..artifacts.catalog import TaskCatalog
 from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
+from ..app.asr_admin import activate_asr_resources
+from ..app.asr_operations import AsrOperationError, AsrOperationManager
 from ..app.config import apply_route_overrides, load_app_config, resolve_providers_file
 from ..app.credentials import (
     auth_file_path,
@@ -42,7 +44,11 @@ from ..app.desktop_requests import (
     run_request_to_payload,
 )
 from ..app.doctor import doctor_report, format_doctor_report
-from ..app.asr_runtime import asr_provider_endpoint_policy_code
+from ..app.asr_runtime import (
+    asr_provider_endpoint_policy_code,
+    probe_external_accelerator,
+    probe_external_model,
+)
 from ..app.asr_testing import run_asr_connection_test
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..formats.srt import parse_srt_file
@@ -956,6 +962,54 @@ def _build_parser() -> argparse.ArgumentParser:
     asr_setup_verify_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
     asr_setup_verify_p.add_argument("--json", action="store_true", help="Print machine-readable verification result")
     asr_setup_verify_p.add_argument("--strict", action="store_true", help="Exit with code 1 when verification is not ready")
+    asr_setup_apply_p = asr_sub.add_parser(
+        "setup-apply",
+        help="Apply a TransVortex-managed ASR resource action and wait for completion",
+    )
+    asr_setup_apply_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_setup_apply_p.add_argument(
+        "--resource",
+        choices=["setup", "runtime", "model", "accelerator"],
+        required=True,
+    )
+    asr_setup_apply_p.add_argument("--item-id", default="")
+    asr_setup_apply_p.add_argument("--json", action="store_true")
+    for command_name, save_result in (("model-probe", False), ("model-register", True)):
+        command = asr_sub.add_parser(
+            command_name,
+            help=("Register" if save_result else "Probe") + " an Agent- or user-prepared Whisper model",
+        )
+        command.add_argument("--model-path", required=True)
+        command.add_argument("--providers-file", dest="setup_providers_file", default=None)
+        command.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+        command.add_argument("--compute-type", default="auto")
+        command.add_argument("--accelerator-root", default=None)
+        command.add_argument("--timeout-seconds", type=float, default=120.0)
+        command.add_argument("--json", action="store_true")
+    for command_name, save_result in (("accelerator-probe", False), ("accelerator-register", True)):
+        command = asr_sub.add_parser(
+            command_name,
+            help=("Register" if save_result else "Probe") + " an Agent-prepared NVIDIA accelerator directory",
+        )
+        command.add_argument("--accelerator-root", required=True)
+        command.add_argument("--providers-file", dest="setup_providers_file", default=None)
+        command.add_argument("--accelerator-id", default="nvidia-cuda12")
+        command.add_argument("--compute-type", default="auto")
+        command.add_argument("--timeout-seconds", type=float, default=120.0)
+        command.add_argument("--json", action="store_true")
+    asr_resources_activate_p = asr_sub.add_parser(
+        "resources-activate",
+        help="Attach registered or managed ASR resources to a local worker configuration",
+    )
+    asr_resources_activate_p.add_argument("--provider", default="")
+    asr_resources_activate_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_resources_activate_p.add_argument("--managed-model-id", default="")
+    asr_resources_activate_p.add_argument("--model-registration-id", default="")
+    asr_resources_activate_p.add_argument("--managed-accelerator-id", default="")
+    asr_resources_activate_p.add_argument("--accelerator-registration-id", default="")
+    asr_resources_activate_p.add_argument("--device", choices=["auto", "cpu", "cuda"], default="")
+    asr_resources_activate_p.add_argument("--compute-type", default="")
+    asr_resources_activate_p.add_argument("--json", action="store_true")
     asr_provider_test_p = asr_sub.add_parser(
         "provider-test",
         help="Run an authorized ASR route probe and record its non-secret status",
@@ -1027,6 +1081,182 @@ def main() -> None:
             _print_json(payload)
         else:
             print(payload)
+        return
+
+    asr_command = getattr(args, "asr_command", None) if args.command == "asr" else None
+    if asr_command == "setup-apply":
+        operation_id = ""
+        try:
+            config = load_app_config(root_dir=root, providers_file=providers_file)
+            manager = AsrOperationManager(root_dir=root, network=config.network)
+            if args.resource == "setup":
+                if not args.item_id:
+                    raise AsrOperationError("model_required", "--item-id is required for a setup apply")
+                operation = manager.start_setup(args.item_id)
+            else:
+                if args.resource in {"model", "accelerator"} and not args.item_id:
+                    raise AsrOperationError("item_required", f"--item-id is required for {args.resource}")
+                operation = manager.start_install(args.resource, args.item_id)
+            operation_id = str(operation.get("id") or "")
+            final = manager.wait(operation_id)
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": "managed_apply",
+                "ok": final.get("state") == "completed",
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "resource": args.resource,
+                "operation": final,
+            }
+        except KeyboardInterrupt:
+            if operation_id:
+                manager.cancel(operation_id)
+                final = manager.wait(operation_id)
+            else:
+                final = {}
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": "managed_apply",
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "resource": args.resource,
+                "operation": final,
+                "error": {"code": "cancelled", "message": "Managed apply cancelled"},
+            }
+        except AsrOperationError as exc:
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": "managed_apply",
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "resource": args.resource,
+                "error": {"code": exc.code, "message": str(exc)},
+            }
+        except Exception as exc:  # noqa: BLE001 - keep Agent-facing mutations structured
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": "managed_apply",
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "resource": args.resource,
+                "error": {"code": "managed_apply_failed", "message": str(exc)},
+            }
+        _print_json(payload)
+        if payload.get("ok") is not True:
+            raise SystemExit(1)
+        return
+
+    if asr_command in {"model-probe", "model-register"}:
+        try:
+            payload = probe_external_model(
+                root_dir=root,
+                model_path=Path(args.model_path),
+                device=args.device,
+                compute_type=args.compute_type,
+                accelerator_root=Path(args.accelerator_root) if args.accelerator_root else None,
+                timeout_seconds=args.timeout_seconds,
+                save=asr_command == "model-register",
+            )
+            payload.update(
+                {
+                    "schema_version": 2,
+                    "contract": "transvortex.agent_setup",
+                    "kind": asr_command.replace("-", "_"),
+                    "executor": "transvortex",
+                    "ownership": "external",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - keep Agent-facing probes structured
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": asr_command.replace("-", "_"),
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "external",
+                "error": {"code": "model_probe_failed", "message": str(exc)},
+            }
+        _print_json(payload)
+        if payload.get("ok") is not True:
+            raise SystemExit(1)
+        return
+
+    if asr_command in {"accelerator-probe", "accelerator-register"}:
+        try:
+            payload = probe_external_accelerator(
+                root_dir=root,
+                accelerator_root=Path(args.accelerator_root),
+                accelerator_id=args.accelerator_id,
+                compute_type=args.compute_type,
+                save=asr_command == "accelerator-register",
+                timeout_seconds=args.timeout_seconds,
+            )
+            payload.update(
+                {
+                    "schema_version": 2,
+                    "contract": "transvortex.agent_setup",
+                    "kind": asr_command.replace("-", "_"),
+                    "executor": "transvortex",
+                    "ownership": "external",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - keep Agent-facing probes structured
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": asr_command.replace("-", "_"),
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "external",
+                "error": {"code": "accelerator_probe_failed", "message": str(exc)},
+            }
+        _print_json(payload)
+        if payload.get("ok") is not True:
+            raise SystemExit(1)
+        return
+
+    if asr_command == "resources-activate":
+        try:
+            payload = activate_asr_resources(
+                root_dir=root,
+                providers_file=providers_file,
+                provider_name=args.provider,
+                managed_model_id=args.managed_model_id,
+                model_registration_id=args.model_registration_id,
+                managed_accelerator_id=args.managed_accelerator_id,
+                accelerator_registration_id=args.accelerator_registration_id,
+                device=args.device,
+                compute_type=args.compute_type,
+            )
+            payload.update(
+                {
+                    "schema_version": 2,
+                    "contract": "transvortex.agent_setup",
+                    "kind": "resources_activate",
+                    "executor": "transvortex",
+                    "ownership": "transvortex",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - keep Agent-facing config writes structured
+            payload = {
+                "schema_version": 2,
+                "contract": "transvortex.agent_setup",
+                "kind": "resources_activate",
+                "ok": False,
+                "executor": "transvortex",
+                "ownership": "transvortex",
+                "error": {"code": "resource_activation_failed", "message": str(exc)},
+            }
+        _print_json(payload)
+        if payload.get("ok") is not True:
+            raise SystemExit(1)
         return
 
     if args.command == "asr" and getattr(args, "asr_command", None) == "provider-test":

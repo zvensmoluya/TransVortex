@@ -3922,6 +3922,13 @@ void main() {
           'schema_version': 1,
           'registered': true,
           'asr_environment_handoff_text': 'read ASR workflow',
+          'asr_environment_handoffs': {
+            'inspect': 'inspect this machine',
+            'prepare_model': 'prepare the model',
+            'prepare_accelerator': 'prepare NVIDIA resources',
+            'register': 'register existing resources',
+            'full': 'read ASR workflow',
+          },
         };
       }
       throw RpcRemoteException('method_not_found', method);
@@ -3937,9 +3944,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
     await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('准备 GPU 加速'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('asr-agent-scope-accelerator')));
+    await tester.pumpAndSettle();
 
-    expect(clipboardText, 'read ASR workflow');
-    expect(find.text('ASR 环境交接已复制。'), findsOneWidget);
+    expect(clipboardText, 'prepare NVIDIA resources');
+    expect(find.text('已复制“准备 GPU 加速”交接。'), findsOneWidget);
     expectNoFlutterException();
   });
 

@@ -225,6 +225,13 @@ void main() {
           'capabilities_argv': ['python.exe', 'agent-info', '--json'],
           'handoff_text': 'general handoff',
           'asr_environment_handoff_text': 'asr handoff',
+          'asr_environment_handoffs': {
+            'inspect': 'inspect handoff',
+            'prepare_model': 'model handoff',
+            'prepare_accelerator': 'accelerator handoff',
+            'register': 'register handoff',
+            'full': 'full handoff',
+          },
         },
       }),
     );
@@ -237,6 +244,7 @@ void main() {
     expect(entry.cliArgvPrefix[3], 'transvortex.cli');
     expect(entry.documentPath('usage'), endsWith('AGENT_USAGE.md'));
     expect(entry.asrEnvironmentHandoffText, 'asr handoff');
+    expect(entry.asrEnvironmentHandoffs['prepare_model'], 'model handoff');
   });
 
   test('ServiceHealth active task label uses user facing text', () {
@@ -1522,7 +1530,7 @@ routing:
       });
       final client = AppServiceClient(transport);
 
-      final result = await client.probeManagedAsrModel(
+      final result = await client.probeExternalAsrModel(
         modelPath: r'D:\Models\large-v3',
         device: 'cpu',
       );
@@ -1558,7 +1566,7 @@ routing:
     });
     final client = AppServiceClient(transport);
 
-    final result = await client.discoverManagedAsrModels(r'D:\Models');
+    final result = await client.discoverExternalAsrModels(r'D:\Models');
 
     expect(result.ok, isTrue);
     expect(result.scannedDirectories, 12);

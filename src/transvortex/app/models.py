@@ -312,6 +312,12 @@ class AsrRuntimeConfig:
 
 
 @dataclass
+class AsrAcceleratorConfig:
+    source: str = "managed"  # managed | external
+    id: str = "nvidia-cuda12"
+
+
+@dataclass
 class AsrAuthConfig:
     type: str = "bearer"  # none | bearer
     env_key: str = "TVX_MODEL_API_KEY"
@@ -368,6 +374,7 @@ class AsrProviderConfig:
     auth: AsrAuthConfig = field(default_factory=AsrAuthConfig)
     local: AsrLocalConfig = field(default_factory=AsrLocalConfig)
     runtime: AsrRuntimeConfig = field(default_factory=AsrRuntimeConfig)
+    accelerator: AsrAcceleratorConfig = field(default_factory=AsrAcceleratorConfig)
     execution: AsrExecutionConfig = field(default_factory=AsrExecutionConfig)
     chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
     preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())

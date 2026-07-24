@@ -32,14 +32,20 @@ from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
 from .agent_entry import AgentEntryError, agent_entry_service_payload
-from .asr_admin import draft_to_asr_provider_config, pipeline_file_version, save_asr_provider_config
+from .asr_admin import (
+    activate_asr_resources,
+    draft_to_asr_provider_config,
+    pipeline_file_version,
+    save_asr_provider_config,
+)
 from .asr_operations import AsrOperationError, AsrOperationManager
 from .asr_runtime import (
     asr_provider_readiness,
     asr_runtime_snapshot,
     discover_external_models,
     discover_python_environments,
-    probe_managed_model,
+    probe_external_accelerator,
+    probe_external_model,
     probe_python_environment,
     save_external_environment,
 )
@@ -76,6 +82,8 @@ SERVICE_CAPABILITIES = [
     "asr_storage_settings",
     "asr_model_discovery",
     "asr_model_probe",
+    "asr_accelerator_probe",
+    "asr_resource_activation",
     "asr_environment_probe",
     "agent_entry",
     "media_inspection",
@@ -154,6 +162,8 @@ class DesktopApi:
             "asr.hardware.probe": self.asr_hardware_probe,
             "asr.model.discover": self.asr_model_discover,
             "asr.model.probe": self.asr_model_probe,
+            "asr.accelerator.probe": self.asr_accelerator_probe,
+            "asr.resources.activate": self.asr_resources_activate,
             "asr.environment.discover": self.asr_environment_discover,
             "asr.environment.probe": self.asr_environment_probe,
             "media.inspect": self.media_inspect,
@@ -518,17 +528,53 @@ class DesktopApi:
             raise DesktopApiError(exc.code, str(exc)) from exc
 
     def asr_model_probe(self, params: dict[str, Any]) -> dict[str, Any]:
-        return probe_managed_model(
+        return probe_external_model(
             root_dir=self.root_dir,
             model_path=Path(_required_text(params, "model_path", "modelPath")),
             device=_optional_text(params, "device") or "auto",
             compute_type=_optional_text(params, "compute_type", "computeType") or "auto",
+            accelerator_root=Path(raw_accelerator_root)
+            if (raw_accelerator_root := _optional_text(params, "accelerator_root", "acceleratorRoot"))
+            else None,
             timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
         )
 
     def asr_model_discover(self, params: dict[str, Any]) -> dict[str, Any]:
         return discover_external_models(
             Path(_required_text(params, "search_root", "searchRoot", "path"))
+        )
+
+    def asr_accelerator_probe(self, params: dict[str, Any]) -> dict[str, Any]:
+        return probe_external_accelerator(
+            root_dir=self.root_dir,
+            accelerator_root=Path(_required_text(params, "accelerator_root", "acceleratorRoot", "path")),
+            accelerator_id=_optional_text(params, "accelerator_id", "acceleratorId", "id") or "nvidia-cuda12",
+            compute_type=_optional_text(params, "compute_type", "computeType") or "auto",
+            save=_optional_bool(params, "save") is True,
+            timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
+        )
+
+    def asr_resources_activate(self, params: dict[str, Any]) -> dict[str, Any]:
+        return activate_asr_resources(
+            root_dir=self.root_dir,
+            provider_name=_optional_text(params, "provider", "provider_name", "providerName") or "",
+            managed_model_id=_optional_text(params, "managed_model_id", "managedModelId") or "",
+            model_registration_id=_optional_text(params, "model_registration_id", "modelRegistrationId") or "",
+            managed_accelerator_id=_optional_text(
+                params,
+                "managed_accelerator_id",
+                "managedAcceleratorId",
+            )
+            or "",
+            accelerator_registration_id=_optional_text(
+                params,
+                "accelerator_registration_id",
+                "acceleratorRegistrationId",
+            )
+            or "",
+            device=_optional_text(params, "device") or "",
+            compute_type=_optional_text(params, "compute_type", "computeType") or "",
+            expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
         )
 
     def asr_environment_discover(self, _params: dict[str, Any]) -> dict[str, Any]:

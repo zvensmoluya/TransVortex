@@ -821,13 +821,13 @@ class AppServiceClient {
     return call('asr.hardware.probe').then(_stringMap);
   }
 
-  Future<AsrModelDiscovery> discoverManagedAsrModels(String searchRoot) async {
+  Future<AsrModelDiscovery> discoverExternalAsrModels(String searchRoot) async {
     return AsrModelDiscovery.fromJson(
       await call('asr.model.discover', {'search_root': searchRoot}),
     );
   }
 
-  Future<Map<String, Object?>> probeManagedAsrModel({
+  Future<Map<String, Object?>> probeExternalAsrModel({
     required String modelPath,
     String device = 'auto',
     String computeType = 'auto',
@@ -979,6 +979,7 @@ class AgentEntryInfo {
     required this.capabilitiesArgv,
     required this.handoffText,
     required this.asrEnvironmentHandoffText,
+    required this.asrEnvironmentHandoffs,
   });
 
   final int schemaVersion;
@@ -995,6 +996,7 @@ class AgentEntryInfo {
   final List<String> capabilitiesArgv;
   final String handoffText;
   final String asrEnvironmentHandoffText;
+  final Map<String, String> asrEnvironmentHandoffs;
 
   factory AgentEntryInfo.fromJson(Object? value) {
     final map = _stringMap(value);
@@ -1014,6 +1016,9 @@ class AgentEntryInfo {
       handoffText: _stringValue(map['handoff_text']) ?? '',
       asrEnvironmentHandoffText:
           _stringValue(map['asr_environment_handoff_text']) ?? '',
+      asrEnvironmentHandoffs: _stringMap(
+        map['asr_environment_handoffs'],
+      ).map((key, value) => MapEntry(key, _stringValue(value) ?? '')),
     );
   }
 

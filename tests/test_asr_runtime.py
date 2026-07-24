@@ -19,7 +19,8 @@ from transvortex.app.asr_runtime import (
     discover_external_models,
     discover_python_environments,
     load_asr_runtime_state,
-    probe_managed_model,
+    probe_external_accelerator,
+    probe_external_model,
     probe_python_environment,
     provider_test_fingerprint,
     resolve_whisper_runtime,
@@ -27,7 +28,13 @@ from transvortex.app.asr_runtime import (
     save_external_environment,
 )
 from transvortex.app.media_inspect import inspect_media_source
-from transvortex.app.models import AsrAuthConfig, AsrLocalConfig, AsrProviderConfig, AsrRuntimeConfig
+from transvortex.app.models import (
+    AsrAcceleratorConfig,
+    AsrAuthConfig,
+    AsrLocalConfig,
+    AsrProviderConfig,
+    AsrRuntimeConfig,
+)
 from transvortex.utils import write_json
 
 
@@ -819,7 +826,7 @@ def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, m
         },
     )
 
-    result = probe_managed_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+    result = probe_external_model(root_dir=tmp_path, model_path=model_root, device="cpu")
     provider = AsrProviderConfig(
         name="whisper",
         kind="local_worker",
@@ -848,6 +855,109 @@ def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, m
     state["models"][result["model"]["id"]]["probe"] = "invalid"
     save_asr_runtime_state(paths, state)
     assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "model_unverified"
+
+
+def test_managed_runtime_registers_and_resolves_external_accelerator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    catalog = _catalog()
+    catalog["accelerators"] = [
+        {
+            "id": "nvidia-cuda12",
+            "version": "12.4",
+            "platform": "windows-x64",
+            "packages": {
+                "nvidia-cuda-runtime-cu12": "12.4.127",
+                "nvidia-cuda-nvrtc-cu12": "12.4.127",
+                "nvidia-cublas-cu12": "12.4.5.8",
+                "nvidia-cudnn-cu12": "9.1.0.70",
+            },
+            "artifact": {"published": False, "url": "", "size": 0, "sha256": ""},
+        }
+    ]
+    catalog_path = tmp_path / "catalog.json"
+    write_json(catalog_path, catalog)
+    monkeypatch.setenv("TRANSVORTEX_ASR_CATALOG", str(catalog_path))
+    paths = asr_runtime_paths(tmp_path)
+    runtime_root = paths.components_root / "faster-whisper" / "1.0.0"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "python.exe").write_bytes(b"")
+    write_json(
+        runtime_root / "component.json",
+        {
+            "id": "managed:faster-whisper",
+            "version": "1.0.0",
+            "python": "python.exe",
+            "protocol_version": 1,
+        },
+    )
+    model_root = paths.models_root / "small" / "pinned-revision"
+    model_root.mkdir(parents=True)
+    (model_root / "model.bin").write_bytes(b"trusted-model")
+    write_json(model_root / "model.json", {"id": "small", "revision": "pinned-revision"})
+    accelerator_root = tmp_path / "agent-prepared-cuda"
+    for relative in (
+        "nvidia/cuda_runtime/bin",
+        "nvidia/cuda_nvrtc/bin",
+        "nvidia/cublas/bin",
+        "nvidia/cudnn/bin",
+    ):
+        directory = accelerator_root / relative
+        directory.mkdir(parents=True)
+        (directory / "test.dll").write_bytes(relative.encode("ascii"))
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.probe_python_environment",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "code": "ready",
+            "protocol_version": 1,
+            "cuda": {
+                "available": True,
+                "device_count": 1,
+                "compute_types": ["float16", "int8_float16"],
+            },
+        },
+    )
+
+    registered = probe_external_accelerator(
+        root_dir=tmp_path,
+        accelerator_root=accelerator_root,
+        compute_type="float16",
+        save=True,
+    )
+    registration_id = registered["accelerator"]["id"]
+    provider = AsrProviderConfig(
+        name="whisper",
+        kind="local_worker",
+        protocol="faster_whisper",
+        model="small",
+        runtime=AsrRuntimeConfig(source="managed", id="managed:faster-whisper"),
+        accelerator=AsrAcceleratorConfig(source="external", id=registration_id),
+        local=AsrLocalConfig(
+            model_size="small",
+            model_source="managed",
+            device="cuda",
+            compute_type="float16",
+        ),
+    )
+
+    assert registered["ok"] is True
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
+    resolved = resolve_whisper_runtime(provider, root_dir=tmp_path)
+    assert resolved["accelerator_root"] == str(accelerator_root.resolve())
+    assert resolved["accelerator_source"] == "external"
+
+    removed = AsrOperationManager(root_dir=tmp_path, catalog=catalog).remove(
+        "accelerator",
+        "nvidia-cuda12",
+    )
+    assert removed["removed"] is False
+    assert accelerator_root.is_dir()
+    assert registration_id in load_asr_runtime_state(paths)["accelerators"]
+
+    (accelerator_root / "nvidia" / "cudnn" / "bin" / "test.dll").write_bytes(b"changed")
+    assert asr_provider_readiness(provider, root_dir=tmp_path)["code"] == "accelerator_changed"
 
 
 def test_external_model_discovery_accepts_parent_with_multiple_candidates(
@@ -918,7 +1028,7 @@ def test_managed_runtime_accepts_loadable_custom_ctranslate2_model(
         },
     )
 
-    result = probe_managed_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+    result = probe_external_model(root_dir=tmp_path, model_path=model_root, device="cpu")
 
     assert result["ok"] is True
     assert result["model"]["model_id"].startswith("custom-")

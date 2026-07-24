@@ -486,11 +486,55 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               ),
             ),
             const SizedBox(width: T.s12),
-            ActionButton(
-              key: const ValueKey('asr-agent-handoff'),
-              label: '交给 Agent',
-              icon: Icons.terminal_rounded,
-              onTap: _copyingAgentHandoff ? null : _copyAsrAgentHandoff,
+            MenuAnchor(
+              menuChildren: [
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-inspect'),
+                  leadingIcon: const Icon(Icons.manage_search_rounded),
+                  onPressed: () => _copyAsrAgentHandoff('inspect', '侦查本机'),
+                  child: const Text('侦查本机'),
+                ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-model'),
+                  leadingIcon: const Icon(Icons.view_in_ar_rounded),
+                  onPressed: () =>
+                      _copyAsrAgentHandoff('prepare_model', '准备模型'),
+                  child: const Text('准备模型'),
+                ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-accelerator'),
+                  leadingIcon: const Icon(Icons.memory_rounded),
+                  onPressed: () =>
+                      _copyAsrAgentHandoff('prepare_accelerator', '准备 GPU 加速'),
+                  child: const Text('准备 GPU 加速'),
+                ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-register'),
+                  leadingIcon: const Icon(Icons.link_rounded),
+                  onPressed: () => _copyAsrAgentHandoff('register', '接入已有资源'),
+                  child: const Text('接入已有资源'),
+                ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-full'),
+                  leadingIcon: const Icon(Icons.build_circle_outlined),
+                  onPressed: () => _copyAsrAgentHandoff('full', '完整准备'),
+                  child: const Text('完整准备'),
+                ),
+              ],
+              builder: (context, controller, child) => ActionButton(
+                key: const ValueKey('asr-agent-handoff'),
+                label: '交给 Agent',
+                icon: Icons.terminal_rounded,
+                onTap: _copyingAgentHandoff
+                    ? null
+                    : () {
+                        if (controller.isOpen) {
+                          controller.close();
+                        } else {
+                          controller.open();
+                        }
+                      },
+              ),
             ),
           ],
         ),
@@ -692,7 +736,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                         successMessage:
                             '${_asrExternalModelLabel(_detectedExternalModelId)} 已设为默认。',
                       )
-                    : _probeManagedAsrModel
+                    : _probeExternalAsrModel
               : storageHasSpace
               ? () => _startAsrInstall('runtime')
               : null,
@@ -1393,7 +1437,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _error = null;
     });
     try {
-      final discovery = await _client.discoverManagedAsrModels(path.trim());
+      final discovery = await _client.discoverExternalAsrModels(path.trim());
       if (!mounted) return;
       if (!discovery.ok) {
         setState(() {
@@ -1481,7 +1525,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     );
   }
 
-  Future<void> _probeManagedAsrModel() async {
+  Future<void> _probeExternalAsrModel() async {
     final targetProvider = _asrProviderNameForSelection(_selectedAsrProvider);
     final targetPath = _externalModelPath.text.trim();
     final targetDevice = _device.text;
@@ -1492,7 +1536,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _message = null;
     });
     try {
-      final result = await _client.probeManagedAsrModel(
+      final result = await _client.probeExternalAsrModel(
         modelPath: targetPath,
         device: targetDevice,
       );
@@ -1533,7 +1577,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     }
   }
 
-  Future<void> _copyAsrAgentHandoff() async {
+  Future<void> _copyAsrAgentHandoff(String scope, String label) async {
     if (_copyingAgentHandoff) return;
     setState(() {
       _copyingAgentHandoff = true;
@@ -1542,13 +1586,16 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     });
     try {
       final entry = await _client.agentEntry();
-      final text = entry.asrEnvironmentHandoffText.trim();
+      final scopedText = entry.asrEnvironmentHandoffs[scope]?.trim() ?? '';
+      final text = scopedText.isNotEmpty
+          ? scopedText
+          : entry.asrEnvironmentHandoffText.trim();
       if (text.isEmpty) {
         throw StateError('ASR Agent handoff is empty');
       }
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      setState(() => _message = 'ASR 环境交接已复制。');
+      setState(() => _message = '已复制“$label”交接。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlyAgentEntryError(error));

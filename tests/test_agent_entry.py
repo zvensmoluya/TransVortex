@@ -8,6 +8,7 @@ import pytest
 from transvortex.app.agent_entry import (
     AgentEntryError,
     build_installed_agent_entry,
+    agent_entry_service_payload,
     register_agent_entry,
     remove_agent_entry,
     runtime_agent_context,
@@ -82,6 +83,21 @@ def test_runtime_context_discovers_registered_install_from_nested_executable(tmp
     assert payload["registered"] is True
     assert payload["install_root"] == str(install_root.resolve())
     assert payload["cli_argv_prefix"][0] == str(executable.resolve())
+
+
+def test_agent_entry_service_payload_offers_scoped_asr_handoffs(tmp_path: Path) -> None:
+    install_root, config_root = _installed_layout(tmp_path)
+    executable = install_root / "runtime" / "python" / "python.exe"
+
+    payload = agent_entry_service_payload(config_root=config_root, executable=executable)
+
+    handoffs = payload["asr_environment_handoffs"]
+    assert set(handoffs) == {"inspect", "prepare_model", "prepare_accelerator", "register", "full"}
+    assert "暂不准备或接入资源" in handoffs["inspect"]
+    assert "模型" in handoffs["prepare_model"]
+    assert "NVIDIA" in handoffs["prepare_accelerator"]
+    assert "不重新下载" in handoffs["register"]
+    assert payload["asr_environment_handoff_text"] == handoffs["full"]
 
 
 def test_source_context_does_not_create_a_stable_entry(tmp_path: Path) -> None:

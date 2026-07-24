@@ -58,7 +58,7 @@ Base URL 表示模型 API 或中转网关地址，不表示本机网络代理。
 
 进程内 `faster-whisper` 仍保留给 CLI 和开发实验，但 Flutter 全新配置不会创建该入口。环境缺失时给出与当前方案对应的修复动作，不展开完整 doctor 报告。
 
-语音识别设置提供“交给 Agent”上下文动作。它从 Local Service 取得当前安装的稳定入口和 ASR workflow，复制一段短交接；不内嵌完整 Prompt，不导出通用 Skill，也不把只读 plan 当成 apply。没有正式安装入口时明确显示不可用，不猜 CLI 路径。
+语音识别设置提供“交给 Agent”上下文菜单，用户可以选择侦查本机、准备模型、准备 GPU 加速、接入已有资源或完整准备。它从 Local Service 取得当前安装的稳定入口和 ASR workflow，复制对应范围的短交接；Agent 可使用自身工具准备外部资源，也可调用能力契约广告的托管 apply，随后通过 probe/register、activate 和 strict verify 接回应用。没有正式安装入口时明确显示不可用，不猜 CLI 路径。
 
 语音识别设置同时提供受管资源管理入口，让用户在当前识别上下文中直接删除 TransVortex 下载的运行组件、模型或未来的加速组件。用户自行选择并原地使用的模型不属于应用资产，不显示在清理列表中，也不会被应用删除。
 

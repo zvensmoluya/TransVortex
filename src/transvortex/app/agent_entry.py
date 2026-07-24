@@ -159,10 +159,13 @@ def agent_entry_service_payload(*, config_root: Path, executable: Path | None = 
     entry_document = str(agent_entry_root(config_root) / AGENT_ENTRY_DOCUMENT_NAME)
     result = dict(payload)
     result["handoff_text"] = _handoff_text(entry_document)
-    result["asr_environment_handoff_text"] = _handoff_text(
-        entry_document,
-        workflow=str(payload["documents"]["asr_environment_setup"]),
-    )
+    workflow = str(payload["documents"]["asr_environment_setup"])
+    asr_handoffs = {
+        scope: _asr_handoff_text(entry_document, workflow=workflow, scope=scope)
+        for scope in ("inspect", "prepare_model", "prepare_accelerator", "register", "full")
+    }
+    result["asr_environment_handoffs"] = asr_handoffs
+    result["asr_environment_handoff_text"] = asr_handoffs["full"]
     return result
 
 
@@ -248,6 +251,24 @@ def _handoff_text(entry_document: str, *, workflow: str | None = None) -> str:
         "先读取该文件和同目录的 `current.json`，再执行其中的 `capabilities_argv` 获取当前能力契约"
         f"{workflow_text}。"
         "不要假设 `transvortex` 已加入 PATH，也不要读取或输出凭据值。"
+    )
+
+
+def _asr_handoff_text(entry_document: str, *, workflow: str, scope: str) -> str:
+    goals = {
+        "inspect": "侦查这台电脑当前的 ASR、GPU、驱动、磁盘和可复用资源，只给出结论与可执行方案，暂不准备或接入资源",
+        "prepare_model": "侦查本机后准备一个适合当前配置的 Whisper 模型；可调用 TransVortex 托管下载，也可用你自己的工具准备外部模型，并在完成后注册、激活和验证",
+        "prepare_accelerator": "侦查本机 NVIDIA GPU、驱动和用户态 CUDA 资源后准备可用的 GPU 加速；可调用 TransVortex 托管下载，也可用你自己的工具准备外部资源，并在完成后注册、激活和验证",
+        "register": "接入用户已经准备好的模型或 GPU 加速资源；先探测，随后使用 TransVortex 广告的注册、激活和验证命令，不重新下载资源",
+        "full": "侦查这台电脑并把本地 ASR 环境准备到可用；TransVortex runtime 使用产品托管版本，模型和 GPU 加速可分别选择托管资源或由你准备外部资源，最后注册、激活并完成严格验证",
+    }
+    goal = goals.get(scope, goals["full"])
+    return (
+        "请使用本机安装的 TransVortex。"
+        f"稳定入口：`{entry_document}`；ASR 环境与资源工作流：`{workflow}`。"
+        "先读取入口、current.json 和 capabilities_argv 返回的当前契约。"
+        f"本次范围：{goal}。"
+        "把执行模式与 runtime、模型、GPU 加速资源的来源分别处理，并以 setup-verify --strict 的结构化结果作为完成依据。"
     )
 
 

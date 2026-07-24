@@ -178,6 +178,22 @@ class AsrOperationManager:
             payload = read_json(path)
             return payload if isinstance(payload, dict) else {}
 
+    def wait(self, operation_id: str, *, poll_seconds: float = 0.1) -> dict[str, Any]:
+        while True:
+            operation = self.operation(operation_id)
+            if operation.get("state") not in ACTIVE_OPERATION_STATES:
+                return operation
+            with self._lock:
+                thread = self._threads.get(operation_id)
+            if thread is None:
+                return self._finish(
+                    operation_id,
+                    "failed",
+                    error_code="operation_interrupted",
+                    message="The installer process is no longer running",
+                )
+            thread.join(max(poll_seconds, 0.01))
+
     def operations(self) -> list[dict[str, Any]]:
         with self._lock:
             if not self.paths.operations_root.is_dir():

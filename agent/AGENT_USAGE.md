@@ -24,7 +24,6 @@ that command is globally installed. Start with:
 ```powershell
 transvortex agent-info --json
 transvortex asr setup-plan --json
-transvortex doctor --json
 transvortex probe-provider --strict
 ```
 
@@ -40,13 +39,11 @@ send a network request. It is not an ASR route probe.
 
 ## ASR Environment Setup Contract
 
-`asr setup-plan --json` emits the versioned, read-only
-`transvortex.agent_setup` contract. It reports the active ASR route, pinned
-runtime/model requirements, installed component state, safe credential metadata,
-blocking items, and the exact verification command. It does not install assets,
-write configuration, invoke `pip`, change a driver, or access the network. If a
-route has not been confirmed, an Agent must keep `route` as `null` and return
-ranked alternatives rather than guessing.
+`asr setup-plan --json` emits version 2 of the read-only
+`transvortex.agent_setup` contract. `provider_mode` describes where ASR runs;
+`resources` separately describes runtime, model, accelerator, driver, and
+configuration sources. `plan.actions[]` identifies the executor and ownership
+for every preparation, apply, registration, activation, and verification step.
 For a setup plan, `ok: true` means the contract was generated; it does not mean
 the environment is usable. Use `ready: true`, `plan_status: "ready"`, and an
 empty blocking list together before presenting the plan as ready.
@@ -59,8 +56,33 @@ Execute the returned `agent_argv` or `plan.actions[].argv` arrays directly so
 follow-up commands use the same resolved root and providers file; do not rebuild
 them by concatenating an unquoted shell command.
 
-After an explicitly approved plan has been applied through an advertised
-TransVortex capability or the native desktop wizard, run:
+For TransVortex-managed resources, use the advertised apply operation:
+
+```powershell
+transvortex asr setup-apply --resource runtime --json
+transvortex asr setup-apply --resource model --item-id <model-id> --json
+transvortex asr setup-apply --resource accelerator --item-id <accelerator-id> --json
+```
+
+An Agent may instead prepare external model or accelerator directories with its
+own local tools. TransVortex probes and records those resources, then attaches
+their registration IDs to the active local worker:
+
+```powershell
+transvortex asr model-probe --model-path <model-path> --json
+transvortex asr model-register --model-path <model-path> --json
+transvortex asr accelerator-probe --accelerator-root <accelerator-root> --json
+transvortex asr accelerator-register --accelerator-root <accelerator-root> --json
+transvortex asr resources-activate --model-registration-id <id> --json
+transvortex asr resources-activate --accelerator-registration-id <id> --json
+```
+
+The desktop local worker always uses the TransVortex-managed runtime. External
+Python remains a CLI/development compatibility path; it is not something the
+setup Agent should build for a normal desktop user. Model and accelerator
+sources are independent, and external directories remain externally owned.
+
+After the selected scope has been applied and connected, run:
 
 ```powershell
 transvortex asr setup-verify --json --strict
@@ -70,7 +92,7 @@ Treat `ok: true` as the only successful environment result. The verify command
 does not mutate TransVortex configuration or components and does not use the
 network. For local workers it launches the selected runtime locally, loads the
 model, and transcribes generated probe audio in addition to checking readiness,
-managed markers, and managed model file SHA-256 values. When the catalog publishes
+managed markers, external registrations, and managed model file SHA-256 values. When the catalog publishes
 an archive SHA-256, the component marker records the install-time verified digest;
 otherwise the missing archive check is reported in `hashes_not_checked`. The
 installed marker and model hashes must still pass. A route-specific provider

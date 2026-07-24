@@ -10,6 +10,7 @@ import yaml
 
 from .models import (
     AppConfig,
+    AsrAcceleratorConfig,
     AsrAuthConfig,
     AsrChunkingConfig,
     AsrExecutionConfig,
@@ -575,6 +576,7 @@ ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions", "funasr_ope
 ASR_AUTH_TYPES = {"none", "bearer"}
 ASR_RUNTIME_SOURCES = {"inprocess", "managed", "external"}
 ASR_MODEL_SOURCES = {"managed", "external"}
+ASR_ACCELERATOR_SOURCES = {"managed", "external"}
 LEGACY_ASR_FIELDS = {
     "mode",
     "local",
@@ -703,6 +705,22 @@ def _parse_asr_runtime(raw: Any, *, kind: str) -> AsrRuntimeConfig:
     return AsrRuntimeConfig(source=source, id=runtime_id)
 
 
+def _parse_asr_accelerator(raw: Any, *, kind: str) -> AsrAcceleratorConfig:
+    accelerator_raw = raw if isinstance(raw, dict) else {}
+    if kind != "local_worker":
+        return AsrAcceleratorConfig()
+    source = _to_str(accelerator_raw.get("source"), "managed").strip().lower()
+    if source not in ASR_ACCELERATOR_SOURCES:
+        raise ValueError(f"Unsupported ASR accelerator.source: {source}")
+    accelerator_id = _to_str(
+        accelerator_raw.get("id"),
+        "nvidia-cuda12" if source == "managed" else "",
+    ).strip()
+    if source == "external" and not accelerator_id:
+        raise ValueError("ASR external accelerator requires accelerator.id")
+    return AsrAcceleratorConfig(source=source, id=accelerator_id)
+
+
 def _parse_asr_chunking(raw: Any, *, default: AsrChunkingConfig) -> AsrChunkingConfig:
     chunking_raw = raw if isinstance(raw, dict) else {}
     silence_raw = chunking_raw.get("silence") if isinstance(chunking_raw.get("silence"), dict) else {}
@@ -825,6 +843,7 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         auth=_parse_asr_auth(row.get("auth"), kind=kind),
         local=_parse_asr_local(row.get("local"), model=model),
         runtime=_parse_asr_runtime(row.get("runtime"), kind=kind),
+        accelerator=_parse_asr_accelerator(row.get("accelerator"), kind=kind),
         execution=_parse_asr_execution(row.get("execution"), default=default_execution),
         chunking=_parse_asr_chunking(row.get("chunking"), default=default_chunking),
         preprocessing=_parse_asr_preprocessing(row.get("preprocessing"), default=default_preprocessing),
