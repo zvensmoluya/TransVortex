@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+from pathlib import Path
 
-PROTOCOL_VERSION = "0.1"
+from ..app.agent_entry import AGENT_PROTOCOL_VERSION, runtime_agent_context
 
 
-def agent_info_payload() -> dict:
+PROTOCOL_VERSION = AGENT_PROTOCOL_VERSION
+
+
+def agent_info_payload(*, root_dir: Path | None = None) -> dict:
+    root = (root_dir or Path.cwd()).expanduser().resolve()
+    installation = runtime_agent_context(root_dir=root)
+    cli_prefix = list(installation["cli_argv_prefix"])
+
+    def cli_argv(*parts: str) -> list[str]:
+        return [*cli_prefix, *parts]
+
     return {
         "name": "transvortex",
         "protocol_version": PROTOCOL_VERSION,
         "machine_readable": True,
+        "installation": installation,
         "setup_contract": {
             "contract": "transvortex.agent_setup",
             "schema_version": 1,
@@ -17,13 +29,23 @@ def agent_info_payload() -> dict:
                 "transvortex asr setup-plan --json",
                 "transvortex asr setup-verify --json --strict",
             ],
+            "read_only_argv": [
+                cli_argv("asr", "setup-plan", "--json"),
+                cli_argv("asr", "setup-verify", "--json", "--strict"),
+            ],
             "root_argument": "--root <config-root>",
             "providers_file_argument": "--providers-file <providers-file>",
-            "schema_asset": "skills/transvortex-agent-setup/references/setup_contract.schema.json",
-            "bootstrap_asset": "AGENT_BOOTSTRAP.md",
-            "packaged_schema_asset": "agent/skills/transvortex-agent-setup/references/setup_contract.schema.json",
-            "packaged_bootstrap_asset": "agent/AGENT_BOOTSTRAP.md",
+            "schema_asset": "agent/references/setup_contract.schema.json",
+            "workflow_asset": "agent/workflows/ASR_ENVIRONMENT_SETUP.md",
+            "packaged_schema_asset": "agent/references/setup_contract.schema.json",
+            "packaged_workflow_asset": "agent/workflows/ASR_ENVIRONMENT_SETUP.md",
         },
+        "recommended_argv": [
+            cli_argv("agent-info", "--json"),
+            cli_argv("asr", "setup-plan", "--json"),
+            cli_argv("doctor", "--json"),
+            cli_argv("asr", "setup-verify", "--json", "--strict"),
+        ],
         "recommended_workflow": [
             "transvortex agent-info --json",
             "transvortex asr setup-plan --json",

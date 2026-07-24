@@ -283,6 +283,10 @@ $report = [ordered]@{
     end_user_powershell_required = $false
     python_runtime_included = $true
     ffmpeg_included = $true
+    agent_entry_registered = $true
+    agent_entry_stable_root = "%LOCALAPPDATA%\TransVortex\Agent"
+    agent_entry_owned_files = @("README.md", "current.json")
+    agent_native_extensions_modified = $false
     payload_manifest = "installer_payload_manifest.json"
     payload_file_count = $payloadFiles.Count
     payload_bytes = [int64]$payloadBytes
@@ -299,6 +303,7 @@ $report = [ordered]@{
         "/REMOVECREDENTIALS"
     )
     external_models_removed_by_uninstaller = $false
+    agent_entry_removed_by_uninstaller = $true
     running_process_mutex = "Local\\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B"
     signed = $signed
     signing_required_for_public_release = $true

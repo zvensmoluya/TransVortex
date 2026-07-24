@@ -79,11 +79,14 @@ asr_providers:
     return providers_file
 
 
-def test_agent_info_advertises_read_only_setup_contract() -> None:
-    payload = agent_info_payload()
+def test_agent_info_advertises_read_only_setup_contract(tmp_path: Path) -> None:
+    payload = agent_info_payload(root_dir=tmp_path)
 
     assert payload["setup_contract"]["contract"] == "transvortex.agent_setup"
     assert payload["setup_contract"]["schema_version"] == 1
+    assert payload["installation"]["config_root"] == str(tmp_path.resolve())
+    assert payload["installation"]["capabilities_argv"][-2:] == ["agent-info", "--json"]
+    assert payload["recommended_argv"][1][-2:] == ["setup-plan", "--json"]
     assert "transvortex asr setup-plan --json" in payload["recommended_workflow"]
     assert payload["commands"]["asr setup-plan"]["read_only"] is True
     assert payload["commands"]["asr setup-verify"]["supports_strict"] is True

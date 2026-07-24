@@ -31,6 +31,7 @@ from ..providers.model_catalog import model_catalog_payload
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
+from .agent_entry import AgentEntryError, agent_entry_service_payload
 from .asr_admin import draft_to_asr_provider_config, pipeline_file_version, save_asr_provider_config
 from .asr_operations import AsrOperationError, AsrOperationManager
 from .asr_runtime import (
@@ -76,6 +77,7 @@ SERVICE_CAPABILITIES = [
     "asr_model_discovery",
     "asr_model_probe",
     "asr_environment_probe",
+    "agent_entry",
     "media_inspection",
     "result_workspace",
     "event_cursor",
@@ -116,6 +118,7 @@ class DesktopApi:
             "service.shutdown": self.service_shutdown,
             "desktop.ping": self.ping,
             "desktop.snapshot": self.desktop_snapshot,
+            "agent.entry.get": self.agent_entry_get,
             "catalog.status": self.catalog_status,
             "catalog.rebuild": self.catalog_rebuild,
             "config.get": self.config_get,
@@ -202,6 +205,12 @@ class DesktopApi:
         if self._shutdown_callback is not None:
             self._shutdown_callback()
         return {"ok": True, "shutdown": "requested"}
+
+    def agent_entry_get(self, _params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return agent_entry_service_payload(config_root=self.root_dir)
+        except AgentEntryError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
 
     def ping(self, _params: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "service": SERVICE_NAME}

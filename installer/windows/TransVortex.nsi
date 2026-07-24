@@ -493,6 +493,18 @@ Function ValidateStagingPayload
     Abort "安装内容不完整：缺少工作区配置组件"
   IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\asr_storage.py" +2
     Abort "安装内容不完整：缺少识别资源位置组件"
+  IfFileExists "$StagingDir\runtime\python\Lib\site-packages\transvortex\app\agent_entry.py" +2
+    Abort "安装内容不完整：缺少 Agent 入口组件"
+  IfFileExists "$StagingDir\agent\README.md" +2
+    Abort "安装内容不完整：缺少 Agent 文档入口"
+  IfFileExists "$StagingDir\agent\AGENT_USAGE.md" +2
+    Abort "安装内容不完整：缺少 Agent CLI 手册"
+  IfFileExists "$StagingDir\agent\ADAPTATION_GUIDE.md" +2
+    Abort "安装内容不完整：缺少 Agent 适配说明"
+  IfFileExists "$StagingDir\agent\workflows\ASR_ENVIRONMENT_SETUP.md" +2
+    Abort "安装内容不完整：缺少 ASR 环境准备说明"
+  IfFileExists "$StagingDir\agent\references\setup_contract.schema.json" +2
+    Abort "安装内容不完整：缺少 Agent setup contract schema"
   ReadINIStr $0 "$StagingDir\.transvortex-install.ini" "Install" "AppId"
   StrCmp $0 "${APP_ID}" +2
     Abort "安装内容不完整：缺少安装归属标记"
@@ -597,6 +609,16 @@ asr_storage_config_ready_after_swap:
     Goto post_swap_failed
   ${EndIf}
 
+  SetDetailsPrint textonly
+  DetailPrint "正在登记 Agent / CLI 入口…"
+  SetDetailsPrint none
+  ClearErrors
+  ExecWait '"$INSTDIR\runtime\python\pythonw.exe" -B -m transvortex.app.agent_entry register --install-root "$INSTDIR" --config-root "$LOCALAPPDATA\TransVortex\Config"' $0
+  IfErrors post_agent_entry_failed
+  ${If} $0 != 0
+    Goto post_agent_entry_failed
+  ${EndIf}
+
   WriteRegStr HKCU "${APP_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${APP_VERSION}"
@@ -626,6 +648,15 @@ post_asr_storage_config_failed:
 post_swap_failed:
   Call RollBackPayload
   Abort "无法创建带正确 Windows 应用身份的开始菜单快捷方式。已恢复此前安装。"
+
+post_agent_entry_failed:
+  StrCmp $HadPreviousInstall "1" agent_entry_failure_rollback
+  Delete "$LOCALAPPDATA\TransVortex\Agent\current.json"
+  Delete "$LOCALAPPDATA\TransVortex\Agent\README.md"
+  RMDir "$LOCALAPPDATA\TransVortex\Agent"
+agent_entry_failure_rollback:
+  Call RollBackPayload
+  Abort "无法登记 Agent / CLI 入口。已恢复此前安装。"
 
 restore_after_swap_failure:
   StrCmp $HadPreviousInstall "1" 0 swap_failed
@@ -924,6 +955,9 @@ preserve_workspace_location:
   DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "AsrStorageLocation"
 preserve_asr_storage_location:
   DeleteRegKey /ifempty HKCU "${APP_REGISTRY_KEY}"
+  Delete "$LOCALAPPDATA\TransVortex\Agent\current.json"
+  Delete "$LOCALAPPDATA\TransVortex\Agent\README.md"
+  RMDir "$LOCALAPPDATA\TransVortex\Agent"
   RMDir /r "$INSTDIR"
   RMDir /r "$INSTDIR.__staging"
   RMDir /r "$INSTDIR.__previous"

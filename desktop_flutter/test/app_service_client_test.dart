@@ -194,6 +194,51 @@ void main() {
     expect(health.pumpLabel, 'running');
   });
 
+  test('AppServiceClient parses the installed Agent entry contract', () async {
+    final client = AppServiceClient(
+      _FakeTransport({
+        'agent.entry.get': {
+          'schema_version': 1,
+          'app_version': '1.2.3',
+          'protocol_version': '0.1',
+          'registered': true,
+          'install_root': r'C:\Programs\TransVortex\App',
+          'config_root': r'C:\Users\tester\AppData\Local\TransVortex\Config',
+          'agent_entry_document':
+              r'C:\Users\tester\AppData\Local\TransVortex\Agent\README.md',
+          'agent_entry_state':
+              r'C:\Users\tester\AppData\Local\TransVortex\Agent\current.json',
+          'agent_docs_root': r'C:\Programs\TransVortex\App\agent',
+          'documents': {
+            'usage': r'C:\Programs\TransVortex\App\agent\AGENT_USAGE.md',
+            'asr_environment_setup':
+                r'C:\Programs\TransVortex\App\agent\workflows\ASR_ENVIRONMENT_SETUP.md',
+          },
+          'cli_argv_prefix': [
+            r'C:\Programs\TransVortex\App\runtime\python\python.exe',
+            '-B',
+            '-m',
+            'transvortex.cli',
+            '--root',
+            r'C:\Users\tester\AppData\Local\TransVortex\Config',
+          ],
+          'capabilities_argv': ['python.exe', 'agent-info', '--json'],
+          'handoff_text': 'general handoff',
+          'asr_environment_handoff_text': 'asr handoff',
+        },
+      }),
+    );
+
+    final entry = await client.agentEntry();
+
+    expect(entry.registered, isTrue);
+    expect(entry.appVersion, '1.2.3');
+    expect(entry.entryDocument, endsWith(r'Agent\README.md'));
+    expect(entry.cliArgvPrefix[3], 'transvortex.cli');
+    expect(entry.documentPath('usage'), endsWith('AGENT_USAGE.md'));
+    expect(entry.asrEnvironmentHandoffText, 'asr handoff');
+  });
+
   test('ServiceHealth active task label uses user facing text', () {
     final active = ServiceHealth.fromJson({
       'service': 'transvortex.app_service',

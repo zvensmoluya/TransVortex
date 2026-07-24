@@ -12,10 +12,23 @@ def test_gui_maintenance_uses_windowless_python() -> None:
     )
 
     assert 'runtime\\python\\python.exe" -B -m' not in installer
-    assert installer.count('ExecWait \'"$INSTDIR\\runtime\\python\\pythonw.exe"') == 4
+    assert installer.count('ExecWait \'"$INSTDIR\\runtime\\python\\pythonw.exe"') == 5
     assert "-m transvortex.app.workspace_storage" in installer
     assert "-m transvortex.app.asr_storage" in installer
+    assert "-m transvortex.app.agent_entry register" in installer
     assert installer.count("-m transvortex.app.uninstall_cleanup") == 2
+
+
+def test_installer_registers_and_removes_only_owned_agent_locator_files() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"$LOCALAPPDATA\\TransVortex\\Agent\\current.json"' in installer
+    assert '"$LOCALAPPDATA\\TransVortex\\Agent\\README.md"' in installer
+    assert 'RMDir "$LOCALAPPDATA\\TransVortex\\Agent"' in installer
+    assert 'RMDir /r "$LOCALAPPDATA\\TransVortex\\Agent"' not in installer
+    assert 'agent\\workflows\\ASR_ENVIRONMENT_SETUP.md' in installer
 
 
 def test_installer_uses_isolated_app_data_and_resource_directories() -> None:

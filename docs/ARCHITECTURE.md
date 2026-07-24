@@ -9,6 +9,9 @@ owning package directly.
 TransVortex is an agent-callable headless worker with CLI/agent and desktop entry points:
 
 - CLI and agent commands call the Python worker directly.
+- Registered Windows installs expose a stable, secret-free Agent locator under
+  `%LOCALAPPDATA%\TransVortex\Agent`; it points to versioned docs and exact CLI
+  argv arrays without modifying any Agent-native extension directory.
 - The Flutter desktop app starts the packaged Python Local Service and uses its
   typed JSON-RPC contract to manage workers, tasks, and results.
 - The Flutter app is the only product desktop frontend.

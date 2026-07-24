@@ -441,6 +441,61 @@ function Wait-PathRemoved {
     }
     return $true
 }
+
+function Assert-AgentEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$EntryRoot
+    )
+
+    $entryDocument = Join-Path $EntryRoot "README.md"
+    $entryState = Join-Path $EntryRoot "current.json"
+    if (-not (Test-Path -LiteralPath $entryDocument) -or -not (Test-Path -LiteralPath $entryState)) {
+        throw "Installed Agent locator is incomplete."
+    }
+    $state = Get-Content -LiteralPath $entryState -Encoding utf8 -Raw | ConvertFrom-Json
+    if (-not [bool]$state.registered -or [int]$state.schema_version -ne 1) {
+        throw "Installed Agent locator metadata is invalid."
+    }
+    if (-not [string]::Equals((Get-FullPath -Path $state.install_root), (Get-FullPath -Path $Root), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Agent locator install_root does not match the installed app."
+    }
+    if (-not [string]::Equals((Get-FullPath -Path $state.config_root), (Get-FullPath -Path $ConfigRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Agent locator config_root does not match the installed app."
+    }
+    $argv = @($state.cli_argv_prefix)
+    $expectedPython = Join-Path $Root "runtime\python\python.exe"
+    if ($argv.Count -ne 6 -or
+        -not [string]::Equals((Get-FullPath -Path $argv[0]), (Get-FullPath -Path $expectedPython), [System.StringComparison]::OrdinalIgnoreCase) -or
+        $argv[1] -ne "-B" -or $argv[2] -ne "-m" -or $argv[3] -ne "transvortex.cli" -or
+        $argv[4] -ne "--root" -or
+        -not [string]::Equals((Get-FullPath -Path $argv[5]), (Get-FullPath -Path $ConfigRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Agent locator CLI argv prefix is invalid."
+    }
+    foreach ($documentPath in @(
+        $state.documents.start,
+        $state.documents.usage,
+        $state.documents.adaptation,
+        $state.documents.asr_environment_setup,
+        $state.documents.setup_contract_schema
+    )) {
+        if (-not (Test-Path -LiteralPath ([string]$documentPath))) {
+            throw "Agent locator references a missing document: $documentPath"
+        }
+    }
+    return [ordered]@{
+        schema_version = [int]$state.schema_version
+        registered = [bool]$state.registered
+        entry_document = $entryDocument
+        entry_state = $entryState
+        cli_argv_prefix_ok = $true
+        documents_ok = $true
+    }
+}
 $installerRequestedPath = Get-FullPath -Path $InstallRoot
 $installFullPath = Get-EffectiveInstallRoot -RequestedPath $installerRequestedPath
 $productRoot = Split-Path -Parent $installFullPath
@@ -454,11 +509,18 @@ $reportFullPath = Get-FullPath -Path $ReportPath
 $defaultProductRoot = Join-Path $env:LOCALAPPDATA "Programs\TransVortex"
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TransVortex"
 $appKey = "HKCU:\Software\TransVortex"
+$agentEntryRoot = Join-Path $env:LOCALAPPDATA "TransVortex\Agent"
+$agentEntryDocument = Join-Path $agentEntryRoot "README.md"
+$agentEntryState = Join-Path $agentEntryRoot "current.json"
+$configRoot = Join-Path $env:LOCALAPPDATA "TransVortex\Config"
 if (Test-Path -LiteralPath $defaultProductRoot) {
     throw "Refusing automated acceptance while the default TransVortex product root exists: $defaultProductRoot"
 }
 if ((Test-Path -LiteralPath $uninstallKey) -or (Test-Path -LiteralPath $appKey)) {
     throw "Refusing automated acceptance while TransVortex installer registry keys already exist."
+}
+if ((Test-Path -LiteralPath $agentEntryDocument) -or (Test-Path -LiteralPath $agentEntryState)) {
+    throw "Refusing automated acceptance while a TransVortex Agent locator already exists."
 }
 
 $shortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "TransVortex.lnk"
@@ -479,6 +541,7 @@ $relocatedTarget = Join-Path $relocatedParent "TransVortex\App"
 $installedApp = $null
 $acceptanceSucceeded = $false
 $installed = $false
+$agentEntryReport = $null
 New-Item -ItemType Directory -Force -Path $acceptanceRoot | Out-Null
 if ($hadShortcut) {
     Copy-Item -LiteralPath $shortcutPath -Destination $shortcutBackup -Force
@@ -507,6 +570,7 @@ try {
     }
     $installed = $true
     Assert-InstalledLayout -Root $installFullPath
+    $agentEntryReport = Assert-AgentEntry -Root $installFullPath -ConfigRoot $configRoot -EntryRoot $agentEntryRoot
 
     $registry = Get-ItemProperty -LiteralPath $uninstallKey
     if (-not [string]::Equals((Get-FullPath -Path $registry.InstallLocation), $installFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -545,6 +609,7 @@ try {
         throw "Upgrade did not remove an obsolete file from the prior install."
     }
     Assert-InstalledLayout -Root $installFullPath
+    $agentEntryReport = Assert-AgentEntry -Root $installFullPath -ConfigRoot $configRoot -EntryRoot $agentEntryRoot
 
     $installedApp = Start-IsolatedInstalledApp -Root $installFullPath -IsolatedLocalAppData $isolatedLocalAppData -IsolatedProfile $isolatedProfile
     Start-Sleep -Seconds $LaunchWaitSeconds
@@ -594,6 +659,9 @@ try {
     if (Test-Path -LiteralPath $shortcutPath) {
         throw "Start menu shortcut remains after uninstall."
     }
+    if ((Test-Path -LiteralPath $agentEntryDocument) -or (Test-Path -LiteralPath $agentEntryState)) {
+        throw "TransVortex-owned Agent locator files remain after uninstall."
+    }
     if (-not (Test-Path -LiteralPath $userDataSentinel)) {
         throw "Uninstall removed the user-data sentinel."
     }
@@ -621,6 +689,8 @@ try {
         installed_layout_ok = $true
         install_ownership_marker_ok = $true
         installed_powershell_script_count = 0
+        agent_entry = $agentEntryReport
+        uninstall_removed_agent_entry = $true
         local_service = $serviceReport
         uninstall_cleanup_helper = $uninstallCleanupReport
         shortcut_app_user_model_id_ok = [bool]$shortcutReport.shortcut_app_user_model_id_ok

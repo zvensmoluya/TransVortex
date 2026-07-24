@@ -1,6 +1,6 @@
 # TransVortex ASR route reference
 
-Use this file after discovery when an Agent must explain or choose an ASR route. The repository's [AGENT_USAGE.md](../../../AGENT_USAGE.md) remains the source of truth for CLI syntax and task artifacts. If a command or field is not advertised by `agent-info --json`, do not invent it; return `blocked` with a concrete compatibility note.
+Use this file after discovery when an Agent must explain or choose an ASR route. Use `documents.usage` from `current.json` as the source of truth for CLI syntax and task artifacts; in a source checkout that file is [`../AGENT_USAGE.md`](../AGENT_USAGE.md). If a command or field is not advertised by `agent-info --json`, do not invent it; return `blocked` with a concrete compatibility note.
 
 ## Route decision
 

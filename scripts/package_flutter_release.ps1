@@ -385,10 +385,10 @@ tools. It does not depend on a system Python or FFmpeg installation. It does not
 include model files, API keys, auth.json, .env files, or local provider
 configuration.
 
-The agent\ directory contains the machine-readable ASR setup contract,
-AGENT_USAGE.md, a generic bootstrap prompt, and the reference
-transvortex-agent-setup skill. These files only describe bounded discovery and
-verification workflows; they do not contain models, credentials, or installers.
+The agent\ directory contains a short Agent/CLI entry, AGENT_USAGE.md, an
+Agent-native adaptation guide, and on-demand workflows and references. The
+portable package does not register a global Agent entry or modify any Agent's
+skill/plugin directories. These files do not contain models or credentials.
 
 Local Whisper is represented as an optional managed component. Runtime,
 model, and NVIDIA packages are downloaded only after an explicit user action
@@ -428,9 +428,10 @@ This payload does not include model files, API keys, auth.json, .env files, or
 local provider configuration. Local Whisper components are installed only after
 an explicit user action and remain under the user-level TransVortex data root.
 
-The agent\ directory contains the read-only ASR setup contract and the generic
-Agent handoff material. It is safe to copy to a local Codex, Claude Code,
-OpenClaw, or other Agent workspace for review before any mutating action.
+The agent\ directory contains the versioned Agent/CLI entry, usage contract,
+adaptation guide, and on-demand ASR workflow. The NSIS installer registers the
+stable per-user locator under %LOCALAPPDATA%\TransVortex\Agent without modifying
+any Agent's own skill/plugin directories.
 
 FFmpeg notices and source traceability are under tools\ffmpeg. Public release of
 an installer must be accompanied by the complete corresponding FFmpeg source
@@ -622,9 +623,7 @@ Get-ChildItem -LiteralPath $releaseRoot -Force | ForEach-Object {
 Copy-RequiredDirectory -Source $resolvedAppRuntimeRoot -Destination (Join-Path $packageRoot "runtime")
 Copy-RequiredDirectory -Source $resolvedFfmpegRuntimeRoot -Destination (Join-Path $packageRoot "tools\ffmpeg")
 Copy-RequiredDirectory -Source (Join-Path $repoRoot "prompts") -Destination (Join-Path $packageRoot "prompts")
-Copy-RequiredFile -Source (Join-Path $repoRoot "AGENT_USAGE.md") -Destination (Join-Path $packageRoot "agent\AGENT_USAGE.md")
-Copy-RequiredFile -Source (Join-Path $repoRoot "AGENT_BOOTSTRAP.md") -Destination (Join-Path $packageRoot "agent\AGENT_BOOTSTRAP.md")
-Copy-RequiredDirectory -Source (Join-Path $repoRoot "skills\transvortex-agent-setup") -Destination (Join-Path $packageRoot "agent\skills\transvortex-agent-setup")
+Copy-RequiredDirectory -Source (Join-Path $repoRoot "agent") -Destination (Join-Path $packageRoot "agent")
 if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
     Copy-RequiredDirectory -Source (Join-Path $repoRoot "memory\presets") -Destination (Join-Path $packageRoot "memory\presets")
 }
@@ -653,6 +652,8 @@ $requiredPaths = @(
     "runtime\python\python.exe",
     "runtime\python\pythonw.exe",
     "runtime\python\Lib\site-packages\transvortex\app_service.py",
+    "runtime\python\Lib\site-packages\transvortex\app\agent_entry.py",
+    "runtime\python\Lib\site-packages\transvortex\protocol\agent_protocol.py",
     "runtime\python\Lib\site-packages\transvortex\protocol\agent_setup.py",
     "runtime\python\Lib\site-packages\transvortex\app\desktop_api.py",
     "runtime\python\Lib\site-packages\transvortex\app\asr_storage.py",
@@ -664,12 +665,12 @@ $requiredPaths = @(
     "tools\ffmpeg\bin\ffprobe.exe",
     "tools\ffmpeg\SOURCE_NOTICE.txt",
     "prompts\translation\system.v1.md",
+    "agent\README.md",
     "agent\AGENT_USAGE.md",
-    "agent\AGENT_BOOTSTRAP.md",
-    "agent\skills\transvortex-agent-setup\SKILL.md",
-    "agent\skills\transvortex-agent-setup\agents\openai.yaml",
-    "agent\skills\transvortex-agent-setup\references\provider-modes.md",
-    "agent\skills\transvortex-agent-setup\references\setup_contract.schema.json",
+    "agent\ADAPTATION_GUIDE.md",
+    "agent\workflows\ASR_ENVIRONMENT_SETUP.md",
+    "agent\references\provider-modes.md",
+    "agent\references\setup_contract.schema.json",
     "pipeline.yaml",
     "providers.yaml"
 )
@@ -749,6 +750,9 @@ $report = [ordered]@{
     ffmpeg_runtime_source = if ($InstallerPayload) { $null } else { $resolvedFfmpegRuntimeRoot }
     agent_assets_included = $true
     agent_asset_root = "agent"
+    agent_entry_registration = if ($InstallerPayload) { "nsis_installer" } else { "none" }
+    agent_entry_stable_root = if ($InstallerPayload) { "%LOCALAPPDATA%\TransVortex\Agent" } else { $null }
+    agent_native_extensions_modified = $false
     ffmpeg_check = $ffmpegReport
     local_asr_runtime_included = $false
     local_asr_models_included = $false

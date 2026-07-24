@@ -8,12 +8,13 @@ import '../services/window_state_bridge.dart';
 import '../services/workspace_data_manager.dart';
 import '../theme/tokens.dart';
 import 'application_network_settings.dart';
+import 'agent_cli_settings.dart';
 import 'asr_resource_management.dart';
 import 'settings_common.dart';
 import 'title_bar.dart';
 import 'workspace_data_management.dart';
 
-enum _ApplicationSettingsSection { network, workspace, resources }
+enum _ApplicationSettingsSection { network, workspace, resources, agent }
 
 const _applicationSettingsTabs = [
   SettingsTabOption(value: _ApplicationSettingsSection.network, label: '网络'),
@@ -24,6 +25,10 @@ const _applicationSettingsTabs = [
   SettingsTabOption(
     value: _ApplicationSettingsSection.resources,
     label: '识别资源',
+  ),
+  SettingsTabOption(
+    value: _ApplicationSettingsSection.agent,
+    label: 'Agent / CLI',
   ),
 ];
 
@@ -85,7 +90,7 @@ class _ApplicationSettingsPanelState extends State<ApplicationSettingsPanel> {
               options: _applicationSettingsTabs,
               selected: _section,
               onPick: _selectSection,
-              tabWidth: 112,
+              tabWidth: 102,
             ),
           ),
         ),
@@ -206,6 +211,10 @@ class _ApplicationSettingsPanelState extends State<ApplicationSettingsPanel> {
               pathOpener: widget.pathOpener,
               directoryPicker: widget.directoryPicker,
               showHeader: false,
+            ),
+            _ApplicationSettingsSection.agent => AgentCliSettings(
+              client: _client,
+              pathOpener: widget.pathOpener,
             ),
           },
         ),

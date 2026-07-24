@@ -37,6 +37,7 @@ from ..app.asr_runtime import (
 )
 from ..app.config import load_app_config, resolve_providers_file
 from ..app.credentials import resolve_credential
+from ..app.agent_entry import cli_argv_prefix
 from ..utils import read_json
 from ..utils import utc_now_iso
 
@@ -445,9 +446,7 @@ def _plan_actions(
 
     def asr_argv(*parts: str) -> list[str]:
         return [
-            "transvortex",
-            "--root",
-            str(root),
+            *cli_argv_prefix(root_dir=root),
             "asr",
             *parts,
             "--providers-file",
@@ -1242,6 +1241,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
 
     context = _load_context(root_dir, providers_file)
     root = context["root"]
+    agent_cli_prefix = cli_argv_prefix(root_dir=root)
     paths = context["paths"]
     catalog = context["catalog"]
     provider = context["provider"]
@@ -1432,14 +1432,14 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             "protocol": "transvortex --root <config-root> agent-info --json",
         },
         "agent_argv": {
-            "plan": ["transvortex", "--root", str(root), "asr", "setup-plan", "--providers-file", str(context["providers_file"]), "--json"],
-            "verify": ["transvortex", "--root", str(root), "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
-            "doctor": ["transvortex", "--root", str(root), "doctor", "--providers-file", str(context["providers_file"]), "--json"],
-            "protocol": ["transvortex", "--root", str(root), "agent-info", "--json"],
+            "plan": [*agent_cli_prefix, "asr", "setup-plan", "--providers-file", str(context["providers_file"]), "--json"],
+            "verify": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
+            "doctor": [*agent_cli_prefix, "doctor", "--providers-file", str(context["providers_file"]), "--json"],
+            "protocol": [*agent_cli_prefix, "agent-info", "--json"],
         },
         "verification": {
             "command": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
-            "argv": ["transvortex", "--root", str(root), "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
+            "argv": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
             "read_only": True,
             "network_access": False,
             "executes_local_code": provider is not None and provider.kind == "local_worker",

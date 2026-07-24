@@ -78,6 +78,28 @@ def test_app_service_ping_and_unknown_method(tmp_path: Path) -> None:
     assert missing["error"]["code"] == "method_not_found"
 
 
+def test_agent_entry_rpc_returns_backend_discovery_payload(tmp_path: Path, monkeypatch) -> None:
+    expected = {
+        "registered": True,
+        "agent_entry_document": str(tmp_path / "Agent" / "README.md"),
+        "handoff_text": "handoff",
+    }
+    monkeypatch.setattr(
+        "transvortex.app.desktop_api.agent_entry_service_payload",
+        lambda *, config_root: {**expected, "config_root": str(config_root)},
+    )
+
+    response = handle_line(DesktopApi(root_dir=tmp_path), _request("agent.entry.get"), root_dir=tmp_path)
+
+    assert response["result"] == {**expected, "config_root": str(tmp_path)}
+
+
+def test_agent_entry_rpc_reports_source_runtime_as_unregistered(tmp_path: Path) -> None:
+    response = handle_line(DesktopApi(root_dir=tmp_path), _request("agent.entry.get"), root_dir=tmp_path)
+
+    assert response["error"]["code"] == "agent_install_not_registered"
+
+
 def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     _write_config(tmp_path)
     stopped = []
@@ -96,6 +118,7 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert "runtime_pump" in info["result"]["capabilities"]
     assert "derived_translation" in info["result"]["capabilities"]
     assert "asr_model_discovery" in info["result"]["capabilities"]
+    assert "agent_entry" in info["result"]["capabilities"]
     assert health["result"]["status"] == "healthy"
     assert health["result"]["pump"]["running"] is True
     assert set(health["result"]["runtime"]) == {"active"}

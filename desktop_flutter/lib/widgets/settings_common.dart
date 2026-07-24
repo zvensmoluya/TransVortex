@@ -706,10 +706,12 @@ class ActionButton extends StatefulWidget {
     required this.label,
     required this.onTap,
     this.strong = false,
+    this.icon,
   });
   final String label;
   final VoidCallback? onTap;
   final bool strong;
+  final IconData? icon;
 
   @override
   State<ActionButton> createState() => _ActionButtonState();
@@ -743,9 +745,18 @@ class _ActionButtonState extends State<ActionButton> {
               width: 1.2,
             ),
           ),
-          child: Text(
-            widget.label,
-            style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.icon case final icon?) ...[
+                Icon(icon, size: 16, color: fg),
+                const SizedBox(width: T.s4),
+              ],
+              Text(
+                widget.label,
+                style: T.tBody.copyWith(color: fg, fontWeight: T.wMedium),
+              ),
+            ],
           ),
         ),
       ),

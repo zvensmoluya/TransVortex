@@ -73,6 +73,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 
 全新安装把用户选择的位置整理为一个专用产品根，并建立 `App`、`Data`、`Resources` 三个相互隔离的子目录。默认布局是 `%LOCALAPPDATA%\Programs\TransVortex\App`、`Data` 和 `Resources`；选择其他磁盘时三者一起跟随到所选位置。升级的 staging、旧版本回滚和卸载程序删除边界都只落在 `App`，不会覆盖 `Data` 或 `Resources`。确认页面直接展示程序、工作数据和识别资源的最终路径，其中工作数据仍可单独更改；配置和凭据固定在 Windows 用户目录。
 
+版本化 Agent 资料位于 `<InstallRoot>\agent`。正式 NSIS 安装在程序替换、配置和快捷方式全部成功后，原子写入 `%LOCALAPPDATA%\TransVortex\Agent\README.md` 与 `current.json`；后者只包含当前安装根、配置根、文档路径和可直接执行的 CLI `argv` 数组，不含凭据。升级重写这两个定位文件，Local Service 启动时也会在有效安装标记存在时自修复。卸载只删除这两个自有文件并尝试移除空目录，不递归删除 Agent 目录中的其他内容。便携包不登记该用户级入口。
+
 目标 `App` 非空且没有有效安装归属标记时，安装器拒绝覆盖。检测到注册表中的已有安装时，升级继续使用原程序、工作区和识别资源位置，不借升级之机把旧版 `TransVortex` / `TransVortexData` / `TransVortexResources` 布局搬进新层级；如需更换程序路径，应先卸载旧版本。检测到已有任务或缓存时也沿用原工作区，安装后可在“应用设置 → 工作数据”中查看占用、清理缓存或安全迁移。
 
 安装器与卸载器使用和 Flutter 一致的瓷白、柔墨、草莓粉及浅青品牌资产。公开界面隐藏逐文件 DLL 与 staging 路径，只显示准备目录、安装运行环境、校验内容和创建入口等产品阶段；失败信息仍保留具体恢复原因。欢迎图与顶部图由 `scripts/build_brand_assets.ps1` 从仓库内 SVG 确定性生成，不引入另一套图标或插画语言。
@@ -85,6 +87,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 - 应用设置与识别登记状态：默认保留。
 - 任务工作区与恢复缓存：默认保留，选择删除时再次确认不可恢复。
 - 用户级 `~/.transvortex/auth.json` 凭据：默认保留；选择删除后，重新安装应用时需要重新配置服务凭据。
+
+Agent / CLI 定位文件属于已安装程序入口，不属于用户设置；卸载时始终移除，但不会触碰任何 Agent 自己的 skill、plugin、rules 或项目说明。
 
 卸载器先读取 `Config/asr_storage.json` 和 `Config/workspace_storage.json`，再处理配置删除，因此可以找到独立的 ASR 资源位置和工作数据位置。保留识别资源时，即使用户选择删除其他应用设置，也会保留识别资源位置登记及重新安装恢复提示，避免保留下来的大文件失去索引；只有同时删除识别资源和应用设置时才一并清理该提示。自选工作区还必须带有安装器写入的 `.transvortex-workspace.json` 归属标记，卸载器才会清理其中的 `Tasks` 和 `Cache`。它不会删除用户选择的根目录中的其他文件、原地使用的外部模型、原始媒体或已导出的字幕。配置损坏或归属标记缺失时只检查安全的默认位置并给出残留提示，不扩大删除范围。保留任务时同时保留工作区位置登记，重新安装后仍能找到原任务。
 

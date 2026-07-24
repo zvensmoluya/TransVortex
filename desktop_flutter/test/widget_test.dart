@@ -441,6 +441,7 @@ void main() {
       expect(find.text('连接方式'), findsOneWidget);
       expect(find.text('工作数据'), findsOneWidget);
       expect(find.text('识别资源'), findsOneWidget);
+      expect(find.text('Agent / CLI'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('application-settings-drag-area')),
         findsOneWidget,
@@ -493,6 +494,104 @@ void main() {
       expectNoFlutterException();
     },
   );
+
+  testWidgets('application settings expose the installed Agent entry', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(480, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText = '${(call.arguments as Map)['text']}';
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final bridge = WindowStateBridge.main(WindowStateStore());
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'agent.entry.get') {
+        return {
+          'schema_version': 1,
+          'app_version': '1.2.3',
+          'protocol_version': '0.1',
+          'registered': true,
+          'install_root': r'C:\Programs\TransVortex\App',
+          'config_root': r'C:\Users\tester\AppData\Local\TransVortex\Config',
+          'agent_entry_document':
+              r'C:\Users\tester\AppData\Local\TransVortex\Agent\README.md',
+          'agent_entry_state':
+              r'C:\Users\tester\AppData\Local\TransVortex\Agent\current.json',
+          'agent_docs_root': r'C:\Programs\TransVortex\App\agent',
+          'documents': const <String, Object?>{},
+          'cli_argv_prefix': [
+            r'C:\Programs\TransVortex\App\runtime\python\python.exe',
+            '-B',
+            '-m',
+            'transvortex.cli',
+            '--root',
+            r'C:\Users\tester\AppData\Local\TransVortex\Config',
+          ],
+          'capabilities_argv': ['python.exe', 'agent-info', '--json'],
+          'handoff_text': 'read stable entry',
+          'asr_environment_handoff_text': 'read ASR workflow',
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+    final pathOpener = _RecordingPathOpener();
+    final service = _readyController();
+    addTearDown(service.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 480,
+          height: 520,
+          child: ApplicationSettingsPanel(
+            bridge: bridge,
+            service: service,
+            pathOpener: pathOpener,
+            onClose: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.text('Agent / CLI'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Agent / CLI 入口已就绪'), findsOneWidget);
+    expect(
+      find.text(r'C:\Users\tester\AppData\Local\TransVortex\Agent\README.md'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-entry-copy')));
+    await tester.pump();
+    expect(clipboardText, 'read stable entry');
+    expect(find.text('Agent 入口已复制。'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('agent-entry-reveal')));
+    await tester.pump();
+    expect(pathOpener.revealedFiles, [
+      r'C:\Users\tester\AppData\Local\TransVortex\Agent\README.md',
+    ]);
+    await tester.tap(find.byKey(const ValueKey('agent-docs-open')));
+    await tester.pump();
+    expect(pathOpener.openedDirectories, [
+      r'C:\Programs\TransVortex\App\agent',
+    ]);
+    expectNoFlutterException();
+  });
 
   testWidgets('application settings save the shared local proxy setting', (
     tester,
@@ -3784,6 +3883,63 @@ void main() {
     expect(savedAsrDraft?['kind'], 'local_worker');
     expect((savedAsrDraft?['runtime'] as Map?)?['source'], 'managed');
     expect(find.textContaining('识别默认已保存'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('ASR settings copy the on-demand Agent environment handoff', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(760, 560));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText = '${(call.arguments as Map)['text']}';
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          managedAsr: true,
+          localModel: 'small',
+          asrLocal: _managedAsrResources(),
+        ).raw;
+      }
+      if (method == 'agent.entry.get') {
+        return {
+          'schema_version': 1,
+          'registered': true,
+          'asr_environment_handoff_text': 'read ASR workflow',
+        };
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(clipboardText, 'read ASR workflow');
+    expect(find.text('ASR 环境交接已复制。'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -7234,6 +7390,12 @@ class _RecordingTaskNotificationService implements TaskNotificationService {
 
 class _RecordingPathOpener extends PathOpener {
   final openedDirectories = <String>[];
+  final revealedFiles = <String>[];
+
+  @override
+  Future<void> revealFile(String path) async {
+    revealedFiles.add(path);
+  }
 
   @override
   Future<void> openDirectory(String path) async {

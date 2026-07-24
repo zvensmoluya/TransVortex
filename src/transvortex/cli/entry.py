@@ -1028,7 +1028,7 @@ def main() -> None:
     raw_providers_file = getattr(args, "setup_providers_file", None) or getattr(args, "providers_file", None)
     providers_file = Path(raw_providers_file).resolve() if raw_providers_file else None
     if args.command == "agent-info":
-        payload = agent_info_payload()
+        payload = agent_info_payload(root_dir=root)
         if args.json:
             _print_json(payload)
         else:

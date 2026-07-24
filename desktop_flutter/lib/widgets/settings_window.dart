@@ -111,6 +111,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
+  bool _copyingAgentHandoff = false;
   bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
   bool _changingAsrStorage = false;
@@ -460,16 +461,38 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final selectedKind = '${_asrDraft(_selectedAsrProvider)['kind']}';
     final showBackgroundOperation =
         activeOperation?.active == true && selectedKind != 'local_worker';
-    final busy = _loading || _savingAsr || _probingAsrModel || _testingAsr;
+    final busy =
+        _loading ||
+        _savingAsr ||
+        _probingAsrModel ||
+        _testingAsr ||
+        _copyingAgentHandoff;
     final showFeedback = busy || _error != null || _message != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SegmentedEngines(
-          selected: _selectedAsrProvider,
-          onPick: _savingAsr || _probingAsrModel || _testingAsr
-              ? null
-              : _pickAsrProvider,
+        Row(
+          children: [
+            Expanded(
+              child: _SegmentedEngines(
+                selected: _selectedAsrProvider,
+                onPick:
+                    _savingAsr ||
+                        _probingAsrModel ||
+                        _testingAsr ||
+                        _copyingAgentHandoff
+                    ? null
+                    : _pickAsrProvider,
+              ),
+            ),
+            const SizedBox(width: T.s12),
+            ActionButton(
+              key: const ValueKey('asr-agent-handoff'),
+              label: '交给 Agent',
+              icon: Icons.terminal_rounded,
+              onTap: _copyingAgentHandoff ? null : _copyAsrAgentHandoff,
+            ),
+          ],
         ),
         if (showFeedback) ...[
           const SizedBox(height: T.s8),
@@ -1507,6 +1530,30 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _probingAsrModel = false);
+    }
+  }
+
+  Future<void> _copyAsrAgentHandoff() async {
+    if (_copyingAgentHandoff) return;
+    setState(() {
+      _copyingAgentHandoff = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final entry = await _client.agentEntry();
+      final text = entry.asrEnvironmentHandoffText.trim();
+      if (text.isEmpty) {
+        throw StateError('ASR Agent handoff is empty');
+      }
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) return;
+      setState(() => _message = 'ASR 环境交接已复制。');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlyAgentEntryError(error));
+    } finally {
+      if (mounted) setState(() => _copyingAgentHandoff = false);
     }
   }
 
@@ -4123,6 +4170,13 @@ String? _stringValue(Object? value) {
 }
 
 String _friendlySettingsError(Object error) => friendlySettingsError(error);
+
+String _friendlyAgentEntryError(Object error) {
+  if (error is RpcRemoteException && error.code.startsWith('agent_')) {
+    return '当前运行方式没有可用的安装版 Agent 入口。';
+  }
+  return _friendlySettingsError(error);
+}
 
 String _friendlyAsrModelProbeError(String code, String message) {
   return switch (code) {

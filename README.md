@@ -80,12 +80,30 @@ transvortex status --task-id <task_id> --json
 transvortex result open --task-id <task_id> --json
 ```
 
-`--detach --json` 返回排队回执，不是最终任务结果。机器调用不要解析人类日志，完整约定见 [`AGENT_USAGE.md`](AGENT_USAGE.md)。
+`--detach --json` 返回排队回执，不是最终任务结果。机器调用不要解析人类日志，完整约定见 [`agent/AGENT_USAGE.md`](agent/AGENT_USAGE.md)。
 
-## Agent 环境准备
+## Agent / CLI 入口
 
-TransVortex 还提供一个只读的 ASR 环境契约，适合交给 Codex、Claude Code、
-OpenClaw 或其他本地 Agent 规划安装和修复：
+正式安装会登记两个用户级稳定入口：
+
+```text
+%LOCALAPPDATA%\TransVortex\Agent\README.md
+%LOCALAPPDATA%\TransVortex\Agent\current.json
+```
+
+Agent 先读取 `current.json`，再直接执行其中的 `capabilities_argv` 参数数组，
+不需要猜安装目录，也不依赖全局 `PATH`。版本化资料随应用安装在
+`<InstallRoot>\agent`；升级会更新定位，卸载只删除上述两个自有入口文件。
+便携包保留包内资料，但不登记全局入口，也不修改 Codex、Claude Code、
+OpenClaw 等 Agent 自己的 skill、plugin 或 rules 目录。
+
+源码仓库从 [`agent/README.md`](agent/README.md) 开始。Agent 可以直接使用 CLI；
+需要长期复用时，再按 [`agent/ADAPTATION_GUIDE.md`](agent/ADAPTATION_GUIDE.md)
+自行建立原生适配。一次性的 ASR 环境准备按
+[`agent/workflows/ASR_ENVIRONMENT_SETUP.md`](agent/workflows/ASR_ENVIRONMENT_SETUP.md)
+执行，不要求先创建 skill。
+
+TransVortex 还提供只读 ASR 环境契约，用于规划和验证：
 
 ```powershell
 transvortex agent-info --json
@@ -93,10 +111,9 @@ transvortex asr setup-plan --json
 transvortex asr setup-verify --json --strict
 ```
 
-契约不会自行安装 Whisper、CUDA、模型或凭据。需要让 Agent 接手时，可直接
-使用 [`AGENT_BOOTSTRAP.md`](AGENT_BOOTSTRAP.md)；它会要求先生成计划、等待
-用户确认，再调用 TransVortex 已广告的能力并由 TransVortex 验证结果。Skill
-参考实现位于 [`skills/transvortex-agent-setup/SKILL.md`](skills/transvortex-agent-setup/SKILL.md)。
+契约不会自行安装 Whisper、CUDA、模型或凭据，也不表示用户已经批准 apply。
+Flutter 的“应用设置 → Agent / CLI”可以复制短交接并打开当前资料；语音识别
+设置中的“交给 Agent”只附加 ASR workflow 指针，不把整份 Prompt 写入剪贴板。
 其中 setup-plan 的 `ok` 只表示契约生成成功；是否可运行要看 `ready`、
 `plan_status` 和 `blocking_items`，最终以 setup-verify 的 `ok` 为准。
 
@@ -112,6 +129,7 @@ flutter run -d windows
 
 - 主窗口的一次制作流程。
 - 翻译模型和语音识别设置。
+- Agent / CLI 稳定入口与按需 ASR 环境交接。
 - 任务处理、结果编辑和重新导出。
 - 内部诊断与 Windows 系统通知。
 

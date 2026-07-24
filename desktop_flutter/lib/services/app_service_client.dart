@@ -584,6 +584,10 @@ class AppServiceClient {
     return ServiceHealth.fromJson(await _transport.call('service.health'));
   }
 
+  Future<AgentEntryInfo> agentEntry() async {
+    return AgentEntryInfo.fromJson(await _transport.call('agent.entry.get'));
+  }
+
   Future<DesktopSnapshot> desktopSnapshot() async {
     return DesktopSnapshot.fromJson(await _transport.call('desktop.snapshot'));
   }
@@ -957,6 +961,63 @@ class ServiceInfo {
       capabilities: _stringList(map['capabilities']),
     );
   }
+}
+
+class AgentEntryInfo {
+  const AgentEntryInfo({
+    required this.schemaVersion,
+    required this.appVersion,
+    required this.protocolVersion,
+    required this.registered,
+    required this.installRoot,
+    required this.configRoot,
+    required this.entryDocument,
+    required this.entryState,
+    required this.docsRoot,
+    required this.documents,
+    required this.cliArgvPrefix,
+    required this.capabilitiesArgv,
+    required this.handoffText,
+    required this.asrEnvironmentHandoffText,
+  });
+
+  final int schemaVersion;
+  final String appVersion;
+  final String protocolVersion;
+  final bool registered;
+  final String installRoot;
+  final String configRoot;
+  final String entryDocument;
+  final String entryState;
+  final String docsRoot;
+  final Map<String, Object?> documents;
+  final List<String> cliArgvPrefix;
+  final List<String> capabilitiesArgv;
+  final String handoffText;
+  final String asrEnvironmentHandoffText;
+
+  factory AgentEntryInfo.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AgentEntryInfo(
+      schemaVersion: _intValue(map['schema_version']) ?? 0,
+      appVersion: _stringValue(map['app_version']) ?? '',
+      protocolVersion: _stringValue(map['protocol_version']) ?? '',
+      registered: map['registered'] == true,
+      installRoot: _stringValue(map['install_root']) ?? '',
+      configRoot: _stringValue(map['config_root']) ?? '',
+      entryDocument: _stringValue(map['agent_entry_document']) ?? '',
+      entryState: _stringValue(map['agent_entry_state']) ?? '',
+      docsRoot: _stringValue(map['agent_docs_root']) ?? '',
+      documents: _stringMap(map['documents']),
+      cliArgvPrefix: _stringList(map['cli_argv_prefix']),
+      capabilitiesArgv: _stringList(map['capabilities_argv']),
+      handoffText: _stringValue(map['handoff_text']) ?? '',
+      asrEnvironmentHandoffText:
+          _stringValue(map['asr_environment_handoff_text']) ?? '',
+    );
+  }
+
+  String documentPath(String name) => _stringValue(documents[name]) ?? '';
 }
 
 class ServiceHealth {
