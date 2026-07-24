@@ -115,7 +115,7 @@ flutter run -d windows
 - 任务处理、结果编辑和重新导出。
 - 内部诊断与 Windows 系统通知。
 
-正式任务位于 `%LOCALAPPDATA%\TransVortex\Workspace\Tasks`，可重建媒体缓存位于 `Workspace\Cache`。受管 ASR 组件、模型和下载分别位于 `Components`、`Models` 和 `Downloads\ASR`。
+全新安装在用户选择的 TransVortex 产品根下建立 `App`、`Data` 和 `Resources`；任务与缓存位于 `Data\Tasks`、`Data\Cache`，受管 ASR 组件、模型和下载位于 `Resources`。配置继续位于 `%LOCALAPPDATA%\TransVortex\Config`，已有安装沿用原登记路径。
 
 开发与验证说明见 [`desktop_flutter/README.md`](desktop_flutter/README.md) 和 [`docs/运行与测试指南.md`](docs/运行与测试指南.md)。
 

@@ -268,10 +268,13 @@ $report = [ordered]@{
     release_stage = $releaseStage
     release_channel = $releaseChannel
     install_scope = "per_user"
-    default_install_root = "%LOCALAPPDATA%\Programs\TransVortex"
+    default_product_root = "%LOCALAPPDATA%\Programs\TransVortex"
+    default_install_root = "%LOCALAPPDATA%\Programs\TransVortex\App"
     dedicated_install_subdirectory = $true
     workspace_location_selected_during_install = $true
-    workspace_default_follows_install_parent = $true
+    workspace_default = "%LOCALAPPDATA%\Programs\TransVortex\Data"
+    asr_storage_default = "%LOCALAPPDATA%\Programs\TransVortex\Resources"
+    workspace_default_follows_product_root = $true
     workspace_separate_from_install_root = $true
     workspace_config = "%LOCALAPPDATA%\TransVortex\Config\workspace_storage.json"
     silent_workspace_switch = "/WORKSPACEROOT=<path>"

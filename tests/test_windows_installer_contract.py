@@ -18,13 +18,28 @@ def test_gui_maintenance_uses_windowless_python() -> None:
     assert installer.count("-m transvortex.app.uninstall_cleanup") == 2
 
 
-def test_installer_keeps_asr_resources_next_to_the_selected_install_drive() -> None:
+def test_installer_uses_isolated_app_data_and_resource_directories() -> None:
     installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
         encoding="utf-8"
     )
 
-    assert '${GetParent} "$INSTDIR"' in installer
+    assert 'StrCpy $INSTDIR "$INSTDIR\\App"' in installer
+    assert 'StrCpy $WorkspaceRoot "$ProductRoot\\Data"' in installer
+    assert 'StrCpy $AsrStorageRoot "$ProductRoot\\Resources"' in installer
+    assert '程序（升级时只替换这里）' in installer
+    assert '工作数据（任务、中间资料和恢复缓存）' in installer
+    assert '识别资源（运行组件、模型和下载断点）' in installer
+
+
+def test_installer_preserves_classic_storage_defaults_for_existing_layouts() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'StrCpy $WorkspaceRoot "$0\\TransVortexData"' in installer
     assert 'StrCpy $AsrStorageRoot "$0\\TransVortexResources"' in installer
+    assert 'ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "InstallLocation"' in installer
+    assert 'IntCmp $1 0 normalize_done normalize_leaf normalize_leaf' in installer
     assert '"AsrStorageLocation"' in installer
     assert "preserve_asr_storage_location:" in installer
 
@@ -49,3 +64,14 @@ def test_release_pipeline_requires_windowless_python() -> None:
     for relative_path in required_in:
         content = (ROOT / relative_path).read_text(encoding="utf-8")
         assert "pythonw.exe" in content, relative_path
+
+
+def test_installer_acceptance_checks_new_default_storage_layout() -> None:
+    acceptance = (ROOT / "scripts" / "accept_windows_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '$workspaceRoot = Join-Path $productRoot "Data"' in acceptance
+    assert '$asrStorageRoot = Join-Path $productRoot "Resources"' in acceptance
+    assert "Default workspace does not match the product Data directory." in acceptance
+    assert "Default ASR storage does not match the product Resources directory." in acceptance

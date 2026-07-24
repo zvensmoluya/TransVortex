@@ -90,10 +90,10 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 !define MUI_PAGE_HEADER_TEXT "许可协议"
 !define MUI_PAGE_HEADER_SUBTEXT "请阅读 TransVortex 的开源许可。"
 !insertmacro MUI_PAGE_LICENSE "${LICENSE_FILE}"
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择安装位置。若所选目录不是 TransVortex 专用目录，安装程序会在其中新建 TransVortex 子目录。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 TransVortex 存放位置。安装器会在这里建立独立的 App、Data 和 Resources 目录；升级只替换 App。"
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
-!define MUI_PAGE_HEADER_TEXT "选择程序安装位置"
-!define MUI_PAGE_HEADER_SUBTEXT "这里只存放程序文件；模型和任务使用独立的用户数据位置。"
+!define MUI_PAGE_HEADER_TEXT "选择 TransVortex 存放位置"
+!define MUI_PAGE_HEADER_SUBTEXT "程序、工作数据和识别资源使用相互隔离的子目录。"
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom WorkspacePageCreate WorkspacePageLeave
 !define MUI_PAGE_HEADER_TEXT "正在准备 TransVortex"
@@ -126,6 +126,8 @@ Var WorkspaceNoticeLabel
 Var WorkspaceRoot
 Var WorkspaceLocked
 Var AsrStorageRoot
+Var ProductRoot
+Var ModernInstallLayout
 Var CleanupDialog
 Var CleanupAsrCheckbox
 Var CleanupSettingsCheckbox
@@ -174,10 +176,44 @@ Function NormalizeInstallDirectory
 normalize_leaf:
   ${GetFileName} "$INSTDIR" $1
   System::Call 'kernel32::lstrcmpiW(w "$1", w "${APP_NAME}") i .r2'
-  IntCmp $2 0 normalize_done
-  StrCpy $INSTDIR "$INSTDIR\${APP_NAME}"
+  IntCmp $2 0 normalize_product_root
+  System::Call 'kernel32::lstrcmpiW(w "$1", w "App") i .r2'
+  IntCmp $2 0 normalize_app_leaf
+  StrCpy $INSTDIR "$INSTDIR\${APP_NAME}\App"
+  Goto normalize_done
+
+normalize_product_root:
+  StrCpy $INSTDIR "$INSTDIR\App"
+  Goto normalize_done
+
+normalize_app_leaf:
+  ${GetParent} "$INSTDIR" $1
+  ${GetFileName} "$1" $2
+  System::Call 'kernel32::lstrcmpiW(w "$2", w "${APP_NAME}") i .r3'
+  IntCmp $3 0 normalize_done
+  StrCpy $INSTDIR "$INSTDIR\${APP_NAME}\App"
 
 normalize_done:
+FunctionEnd
+
+Function ResolveInstallLayout
+  StrCpy $ProductRoot ""
+  StrCpy $ModernInstallLayout "0"
+  ${GetFileName} "$INSTDIR" $0
+  System::Call 'kernel32::lstrcmpiW(w "$0", w "App") i .r1'
+  IntCmp $1 0 install_layout_app install_layout_done install_layout_done
+
+install_layout_app:
+  ${GetParent} "$INSTDIR" $0
+  ${GetFileName} "$0" $1
+  System::Call 'kernel32::lstrcmpiW(w "$1", w "${APP_NAME}") i .r2'
+  IntCmp $2 0 install_layout_modern install_layout_done install_layout_done
+
+install_layout_modern:
+  StrCpy $ProductRoot "$0"
+  StrCpy $ModernInstallLayout "1"
+
+install_layout_done:
 FunctionEnd
 
 Function CheckInstallDirectorySafety
@@ -257,6 +293,12 @@ workspace_root_from_registry:
 check_legacy_workspace:
   IfFileExists "$LOCALAPPDATA\TransVortex\Workspace\Tasks\*.*" use_legacy_workspace
   IfFileExists "$LOCALAPPDATA\TransVortex\Workspace\Cache\*.*" use_legacy_workspace
+  Call ResolveInstallLayout
+  StrCmp $ModernInstallLayout "1" 0 use_classic_install_workspace
+  StrCpy $WorkspaceRoot "$ProductRoot\Data"
+  Goto workspace_root_done
+
+use_classic_install_workspace:
   ${GetParent} "$INSTDIR" $0
   StrCmp $0 "" use_profile_workspace
   StrCpy $WorkspaceRoot "$0\TransVortexData"
@@ -282,8 +324,9 @@ workspace_root_done:
 FunctionEnd
 
 Function WorkspacePageCreate
-  !insertmacro MUI_HEADER_TEXT "选择工作数据位置" "任务资料和临时媒体可能持续增长，请确认保存磁盘。"
+  !insertmacro MUI_HEADER_TEXT "确认最终存放位置" "任务资料和识别资源可能持续增长，请确认保存磁盘。"
   Call ResolveWorkspaceRoot
+  Call ResolveAsrStorageRoot
   nsDialogs::Create 1018
   Pop $WorkspaceDialog
   ${If} $WorkspaceDialog == error
@@ -291,20 +334,34 @@ Function WorkspacePageCreate
   ${EndIf}
   SetCtlColors $WorkspaceDialog "" "FAF8FC"
 
-  ${NSD_CreateLabel} 0 0 100% 30u "这里保存任务状态、识别与翻译中间资料，以及可恢复的临时音频；配置和凭据仍保存在 Windows 用户目录。"
+  ${NSD_CreateLabel} 0 0 100% 24u "安装器将按下面的最终路径落盘。配置和凭据仍保存在 Windows 用户目录。"
   Pop $0
   SetCtlColors $0 "2E2A33" "FAF8FC"
 
-  ${NSD_CreateLabel} 0 40u 100% 12u "工作数据文件夹"
+  ${NSD_CreateLabel} 0 28u 100% 12u "程序（升级时只替换这里）"
   Pop $0
   SetCtlColors $0 "2E2A33" "FAF8FC"
-  ${NSD_CreateText} 0 56u 78% 13u "$WorkspaceRoot"
+  ${NSD_CreateText} 0 41u 100% 13u "$INSTDIR"
+  Pop $0
+  EnableWindow $0 0
+
+  ${NSD_CreateLabel} 0 60u 100% 12u "工作数据（任务、中间资料和恢复缓存）"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+  ${NSD_CreateText} 0 73u 78% 13u "$WorkspaceRoot"
   Pop $WorkspacePathInput
-  ${NSD_CreateButton} 80% 55u 20% 15u "浏览…"
+  ${NSD_CreateButton} 80% 72u 20% 15u "浏览…"
   Pop $WorkspaceBrowseButton
   ${NSD_OnClick} $WorkspaceBrowseButton SelectWorkspaceDirectory
 
-  ${NSD_CreateLabel} 0 80u 100% 34u "程序升级不会删除这个文件夹。语音识别运行组件和模型使用应用内单独设置的资源位置。"
+  ${NSD_CreateLabel} 0 92u 100% 12u "识别资源（运行组件、模型和下载断点）"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+  ${NSD_CreateText} 0 105u 100% 13u "$AsrStorageRoot"
+  Pop $0
+  EnableWindow $0 0
+
+  ${NSD_CreateLabel} 0 126u 100% 34u "程序升级不会删除工作数据或识别资源。工作数据安装后仍可在“应用设置”中安全迁移。"
   Pop $WorkspaceNoticeLabel
   SetCtlColors $WorkspaceNoticeLabel "5F5965" "FAF8FC"
 
@@ -382,6 +439,12 @@ check_legacy_asr_storage:
   IfFileExists "$LOCALAPPDATA\TransVortex\Components\*.*" use_profile_asr_storage
   IfFileExists "$LOCALAPPDATA\TransVortex\Models\faster-whisper\*.*" use_profile_asr_storage
   IfFileExists "$LOCALAPPDATA\TransVortex\Downloads\ASR\*.*" use_profile_asr_storage
+  Call ResolveInstallLayout
+  StrCmp $ModernInstallLayout "1" 0 use_classic_install_asr_storage
+  StrCpy $AsrStorageRoot "$ProductRoot\Resources"
+  Goto asr_storage_root_done
+
+use_classic_install_asr_storage:
   ${GetParent} "$INSTDIR" $0
   StrCmp $0 "" use_profile_asr_storage
   StrCpy $AsrStorageRoot "$0\TransVortexResources"

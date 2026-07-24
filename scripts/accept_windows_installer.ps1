@@ -61,10 +61,16 @@ function Get-EffectiveInstallRoot {
 
     $requestedFullPath = Get-FullPath -Path $RequestedPath
     $leaf = Split-Path -Leaf $requestedFullPath
-    if ([string]::Equals($leaf, "TransVortex", [System.StringComparison]::OrdinalIgnoreCase)) {
-        return $requestedFullPath
+    if ([string]::Equals($leaf, "App", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $parent = Split-Path -Parent $requestedFullPath
+        if ([string]::Equals((Split-Path -Leaf $parent), "TransVortex", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $requestedFullPath
+        }
     }
-    return Join-Path $requestedFullPath "TransVortex"
+    if ([string]::Equals($leaf, "TransVortex", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return Join-Path $requestedFullPath "App"
+    }
+    return Join-Path $requestedFullPath "TransVortex\App"
 }
 
 function Invoke-WaitingProcess {
@@ -437,6 +443,7 @@ function Wait-PathRemoved {
 }
 $installerRequestedPath = Get-FullPath -Path $InstallRoot
 $installFullPath = Get-EffectiveInstallRoot -RequestedPath $installerRequestedPath
+$productRoot = Split-Path -Parent $installFullPath
 Assert-PathInsideDirectory -Path $installerRequestedPath -Directory $acceptanceRoot
 Assert-PathInsideDirectory -Path $installFullPath -Directory $acceptanceRoot
 if ([string]::IsNullOrWhiteSpace($ReportPath)) {
@@ -444,11 +451,11 @@ if ([string]::IsNullOrWhiteSpace($ReportPath)) {
 }
 $reportFullPath = Get-FullPath -Path $ReportPath
 
-$defaultInstallRoot = Join-Path $env:LOCALAPPDATA "Programs\TransVortex"
+$defaultProductRoot = Join-Path $env:LOCALAPPDATA "Programs\TransVortex"
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TransVortex"
 $appKey = "HKCU:\Software\TransVortex"
-if (Test-Path -LiteralPath $defaultInstallRoot) {
-    throw "Refusing automated acceptance while the default TransVortex install exists: $defaultInstallRoot"
+if (Test-Path -LiteralPath $defaultProductRoot) {
+    throw "Refusing automated acceptance while the default TransVortex product root exists: $defaultProductRoot"
 }
 if ((Test-Path -LiteralPath $uninstallKey) -or (Test-Path -LiteralPath $appKey)) {
     throw "Refusing automated acceptance while TransVortex installer registry keys already exist."
@@ -462,12 +469,13 @@ $userDataSentinel = Join-Path $userDataSentinelRoot "preserve.txt"
 $serviceRoot = Join-Path $acceptanceRoot "service"
 $isolatedProfile = Join-Path $acceptanceRoot "profile"
 $isolatedLocalAppData = Join-Path $acceptanceRoot "local-app-data"
-$workspaceRoot = Join-Path $acceptanceRoot "workspace"
+$workspaceRoot = Join-Path $productRoot "Data"
+$asrStorageRoot = Join-Path $productRoot "Resources"
 $unsafeParent = Join-Path $acceptanceRoot "unsafe-parent"
-$unsafeTarget = Join-Path $unsafeParent "TransVortex"
+$unsafeTarget = Join-Path $unsafeParent "TransVortex\App"
 $unsafeSentinel = Join-Path $unsafeTarget "unrelated-user-file.txt"
 $relocatedParent = Join-Path $acceptanceRoot "relocated-parent"
-$relocatedTarget = Join-Path $relocatedParent "TransVortex"
+$relocatedTarget = Join-Path $relocatedParent "TransVortex\App"
 $installedApp = $null
 $acceptanceSucceeded = $false
 $installed = $false
@@ -493,7 +501,7 @@ try {
         throw "Unsafe-directory protection changed the unrelated sentinel."
     }
 
-    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
+    $freshInstallExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($freshInstallExit -ne 0) {
         throw "Fresh silent install failed with exit code $freshInstallExit"
     }
@@ -506,7 +514,10 @@ try {
     }
     $appRegistry = Get-ItemProperty -LiteralPath $appKey
     if (-not [string]::Equals((Get-FullPath -Path $appRegistry.WorkspaceLocation), (Get-FullPath -Path $workspaceRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Workspace registry location does not match the acceptance root."
+        throw "Default workspace does not match the product Data directory."
+    }
+    if (-not [string]::Equals((Get-FullPath -Path $appRegistry.AsrStorageLocation), (Get-FullPath -Path $asrStorageRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Default ASR storage does not match the product Resources directory."
     }
     if (-not (Test-Path -LiteralPath $shortcutPath)) {
         throw "Start menu shortcut was not created."
@@ -526,7 +537,7 @@ try {
 
     $obsoleteMarker = Join-Path $installFullPath "obsolete-upgrade-marker.txt"
     Set-Content -LiteralPath $obsoleteMarker -Value "must be removed" -Encoding utf8
-    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
+    $upgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($upgradeExit -ne 0) {
         throw "Silent upgrade failed with exit code $upgradeExit"
     }
@@ -543,7 +554,7 @@ try {
     $mutex = [System.Threading.Mutex]::OpenExisting("Local\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B")
     $mutex.Dispose()
 
-    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/WORKSPACEROOT=$workspaceRoot", "/D=$installerRequestedPath")
+    $blockedUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @("/S", "/D=$installerRequestedPath")
     if ($blockedUpgradeExit -ne 10) {
         throw "Running-process install protection returned $blockedUpgradeExit instead of 10."
     }
@@ -600,6 +611,9 @@ try {
         install_scope = "per_user"
         custom_install_root = $true
         dedicated_install_subdirectory = $true
+        unified_product_root = $true
+        default_workspace_is_product_data = $true
+        default_asr_storage_is_product_resources = $true
         unsafe_directory_block_exit_code = $unsafeDirectoryExit
         unsafe_directory_preserved = $true
         installed_path_change_block_exit_code = $pathChangeExit
