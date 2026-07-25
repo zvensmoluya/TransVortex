@@ -183,7 +183,8 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
   };
   late bool _advancedExpanded = _policy == _ReasoningPolicy.serviceDefault;
 
-  void _select(String value) => Navigator.of(context).pop(value);
+  void _select(String value) =>
+      Navigator.of(context, rootNavigator: true).pop(value);
 
   void _showManual() {
     setState(() {
@@ -281,7 +282,7 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
                       onChanged: (index) {
                         setState(() => _manualValue = manual[index].value);
                       },
-                      onApply: (index) => _select(manual[index].value),
+                      onChangeEnd: (index) => _select(manual[index].value),
                     )
                   : const SizedBox(
                       key: ValueKey('reasoning-manual-controls-hidden'),
@@ -485,13 +486,13 @@ class _ManualEffortControl extends StatelessWidget {
     required this.choices,
     required this.selectedIndex,
     required this.onChanged,
-    required this.onApply,
+    required this.onChangeEnd,
   });
 
   final List<ReasoningEffortChoice> choices;
   final int selectedIndex;
   final ValueChanged<int> onChanged;
-  final ValueChanged<int> onApply;
+  final ValueChanged<int> onChangeEnd;
 
   @override
   Widget build(BuildContext context) {
@@ -504,29 +505,12 @@ class _ManualEffortControl extends StatelessWidget {
             children: [
               Text('具体档位', style: T.tCaption),
               const Spacer(),
-              DesignedTooltip(
-                message: '使用${choices[selectedIndex].label}档',
-                width: 150,
-                height: 62,
-                child: InkWell(
-                  key: const ValueKey('reasoning-manual-apply'),
-                  borderRadius: BorderRadius.circular(T.rSm),
-                  onTap: () => onApply(selectedIndex),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: T.accentSoft,
-                      borderRadius: BorderRadius.circular(T.rSm),
-                      border: Border.all(color: T.accent),
-                    ),
-                    child: const Icon(
-                      Icons.check_rounded,
-                      size: 17,
-                      color: T.accentStrong,
-                    ),
-                  ),
+              Text(
+                choices[selectedIndex].label,
+                key: const ValueKey('reasoning-manual-current'),
+                style: T.tCaption.copyWith(
+                  color: T.accentStrong,
+                  fontWeight: T.wBold,
                 ),
               ),
             ],
@@ -555,6 +539,7 @@ class _ManualEffortControl extends StatelessWidget {
                 semanticFormatterCallback: (value) =>
                     choices[value.round()].label,
                 onChanged: (value) => onChanged(value.round()),
+                onChangeEnd: (value) => onChangeEnd(value.round()),
               ),
             ),
             Row(

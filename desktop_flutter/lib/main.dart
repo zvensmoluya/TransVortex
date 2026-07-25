@@ -1744,6 +1744,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             view: view,
             onPickTranslation: _pickTranslation,
             onPickAsr: _pickAsr,
+            onPickReasoning: _pickReasoningEffort,
             onSelectSourceLanguage: _controller.setSourceLang,
             onSelectTargetLanguage: _controller.setTargetLang,
             onPickBilingual: _pickBilingual,

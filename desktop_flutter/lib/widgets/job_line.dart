@@ -14,6 +14,7 @@ class JobLine extends StatelessWidget {
     required this.view,
     required this.onPickTranslation,
     required this.onPickAsr,
+    required this.onPickReasoning,
     required this.onSelectSourceLanguage,
     required this.onSelectTargetLanguage,
     required this.onPickBilingual,
@@ -26,6 +27,7 @@ class JobLine extends StatelessWidget {
   final MainWindowViewModel view;
   final VoidCallback onPickTranslation;
   final VoidCallback onPickAsr;
+  final VoidCallback onPickReasoning;
   final ValueChanged<String> onSelectSourceLanguage;
   final ValueChanged<String> onSelectTargetLanguage;
   final VoidCallback onPickBilingual;
@@ -103,6 +105,15 @@ class JobLine extends StatelessWidget {
                 onPick: openMenu,
               ),
             ),
+            if (view.reasoningConfigurable) ...[
+              const Text('，思考程度', style: T.tBody),
+              _Word(
+                key: const ValueKey('job-reasoning-effort'),
+                label: _compactReasoningLabel(view.reasoningDetail),
+                tooltip: '思考程度：${view.reasoningDetail}',
+                onPick: onPickReasoning,
+              ),
+            ],
           ],
         ),
         const SizedBox(height: T.s8),
@@ -130,6 +141,7 @@ class JobLine extends StatelessWidget {
 
 class _Word extends StatefulWidget {
   const _Word({
+    super.key,
     required this.label,
     required this.onPick,
     this.fullLabel,
@@ -220,6 +232,10 @@ class _WordState extends State<_Word> with SingleTickerProviderStateMixin {
         ? content
         : DesignedTooltip(message: fullLabel, child: content);
   }
+}
+
+String _compactReasoningLabel(String label) {
+  return label.replaceFirst('当前：', '');
 }
 
 String _compactEngineLabel(String label) {

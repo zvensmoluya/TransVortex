@@ -1694,6 +1694,63 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main shows and submits the current reasoning value', (
+    tester,
+  ) async {
+    installFilePickerMock(tester);
+    final transport = _FakeTransport({
+      'service.info': {
+        'service': 'transvortex.app_service',
+        'protocol_version': 1,
+        'app_version': 'test',
+        'capabilities': ['desktop_snapshot', 'runtime_pump'],
+      },
+      'service.health': {
+        'service': 'transvortex.app_service',
+        'status': 'healthy',
+        'runtime': {'active': null},
+        'pump': {'enabled': true},
+      },
+      'desktop.snapshot': _desktopSnapshot(primaryReasoningEffort: 'high').raw,
+      'runtime.submitRun': {
+        'ok': true,
+        'task_id': 'tvx_reasoning_effort',
+        'status': 'QUEUED',
+      },
+      'tasks.events': {
+        'task_id': 'tvx_reasoning_effort',
+        'events': [],
+        'cursor': 0,
+        'next_cursor': 0,
+        'has_more': false,
+      },
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _controllerForTransport(transport),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const ValueKey('job-reasoning-effort')), findsOneWidget);
+    expect(find.text('高'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('job-reasoning-effort')));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(const ValueKey('reasoning-mode-manual')), findsOneWidget);
+    expect(find.text('高'), findsWidgets);
+    await tester.tapAt(const Offset(8, 120));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    await pickSourceAndStart(tester);
+    final submitParams = transport.lastParams['runtime.submitRun'];
+    final request = submitParams?['request'] as Map<String, Object?>?;
+    final routing = request?['routing'] as Map<String, Object?>?;
+    final primary = routing?['primary'] as Map<String, Object?>?;
+    expect(primary?['reasoning_effort'], 'high');
+    expectNoFlutterException();
+  });
+
   testWidgets('main language menus update submitted language pair', (
     tester,
   ) async {
@@ -3322,19 +3379,27 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('reasoning-manual-apply')),
+      find.byKey(const ValueKey('reasoning-manual-current')),
       findsOneWidget,
     );
-    await tester.drag(
+    final sliderRect = tester.getRect(
       find.byKey(const ValueKey('reasoning-manual-slider')),
-      const Offset(80, 0),
+    );
+    await tester.tapAt(Offset(sliderRect.right - 24, sliderRect.center.dy));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reasoning-effort-picker')), findsNothing);
+    expect(calls, contains('provider.routing.save'));
+    var profiles = savedRouting?['profiles'] as List?;
+    var active = profiles?.cast<Map>().firstWhere(
+      (item) => item['id'] == 'route_1',
+    );
+    expect((active?['primary'] as Map?)?['reasoning_effort'], 'high');
+
+    await tester.tap(
+      find.byKey(const ValueKey('primary-reasoning-effort-button')),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('reasoning-effort-picker')),
-      findsOneWidget,
-    );
-    expect(calls, isNot(contains('provider.routing.save')));
+    expect(find.text('高'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('reasoning-advanced-toggle')));
     await tester.pumpAndSettle();
@@ -3354,8 +3419,8 @@ void main() {
 
     expect(calls, contains('provider.routing.save'));
     expect(calls, isNot(contains('provider.save')));
-    final profiles = savedRouting?['profiles'] as List?;
-    final active = profiles?.cast<Map>().firstWhere(
+    profiles = savedRouting?['profiles'] as List?;
+    active = profiles?.cast<Map>().firstWhere(
       (item) => item['id'] == 'route_1',
     );
     expect(active?['primary'], {
@@ -7032,6 +7097,7 @@ DesktopSnapshot _desktopSnapshot({
   String activeRoutingProfile = '',
   bool withRoutingFallback = false,
   bool withTwoRoutingFallbacks = false,
+  String primaryReasoningEffort = '',
   List<Map<String, Object?>> tasks = const [],
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
@@ -7060,7 +7126,12 @@ DesktopSnapshot _desktopSnapshot({
           {
             'id': 'route_1',
             'name': '配置 1',
-            'primary': {'provider': 'RealProvider', 'model': 'real-model'},
+            'primary': {
+              'provider': 'RealProvider',
+              'model': 'real-model',
+              if (primaryReasoningEffort.isNotEmpty)
+                'reasoning_effort': primaryReasoningEffort,
+            },
             'fallback': withTwoRoutingFallbacks
                 ? [
                     {'provider': 'RealProvider', 'model': 'backup-model'},
@@ -7083,7 +7154,12 @@ DesktopSnapshot _desktopSnapshot({
           {
             'id': 'default',
             'name': 'Default',
-            'primary': {'provider': 'RealProvider', 'model': models.first},
+            'primary': {
+              'provider': 'RealProvider',
+              'model': models.first,
+              if (primaryReasoningEffort.isNotEmpty)
+                'reasoning_effort': primaryReasoningEffort,
+            },
             'fallback': [
               {'provider': 'RealProvider', 'model': 'real-model'},
             ],
