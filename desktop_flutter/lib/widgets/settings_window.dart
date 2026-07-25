@@ -495,48 +495,42 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-full'),
                   leadingIcon: const Icon(Icons.build_circle_outlined),
-                  onPressed: () => _copyAsrAgentHandoff('full', '准备本机识别'),
-                  child: const Text('准备本机识别'),
+                  onPressed: () => _copyAsrAgentHandoff('full', '完整准备'),
+                  child: const Text('完整准备本机识别'),
                 ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-model'),
+                  leadingIcon: const Icon(Icons.view_in_ar_rounded),
+                  onPressed: () =>
+                      _copyAsrAgentHandoff('prepare_model', '准备模型'),
+                  child: const Text('只准备模型'),
+                ),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-accelerator'),
+                  leadingIcon: const Icon(Icons.memory_rounded),
+                  onPressed: () =>
+                      _copyAsrAgentHandoff('prepare_accelerator', '准备 GPU 加速'),
+                  child: const Text('只准备 GPU 加速'),
+                ),
+                const Divider(height: 1),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-register'),
                   leadingIcon: const Icon(Icons.link_rounded),
                   onPressed: () => _copyAsrAgentHandoff('register', '接入已有资源'),
                   child: const Text('接入已有资源'),
                 ),
-                SubmenuButton(
-                  menuChildren: [
-                    MenuItemButton(
-                      key: const ValueKey('asr-agent-scope-inspect'),
-                      leadingIcon: const Icon(Icons.manage_search_rounded),
-                      onPressed: () =>
-                          _copyAsrAgentHandoff('inspect', '评估本机条件'),
-                      child: const Text('评估本机条件'),
-                    ),
-                    MenuItemButton(
-                      key: const ValueKey('asr-agent-scope-model'),
-                      leadingIcon: const Icon(Icons.view_in_ar_rounded),
-                      onPressed: () =>
-                          _copyAsrAgentHandoff('prepare_model', '准备模型'),
-                      child: const Text('准备模型'),
-                    ),
-                    MenuItemButton(
-                      key: const ValueKey('asr-agent-scope-accelerator'),
-                      leadingIcon: const Icon(Icons.memory_rounded),
-                      onPressed: () => _copyAsrAgentHandoff(
-                        'prepare_accelerator',
-                        '准备 GPU 加速',
-                      ),
-                      child: const Text('准备 GPU 加速'),
-                    ),
-                  ],
-                  child: const Text('更多 Agent 操作'),
+                MenuItemButton(
+                  key: const ValueKey('asr-agent-scope-inspect'),
+                  leadingIcon: const Icon(Icons.manage_search_rounded),
+                  onPressed: () => _copyAsrAgentHandoff('inspect', '了解本机环境'),
+                  child: const Text('了解本机环境'),
                 ),
               ],
               builder: (context, controller, child) => ActionButton(
                 key: const ValueKey('asr-agent-handoff'),
                 label: '交给 Agent',
                 icon: Icons.terminal_rounded,
+                trailingIcon: Icons.expand_more_rounded,
                 onTap: _copyingAgentHandoff
                     ? null
                     : () {
@@ -552,7 +546,12 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ),
         if (showFeedback) ...[
           const SizedBox(height: T.s8),
-          _AsrFeedbackBar(busy: busy, error: _error, message: _message),
+          _AsrFeedbackBar(
+            busy: busy,
+            busyText: _copyingAgentHandoff ? '正在准备 Agent 交接…' : '正在同步…',
+            error: _error,
+            message: _message,
+          ),
         ],
         if (showBackgroundOperation) ...[
           const SizedBox(height: T.s12),
@@ -1879,7 +1878,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       }
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      setState(() => _message = '已复制“$label”交接。');
+      setState(() => _message = '“$label”已复制，可交给 Agent；返回本窗口时会自动刷新。');
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlyAgentEntryError(error));
@@ -2785,18 +2784,20 @@ Color _diagnosticStatusColor(String status) {
 class _AsrFeedbackBar extends StatelessWidget {
   const _AsrFeedbackBar({
     required this.busy,
+    required this.busyText,
     required this.error,
     required this.message,
   });
 
   final bool busy;
+  final String busyText;
   final String? error;
   final String? message;
 
   @override
   Widget build(BuildContext context) {
     final text = busy
-        ? '正在同步…'
+        ? busyText
         : error?.trim().isNotEmpty == true
         ? error!.trim()
         : message?.trim() ?? '';

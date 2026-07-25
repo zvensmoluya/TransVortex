@@ -570,7 +570,10 @@ void main() {
     await tester.tap(find.text('Agent / CLI'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Agent / CLI 入口已就绪'), findsOneWidget);
+    expect(find.text('Agent 接入已就绪'), findsOneWidget);
+    expect(find.text('复制交接信息'), findsOneWidget);
+    expect(find.text('定位稳定入口'), findsOneWidget);
+    expect(find.text('打开版本文档'), findsOneWidget);
     expect(
       find.text(r'C:\Users\tester\AppData\Local\TransVortex\Agent\README.md'),
       findsOneWidget,
@@ -578,7 +581,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('agent-entry-copy')));
     await tester.pump();
     expect(clipboardText, 'read stable entry');
-    expect(find.text('Agent 入口已复制。'), findsOneWidget);
+    expect(find.text('交接信息已复制，可交给 Agent。'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('agent-entry-reveal')));
     await tester.pump();
@@ -4009,17 +4012,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('准备本机识别'), findsOneWidget);
+    expect(find.text('完整准备本机识别'), findsOneWidget);
+    expect(find.text('只准备模型'), findsOneWidget);
+    expect(find.text('只准备 GPU 加速'), findsOneWidget);
     expect(find.text('接入已有资源'), findsOneWidget);
-    expect(find.text('更多 Agent 操作'), findsOneWidget);
-    await tester.tap(find.text('更多 Agent 操作'));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('准备 GPU 加速'), findsOneWidget);
+    expect(find.text('了解本机环境'), findsOneWidget);
+    expect(find.text('更多 Agent 操作'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('asr-agent-scope-accelerator')));
     await tester.pumpAndSettle();
 
     expect(clipboardText, 'prepare NVIDIA resources');
-    expect(find.text('已复制“准备 GPU 加速”交接。'), findsOneWidget);
+    expect(find.text('“准备 GPU 加速”已复制，可交给 Agent；返回本窗口时会自动刷新。'), findsOneWidget);
     expectNoFlutterException();
   });
 

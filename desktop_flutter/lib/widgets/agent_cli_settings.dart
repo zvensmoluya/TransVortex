@@ -57,17 +57,14 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
     if (_acting || text.isEmpty) return;
     await _runAction(
       () => Clipboard.setData(ClipboardData(text: text)),
-      success: 'Agent 入口已复制。',
+      success: '交接信息已复制，可交给 Agent。',
     );
   }
 
   Future<void> _revealEntry() async {
     final path = _entry?.entryDocument.trim() ?? '';
     if (_acting || path.isEmpty) return;
-    await _runAction(
-      () => _pathOpener.revealFile(path),
-      success: '已在资源管理器中显示入口。',
-    );
+    await _runAction(() => _pathOpener.revealFile(path), success: '已定位稳定入口文件。');
   }
 
   Future<void> _openDocs() async {
@@ -75,7 +72,7 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
     if (_acting || path.isEmpty) return;
     await _runAction(
       () => _pathOpener.openDirectory(path),
-      success: '已打开 Agent 资料目录。',
+      success: '已打开当前版本的 Agent 文档。',
     );
   }
 
@@ -126,20 +123,20 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
       footer: [
         ActionButton(
           key: const ValueKey('agent-entry-copy'),
-          label: '复制入口',
+          label: '复制交接信息',
           icon: Icons.content_copy_rounded,
           strong: true,
           onTap: _acting ? null : _copyEntry,
         ),
         ActionButton(
           key: const ValueKey('agent-entry-reveal'),
-          label: '显示入口',
+          label: '定位稳定入口',
           icon: Icons.find_in_page_rounded,
           onTap: _acting ? null : _revealEntry,
         ),
         ActionButton(
           key: const ValueKey('agent-docs-open'),
-          label: '打开资料',
+          label: '打开版本文档',
           icon: Icons.folder_open_rounded,
           onTap: _acting ? null : _openDocs,
         ),
@@ -159,7 +156,7 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
               const SizedBox(width: T.s8),
               Expanded(
                 child: Text(
-                  entry.registered ? 'Agent / CLI 入口已就绪' : 'Agent / CLI 入口未登记',
+                  entry.registered ? 'Agent 接入已就绪' : 'Agent 接入未登记',
                   style: T.tBody.copyWith(fontWeight: T.wBold),
                 ),
               ),
@@ -176,21 +173,21 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
         ],
         const SizedBox(height: T.s16),
         SettingsSection(
-          title: '稳定入口',
+          title: '稳定交接入口',
           children: [
-            ReadonlyRow(label: '入口文件', value: entry.entryDocument),
+            ReadonlyRow(label: '交接文件', value: entry.entryDocument),
             const SizedBox(height: T.s8),
-            ReadonlyRow(label: '定位信息', value: entry.entryState),
+            ReadonlyRow(label: '安装定位', value: entry.entryState),
           ],
         ),
         SettingsSection(
-          title: '当前安装',
+          title: '当前版本资源',
           children: [
             ReadonlyRow(label: '程序目录', value: entry.installRoot),
             const SizedBox(height: T.s8),
             ReadonlyRow(label: '配置目录', value: entry.configRoot),
             const SizedBox(height: T.s8),
-            ReadonlyRow(label: '资料目录', value: entry.docsRoot),
+            ReadonlyRow(label: 'Agent 文档', value: entry.docsRoot),
           ],
         ),
         SettingsSection(
@@ -198,7 +195,7 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
           divider: false,
           children: [
             ReadonlyRow(
-              label: '运行环境',
+              label: '执行程序',
               value: entry.cliArgvPrefix.isEmpty
                   ? ''
                   : entry.cliArgvPrefix.first,

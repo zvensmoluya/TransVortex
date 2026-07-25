@@ -250,6 +250,8 @@ def _handoff_text(entry_document: str, *, workflow: str | None = None) -> str:
         f"稳定入口：`{entry_document}`。"
         "先读取该文件和同目录的 `current.json`，再执行其中的 `capabilities_argv` 获取当前能力契约"
         f"{workflow_text}。"
+        "按用户当前任务只读取需要的文档并调用能力；"
+        "只有需要长期复用时，再读取适配说明并按你自己的扩展机制建立薄适配。"
         "不要假设 `transvortex` 已加入 PATH，也不要读取或输出凭据值。"
     )
 
