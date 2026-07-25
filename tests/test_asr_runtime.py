@@ -14,7 +14,9 @@ import pytest
 
 from transvortex.app.asr_operations import AsrOperationError, AsrOperationManager
 from transvortex.app.asr_runtime import (
+    asr_active_execution_snapshot,
     asr_provider_readiness,
+    asr_runtime_snapshot,
     asr_runtime_paths,
     discover_external_models,
     discover_python_environments,
@@ -840,17 +842,23 @@ def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, m
     model_root.mkdir()
     (model_root / "config.json").write_bytes(config_bytes)
     (model_root / "model.bin").write_bytes(b"existing-model")
-    monkeypatch.setattr(
-        "transvortex.app.asr_runtime.probe_python_environment",
-        lambda *_args, **_kwargs: {
+    captured_probe: dict[str, object] = {}
+
+    def fake_probe(*_args, **kwargs):  # noqa: ANN003
+        captured_probe.update(kwargs)
+        return {
             "ok": True,
             "protocol_version": 1,
             "model": {"loaded": True},
             "transcription": {"ok": True},
-        },
+        }
+
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.probe_python_environment",
+        fake_probe,
     )
 
-    result = probe_external_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+    result = probe_external_model(root_dir=tmp_path, model_path=model_root, device="auto")
     provider = AsrProviderConfig(
         name="whisper",
         kind="local_worker",
@@ -867,6 +875,9 @@ def test_managed_runtime_registers_and_resolves_external_model(tmp_path: Path, m
 
     assert result["ok"] is True
     assert result["model"]["model_id"] == "small"
+    assert result["requested_device"] == "auto"
+    assert result["resolved_device"] == "cpu"
+    assert captured_probe["device"] == "cpu"
     assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
     runtime = resolve_whisper_runtime(provider, root_dir=tmp_path)
     assert runtime["python_executable"] == str(runtime_root / "python.exe")
@@ -968,6 +979,26 @@ def test_managed_runtime_registers_and_resolves_external_accelerator(
 
     assert registered["ok"] is True
     assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
+    active = asr_active_execution_snapshot(
+        provider,
+        root_dir=tmp_path,
+        runtime_snapshot=asr_runtime_snapshot(tmp_path),
+    )
+    assert active["requested_device"] == "cuda"
+    assert active["resolved_device"] == "cuda"
+    assert active["compute_type"] == "float16"
+    assert active["can_run"] is True
+    assert active["model_resource"]["source"] == "managed"
+    assert active["model_resource"]["ready"] is True
+    assert active["accelerator"]["source"] == "external"
+    assert active["accelerator"]["registration_id"] == registration_id
+    assert active["accelerator"]["root"] == str(accelerator_root.resolve())
+    assert active["accelerator"]["ready"] is True
+    assert active["accelerator"]["cuda"] == {
+        "available": True,
+        "device_count": 1,
+        "compute_types": ["float16", "int8_float16"],
+    }
     resolved = resolve_whisper_runtime(provider, root_dir=tmp_path)
     assert resolved["accelerator_root"] == str(accelerator_root.resolve())
     assert resolved["accelerator_source"] == "external"

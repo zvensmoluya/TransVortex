@@ -668,6 +668,50 @@ void main() {
     expect(primary['reasoning_effort'], 'none');
   });
 
+  test(
+    'controller keeps reasoning strength across compatible models',
+    () async {
+      final controller = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(extraModels: const ['pro-model']),
+        ),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\movie.mp4');
+      controller.selectReasoningEffortValue('medium');
+
+      final compatible = controller.view.translationDirectOptions.firstWhere(
+        (item) => item.model == 'pro-model',
+      );
+      controller.selectTranslation(compatible);
+
+      var routing =
+          controller.buildRunRequest()['routing'] as Map<String, Object?>;
+      var primary = routing['primary'] as Map<String, Object?>;
+      expect(controller.view.reasoningLabel, '中');
+      expect(primary['reasoning_effort'], 'medium');
+
+      controller.selectTranslation(
+        const TranslationRuntimeChoice(
+          label: 'plain-model',
+          configured: true,
+          routing: {
+            'primary': {'provider': 'PlainProvider', 'model': 'plain-model'},
+            'fallback': <Object?>[],
+          },
+          source: TranslationChoiceSource.direct,
+          provider: 'PlainProvider',
+          model: 'plain-model',
+        ),
+      );
+
+      routing = controller.buildRunRequest()['routing'] as Map<String, Object?>;
+      primary = routing['primary'] as Map<String, Object?>;
+      expect(controller.view.reasoningConfigurable, isFalse);
+      expect(primary['reasoning_effort'], 'auto');
+    },
+  );
+
   test('controller sends selected language pair in run payload', () async {
     final controller = MainWindowController(service: _readyController());
     await controller.startService();

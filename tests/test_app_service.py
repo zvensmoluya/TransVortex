@@ -261,6 +261,11 @@ def test_app_service_desktop_snapshot_contains_control_plane_payloads(tmp_path: 
         "mode": "system",
         "proxy_port": 0,
     }
+    active = response["result"]["config"]["asr_local"]["active_execution"]
+    assert active["kind"] == "local_worker"
+    assert active["requested_device"] == "auto"
+    assert active["resolved_device"] == "cpu"
+    assert active["accelerator"]["active"] is False
 
 
 def test_app_service_saves_global_network_settings(tmp_path: Path) -> None:

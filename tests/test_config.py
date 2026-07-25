@@ -152,6 +152,31 @@ asr_providers:
     assert provider.local.compute_type == "int8"
 
 
+def test_asr_resource_activation_rejects_gpu_compute_type_on_cpu(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr: {provider: local_whisper}
+asr_providers:
+  - name: local_whisper
+    kind: local_worker
+    protocol: faster_whisper
+    model: small
+    runtime: {source: managed, id: managed:faster-whisper}
+    local: {model_source: managed, device: auto, compute_type: auto}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="not compatible with CPU"):
+        activate_asr_resources(
+            root_dir=tmp_path,
+            device="cpu",
+            compute_type="float16",
+        )
+
+
 def test_artifacts_directory_environment_overrides_workspace_yaml(
     tmp_path: Path, monkeypatch
 ) -> None:

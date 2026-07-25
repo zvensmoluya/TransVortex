@@ -181,7 +181,18 @@ def asr_runtime_snapshot(
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
-        row["installed"] = _accelerator_marker(paths, row) is not None
+        marker = _accelerator_marker(paths, row)
+        row["installed"] = marker is not None
+        if marker is not None:
+            row["root"] = str(
+                paths.components_root
+                / "accelerators"
+                / str(row.get("id") or "")
+                / str(row.get("version") or "")
+            )
+            hardware_probe = marker.get("hardware_probe")
+            if isinstance(hardware_probe, dict):
+                row["hardware_probe"] = hardware_probe
         accelerator_rows.append(row)
     model_rows = []
     for raw in catalog.get("models") or []:
@@ -220,6 +231,155 @@ def asr_runtime_snapshot(
         ),
         "operations": operations,
     }
+
+
+def asr_active_execution_snapshot(
+    provider: AsrProviderConfig,
+    *,
+    root_dir: Path,
+    runtime_snapshot: dict[str, Any] | None = None,
+    app_data_root: Path | None = None,
+) -> dict[str, Any]:
+    """Project the configured local worker and its verified runtime resources."""
+
+    readiness = asr_provider_readiness(
+        provider,
+        root_dir=root_dir,
+        app_data_root=app_data_root,
+    )
+    payload: dict[str, Any] = {
+        "provider": provider.name,
+        "kind": provider.kind,
+        "model": provider.model,
+        "requested_device": provider.local.device if provider.kind == "local_worker" else "",
+        "resolved_device": "",
+        "device_resolution": "not_applicable",
+        "compute_type": provider.local.compute_type if provider.kind == "local_worker" else "",
+        "can_run": readiness.get("can_run") is True,
+        "readiness": readiness,
+        "model_resource": {},
+        "accelerator": {},
+    }
+    if provider.kind != "local_worker":
+        return payload
+
+    snapshot = runtime_snapshot or asr_runtime_snapshot(
+        root_dir,
+        app_data_root=app_data_root,
+    )
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    catalog = load_asr_catalog()
+    accelerator = _selected_accelerator(provider, paths, catalog)
+    hardware = (
+        accelerator.get("hardware_probe")
+        if isinstance(accelerator, dict) and isinstance(accelerator.get("hardware_probe"), dict)
+        else {}
+    )
+    cuda = hardware.get("cuda") if isinstance(hardware.get("cuda"), dict) else {}
+    accelerator_ready = (
+        isinstance(accelerator, dict)
+        and hardware.get("ok") is True
+        and cuda.get("available") is True
+    )
+
+    requested_device = str(provider.local.device or "auto").lower()
+    if requested_device == "auto":
+        resolved_device = "cuda" if accelerator_ready else "cpu"
+        resolution = "verified_accelerator" if accelerator_ready else "no_verified_accelerator"
+    else:
+        resolved_device = requested_device
+        resolution = "explicit_configuration"
+    payload["requested_device"] = requested_device
+    payload["resolved_device"] = resolved_device
+    payload["device_resolution"] = resolution
+
+    accelerator_source = str(provider.accelerator.source or "managed")
+    accelerator_id = str(provider.accelerator.id or NVIDIA_ACCELERATOR_ID)
+    raw_device_count = cuda.get("device_count")
+    device_count = (
+        raw_device_count
+        if isinstance(raw_device_count, int)
+        and not isinstance(raw_device_count, bool)
+        and raw_device_count >= 0
+        else 0
+    )
+    payload["accelerator"] = {
+        "source": accelerator_source,
+        "id": accelerator_id,
+        "registration_id": accelerator_id if accelerator_source == "external" else "",
+        "state": (
+            "ready"
+            if accelerator_ready
+            else "needs_action"
+            if requested_device == "cuda"
+            else "available_unverified"
+            if isinstance(accelerator, dict)
+            else "not_available"
+        ),
+        "ready": accelerator_ready,
+        "active": resolved_device == "cuda",
+        "root": str(accelerator.get("root") or "") if isinstance(accelerator, dict) else "",
+        "version": str(accelerator.get("version") or "") if isinstance(accelerator, dict) else "",
+        "cuda": {
+            "available": cuda.get("available") is True,
+            "device_count": device_count,
+            "compute_types": [str(item) for item in cuda.get("compute_types") or []],
+        },
+    }
+
+    model_source = str(provider.local.model_source or "managed")
+    model_path = str(provider.local.model_path or "") if model_source == "external" else ""
+    registration_id = ""
+    model_ready = False
+    if model_source == "external":
+        normalized_path = ""
+        try:
+            normalized_path = os.path.normcase(str(Path(model_path).expanduser().resolve()))
+        except OSError:
+            pass
+        for raw in snapshot.get("registered_models") or []:
+            if not isinstance(raw, dict):
+                continue
+            candidate_id = str(raw.get("id") or "")
+            candidate_path = str(raw.get("model_path") or "")
+            try:
+                candidate_path = os.path.normcase(str(Path(candidate_path).expanduser().resolve()))
+            except OSError:
+                continue
+            if (
+                normalized_path
+                and candidate_path == normalized_path
+                and str(raw.get("model_id") or "") == provider.model
+                and registered_external_model(
+                    root_dir=root_dir,
+                    registration_id=candidate_id,
+                    app_data_root=app_data_root,
+                )
+                is not None
+            ):
+                registration_id = candidate_id
+                model_ready = True
+                break
+    else:
+        model_row = next(
+            (
+                raw
+                for raw in snapshot.get("models") or []
+                if isinstance(raw, dict) and str(raw.get("id") or "") == provider.model
+            ),
+            None,
+        )
+        model_ready = isinstance(model_row, dict) and model_row.get("installed") is True
+        model_path = str(model_row.get("path") or "") if isinstance(model_row, dict) else ""
+    payload["model_resource"] = {
+        "source": model_source,
+        "id": provider.model,
+        "registration_id": registration_id,
+        "path": model_path,
+        "state": "ready" if model_ready else "needs_action",
+        "ready": model_ready,
+    }
+    return payload
 
 
 def asr_storage_status(
@@ -968,11 +1128,19 @@ def probe_external_model(
         if accelerator_root is not None
         else _managed_accelerator_root(paths, catalog, NVIDIA_ACCELERATOR_ID)
     )
+    requested_device = str(device or "auto").lower()
+    resolved_device = (
+        "cuda"
+        if requested_device == "auto" and resolved_accelerator_root is not None
+        else "cpu"
+        if requested_device == "auto"
+        else requested_device
+    )
     probe = probe_python_environment(
         executable,
         model_id=model_id,
         model_path=resolved_model,
-        device=device,
+        device=resolved_device,
         compute_type=compute_type,
         accelerator_root=resolved_accelerator_root,
         timeout_seconds=timeout_seconds,
@@ -984,6 +1152,8 @@ def probe_external_model(
             "message": str(probe.get("message") or "Model validation failed"),
             "model_id": model_id,
             "model_path": str(resolved_model),
+            "requested_device": requested_device,
+            "resolved_device": resolved_device,
             "probe": probe,
         }
     final_signature = _external_model_signature(resolved_model)
@@ -1017,7 +1187,15 @@ def probe_external_model(
             "signature": final_signature,
             "probe": probe,
         }
-    return {"ok": True, "code": "ready", "model": record, "saved": save, "probe": probe}
+    return {
+        "ok": True,
+        "code": "ready",
+        "model": record,
+        "saved": save,
+        "requested_device": requested_device,
+        "resolved_device": resolved_device,
+        "probe": probe,
+    }
 
 
 def discover_external_models(

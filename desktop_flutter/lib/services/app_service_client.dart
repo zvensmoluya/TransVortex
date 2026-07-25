@@ -831,12 +831,36 @@ class AppServiceClient {
     required String modelPath,
     String device = 'auto',
     String computeType = 'auto',
+    String? acceleratorRoot,
   }) {
     return call('asr.model.probe', {
       'model_path': modelPath,
       'device': device,
       'compute_type': computeType,
+      'accelerator_root': ?acceleratorRoot,
     }, const Duration(minutes: 3)).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> activateAsrResources({
+    String? provider,
+    String? managedModelId,
+    String? modelRegistrationId,
+    String? managedAcceleratorId,
+    String? acceleratorRegistrationId,
+    String? device,
+    String? computeType,
+    Map<String, Object?>? expectedVersion,
+  }) {
+    return call('asr.resources.activate', {
+      'provider': ?provider,
+      'managed_model_id': ?managedModelId,
+      'model_registration_id': ?modelRegistrationId,
+      'managed_accelerator_id': ?managedAcceleratorId,
+      'accelerator_registration_id': ?acceleratorRegistrationId,
+      'device': ?device,
+      'compute_type': ?computeType,
+      'expected_version': ?expectedVersion,
+    }).then(_stringMap);
   }
 
   Future<List<PythonEnvironmentOption>> discoverAsrEnvironments() async {
@@ -1214,6 +1238,28 @@ class DesktopSnapshot {
         .where((item) => item.id.isNotEmpty)
         .toList(growable: false);
   }
+
+  List<AsrRegisteredResourceOption> get asrRegisteredAccelerators {
+    return _objectList(asrLocal['registered_accelerators'])
+        .map(
+          (item) =>
+              AsrRegisteredResourceOption.fromJson(item, kind: 'accelerator'),
+        )
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  List<AsrRegisteredResourceOption> get asrRegisteredModels {
+    return _objectList(asrLocal['registered_models'])
+        .map(
+          (item) => AsrRegisteredResourceOption.fromJson(item, kind: 'model'),
+        )
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  AsrActiveExecution get asrActiveExecution =>
+      AsrActiveExecution.fromJson(asrLocal['active_execution']);
 
   List<AsrOperationStatus> get asrOperations {
     return _objectList(asrLocal['operations'])
@@ -1994,6 +2040,150 @@ class AsrComponentOption {
       published: artifact.isEmpty || artifact['published'] == true,
       size: _intValue(map['size']) ?? _intValue(artifact['size']) ?? 0,
       path: _stringValue(map['path']) ?? '',
+      raw: map,
+    );
+  }
+}
+
+class AsrRegisteredResourceOption {
+  const AsrRegisteredResourceOption({
+    required this.id,
+    required this.kind,
+    this.resourceId = '',
+    this.path = '',
+    this.root = '',
+    this.version = '',
+    this.ready = false,
+    this.cudaAvailable = false,
+    this.deviceCount = 0,
+    this.computeTypes = const <String>[],
+    this.probeDevice = '',
+    this.probeComputeType = '',
+    this.raw = const <String, Object?>{},
+  });
+
+  final String id;
+  final String kind;
+  final String resourceId;
+  final String path;
+  final String root;
+  final String version;
+  final bool ready;
+  final bool cudaAvailable;
+  final int deviceCount;
+  final List<String> computeTypes;
+  final String probeDevice;
+  final String probeComputeType;
+  final Map<String, Object?> raw;
+
+  factory AsrRegisteredResourceOption.fromJson(
+    Object? value, {
+    required String kind,
+  }) {
+    final map = _stringMap(value);
+    final probe = _stringMap(map['probe']);
+    final cuda = _stringMap(probe['cuda']);
+    final model = _stringMap(probe['model']);
+    return AsrRegisteredResourceOption(
+      id: _stringValue(map['id']) ?? '',
+      kind: kind,
+      resourceId:
+          _stringValue(map[kind == 'model' ? 'model_id' : 'accelerator_id']) ??
+          '',
+      path: _stringValue(map['model_path']) ?? '',
+      root: _stringValue(map['root']) ?? '',
+      version: _stringValue(map['version']) ?? '',
+      ready: probe['ok'] == true,
+      cudaAvailable: cuda['available'] == true,
+      deviceCount: _intValue(cuda['device_count']) ?? 0,
+      computeTypes: _stringList(cuda['compute_types']),
+      probeDevice: _stringValue(model['device']) ?? '',
+      probeComputeType: _stringValue(model['compute_type']) ?? '',
+      raw: map,
+    );
+  }
+}
+
+class AsrActiveExecution {
+  const AsrActiveExecution({
+    this.provider = '',
+    this.kind = '',
+    this.model = '',
+    this.requestedDevice = '',
+    this.resolvedDevice = '',
+    this.deviceResolution = '',
+    this.computeType = '',
+    this.canRun = false,
+    this.modelSource = '',
+    this.modelRegistrationId = '',
+    this.modelPath = '',
+    this.modelReady = false,
+    this.acceleratorSource = '',
+    this.acceleratorId = '',
+    this.acceleratorRegistrationId = '',
+    this.acceleratorRoot = '',
+    this.acceleratorVersion = '',
+    this.acceleratorState = '',
+    this.acceleratorReady = false,
+    this.cudaAvailable = false,
+    this.cudaDeviceCount = 0,
+    this.cudaComputeTypes = const <String>[],
+    this.raw = const <String, Object?>{},
+  });
+
+  final String provider;
+  final String kind;
+  final String model;
+  final String requestedDevice;
+  final String resolvedDevice;
+  final String deviceResolution;
+  final String computeType;
+  final bool canRun;
+  final String modelSource;
+  final String modelRegistrationId;
+  final String modelPath;
+  final bool modelReady;
+  final String acceleratorSource;
+  final String acceleratorId;
+  final String acceleratorRegistrationId;
+  final String acceleratorRoot;
+  final String acceleratorVersion;
+  final String acceleratorState;
+  final bool acceleratorReady;
+  final bool cudaAvailable;
+  final int cudaDeviceCount;
+  final List<String> cudaComputeTypes;
+  final Map<String, Object?> raw;
+
+  factory AsrActiveExecution.fromJson(Object? value) {
+    final map = _stringMap(value);
+    final model = _stringMap(map['model_resource']);
+    final accelerator = _stringMap(map['accelerator']);
+    final cuda = _stringMap(accelerator['cuda']);
+    return AsrActiveExecution(
+      provider: _stringValue(map['provider']) ?? '',
+      kind: _stringValue(map['kind']) ?? '',
+      model: _stringValue(map['model']) ?? '',
+      requestedDevice: _stringValue(map['requested_device']) ?? '',
+      resolvedDevice: _stringValue(map['resolved_device']) ?? '',
+      deviceResolution: _stringValue(map['device_resolution']) ?? '',
+      computeType: _stringValue(map['compute_type']) ?? '',
+      canRun: map['can_run'] == true,
+      modelSource: _stringValue(model['source']) ?? '',
+      modelRegistrationId: _stringValue(model['registration_id']) ?? '',
+      modelPath: _stringValue(model['path']) ?? '',
+      modelReady: model['ready'] == true,
+      acceleratorSource: _stringValue(accelerator['source']) ?? '',
+      acceleratorId: _stringValue(accelerator['id']) ?? '',
+      acceleratorRegistrationId:
+          _stringValue(accelerator['registration_id']) ?? '',
+      acceleratorRoot: _stringValue(accelerator['root']) ?? '',
+      acceleratorVersion: _stringValue(accelerator['version']) ?? '',
+      acceleratorState: _stringValue(accelerator['state']) ?? '',
+      acceleratorReady: accelerator['ready'] == true,
+      cudaAvailable: cuda['available'] == true,
+      cudaDeviceCount: _intValue(cuda['device_count']) ?? 0,
+      cudaComputeTypes: _stringList(cuda['compute_types']),
       raw: map,
     );
   }

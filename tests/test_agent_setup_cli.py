@@ -12,7 +12,12 @@ from transvortex.app.config import load_app_config
 from transvortex.app.asr_runtime import provider_credential_fingerprint, provider_test_fingerprint
 from transvortex.utils import write_json
 from transvortex.protocol.agent_protocol import agent_info_payload
-from transvortex.protocol.agent_setup import _safe_url, setup_plan_payload, setup_verify_payload
+from transvortex.protocol.agent_setup import (
+    _hardware_payload,
+    _safe_url,
+    setup_plan_payload,
+    setup_verify_payload,
+)
 
 
 def _write_setup_config(root: Path) -> Path:
@@ -112,6 +117,8 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
     assert payload["read_only"] is True
     assert payload["network_access"] is False
     assert payload["active_asr"]["runtime_source"] == "managed"
+    assert payload["active_asr"]["requested_device"] == "cpu"
+    assert payload["active_asr"]["resolved_device"] == "cpu"
     assert payload["provider_mode"] == "local_worker"
     assert "route" not in payload
     assert payload["active_asr"]["credential_required"] is False
@@ -123,6 +130,12 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
     assert payload["resources"]["runtime"]["product_source"] == "managed"
     assert payload["resources"]["model"]["source"] == "managed"
     assert payload["current"]["environment_candidates"][0]["id"] == "external:test"
+    assert payload["agent_argv"]["register_model_cpu"][
+        payload["agent_argv"]["register_model_cpu"].index("--device") + 1
+    ] == "cpu"
+    assert "--accelerator-root" in payload["agent_argv"]["register_model_cuda"]
+    assert "--accelerator-id" in payload["agent_argv"]["register_accelerator"]
+    assert "--accelerator-registration-id" in payload["agent_argv"]["activate_external_cuda"]
     assert "super-secret-value" not in json.dumps(payload, ensure_ascii=False)
 
 
@@ -149,6 +162,27 @@ def test_setup_plan_strips_query_credentials_from_endpoint_metadata(tmp_path: Pa
 def test_safe_url_strips_userinfo_query_and_fragment() -> None:
     assert _safe_url("https://user:password@example.invalid/v1?token=secret#fragment") == "https://example.invalid/v1"
     assert _safe_url("/v1/audio/transcriptions?token=secret") == "/v1/audio/transcriptions"
+
+
+def test_hardware_payload_has_one_consistent_cuda_status_shape() -> None:
+    direct = _hardware_payload(
+        {
+            "available": True,
+            "device_count": 1,
+            "compute_types": ["float16"],
+        }
+    )
+    wrapped = _hardware_payload({"ok": True, "cuda": direct})
+
+    assert direct == {
+        "status": "pass",
+        "available": True,
+        "device_count": 1,
+        "compute_types": ["float16"],
+    }
+    assert wrapped["status"] == "pass"
+    assert wrapped["ok"] is True
+    assert wrapped["cuda"] == direct
 
 
 def test_setup_verify_reports_not_ready_without_mutating(tmp_path: Path) -> None:
@@ -430,6 +464,20 @@ asr_providers:
     assert payload["plan_status"] == "needs_action"
     assert payload["resources"]["driver"]["state"] == "inspect"
     assert payload["resources"]["accelerator"]["state"] == "needs_verification"
+    assert payload["active_asr"]["requested_device"] == "cuda"
+    assert payload["active_asr"]["resolved_device"] == "cuda"
+    assert payload["requirements"]["accelerator"]["dll_directories"] == [
+        "nvidia/cuda_runtime/bin",
+        "nvidia/cuda_nvrtc/bin",
+        "nvidia/cublas/bin",
+        "nvidia/cudnn/bin",
+    ]
+    assert payload["requirements"]["accelerator"]["packages"] == {
+        "nvidia-cublas-cu12": "12.4.5.8",
+        "nvidia-cuda-nvrtc-cu12": "12.4.127",
+        "nvidia-cuda-runtime-cu12": "12.4.127",
+        "nvidia-cudnn-cu12": "9.1.0.70",
+    }
     assert "prepare_system_acceleration" in action_ids
     assert "configure_local_worker_device" in action_ids
     assert "install_accelerator" not in action_ids

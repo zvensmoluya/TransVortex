@@ -3829,7 +3829,7 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
-    Map<String, Object?>? savedAsrDraft;
+    Map<String, Object?>? activatedResources;
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       if (method == 'desktop.snapshot') {
@@ -3856,10 +3856,8 @@ void main() {
           },
         ).raw;
       }
-      if (method == 'asr.provider.save') {
-        savedAsrDraft = Map<String, Object?>.from(
-          params['provider_draft'] as Map,
-        );
+      if (method == 'asr.resources.activate') {
+        activatedResources = Map<String, Object?>.from(params);
         return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
@@ -3879,9 +3877,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(calls, contains('asr.provider.save'));
-    expect(savedAsrDraft?['kind'], 'local_worker');
-    expect((savedAsrDraft?['runtime'] as Map?)?['source'], 'managed');
+    expect(calls, contains('asr.resources.activate'));
+    expect(activatedResources?['provider'], 'local');
+    expect(activatedResources?['managed_model_id'], 'large-v3');
+    expect(activatedResources?['device'], 'auto');
+    expect(activatedResources?['compute_type'], 'auto');
     expect(find.textContaining('识别默认已保存'), findsOneWidget);
     expectNoFlutterException();
   });
@@ -3943,6 +3943,11 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
     await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('准备本机识别'), findsOneWidget);
+    expect(find.text('接入已有资源'), findsOneWidget);
+    expect(find.text('更多 Agent 操作'), findsOneWidget);
+    await tester.tap(find.text('更多 Agent 操作'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('准备 GPU 加速'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('asr-agent-scope-accelerator')));
@@ -4215,11 +4220,18 @@ void main() {
             'operations': [],
             'registered_models': [
               {
+                'id': 'model-large-registration',
                 'model_id': 'large-v3',
                 'model_path': r'D:\Models\faster-whisper-large-v3',
                 'signature': 'fixture-signature',
                 'probe': {
-                  'model': {'device': 'cpu'},
+                  'ok': true,
+                  'model': {
+                    'loaded': true,
+                    'device': 'cpu',
+                    'compute_type': 'auto',
+                  },
+                  'transcription': {'ok': true},
                 },
               },
             ],
@@ -4250,6 +4262,160 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets(
+    'ASR settings activates Agent-prepared external CUDA without losing state',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(760, 620));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      const modelPath = r'D:\Models\large-v3';
+      const acceleratorRoot = r'D:\External\CUDA';
+      const modelRegistrationId = 'model-large-registration';
+      const acceleratorRegistrationId = 'external:nvidia-cuda12:test';
+      var activated = false;
+      Map<String, Object?>? activatedResources;
+
+      Map<String, Object?> asrLocal() => {
+        'runtime': {
+          'id': 'managed:faster-whisper',
+          'version': '1.0.0',
+          'installed': true,
+          'artifact': {'published': true, 'size': 100},
+        },
+        'models': const [],
+        'accelerators': const [],
+        'environments': const [],
+        'operations': const [],
+        'registered_models': const [
+          {
+            'id': modelRegistrationId,
+            'model_id': 'large-v3',
+            'model_path': modelPath,
+            'probe': {
+              'ok': true,
+              'model': {
+                'loaded': true,
+                'device': 'cuda',
+                'compute_type': 'float16',
+              },
+              'transcription': {'ok': true},
+            },
+          },
+        ],
+        'registered_accelerators': const [
+          {
+            'id': acceleratorRegistrationId,
+            'accelerator_id': 'nvidia-cuda12',
+            'root': acceleratorRoot,
+            'version': '12.4',
+            'probe': {
+              'ok': true,
+              'cuda': {
+                'available': true,
+                'device_count': 1,
+                'compute_types': ['float16', 'int8_float16'],
+              },
+            },
+          },
+        ],
+        'active_execution': {
+          'provider': 'local',
+          'kind': 'local_worker',
+          'model': 'large-v3',
+          'requested_device': activated ? 'cuda' : 'cpu',
+          'resolved_device': activated ? 'cuda' : 'cpu',
+          'device_resolution': 'explicit_configuration',
+          'compute_type': activated ? 'float16' : 'auto',
+          'can_run': true,
+          'model_resource': const {
+            'source': 'external',
+            'id': 'large-v3',
+            'registration_id': modelRegistrationId,
+            'path': modelPath,
+            'state': 'ready',
+            'ready': true,
+          },
+          'accelerator': {
+            'source': activated ? 'external' : 'managed',
+            'id': activated ? acceleratorRegistrationId : 'nvidia-cuda12',
+            'registration_id': activated ? acceleratorRegistrationId : '',
+            'root': activated ? acceleratorRoot : '',
+            'version': activated ? '12.4' : '',
+            'state': activated ? 'ready' : 'not_available',
+            'ready': activated,
+            'active': activated,
+            'cuda': {
+              'available': activated,
+              'device_count': activated ? 1 : 0,
+              'compute_types': activated
+                  ? const ['float16', 'int8_float16']
+                  : const <String>[],
+            },
+          },
+        },
+      };
+
+      DesktopSnapshot snapshot() => _desktopSnapshot(
+        managedAsr: true,
+        localModel: 'large-v3',
+        localModelSource: 'external',
+        localModelPath: modelPath,
+        externalModelId: 'large-v3',
+        externalModelPath: modelPath,
+        localDevice: activated ? 'cuda' : 'cpu',
+        localComputeType: activated ? 'float16' : 'auto',
+        localAccelerator: activated
+            ? const {'source': 'external', 'id': acceleratorRegistrationId}
+            : const {},
+        localCanRun: true,
+        asrLocal: asrLocal(),
+      );
+
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') return snapshot().raw;
+        if (method == 'asr.resources.activate') {
+          activatedResources = Map<String, Object?>.from(params);
+          activated = true;
+          return {'ok': true, 'provider': 'local'};
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.asrSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.text('CPU'), findsOneWidget);
+      expect(find.text('CPU（推荐）'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('运算方式:cpu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('NVIDIA（外部资源，已验证）').last);
+      await tester.pumpAndSettle();
+      expect(find.text('应用设置'), findsOneWidget);
+
+      await tester.tap(find.text('应用设置'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(activatedResources?['model_registration_id'], modelRegistrationId);
+      expect(
+        activatedResources?['accelerator_registration_id'],
+        acceleratorRegistrationId,
+      );
+      expect(activatedResources?['device'], 'cuda');
+      expect(activatedResources?['compute_type'], 'float16');
+      expect(find.text('NVIDIA（外部资源，已验证）'), findsOneWidget);
+      expect(find.text('当前运行：NVIDIA · float16 · 外部资源已验证'), findsOneWidget);
+      expectNoFlutterException();
+    },
+  );
+
   testWidgets('ASR settings finds model candidates below a parent folder', (
     tester,
   ) async {
@@ -4260,9 +4426,11 @@ void main() {
     const selectedRoot = r'D:\Models';
     const customPath = r'D:\Models\customer\snapshot';
     const customId = 'custom-123456789abc';
+    const registrationId = 'model-custom-registration';
     var savedPath = '';
     var savedModel = 'large-v3';
-    Map<String, Object?>? savedDraft;
+    var modelRegistered = false;
+    Map<String, Object?>? activatedResources;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -4270,7 +4438,7 @@ void main() {
           localModel: savedModel,
           localModelSource: 'external',
           localModelPath: savedPath,
-          asrLocal: const {
+          asrLocal: {
             'paths': {
               'app_data_root': r'C:\Users\tester\AppData\Local\TransVortex',
             },
@@ -4284,6 +4452,23 @@ void main() {
             'accelerators': [],
             'environments': [],
             'operations': [],
+            if (modelRegistered)
+              'registered_models': [
+                {
+                  'id': registrationId,
+                  'model_id': customId,
+                  'model_path': customPath,
+                  'probe': {
+                    'ok': true,
+                    'model': {
+                      'loaded': true,
+                      'device': 'cpu',
+                      'compute_type': 'auto',
+                    },
+                    'transcription': {'ok': true},
+                  },
+                },
+              ],
           },
         ).raw;
       }
@@ -4314,17 +4499,21 @@ void main() {
       }
       if (method == 'asr.model.probe') {
         expect(params['model_path'], customPath);
+        modelRegistered = true;
         return {
           'ok': true,
           'code': 'ready',
-          'model': {'model_id': customId, 'model_path': customPath},
+          'model': {
+            'id': registrationId,
+            'model_id': customId,
+            'model_path': customPath,
+          },
         };
       }
-      if (method == 'asr.provider.save') {
-        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
-        final local = Map<String, Object?>.from(savedDraft!['local'] as Map);
-        savedPath = '${local['model_path']}';
-        savedModel = '${savedDraft!['model']}';
+      if (method == 'asr.resources.activate') {
+        activatedResources = Map<String, Object?>.from(params);
+        savedPath = customPath;
+        savedModel = customId;
         return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
@@ -4359,10 +4548,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));
 
-    final local = Map<String, Object?>.from(savedDraft!['local'] as Map);
-    expect(savedDraft!['model'], customId);
-    expect(local['model_source'], 'external');
-    expect(local['model_path'], customPath);
+    expect(activatedResources?['model_registration_id'], registrationId);
+    expect(activatedResources?['managed_model_id'], isNull);
+    expect(activatedResources?['device'], 'auto');
     expect(find.textContaining('自定义 Whisper 验证通过，已设为默认'), findsOneWidget);
     expect(find.text('验证并启用'), findsNothing);
     expect(find.text('已启用'), findsNothing);
@@ -4377,7 +4565,9 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final probeResult = Completer<Map<String, Object?>>();
-    Map<String, Object?>? savedDraft;
+    const registrationId = 'model-small-registration';
+    var modelRegistered = false;
+    Map<String, Object?>? activatedResources;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -4388,7 +4578,7 @@ void main() {
           externalModelId: 'small',
           externalModelPath: r'D:\Models\small',
           localCanRun: false,
-          asrLocal: const {
+          asrLocal: {
             'runtime': {
               'id': 'managed:faster-whisper',
               'version': '1.0.0',
@@ -4399,12 +4589,34 @@ void main() {
             'accelerators': [],
             'environments': [],
             'operations': [],
+            if (modelRegistered)
+              'registered_models': [
+                {
+                  'id': registrationId,
+                  'model_id': 'small',
+                  'model_path': r'D:\Models\small',
+                  'probe': {
+                    'ok': true,
+                    'model': {
+                      'loaded': true,
+                      'device': 'cpu',
+                      'compute_type': 'auto',
+                    },
+                    'transcription': {'ok': true},
+                  },
+                },
+              ],
           },
         ).raw;
       }
-      if (method == 'asr.model.probe') return probeResult.future;
-      if (method == 'asr.provider.save') {
-        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
+      if (method == 'asr.model.probe') {
+        return probeResult.future.then((value) {
+          modelRegistered = true;
+          return value;
+        });
+      }
+      if (method == 'asr.resources.activate') {
+        activatedResources = Map<String, Object?>.from(params);
         return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
@@ -4435,6 +4647,7 @@ void main() {
       'ok': true,
       'code': 'ready',
       'model': {
+        'id': registrationId,
         'model_id': 'small',
         'model_path': r'D:\Models\small',
         'device': 'cpu',
@@ -4443,11 +4656,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    final local = Map<String, Object?>.from(savedDraft!['local'] as Map);
-    expect(savedDraft!['name'], 'local');
-    expect(savedDraft!['model'], 'small');
-    expect(local['model_source'], 'external');
-    expect(local['model_path'], r'D:\Models\small');
+    expect(activatedResources?['provider'], 'local');
+    expect(activatedResources?['model_registration_id'], registrationId);
+    expect(activatedResources?['device'], 'auto');
     expectNoFlutterException();
   });
 
@@ -4494,11 +4705,18 @@ void main() {
         'operations': [],
         'registered_models': [
           {
+            'id': 'model-large-registration',
             'model_id': 'large-v3',
             'model_path': r'D:\Models\large-v3',
             'signature': 'fixture-signature',
             'probe': {
-              'model': {'device': 'cpu'},
+              'ok': true,
+              'model': {
+                'loaded': true,
+                'device': 'cpu',
+                'compute_type': 'auto',
+              },
+              'transcription': {'ok': true},
             },
           },
         ],
@@ -4507,17 +4725,17 @@ void main() {
 
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') return snapshot();
-      if (method == 'asr.provider.save') {
-        final draft = Map<String, Object?>.from(
-          params['provider_draft'] as Map,
-        );
-        final local = Map<String, Object?>.from(draft['local'] as Map);
-        activeSource = '${local['model_source']}';
-        activeModel = '${draft['model']}';
-        activePath = '${local['model_path']}';
-        rememberedManaged = '${local['managed_model_size']}';
-        rememberedExternal = '${local['external_model_id']}';
-        rememberedExternalPath = '${local['external_model_path']}';
+      if (method == 'asr.resources.activate') {
+        if ('${params['managed_model_id'] ?? ''}'.isNotEmpty) {
+          activeSource = 'managed';
+          activeModel = '${params['managed_model_id']}';
+          activePath = '';
+          rememberedManaged = activeModel;
+        } else if ('${params['model_registration_id'] ?? ''}'.isNotEmpty) {
+          activeSource = 'external';
+          activeModel = rememberedExternal;
+          activePath = rememberedExternalPath;
+        }
         return {'ok': true, 'provider': 'local'};
       }
       throw RpcRemoteException('method_not_found', method);
@@ -4883,7 +5101,7 @@ void main() {
 
     expect(find.text('应用下载'), findsOneWidget);
     expect(find.text('Whisper Small'), findsWidgets);
-    expect(find.text('CPU（推荐）'), findsOneWidget);
+    expect(find.text('自动（当前：CPU）'), findsOneWidget);
     expect(find.text('下载并启用'), findsOneWidget);
 
     await tester.tap(find.text('下载并启用'));
@@ -4894,7 +5112,7 @@ void main() {
     expect(calls, isNot(contains('asr.component.install')));
     expect(setupParams, {'model_id': 'small'});
     expect((savedDraft?['local'] as Map?)?['model_source'], 'managed');
-    expect((savedDraft?['local'] as Map?)?['device'], 'cpu');
+    expect((savedDraft?['local'] as Map?)?['device'], 'auto');
     expect(find.text('正在下载本地识别引擎'), findsOneWidget);
     expect(find.textContaining('关闭此窗口'), findsOneWidget);
     expectNoFlutterException();
@@ -6806,6 +7024,9 @@ DesktopSnapshot _desktopSnapshot({
   String managedModelSize = '',
   String externalModelId = '',
   String externalModelPath = '',
+  String localDevice = 'auto',
+  String localComputeType = 'auto',
+  Map<String, Object?> localAccelerator = const {},
   bool? localCanRun,
   bool multiRoutingProfiles = false,
   String activeRoutingProfile = '',
@@ -7083,6 +7304,8 @@ DesktopSnapshot _desktopSnapshot({
                     'external_model_id': externalModelId,
                   if (externalModelPath.isNotEmpty)
                     'external_model_path': externalModelPath,
+                  'device': localDevice,
+                  'compute_type': localComputeType,
                 },
                 'has_key': true,
                 if (managedAsr)
@@ -7090,6 +7313,8 @@ DesktopSnapshot _desktopSnapshot({
                     'source': 'managed',
                     'id': 'managed:faster-whisper',
                   },
+                if (managedAsr && localAccelerator.isNotEmpty)
+                  'accelerator': localAccelerator,
                 if (managedAsr)
                   'readiness': {
                     'state': (localCanRun ?? localModelPath.isNotEmpty)

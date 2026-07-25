@@ -22,6 +22,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from ..app.asr_runtime import (
+    NVIDIA_ACCELERATOR_DLL_DIRECTORIES,
     asr_provider_endpoint_policy_code,
     asr_provider_network_scope,
     asr_provider_readiness,
@@ -94,25 +95,36 @@ def _is_true(value: Any) -> bool:
     return value is True
 
 
+def _cuda_payload(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    available = _is_true(raw.get("available"))
+    return {
+        "status": "pass" if available else "fail",
+        "available": available,
+        "device_count": _safe_int(raw.get("device_count")),
+        "compute_types": [str(item) for item in raw.get("compute_types") or [] if item is not None],
+    }
+
+
 def _hardware_payload(raw: Any) -> dict[str, Any]:
     """Project hardware diagnostics without forwarding arbitrary stderr/details."""
 
     if not isinstance(raw, dict):
         return {}
+    direct_cuda = any(key in raw for key in ("available", "device_count", "compute_types"))
+    if direct_cuda and not isinstance(raw.get("cuda"), dict):
+        return _cuda_payload(raw)
+    ok = _is_true(raw.get("ok"))
     payload: dict[str, Any] = {
-        "ok": _is_true(raw.get("ok")),
+        "status": "pass" if ok else "fail",
+        "ok": ok,
         "code": str(raw.get("code") or ""),
         "checked_at": str(raw.get("checked_at") or ""),
     }
     cuda = raw.get("cuda") if isinstance(raw.get("cuda"), dict) else None
-    if cuda is None and any(key in raw for key in ("available", "device_count", "compute_types")):
-        cuda = raw
     if cuda is not None:
-        payload["cuda"] = {
-            "available": _is_true(cuda.get("available")),
-            "device_count": _safe_int(cuda.get("device_count")),
-            "compute_types": [str(item) for item in cuda.get("compute_types") or [] if item is not None],
-        }
+        payload["cuda"] = _cuda_payload(cuda)
     return payload
 
 
@@ -252,6 +264,8 @@ def _accelerator_requirement(catalog: dict[str, Any]) -> dict[str, Any] | None:
             "version": str(raw.get("version") or ""),
             "platform": str(raw.get("platform") or ""),
             "packages": {str(key): str(value) for key, value in sorted(packages.items())},
+            "dll_directories": ["/".join(parts) for parts in NVIDIA_ACCELERATOR_DLL_DIRECTORIES],
+            "required_file_pattern": "*.dll",
             "artifact": _artifact_payload(raw.get("artifact")),
         }
     return None
@@ -371,6 +385,41 @@ def _component_requirements(provider: Any, snapshot: dict[str, Any] | None = Non
         or (str(provider.local.device) == "auto" and accelerator_selected)
     )
     return runtime_required, accelerator_required, model_required
+
+
+def _device_resolution(provider: Any, snapshot: dict[str, Any] | None = None) -> dict[str, str]:
+    if provider is None or str(getattr(provider, "kind", "") or "") != "local_worker":
+        return {
+            "requested_device": "",
+            "resolved_device": "",
+            "device_resolution": "not_applicable",
+        }
+    requested = str(provider.local.device or "auto").lower()
+    if requested != "auto":
+        return {
+            "requested_device": requested,
+            "resolved_device": requested,
+            "device_resolution": "explicit_configuration",
+        }
+    source = str(provider.accelerator.source or "managed")
+    accelerator_id = str(provider.accelerator.id or "nvidia-cuda12")
+    if source == "external":
+        return {
+            "requested_device": requested,
+            "resolved_device": "cuda",
+            "device_resolution": "external_accelerator_selected",
+        }
+    installed = any(
+        isinstance(row, dict)
+        and str(row.get("id") or "") == accelerator_id
+        and row.get("installed") is True
+        for row in _list_value((snapshot or {}).get("accelerators"))
+    )
+    return {
+        "requested_device": requested,
+        "resolved_device": "cuda" if installed else "cpu",
+        "device_resolution": "installed_accelerator" if installed else "no_selected_accelerator",
+    }
 
 
 def _mode_alternatives(
@@ -508,6 +557,13 @@ def _plan_actions(
         if provider_mode == "local_worker"
         else ""
     )
+    device_resolution = _device_resolution(provider, current)
+    resolved_device = str(device_resolution.get("resolved_device") or "cpu")
+    requested_compute_type = (
+        str(provider.local.compute_type or "auto")
+        if provider_mode == "local_worker"
+        else "auto"
+    )
     def pinned_component(requirement: Any) -> bool:
         if not isinstance(requirement, dict):
             return False
@@ -634,7 +690,17 @@ def _plan_actions(
                     "requires_network": False,
                     "may_cost_money": False,
                     "argv_template": [
-                        *asr_argv("accelerator-register", "--accelerator-root", "<accelerator-root>"),
+                        *asr_argv(
+                            "accelerator-register",
+                            "--accelerator-root",
+                            "<accelerator-root>",
+                            "--accelerator-id",
+                            str((requirements.get("accelerator") or {}).get("id") or "nvidia-cuda12"),
+                            "--compute-type",
+                            requested_compute_type,
+                            "--timeout-seconds",
+                            "120",
+                        ),
                     ],
                     "expected_outputs": ["external accelerator registration ID", "CUDA probe result"],
                     "rollback": "Remove the registration from configuration; external files remain untouched",
@@ -658,6 +724,10 @@ def _plan_actions(
                             "resources-activate",
                             "--accelerator-registration-id",
                             "<accelerator-registration-id>",
+                            "--device",
+                            "cuda",
+                            "--compute-type",
+                            requested_compute_type,
                         ),
                     ],
                     "expected_outputs": ["active provider references the external accelerator registration"],
@@ -700,7 +770,24 @@ def _plan_actions(
                     "requires_restart": False,
                     "requires_network": False,
                     "may_cost_money": False,
-                    "argv_template": [*asr_argv("model-register", "--model-path", "<model-path>")],
+                    "argv_template": [
+                        *asr_argv(
+                            "model-register",
+                            "--model-path",
+                            "<model-path>",
+                            "--device",
+                            resolved_device,
+                            "--compute-type",
+                            requested_compute_type,
+                            *(
+                                ["--accelerator-root", "<accelerator-root>"]
+                                if resolved_device == "cuda"
+                                else []
+                            ),
+                            "--timeout-seconds",
+                            "120",
+                        )
+                    ],
                     "expected_outputs": ["external model registration ID", "model load and transcription probe result"],
                     "rollback": "Remove the registration from configuration; external files remain untouched",
                 },
@@ -723,6 +810,10 @@ def _plan_actions(
                             "resources-activate",
                             "--model-registration-id",
                             "<model-registration-id>",
+                            "--device",
+                            resolved_device,
+                            "--compute-type",
+                            requested_compute_type,
                         ),
                     ],
                     "expected_outputs": ["active provider references the external model registration"],
@@ -1788,6 +1879,8 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
     model_id = str(provider.model) if provider is not None and model_required else ""
     selected_model = _model_requirement(model_catalog_entry(catalog, model_id)) if model_required else None
     active_asr = _provider_payload(provider, root_dir=root) if provider is not None else None
+    if isinstance(active_asr, dict):
+        active_asr.update(_device_resolution(provider, snapshot))
     blockers: list[dict[str, str]] = []
     if context["catalog_error"] and (runtime_required or accelerator_required or model_required):
         blockers.append(_blocking_item(context["catalog_error"], "The ASR component catalog is invalid or could not be loaded", action="repair_catalog"))
@@ -1964,6 +2057,72 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "agent_argv": {
             "plan": [*agent_cli_prefix, "asr", "setup-plan", "--providers-file", str(context["providers_file"]), "--json"],
             "verify": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
+            "register_model_cpu": [
+                *agent_cli_prefix,
+                "asr",
+                "model-register",
+                "--model-path",
+                "<model-path>",
+                "--device",
+                "cpu",
+                "--compute-type",
+                "auto",
+                "--timeout-seconds",
+                "120",
+                "--providers-file",
+                str(context["providers_file"]),
+                "--json",
+            ],
+            "register_model_cuda": [
+                *agent_cli_prefix,
+                "asr",
+                "model-register",
+                "--model-path",
+                "<model-path>",
+                "--device",
+                "cuda",
+                "--compute-type",
+                str((active_asr or {}).get("compute_type") or "float16"),
+                "--accelerator-root",
+                "<accelerator-root>",
+                "--timeout-seconds",
+                "120",
+                "--providers-file",
+                str(context["providers_file"]),
+                "--json",
+            ],
+            "register_accelerator": [
+                *agent_cli_prefix,
+                "asr",
+                "accelerator-register",
+                "--accelerator-root",
+                "<accelerator-root>",
+                "--accelerator-id",
+                "nvidia-cuda12",
+                "--compute-type",
+                str((active_asr or {}).get("compute_type") or "float16"),
+                "--timeout-seconds",
+                "120",
+                "--providers-file",
+                str(context["providers_file"]),
+                "--json",
+            ],
+            "activate_external_cuda": [
+                *agent_cli_prefix,
+                "asr",
+                "resources-activate",
+                "--model-registration-id",
+                "<model-registration-id>",
+                "--accelerator-registration-id",
+                "<accelerator-registration-id>",
+                "--device",
+                "cuda",
+                "--compute-type",
+                str((active_asr or {}).get("compute_type") or "float16"),
+                "--providers-file",
+                str(context["providers_file"]),
+                "--json",
+            ],
             "protocol": [*agent_cli_prefix, "agent-info", "--json"],
         },
         "verification": {
@@ -2054,17 +2213,10 @@ def _integrity_payload(plan: dict[str, Any]) -> dict[str, Any]:
     is_local_worker = active.get("kind") == "local_worker"
     runtime_required = is_local_worker and active.get("runtime_source") == "managed"
     model_required = is_local_worker and active.get("model_source") == "managed"
-    accelerator_required = runtime_required and active.get("accelerator_source") == "managed" and (
-        active.get("device") == "cuda"
-        or (
-            active.get("device") == "auto"
-            and any(
-                isinstance(row, dict)
-                and str(row.get("id") or "") == "nvidia-cuda12"
-                and row.get("installed") is True
-                for row in _list_value(current.get("accelerators"))
-            )
-        )
+    accelerator_required = (
+        runtime_required
+        and active.get("accelerator_source") == "managed"
+        and active.get("resolved_device") == "cuda"
     )
     runtime_req = requirements.get("runtime") if runtime_required and isinstance(requirements.get("runtime"), dict) else {}
     accelerator_req = requirements.get("accelerator") if accelerator_required and isinstance(requirements.get("accelerator"), dict) else {}
@@ -2291,7 +2443,7 @@ def _local_worker_probe(plan: dict[str, Any], integrity: dict[str, Any]) -> dict
             python_executable,
             model_id=str(active.get("model") or ""),
             model_path=model_path,
-            device=str(active.get("device") or "auto"),
+            device=str(active.get("resolved_device") or active.get("device") or "auto"),
             compute_type=str(active.get("compute_type") or "auto"),
             accelerator_root=accelerator_root,
             timeout_seconds=180.0,
@@ -2374,18 +2526,7 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
             }
         )
         active = plan["active_asr"]
-        accelerator_used = active.get("device") == "cuda" or (
-            active.get("device") == "auto"
-            and (
-                active.get("accelerator_source") == "external"
-                or any(
-                    isinstance(row, dict)
-                    and str(row.get("id") or "") == str(active.get("accelerator_id") or "nvidia-cuda12")
-                    and row.get("installed") is True
-                    for row in _list_value(plan["current"].get("accelerators"))
-                )
-            )
-        )
+        accelerator_used = active.get("resolved_device") == "cuda"
         if active.get("kind") == "local_worker":
             runtime_probe = integrity["runtime_probe"]
             runtime_probe_status = str(runtime_probe.get("status") or "not_checked")

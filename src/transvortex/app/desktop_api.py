@@ -40,6 +40,7 @@ from .asr_admin import (
 )
 from .asr_operations import AsrOperationError, AsrOperationManager
 from .asr_runtime import (
+    asr_active_execution_snapshot,
     asr_provider_readiness,
     asr_runtime_snapshot,
     discover_external_models,
@@ -735,6 +736,14 @@ def config_payload(
             "has_key": has_key,
             "readiness": asr_provider_readiness(provider, root_dir=root),
         }
+    asr_local = asr_runtime_snapshot(root)
+    active_asr_provider = config.asr_providers.get(config.pipeline.asr_provider)
+    if active_asr_provider is not None:
+        asr_local["active_execution"] = asr_active_execution_snapshot(
+            active_asr_provider,
+            root_dir=root,
+            runtime_snapshot=asr_local,
+        )
     return {
         "root_dir": str(root),
         "auth_file": str(auth_file_path()),
@@ -755,7 +764,7 @@ def config_payload(
         "provider_templates": provider_templates_payload(),
         "providers": sorted(providers, key=lambda row: row["name"]),
         "asr_providers": asr_providers,
-        "asr_local": asr_runtime_snapshot(root),
+        "asr_local": asr_local,
         "config_error": error,
     }
 

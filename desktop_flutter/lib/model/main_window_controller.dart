@@ -437,8 +437,22 @@ class MainWindowController extends ChangeNotifier {
   }
 
   void selectTranslation(TranslationRuntimeChoice option) {
+    final selectedEffort = _selectedReasoningEffort;
     _selectedTranslation = option;
-    _selectedReasoningEffort = null;
+    if (selectedEffort != null) {
+      final primary = _asStringMap(option.routing['primary']);
+      final support = reasoningEffortSupportFor(
+        service.snapshot.desktopSnapshot,
+        providerName: '${primary['provider'] ?? option.provider ?? ''}',
+        model: '${primary['model'] ?? option.model ?? ''}',
+        currentValue: reasoningEffortAuto,
+      );
+      final normalized = normalizeReasoningEffort(selectedEffort);
+      if (!support.supported ||
+          !support.choices.any((choice) => choice.value == normalized)) {
+        _selectedReasoningEffort = null;
+      }
+    }
     _publish();
   }
 

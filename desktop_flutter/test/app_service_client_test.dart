@@ -1532,18 +1532,125 @@ routing:
 
       final result = await client.probeExternalAsrModel(
         modelPath: r'D:\Models\large-v3',
-        device: 'cpu',
+        device: 'cuda',
+        computeType: 'float16',
+        acceleratorRoot: r'D:\CUDA',
       );
 
       expect(result['ok'], isTrue);
       expect(transport.calls.single.method, 'asr.model.probe');
       expect(transport.calls.single.params, {
         'model_path': r'D:\Models\large-v3',
-        'device': 'cpu',
-        'compute_type': 'auto',
+        'device': 'cuda',
+        'compute_type': 'float16',
+        'accelerator_root': r'D:\CUDA',
       });
     },
   );
+
+  test(
+    'AppServiceClient activates verified ASR resources atomically',
+    () async {
+      final transport = _RecordingTransport({
+        'asr.resources.activate': {'ok': true},
+      });
+      final client = AppServiceClient(transport);
+
+      await client.activateAsrResources(
+        provider: 'local',
+        modelRegistrationId: 'model-reg',
+        acceleratorRegistrationId: 'accelerator-reg',
+        device: 'cuda',
+        computeType: 'float16',
+        expectedVersion: const {'mtime_ns': 1, 'size': 2},
+      );
+
+      expect(transport.calls.single.method, 'asr.resources.activate');
+      expect(transport.calls.single.params, {
+        'provider': 'local',
+        'model_registration_id': 'model-reg',
+        'accelerator_registration_id': 'accelerator-reg',
+        'device': 'cuda',
+        'compute_type': 'float16',
+        'expected_version': {'mtime_ns': 1, 'size': 2},
+      });
+    },
+  );
+
+  test('DesktopSnapshot projects active external CUDA execution', () {
+    final snapshot = DesktopSnapshot.fromJson({
+      'config': {
+        'asr_local': {
+          'registered_models': [
+            {
+              'id': 'model-reg',
+              'model_id': 'large-v3',
+              'model_path': r'D:\Models\large-v3',
+              'probe': {
+                'ok': true,
+                'model': {'device': 'cuda', 'compute_type': 'float16'},
+              },
+            },
+          ],
+          'registered_accelerators': [
+            {
+              'id': 'accelerator-reg',
+              'accelerator_id': 'nvidia-cuda12',
+              'root': r'D:\CUDA',
+              'probe': {
+                'ok': true,
+                'cuda': {
+                  'available': true,
+                  'device_count': 1,
+                  'compute_types': ['float16'],
+                },
+              },
+            },
+          ],
+          'active_execution': {
+            'provider': 'local',
+            'kind': 'local_worker',
+            'model': 'large-v3',
+            'requested_device': 'cuda',
+            'resolved_device': 'cuda',
+            'compute_type': 'float16',
+            'can_run': true,
+            'model_resource': {
+              'source': 'external',
+              'registration_id': 'model-reg',
+              'path': r'D:\Models\large-v3',
+              'ready': true,
+            },
+            'accelerator': {
+              'source': 'external',
+              'id': 'accelerator-reg',
+              'registration_id': 'accelerator-reg',
+              'root': r'D:\CUDA',
+              'state': 'ready',
+              'ready': true,
+              'cuda': {
+                'available': true,
+                'device_count': 1,
+                'compute_types': ['float16'],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(snapshot.asrRegisteredModels.single.id, 'model-reg');
+    expect(snapshot.asrRegisteredModels.single.probeDevice, 'cuda');
+    expect(snapshot.asrRegisteredAccelerators.single.id, 'accelerator-reg');
+    expect(snapshot.asrRegisteredAccelerators.single.cudaAvailable, isTrue);
+    expect(snapshot.asrActiveExecution.resolvedDevice, 'cuda');
+    expect(snapshot.asrActiveExecution.computeType, 'float16');
+    expect(
+      snapshot.asrActiveExecution.acceleratorRegistrationId,
+      'accelerator-reg',
+    );
+    expect(snapshot.asrActiveExecution.acceleratorReady, isTrue);
+  });
 
   test('AppServiceClient discovers models below a selected folder', () async {
     final transport = _RecordingTransport({

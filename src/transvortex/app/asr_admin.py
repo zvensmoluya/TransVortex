@@ -318,6 +318,17 @@ def activate_asr_resources(
     normalized_compute_type = compute_type.strip()
     if normalized_device and normalized_device not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"Unsupported ASR device: {normalized_device}")
+    if normalized_device in {"auto", "cpu"} and not normalized_compute_type:
+        normalized_compute_type = "auto"
+    if normalized_device == "cpu" and normalized_compute_type.lower() in {
+        "float16",
+        "int8_float16",
+        "bfloat16",
+        "int8_bfloat16",
+    }:
+        raise ValueError(
+            f"ASR compute type is not compatible with CPU: {normalized_compute_type}"
+        )
     if not any(
         (
             managed_model_id,

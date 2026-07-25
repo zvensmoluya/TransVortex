@@ -83,7 +83,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   final _model = TextEditingController();
   final _key = TextEditingController();
   final _endpoint = TextEditingController();
-  final _device = TextEditingController(text: 'cpu');
+  final _device = TextEditingController(text: 'auto');
   final _externalModelPath = TextEditingController();
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
@@ -119,11 +119,15 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   String _asrModelSource = 'managed';
   String _managedModelId = 'small';
   String _externalDraftModelId = '';
+  String _externalDraftRegistrationId = '';
+  String _localComputeType = 'auto';
   String _savedAsrModelSource = 'managed';
   String _savedManagedModelId = 'small';
   String _savedExternalModelId = '';
+  String _savedExternalRegistrationId = '';
   String _savedExternalModelPath = '';
-  String _savedLocalDevice = 'cpu';
+  String _savedLocalDevice = 'auto';
+  String _savedLocalComputeType = 'auto';
   String _locatedExternalModelId = '';
   String _detectedExternalModelId = '';
   AsrOperationStatus? _activeAsrOperation;
@@ -188,7 +192,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final controller = _translationController;
     if (controller != null) unawaited(controller.syncNetworkSettings());
     if (_isAsr && widget.smoke == null) {
-      unawaited(_loadConfig(preserveAsrDraft: true, silent: true));
+      unawaited(_loadConfig(preserveAsrDraft: _asrDraftDirty, silent: true));
     }
   }
 
@@ -489,24 +493,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             MenuAnchor(
               menuChildren: [
                 MenuItemButton(
-                  key: const ValueKey('asr-agent-scope-inspect'),
-                  leadingIcon: const Icon(Icons.manage_search_rounded),
-                  onPressed: () => _copyAsrAgentHandoff('inspect', '侦查本机'),
-                  child: const Text('侦查本机'),
-                ),
-                MenuItemButton(
-                  key: const ValueKey('asr-agent-scope-model'),
-                  leadingIcon: const Icon(Icons.view_in_ar_rounded),
-                  onPressed: () =>
-                      _copyAsrAgentHandoff('prepare_model', '准备模型'),
-                  child: const Text('准备模型'),
-                ),
-                MenuItemButton(
-                  key: const ValueKey('asr-agent-scope-accelerator'),
-                  leadingIcon: const Icon(Icons.memory_rounded),
-                  onPressed: () =>
-                      _copyAsrAgentHandoff('prepare_accelerator', '准备 GPU 加速'),
-                  child: const Text('准备 GPU 加速'),
+                  key: const ValueKey('asr-agent-scope-full'),
+                  leadingIcon: const Icon(Icons.build_circle_outlined),
+                  onPressed: () => _copyAsrAgentHandoff('full', '准备本机识别'),
+                  child: const Text('准备本机识别'),
                 ),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-register'),
@@ -514,11 +504,33 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                   onPressed: () => _copyAsrAgentHandoff('register', '接入已有资源'),
                   child: const Text('接入已有资源'),
                 ),
-                MenuItemButton(
-                  key: const ValueKey('asr-agent-scope-full'),
-                  leadingIcon: const Icon(Icons.build_circle_outlined),
-                  onPressed: () => _copyAsrAgentHandoff('full', '完整准备'),
-                  child: const Text('完整准备'),
+                SubmenuButton(
+                  menuChildren: [
+                    MenuItemButton(
+                      key: const ValueKey('asr-agent-scope-inspect'),
+                      leadingIcon: const Icon(Icons.manage_search_rounded),
+                      onPressed: () =>
+                          _copyAsrAgentHandoff('inspect', '评估本机条件'),
+                      child: const Text('评估本机条件'),
+                    ),
+                    MenuItemButton(
+                      key: const ValueKey('asr-agent-scope-model'),
+                      leadingIcon: const Icon(Icons.view_in_ar_rounded),
+                      onPressed: () =>
+                          _copyAsrAgentHandoff('prepare_model', '准备模型'),
+                      child: const Text('准备模型'),
+                    ),
+                    MenuItemButton(
+                      key: const ValueKey('asr-agent-scope-accelerator'),
+                      leadingIcon: const Icon(Icons.memory_rounded),
+                      onPressed: () => _copyAsrAgentHandoff(
+                        'prepare_accelerator',
+                        '准备 GPU 加速',
+                      ),
+                      child: const Text('准备 GPU 加速'),
+                    ),
+                  ],
+                  child: const Text('更多 Agent 操作'),
                 ),
               ],
               builder: (context, controller, child) => ActionButton(
@@ -839,6 +851,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     required AsrComponentOption model,
     required AsrStorageOption storage,
   }) {
+    final executionDetail = _asrExecutionDetail();
     return Column(
       children: [
         Row(
@@ -857,6 +870,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             Expanded(child: _asrDeviceSelect()),
           ],
         ),
+        if (executionDetail.isNotEmpty) ...[
+          const SizedBox(height: T.s4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text('当前运行：$executionDetail', style: T.tCaption),
+          ),
+        ],
         const SizedBox(height: T.s4),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
@@ -879,6 +899,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     AsrComponentOption? runtime,
     AsrStorageOption storage,
   ) {
+    final executionDetail = _asrExecutionDetail();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -895,6 +916,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ),
         const SizedBox(height: T.s8),
         SizedBox(width: 220, child: _asrDeviceSelect()),
+        if (executionDetail.isNotEmpty) ...[
+          const SizedBox(height: T.s4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text('当前运行：$executionDetail', style: T.tCaption),
+          ),
+        ],
         const SizedBox(height: T.s8),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
@@ -917,15 +945,76 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Widget _asrDeviceSelect() {
-    final hasInstalledNvidia =
+    final active = _snapshot?.asrActiveExecution ?? const AsrActiveExecution();
+    final selectedProvider = _asrProviderNameForSelection(_selectedAsrProvider);
+    final activeMatchesSelection =
+        active.kind == 'local_worker' && active.provider == selectedProvider;
+    final installedManagedNvidia =
         _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
+    final verifiedManagedNvidia =
+        _snapshot?.asrAccelerators.any((item) {
+          if (!item.installed) return false;
+          final hardware = _stringMap(item.raw['hardware_probe']);
+          final cuda = _stringMap(hardware['cuda']);
+          return hardware['ok'] == true && cuda['available'] == true;
+        }) ??
+        false;
+    final activeExternalNvidia =
+        activeMatchesSelection &&
+        active.resolvedDevice == 'cuda' &&
+        active.acceleratorSource == 'external' &&
+        active.acceleratorReady;
+    final activeManagedNvidia =
+        activeMatchesSelection &&
+        active.resolvedDevice == 'cuda' &&
+        active.acceleratorSource == 'managed' &&
+        active.acceleratorReady;
+    final availableExternalNvidia =
+        _snapshot?.asrRegisteredAccelerators.any(
+          (item) => item.ready && item.cudaAvailable,
+        ) ??
+        false;
+    final preferExternalNvidia =
+        activeExternalNvidia ||
+        (!activeManagedNvidia && availableExternalNvidia);
+    final supportedCudaComputeTypes = <String>{
+      if (activeMatchesSelection) ...active.cudaComputeTypes,
+      for (final item
+          in _snapshot?.asrRegisteredAccelerators ??
+              const <AsrRegisteredResourceOption>[])
+        if (item.ready && item.cudaAvailable) ...item.computeTypes,
+      for (final item
+          in _snapshot?.asrAccelerators ?? const <AsrComponentOption>[])
+        if (item.installed)
+          ..._objectList(
+            _stringMap(
+              _stringMap(item.raw['hardware_probe'])['cuda'],
+            )['compute_types'],
+          ).map((value) => '$value').where((value) => value.isNotEmpty),
+    };
+    final hasNvidia = installedManagedNvidia || availableExternalNvidia;
+    final resolvedDevice = _device.text == 'auto'
+        ? (activeMatchesSelection && active.resolvedDevice == 'cuda') ||
+                  (!activeMatchesSelection &&
+                      (verifiedManagedNvidia || availableExternalNvidia))
+              ? 'cuda'
+              : 'cpu'
+        : _device.text;
     final items = <String, String>{
-      'cpu': 'CPU（推荐）',
-      if (hasInstalledNvidia) 'cuda': 'NVIDIA（已安装）',
+      'auto': '自动（当前：${resolvedDevice == 'cuda' ? 'NVIDIA' : 'CPU'}）',
+      'cpu': 'CPU',
+      if (hasNvidia || _device.text == 'cuda')
+        'cuda': preferExternalNvidia
+            ? 'NVIDIA（外部资源，已验证）'
+            : verifiedManagedNvidia
+            ? 'NVIDIA（应用管理，已验证）'
+            : installedManagedNvidia
+            ? 'NVIDIA（应用管理，待验证）'
+            : 'NVIDIA（需要处理）',
     };
     return _AsrSelect(
       label: '运算方式',
-      value: items.containsKey(_device.text) ? _device.text : 'cpu',
+      value: items.containsKey(_device.text) ? _device.text : 'auto',
       items: items,
       onChanged: _probingAsrModel || _savingAsr
           ? null
@@ -933,19 +1022,54 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               if (_probingAsrModel || _savingAsr) return;
               setState(() {
                 _device.text = value;
+                if (value == 'cpu' || value == 'auto') {
+                  _localComputeType = 'auto';
+                } else if (_localComputeType == 'auto' ||
+                    const {
+                      'int8',
+                      'int8_float32',
+                    }.contains(_localComputeType)) {
+                  _localComputeType =
+                      active.computeType.isNotEmpty &&
+                          active.computeType != 'auto'
+                      ? active.computeType
+                      : supportedCudaComputeTypes.contains('float16')
+                      ? 'float16'
+                      : 'auto';
+                }
                 if (_asrModelSource == 'external') {
-                  _detectedExternalModelId =
-                      _registeredExternalModelMatches(
-                        _externalDraftModelId,
-                        _externalModelPath.text,
-                      )
-                      ? _externalDraftModelId
-                      : '';
+                  final registration = _registeredExternalModel(
+                    _externalDraftModelId,
+                    _externalModelPath.text,
+                  );
+                  _externalDraftRegistrationId = registration?.id ?? '';
+                  _detectedExternalModelId = registration == null
+                      ? ''
+                      : _externalDraftModelId;
                 }
                 _asrDraftDirty = !_localDraftMatchesSaved();
               });
             },
     );
+  }
+
+  String _asrExecutionDetail() {
+    final active = _snapshot?.asrActiveExecution;
+    final selectedProvider = _asrProviderNameForSelection(_selectedAsrProvider);
+    if (active == null ||
+        active.kind != 'local_worker' ||
+        active.provider != selectedProvider ||
+        !active.canRun) {
+      return '';
+    }
+    final device = active.resolvedDevice == 'cuda' ? 'NVIDIA' : 'CPU';
+    final compute = active.computeType.isEmpty ? 'auto' : active.computeType;
+    final source = active.resolvedDevice == 'cuda'
+        ? active.acceleratorSource == 'external'
+              ? '外部资源已验证'
+              : '应用管理资源'
+        : '';
+    return [device, compute, if (source.isNotEmpty) source].join(' · ');
   }
 
   void _setAsrModelSource(String source) {
@@ -1099,12 +1223,15 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _model.text = savedModel;
       _externalModelPath.clear();
       _externalDraftModelId = '';
+      _externalDraftRegistrationId = '';
     }
     _endpoint.text = '${draft['endpoint'] ?? '/v1/audio/transcriptions'}';
-    final savedDevice = '${local['device'] ?? 'cpu'}';
-    final hasInstalledNvidia =
-        _snapshot?.asrAccelerators.any((item) => item.installed) ?? false;
-    _device.text = savedDevice == 'cuda' && hasInstalledNvidia ? 'cuda' : 'cpu';
+    final savedDevice = '${local['device'] ?? 'auto'}'.trim().toLowerCase();
+    _device.text = const {'auto', 'cpu', 'cuda'}.contains(savedDevice)
+        ? savedDevice
+        : 'auto';
+    _localComputeType = '${local['compute_type'] ?? 'auto'}'.trim();
+    if (_localComputeType.isEmpty) _localComputeType = 'auto';
     if (_externalModelPath.text.isEmpty && runtimeSource == 'external') {
       final environmentId = '${runtime['id'] ?? ''}';
       final savedEnvironment = _snapshot?.asrEnvironments.firstWhere(
@@ -1116,12 +1243,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           '${savedEnvironment?.modelPaths[_model.text.trim()] ?? ''}';
     }
     final readiness = _selectedAsrOption()?.readiness;
-    final externalRegistered = _registeredExternalModelMatches(
+    final externalRegistration = _registeredExternalModel(
       _externalDraftModelId,
       _externalModelPath.text,
     );
+    _externalDraftRegistrationId = externalRegistration?.id ?? '';
     _detectedExternalModelId =
-        externalRegistered ||
+        externalRegistration != null ||
             (_asrModelSource == 'external' && readiness?.canRun == true)
         ? _externalDraftModelId
         : '';
@@ -1132,8 +1260,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     _savedAsrModelSource = _asrModelSource;
     _savedManagedModelId = _managedModelId;
     _savedExternalModelId = _externalDraftModelId;
+    _savedExternalRegistrationId = _externalDraftRegistrationId;
     _savedExternalModelPath = _externalModelPath.text.trim();
     _savedLocalDevice = _device.text.trim();
+    _savedLocalComputeType = _localComputeType;
     _asrDraftDirty = false;
   }
 
@@ -1141,34 +1271,30 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return _asrModelSource == _savedAsrModelSource &&
         _managedModelId == _savedManagedModelId &&
         _externalDraftModelId == _savedExternalModelId &&
+        _externalDraftRegistrationId == _savedExternalRegistrationId &&
         _normalizedWindowsPath(_externalModelPath.text) ==
             _normalizedWindowsPath(_savedExternalModelPath) &&
-        _device.text.trim() == _savedLocalDevice;
+        _device.text.trim() == _savedLocalDevice &&
+        _localComputeType == _savedLocalComputeType;
   }
 
-  bool _registeredExternalModelMatches(String modelId, String modelPath) {
+  AsrRegisteredResourceOption? _registeredExternalModel(
+    String modelId,
+    String modelPath,
+  ) {
     final normalizedId = modelId.trim();
     final normalizedPath = _normalizedWindowsPath(modelPath);
-    if (normalizedId.isEmpty || normalizedPath.isEmpty) return false;
-    for (final value in _objectList(_snapshot?.asrLocal['registered_models'])) {
-      final row = _stringMap(value);
-      if ('${row['model_id'] ?? ''}'.trim() != normalizedId) continue;
-      if (_normalizedWindowsPath('${row['model_path'] ?? ''}') !=
-          normalizedPath) {
+    if (normalizedId.isEmpty || normalizedPath.isEmpty) return null;
+    for (final registration
+        in _snapshot?.asrRegisteredModels ??
+            const <AsrRegisteredResourceOption>[]) {
+      if (registration.resourceId != normalizedId || !registration.ready) {
         continue;
       }
-      final verifiedDevice =
-          '${_stringMap(_stringMap(row['probe'])['model'])['device'] ?? ''}'
-              .trim();
-      final selectedDevice = _device.text.trim();
-      if (verifiedDevice.isNotEmpty &&
-          selectedDevice.isNotEmpty &&
-          verifiedDevice != selectedDevice) {
-        continue;
-      }
-      return '${row['signature'] ?? ''}'.trim().isNotEmpty;
+      if (_normalizedWindowsPath(registration.path) != normalizedPath) continue;
+      return registration;
     }
-    return false;
+    return null;
   }
 
   void _markAsrDraftDirty() {
@@ -1222,11 +1348,18 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final latest = await _client.desktopSnapshot();
       _snapshot = latest;
       final draft = draftOverride ?? _asrDraft(providerName);
-      await _client.asrProviderSave(
-        providerDraft: draft,
-        apiKey: _keyTextOrNull(),
-        expectedVersion: latest.pipelineFileVersion,
-      );
+      if ('${draft['kind'] ?? ''}' == 'local_worker') {
+        await _activateLocalAsrResources(
+          providerName: providerName,
+          snapshot: latest,
+        );
+      } else {
+        await _client.asrProviderSave(
+          providerDraft: draft,
+          apiKey: _keyTextOrNull(),
+          expectedVersion: latest.pipelineFileVersion,
+        );
+      }
       await _loadConfig();
       if (!mounted) return;
       final savedSnapshot = _snapshot;
@@ -1249,6 +1382,100 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     } finally {
       if (mounted) setState(() => _savingAsr = false);
     }
+  }
+
+  Future<void> _activateLocalAsrResources({
+    required String providerName,
+    required DesktopSnapshot snapshot,
+  }) async {
+    final device = _device.text.trim().isEmpty ? 'auto' : _device.text.trim();
+    final activeExecution = snapshot.asrActiveExecution;
+    final computeType =
+        device == 'cuda' ||
+            (device == 'auto' && activeExecution.resolvedDevice == 'cuda')
+        ? _localComputeType
+        : 'auto';
+    String? managedModelId;
+    String? modelRegistrationId;
+    if (_asrModelSource == 'external') {
+      final registration = _externalDraftRegistrationId.isNotEmpty
+          ? snapshot.asrRegisteredModels.firstWhere(
+              (item) => item.id == _externalDraftRegistrationId,
+              orElse: () =>
+                  const AsrRegisteredResourceOption(id: '', kind: 'model'),
+            )
+          : _registeredExternalModel(
+              _externalDraftModelId,
+              _externalModelPath.text,
+            );
+      if (registration == null ||
+          registration.id.isEmpty ||
+          !registration.ready) {
+        throw StateError('外部 Whisper 模型尚未完成注册验证。');
+      }
+      modelRegistrationId = registration.id;
+    } else {
+      managedModelId = _managedModelId;
+    }
+
+    String? managedAcceleratorId;
+    String? acceleratorRegistrationId;
+    if (device == 'cuda') {
+      bool managedReady(AsrComponentOption item) {
+        if (!item.installed) return false;
+        final hardware = _stringMap(item.raw['hardware_probe']);
+        final cuda = _stringMap(hardware['cuda']);
+        return hardware['ok'] == true && cuda['available'] == true;
+      }
+
+      if (activeExecution.acceleratorSource == 'external') {
+        for (final item in snapshot.asrRegisteredAccelerators) {
+          if (item.id == activeExecution.acceleratorRegistrationId &&
+              item.ready &&
+              item.cudaAvailable) {
+            acceleratorRegistrationId = item.id;
+            break;
+          }
+        }
+      } else if (activeExecution.acceleratorSource == 'managed') {
+        for (final item in snapshot.asrAccelerators) {
+          if (item.id == activeExecution.acceleratorId && managedReady(item)) {
+            managedAcceleratorId = item.id;
+            break;
+          }
+        }
+      }
+      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
+        for (final item in snapshot.asrRegisteredAccelerators) {
+          if (item.ready && item.cudaAvailable) {
+            acceleratorRegistrationId = item.id;
+            break;
+          }
+        }
+      }
+      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
+        for (final item in snapshot.asrAccelerators) {
+          if (managedReady(item)) {
+            managedAcceleratorId = item.id;
+            break;
+          }
+        }
+      }
+      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
+        throw StateError('NVIDIA 加速资源尚未完成验证。');
+      }
+    }
+
+    await _client.activateAsrResources(
+      provider: providerName,
+      managedModelId: managedModelId,
+      modelRegistrationId: modelRegistrationId,
+      managedAcceleratorId: managedAcceleratorId,
+      acceleratorRegistrationId: acceleratorRegistrationId,
+      device: device,
+      computeType: computeType,
+      expectedVersion: snapshot.pipelineFileVersion,
+    );
   }
 
   AsrProviderOption? _selectedAsrOption() {
@@ -1464,6 +1691,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _model.text = candidate.modelId;
         _asrModelSource = 'external';
         _externalDraftModelId = candidate.modelId;
+        _externalDraftRegistrationId = '';
         _locatedExternalModelId = candidate.modelId;
         _detectedExternalModelId = '';
         _asrDraftDirty = true;
@@ -1529,6 +1757,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final targetProvider = _asrProviderNameForSelection(_selectedAsrProvider);
     final targetPath = _externalModelPath.text.trim();
     final targetDevice = _device.text;
+    final activeExecution = _snapshot?.asrActiveExecution;
+    final acceleratorRoot =
+        (targetDevice == 'cuda' ||
+            (targetDevice == 'auto' &&
+                activeExecution?.resolvedDevice == 'cuda'))
+        ? activeExecution?.acceleratorRoot
+        : null;
     if (targetPath.isEmpty) return;
     setState(() {
       _probingAsrModel = true;
@@ -1539,6 +1774,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final result = await _client.probeExternalAsrModel(
         modelPath: targetPath,
         device: targetDevice,
+        computeType: _localComputeType,
+        acceleratorRoot: acceleratorRoot?.isEmpty == true
+            ? null
+            : acceleratorRoot,
       );
       if (!mounted) return;
       if (result['ok'] == true) {
@@ -1551,6 +1790,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             _locatedExternalModelId = modelId;
             _detectedExternalModelId = modelId;
             _externalDraftModelId = modelId;
+            _externalDraftRegistrationId = '${model['id'] ?? ''}'.trim();
             _model.text = modelId;
             _asrModelSource = 'external';
             _asrDraftDirty = true;
@@ -1684,9 +1924,17 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           ? _externalModelPath.text.trim()
           : '';
     }
-    local['device'] = _device.text.trim().isEmpty
-        ? 'auto'
-        : _device.text.trim();
+    if (useEditedFields) {
+      local['device'] = _device.text.trim().isEmpty
+          ? 'auto'
+          : _device.text.trim();
+      local['compute_type'] = _localComputeType.isEmpty
+          ? 'auto'
+          : _localComputeType;
+    } else {
+      local.putIfAbsent('device', () => 'auto');
+      local.putIfAbsent('compute_type', () => 'auto');
+    }
     final runtime = hasExisting
         ? Map<String, Object?>.from(_stringMap(existing.raw['runtime']))
         : <String, Object?>{};
