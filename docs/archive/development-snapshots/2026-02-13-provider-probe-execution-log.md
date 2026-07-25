@@ -16,14 +16,14 @@
     4. `providers.example.yaml`
 - 本地私有配置保护
   - `.gitignore` 已加入 `providers.local.yaml`
-- VectorEngine 示例配置
+- Anthropic Messages 兼容示例配置
   - `providers.yaml` 与 `providers.example.yaml` 已改为：
     - `api_type: anthropic`
     - `compat_mode: anthropic_messages`
-    - `base_url: https://api.vectorengine.ai/v1`
-    - `model: claude-haiku-4-5-20251001`
-    - `endpoint.path_template: /v1/messages`
-    - `env_key: TVX_MODEL_API_KEY`
+    - `base_url: https://gateway.example.invalid/v1`
+    - `model: example-model`
+    - `endpoint.path_template: /messages`
+    - `env_key: TVX_EXAMPLE_PROVIDER_API_KEY`
 - URL 规范化
   - 新增 URL 拼接去重逻辑，避免 `/v1/v1/messages`
 - 新增零 Token 预检命令

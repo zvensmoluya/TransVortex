@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,6 +46,22 @@ def test_installer_uses_isolated_app_data_and_resource_directories() -> None:
     assert '识别资源（运行组件、模型和下载断点）' in installer
 
 
+def test_installer_confirmation_recomputes_the_normalized_product_layout() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+    page_start = installer.index("Function WorkspacePageCreate")
+    page_end = installer.index("FunctionEnd", page_start)
+    page = installer[page_start:page_end]
+
+    assert page.index("Call NormalizeInstallDirectory") < page.index(
+        "Call ResolveWorkspaceRoot"
+    )
+    assert page.index('StrCpy $WorkspaceRoot ""') < page.index(
+        "Call ResolveWorkspaceRoot"
+    )
+
+
 def test_installer_preserves_classic_storage_defaults_for_existing_layouts() -> None:
     installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
         encoding="utf-8"
@@ -79,6 +97,27 @@ def test_release_pipeline_requires_windowless_python() -> None:
         assert "pythonw.exe" in content, relative_path
 
 
+def test_release_packages_an_empty_provider_seed_and_a_neutral_example() -> None:
+    product_seed = yaml.safe_load(
+        (ROOT / "providers.desktop.yaml").read_text(encoding="utf-8")
+    )
+    example = (ROOT / "providers.example.yaml").read_text(encoding="utf-8")
+    packaging = (ROOT / "scripts" / "package_flutter_release.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert product_seed == {"providers": []}
+    assert "gateway.example.invalid" in example
+    assert (
+        'Copy-RequiredFile -Source (Join-Path $repoRoot "providers.desktop.yaml") '
+        '-Destination (Join-Path $packageRoot "providers.yaml")'
+    ) in packaging
+    assert 'providers_yaml_source = "providers.desktop.yaml"' in packaging
+    assert "function Test-PackagedProviderSeed" in packaging
+    assert "Portable product seed must contain zero provider connections" in packaging
+    assert "provider_connection_count = $providerSeedReport.provider_connection_count" in packaging
+
+
 def test_installer_acceptance_checks_new_default_storage_layout() -> None:
     acceptance = (ROOT / "scripts" / "accept_windows_installer.ps1").read_text(
         encoding="utf-8"
@@ -86,6 +125,7 @@ def test_installer_acceptance_checks_new_default_storage_layout() -> None:
 
     assert '$workspaceRoot = Join-Path $productRoot "Data"' in acceptance
     assert '$asrStorageRoot = Join-Path $productRoot "Resources"' in acceptance
+    assert '$InstallRoot = Join-Path $acceptanceRoot "TransVortex"' in acceptance
     assert "Installed workspace does not match the product Data directory." in acceptance
     assert "Default ASR storage does not match the product Resources directory." in acceptance
     assert '"explicit_product_data_due_to_legacy_workspace"' in acceptance

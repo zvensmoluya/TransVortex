@@ -83,7 +83,7 @@ def test_doctor_reports_old_faster_whisper_version(tmp_path: Path, monkeypatch) 
 
 def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=old\nVECTORENGINE_API_KEY=old\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=old\n", encoding="utf-8")
     monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
@@ -98,7 +98,7 @@ def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch
     assert report["status"] == "FAIL"
     assert key_check["code"] == "missing_env"
     assert key_check["details"]["env_key"] == "TVX_MODEL_API_KEY"
-    assert key_check["details"]["legacy_keys_present"] == ["OPENAI_API_KEY", "VECTORENGINE_API_KEY"]
+    assert key_check["details"]["legacy_keys_present"] == ["OPENAI_API_KEY"]
     assert "TVX_MODEL_API_KEY" in key_check["hint_zh"]
 
 

@@ -48,7 +48,7 @@ TRANSVORTEX_MEDIA_TOOLS_DIR=tools\ffmpeg\bin
 
 仓库开发态没有这套 runtime 时，Flutter 继续使用仓库 `src/` 和显式或系统 Python，保持 `flutter run` 与测试工作流可用。Portable 包不再复制 `src/` 或依赖 `PYTHONPATH`。
 
-桌面端首次启动使用仓库 `pipeline.desktop.yaml` 作为产品种子，并复制到用户级 `Config/pipeline.yaml`；仓库根 `pipeline.yaml` 只属于 CLI 和开发工作区。发布脚本同样只把 `pipeline.desktop.yaml` 打包为产品 `pipeline.yaml`，避免开发连接进入新用户默认配置。用户配置创建后不由种子文件覆盖。
+发布构建使用仓库 `pipeline.desktop.yaml` 和 `providers.desktop.yaml` 作为产品种子，分别打包为 `pipeline.yaml` 和 `providers.yaml`；其中 Provider 种子不包含任何连接。安装态 Flutter 首次启动再把包内产品配置同步到用户级 `Config/`。仓库根 `pipeline.yaml` / `providers.yaml` 只属于 CLI 和开发工作区，`providers.example.yaml` 只展示中性配置结构，避免开发连接或示例服务进入新用户默认配置。用户保存连接后会生成本地覆盖文件，不再由产品种子覆盖。
 
 ## 发布包验证
 

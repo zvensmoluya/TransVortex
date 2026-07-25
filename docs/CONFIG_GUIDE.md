@@ -7,6 +7,7 @@
 - `providers.example.yaml`：仓库示例配置（可提交）
 - `providers.local.yaml`：本机真实配置（已在 `.gitignore` 中忽略）
 - `providers.yaml`：兼容旧流程的默认配置文件
+- `providers.desktop.yaml`：正式桌面产品种子，仅包含空连接列表
 
 `load_app_config()` 的 provider 文件优先级：
 
@@ -92,25 +93,25 @@ providers:
 
 `.env` 仍可用于开发兼容，但不再是桌面端默认保存位置。
 
-## 3. VectorEngine Anthropic 兼容配置示例
+## 3. Anthropic Messages 兼容配置示例
 
-下面是推荐示例（可放到 `providers.local.yaml`）：
+下面使用不可路由的保留域名展示配置结构。实际接入时可在应用中选择官方厂商预设，或把地址、模型和凭据引用替换为目标兼容服务的真实值：
 
 ```yaml
 providers:
-  - name: vector_anthropic
+  - name: example_anthropic_gateway
     api_type: anthropic
     compat_mode: anthropic_messages
-    base_url: https://api.vectorengine.ai/v1
-    env_key: TVX_MODEL_API_KEY
+    base_url: https://gateway.example.invalid/v1
+    env_key: TVX_EXAMPLE_PROVIDER_API_KEY
     models:
-      - claude-haiku-4-5-20251001
+      - example-model
     auth:
       type: header
       header_name: x-api-key
       prefix: ""
     endpoint:
-      path_template: /v1/messages
+      path_template: /messages
       method: POST
     request_mapping:
       style: anthropic_messages
@@ -142,13 +143,13 @@ providers:
 
 routing:
   primary:
-    provider: vector_anthropic
-    model: claude-haiku-4-5-20251001
+    provider: example_anthropic_gateway
+    model: example-model
   fallback: []
 ```
 
 说明：
-- 即使写的是 `base_url=/v1` + `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
+- 如果兼容网关要求同时写 `base_url=/v1` 和 `path_template=/v1/messages`，系统会自动规范化，避免变成 `/v1/v1/messages`。
 - `providers.yaml` 只描述 provider 协议、认证、endpoint、响应映射和能力限制；字幕翻译策略、文风和 repair 开关放在 `pipeline.yaml`。
 - `max_output_tokens` 和 `recommended_output_tokens` 是规划预算，不等于网关一定接受对应请求字段。`output_token_param` 留空时按协议使用默认字段，填写真实字段名时使用该字段；若网关不允许客户端传输出上限，填写 `none`，系统仍保留预算用于分块规划，但不会发送输出 token 参数。
 - 某个模型不接受 `temperature` 时，将该单模型 provider 的 `supports_temperature` 设为 `false`。如果同一网关下不同模型支持情况不同，应为它们拆分 provider 配置，避免把一种模型的请求能力套给另一种模型。
@@ -379,7 +380,7 @@ transvortex probe-provider --strict
 可选参数：
 
 ```powershell
-transvortex probe-provider --provider vector_anthropic --model claude-haiku-4-5-20251001 --providers-file .\providers.local.yaml --source-lang en --target-lang zh-CN --strict
+transvortex probe-provider --provider example_anthropic_gateway --model example-model --providers-file .\providers.local.yaml --source-lang en --target-lang zh-CN --strict
 ```
 
 检查项包括：

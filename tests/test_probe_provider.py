@@ -14,18 +14,18 @@ def _write_provider_file(
     path.write_text(
         f"""
 providers:
-  - name: vector_anthropic
+  - name: example_anthropic_gateway
     api_type: anthropic
     compat_mode: anthropic_messages
-    base_url: https://api.vectorengine.ai/v1
+    base_url: https://gateway.example.invalid/v1
     env_key: {env_key}
-    models: [claude-haiku-4-5-20251001]
+    models: [example-model]
     auth:
       type: header
       header_name: x-api-key
       prefix: ""
     endpoint:
-      path_template: /v1/messages
+      path_template: /messages
       method: POST
     request_mapping:
       style: anthropic_messages
@@ -33,7 +33,7 @@ providers:
     response_mapping:
       text_paths: ["{response_paths}"]
 routing:
-  primary: {{provider: vector_anthropic, model: claude-haiku-4-5-20251001}}
+  primary: {{provider: example_anthropic_gateway, model: example-model}}
   fallback: []
         """.strip(),
         encoding="utf-8",

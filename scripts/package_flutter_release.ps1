@@ -165,6 +165,63 @@ function Assert-PortablePackageNoSecrets {
     }
 }
 
+function Test-PackagedProviderSeed {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageRoot
+    )
+
+    $pythonPath = Join-Path $PackageRoot "runtime\python\python.exe"
+    $providersPath = Join-Path $PackageRoot "providers.yaml"
+    if (-not (Test-Path -LiteralPath $pythonPath)) {
+        throw "Packaged Python not found for provider seed validation: $pythonPath"
+    }
+    if (-not (Test-Path -LiteralPath $providersPath)) {
+        throw "Packaged provider seed not found: $providersPath"
+    }
+    $parser = @'
+import json
+import pathlib
+import sys
+
+import yaml
+
+path = pathlib.Path(sys.argv[1])
+payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+if not isinstance(payload, dict):
+    raise TypeError("providers.yaml root must be an object")
+providers = payload.get("providers")
+if not isinstance(providers, list):
+    raise TypeError("providers.yaml must contain a providers list")
+print(json.dumps({"provider_connection_count": len(providers)}))
+'@
+    $parserPath = Join-Path $PackageRoot ".provider_seed_check.py"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        [System.IO.File]::WriteAllText($parserPath, $parser, [System.Text.UTF8Encoding]::new($false))
+        $ErrorActionPreference = "Continue"
+        $json = & $pythonPath $parserPath $providersPath 2>&1
+        $parserExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if (Test-Path -LiteralPath $parserPath) {
+            Remove-Item -LiteralPath $parserPath -Force
+        }
+    }
+    if ($parserExitCode -ne 0) {
+        throw "Packaged provider seed could not be parsed: $($json | Out-String)"
+    }
+    $result = (($json | Out-String).Trim() | ConvertFrom-Json)
+    if ([int]$result.provider_connection_count -ne 0) {
+        throw "Portable product seed must contain zero provider connections, got: $($result.provider_connection_count)"
+    }
+    return [ordered]@{
+        ok = $true
+        providers_path = $providersPath
+        provider_connection_count = [int]$result.provider_connection_count
+    }
+}
+
 function Invoke-PortableServiceCheck {
     param(
         [Parameter(Mandatory = $true)]
@@ -396,8 +453,9 @@ and are stored under the user-level TransVortex data directory.
 
 Credentials are resolved from the user-level TransVortex credential store
 (~\.transvortex\auth.json) or environment variables. The bundled providers.yaml
-is copied from providers.example.yaml so that no local provider secrets are
-packaged.
+is copied from providers.desktop.yaml and starts with no configured connections.
+The separate providers.example.yaml uses a non-routable example domain and does
+not contain local provider secrets.
 
 This is not an MSIX/MSI/NSIS/Inno installer. It is a portable distribution
 artifact used to validate package layout and release startup before the formal
@@ -629,7 +687,7 @@ if (Test-Path -LiteralPath (Join-Path $repoRoot "memory\presets")) {
 }
 Copy-RequiredFile -Source (Join-Path $repoRoot "pipeline.desktop.yaml") -Destination (Join-Path $packageRoot "pipeline.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.example.yaml")
-Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
+Copy-RequiredFile -Source (Join-Path $repoRoot "providers.desktop.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
 Copy-RequiredFile -Source (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE")
 if ($InstallerPayload) {
@@ -672,6 +730,7 @@ $requiredPaths = @(
     "agent\references\provider-modes.md",
     "agent\references\setup_contract.schema.json",
     "pipeline.yaml",
+    "providers.example.yaml",
     "providers.yaml"
 )
 if ($InstallerPayload) {
@@ -687,11 +746,13 @@ if ($missing.Count -gt 0) {
 }
 Assert-PortablePackageNoSecrets -PackageRoot $packageRoot
 
+$providerSeedReport = Test-PackagedProviderSeed -PackageRoot $packageRoot
 $ffmpegReport = Test-PackagedFfmpegRuntime -PackageRoot $packageRoot
 $serviceReport = Invoke-PortableServiceCheck -PackageRoot $packageRoot
 if ($InstallerPayload) {
     $ffmpegReport["ffmpeg_path"] = "tools\ffmpeg\bin\ffmpeg.exe"
     $ffmpegReport["ffprobe_path"] = "tools\ffmpeg\bin\ffprobe.exe"
+    $providerSeedReport["providers_path"] = "providers.yaml"
     $serviceReport["working_directory"] = "."
     $serviceReport["python_executable"] = "runtime\python\python.exe"
 }
@@ -740,7 +801,9 @@ $report = [ordered]@{
     source_release_dir = if ($InstallerPayload) { $null } else { $releaseRoot }
     file_count = $files.Count
     total_bytes = [int64]$totalBytes
-    providers_yaml_source = "providers.example.yaml"
+    providers_yaml_source = "providers.desktop.yaml"
+    provider_connection_count = $providerSeedReport.provider_connection_count
+    provider_seed_check = $providerSeedReport
     python_runtime_included = $true
     python_runtime_root = "runtime"
     python_runtime_manifest = "runtime\app_runtime.json"

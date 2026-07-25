@@ -325,6 +325,8 @@ FunctionEnd
 
 Function WorkspacePageCreate
   !insertmacro MUI_HEADER_TEXT "确认最终存放位置" "任务资料和识别资源可能持续增长，请确认保存磁盘。"
+  Call NormalizeInstallDirectory
+  StrCpy $WorkspaceRoot ""
   Call ResolveWorkspaceRoot
   Call ResolveAsrStorageRoot
   nsDialogs::Create 1018

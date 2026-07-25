@@ -177,7 +177,7 @@ def _env_key_check(
                 "credential_source": credential.source,
             },
         )
-    legacy_keys = sorted(_dotenv_keys(root_dir) & {"OPENAI_API_KEY", "VECTORENGINE_API_KEY"})
+    legacy_keys = sorted(_dotenv_keys(root_dir) & {"OPENAI_API_KEY"})
     hint = f"缺少 {env_key}。请在 .env 中写入 {env_key}=你的key，或在桌面端保存 key。"
     if legacy_keys and env_key == "TVX_MODEL_API_KEY":
         hint += f" 检测到旧 key 名 {', '.join(legacy_keys)}，请复制为 TVX_MODEL_API_KEY。"

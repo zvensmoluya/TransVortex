@@ -1,17 +1,17 @@
 providers:
-  - name: vector_anthropic
+  - name: example_anthropic_gateway
     api_type: anthropic
     compat_mode: anthropic_messages
-    base_url: https://api.vectorengine.ai/v1
-    env_key: TVX_MODEL_API_KEY
+    base_url: https://gateway.example.invalid/v1
+    env_key: TVX_EXAMPLE_PROVIDER_API_KEY
     models:
-      - claude-haiku-4-5-20251001
+      - example-model
     auth:
       type: header
       header_name: x-api-key
       prefix: ""
     endpoint:
-      path_template: /v1/messages
+      path_template: /messages
       method: POST
     request_mapping:
       style: anthropic_messages
@@ -53,8 +53,8 @@ providers:
 
 routing:
   primary:
-    provider: vector_anthropic
-    model: claude-haiku-4-5-20251001
+    provider: example_anthropic_gateway
+    model: example-model
   fallback: []
 
 # Advanced examples:

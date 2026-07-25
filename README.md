@@ -41,6 +41,7 @@ python -m pip install -e .[asr]
 Provider 配置文件职责：
 
 - `providers.example.yaml`：可提交的示例。
+- `providers.desktop.yaml`：正式桌面的空连接种子。
 - `providers.local.yaml`：本机真实配置，已忽略。
 - `providers.yaml`：兼容默认配置。
 - `pipeline.yaml`：ASR、翻译、术语记忆、质量和导出策略。

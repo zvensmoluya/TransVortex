@@ -448,7 +448,7 @@ if ($actualInstallerHash -ne [string]$installerManifest.installer_sha256) {
 $acceptanceId = [guid]::NewGuid().ToString("N")
 $acceptanceRoot = Join-Path $env:TEMP "transvortex-installer-acceptance-$acceptanceId"
 if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
-    $InstallRoot = Join-Path $acceptanceRoot "install-parent"
+    $InstallRoot = Join-Path $acceptanceRoot "TransVortex"
 }
 
 function Wait-PathRemoved {
