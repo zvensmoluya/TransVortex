@@ -774,10 +774,27 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
-  Future<AsrOperationStatus> asrSetupStart(String modelId) async {
-    return AsrOperationStatus.fromJson(
-      await call('asr.setup.start', {'model_id': modelId}),
-    );
+  Future<AsrOperationStatus> asrSetupStart(
+    String modelId, {
+    bool activateOnComplete = false,
+    String? provider,
+    String? managedAcceleratorId,
+    String? acceleratorRegistrationId,
+    String device = 'auto',
+    String computeType = 'auto',
+  }) async {
+    final params = <String, Object?>{'model_id': modelId};
+    if (activateOnComplete) {
+      params.addAll({
+        'activate_on_complete': true,
+        'provider': ?provider,
+        'managed_accelerator_id': ?managedAcceleratorId,
+        'accelerator_registration_id': ?acceleratorRegistrationId,
+        'device': device,
+        'compute_type': computeType,
+      });
+    }
+    return AsrOperationStatus.fromJson(await call('asr.setup.start', params));
   }
 
   Future<AsrStorageOption> asrStorageSet(String storageRoot) async {

@@ -1482,7 +1482,14 @@ class MainWindowController extends ChangeNotifier {
     );
     final label = option?.displayLabel ?? providerName;
     final rawModel = model ?? option?.model ?? '';
-    final modelText = rawModel.startsWith('custom-') ? '自定义 Whisper' : rawModel;
+    final modelText = whisperModelLabel(rawModel, includeEngine: false);
+    if (option?.kind == 'local_worker' && modelText.isNotEmpty) {
+      final local = _asStringMap(option?.raw['local']);
+      final source = '${local['model_source'] ?? ''}' == 'external'
+          ? '本地已有'
+          : '应用管理';
+      return '$label · $modelText（$source）';
+    }
     return modelText.isEmpty ? label : '$label · $modelText';
   }
 

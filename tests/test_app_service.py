@@ -339,8 +339,9 @@ def test_app_service_starts_one_managed_asr_setup_operation(tmp_path: Path, monk
     service = DesktopApi(root_dir=tmp_path)
     received: list[str] = []
 
-    def start_setup(model_id: str) -> dict:
+    def start_setup(model_id: str, **kwargs) -> dict:  # noqa: ANN003
         received.append(model_id)
+        assert kwargs == {"activate": None, "activation_request": {}}
         return {
             "id": "asr_setup_small",
             "kind": "setup",
@@ -362,6 +363,63 @@ def test_app_service_starts_one_managed_asr_setup_operation(tmp_path: Path, monk
     assert received == ["small"]
     assert response["result"]["kind"] == "setup"
     assert response["result"]["phase"] == "runtime"
+
+
+def test_app_service_defers_managed_asr_activation_until_setup_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    captured: dict = {}
+    activated: dict = {}
+
+    def start_setup(model_id: str, **kwargs) -> dict:  # noqa: ANN003
+        captured.update({"model_id": model_id, **kwargs})
+        return {
+            "id": "asr_setup_small",
+            "kind": "setup",
+            "item_id": model_id,
+            "state": "queued",
+        }
+
+    def activate(**kwargs) -> dict:  # noqa: ANN003
+        activated.update(kwargs)
+        return {"ok": True, "provider": kwargs["provider_name"]}
+
+    monkeypatch.setattr(service._asr_operation_manager, "start_setup", start_setup)
+    monkeypatch.setattr("transvortex.app.desktop_api.activate_asr_resources", activate)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.setup.start",
+            {
+                "model_id": "small",
+                "activate_on_complete": True,
+                "provider": "local_whisper",
+                "accelerator_registration_id": "external:nvidia:test",
+                "device": "cuda",
+                "compute_type": "float16",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["kind"] == "setup"
+    assert activated == {}
+    assert captured["activation_request"] == {
+        "provider": "local_whisper",
+        "device": "cuda",
+        "compute_type": "float16",
+        "managed_accelerator_id": "",
+        "accelerator_registration_id": "external:nvidia:test",
+    }
+    activation_result = captured["activate"]("small")
+    assert activation_result == {"ok": True, "provider": "local_whisper"}
+    assert activated["managed_model_id"] == "small"
+    assert activated["accelerator_registration_id"] == "external:nvidia:test"
+    assert activated["create_if_missing"] is True
 
 
 def test_app_service_changes_asr_storage_root(tmp_path: Path, monkeypatch) -> None:

@@ -487,8 +487,60 @@ class DesktopApi:
         try:
             config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
             self._asr_operation_manager.set_network(config.network)
+            activate_on_complete = _optional_bool(
+                params,
+                "activate_on_complete",
+                "activateOnComplete",
+            ) is True
+            activation_request: dict[str, Any] = {}
+            activator: Callable[[str], dict[str, Any]] | None = None
+            if activate_on_complete:
+                provider_name = _required_text(params, "provider", "provider_name", "providerName")
+                activation_request = {
+                    "provider": provider_name,
+                    "device": _optional_text(params, "device") or "auto",
+                    "compute_type": _optional_text(params, "compute_type", "computeType") or "auto",
+                    "managed_accelerator_id": _optional_text(
+                        params,
+                        "managed_accelerator_id",
+                        "managedAcceleratorId",
+                    )
+                    or "",
+                    "accelerator_registration_id": _optional_text(
+                        params,
+                        "accelerator_registration_id",
+                        "acceleratorRegistrationId",
+                    )
+                    or "",
+                }
+
+                def activate_setup(model_id: str) -> dict[str, Any]:
+                    try:
+                        return activate_asr_resources(
+                            root_dir=self.root_dir,
+                            providers_file=self.providers_file,
+                            provider_name=provider_name,
+                            managed_model_id=model_id,
+                            managed_accelerator_id=str(
+                                activation_request["managed_accelerator_id"]
+                            ),
+                            accelerator_registration_id=str(
+                                activation_request["accelerator_registration_id"]
+                            ),
+                            device=str(activation_request["device"]),
+                            compute_type=str(activation_request["compute_type"]),
+                            create_if_missing=True,
+                        )
+                    except AsrOperationError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - persisted as setup failure
+                        raise AsrOperationError("activation_failed", str(exc)) from exc
+
+                activator = activate_setup
             return self._asr_operation_manager.start_setup(
-                _required_text(params, "model_id", "modelId", "id")
+                _required_text(params, "model_id", "modelId", "id"),
+                activate=activator,
+                activation_request=activation_request,
             )
         except AsrOperationError as exc:
             raise DesktopApiError(exc.code, str(exc)) from exc

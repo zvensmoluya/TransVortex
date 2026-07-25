@@ -42,7 +42,7 @@ void main() {
       expect(controller.view.translationLabel, 'real-model');
       expect(controller.view.translationDetail, contains('默认模型'));
       expect(controller.view.translationDetail, contains('备用 fallback-model'));
-      expect(controller.view.asrLabel, '本机 Whisper · large-v3');
+      expect(controller.view.asrLabel, '本机 Whisper · Large v3');
       expect(controller.view.sourceLang, 'auto');
       expect(controller.view.targetLang, 'zh-CN');
     },
@@ -58,6 +58,24 @@ void main() {
 
     expect(controller.view.asrLabel, '本机 Whisper · 自定义 Whisper');
   });
+
+  test(
+    'controller distinguishes external and app-managed Whisper models',
+    () async {
+      final external = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            asrKind: 'local_worker',
+            asrModelSource: 'external',
+          ),
+        ),
+      );
+      addTearDown(external.dispose);
+      await external.startService();
+
+      expect(external.view.asrLabel, '本机 Whisper · Large v3（本地已有）');
+    },
+  );
 
   test(
     'controller keeps snapshots fresh while an ASR setup is active',
@@ -1432,6 +1450,8 @@ DesktopSnapshot _desktopSnapshot({
   bool translationHasKey = true,
   bool asrHasKey = true,
   String asrModel = 'large-v3',
+  String asrKind = 'local_inprocess',
+  String asrModelSource = 'managed',
   List<String> extraModels = const [],
   List<Map<String, Object?>> routingProfiles = const [],
   List<Map<String, Object?>> tasks = const [],
@@ -1483,10 +1503,12 @@ DesktopSnapshot _desktopSnapshot({
       'asr_providers': {
         'local': {
           'name': 'local',
-          'kind': 'local_inprocess',
+          'kind': asrKind,
           'protocol': 'faster_whisper',
           'model': asrModel,
           'has_key': asrHasKey,
+          if (asrKind == 'local_worker')
+            'local': {'model_source': asrModelSource},
         },
       },
       if (asrLocal.isNotEmpty) 'asr_local': asrLocal,

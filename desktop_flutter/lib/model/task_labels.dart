@@ -187,6 +187,22 @@ String languageLabel(String code) {
   };
 }
 
+String whisperModelLabel(String modelId, {bool includeEngine = true}) {
+  final normalized = modelId.trim();
+  final model = normalized.startsWith('custom-')
+      ? '自定义 Whisper'
+      : switch (normalized) {
+          'small' => 'Small',
+          'medium' => 'Medium',
+          'large-v3' => 'Large v3',
+          _ => normalized,
+        };
+  if (!includeEngine || model.isEmpty || model == '自定义 Whisper') {
+    return model;
+  }
+  return 'Whisper $model';
+}
+
 String fileTooltipLabel(String path, {String fallbackName = ''}) {
   final trimmedPath = path.trim();
   final name = fallbackName.trim().isNotEmpty

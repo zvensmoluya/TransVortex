@@ -12,6 +12,7 @@ from .credentials import auth_file_path, resolve_credential, write_auth_credenti
 from .models import AsrProviderConfig, NetworkConfig
 from .asr_runtime import (
     asr_provider_readiness,
+    asr_runtime_snapshot,
     load_asr_catalog,
     model_catalog_entry,
     registered_external_accelerator,
@@ -307,6 +308,7 @@ def activate_asr_resources(
     device: str = "",
     compute_type: str = "",
     expected_version: dict[str, Any] | None = None,
+    create_if_missing: bool = False,
 ) -> dict[str, Any]:
     """Attach verified resources to a local worker without exposing raw YAML edits."""
 
@@ -344,7 +346,29 @@ def activate_asr_resources(
     selected_name = provider_name.strip() or config.pipeline.asr_provider
     provider = config.asr_providers.get(selected_name)
     if provider is None:
-        raise ValueError(f"ASR provider not found: {selected_name}")
+        if not create_if_missing or not selected_name:
+            raise ValueError(f"ASR provider not found: {selected_name}")
+        provider = draft_to_asr_provider_config(
+            {
+                "name": selected_name,
+                "kind": "local_worker",
+                "protocol": "faster_whisper",
+                "model": managed_model_id or "small",
+                "auth": {"type": "none"},
+                "runtime": {
+                    "source": "managed",
+                    "id": "managed:faster-whisper",
+                },
+                "local": {
+                    "model_source": "managed",
+                    "model_size": managed_model_id or "small",
+                    "managed_model_size": managed_model_id or "small",
+                    "device": normalized_device or "auto",
+                    "compute_type": normalized_compute_type or "auto",
+                },
+            },
+            network=config.network,
+        )
     if provider.kind != "local_worker":
         raise ValueError("ASR resources can only be attached to a local worker provider")
     catalog = load_asr_catalog()
@@ -356,6 +380,16 @@ def activate_asr_resources(
     if managed_model_id:
         if model_catalog_entry(catalog, managed_model_id) is None:
             raise ValueError(f"Managed ASR model not found: {managed_model_id}")
+        model_row = next(
+            (
+                item
+                for item in asr_runtime_snapshot(root_dir).get("models") or []
+                if isinstance(item, dict) and str(item.get("id") or "") == managed_model_id
+            ),
+            None,
+        )
+        if not isinstance(model_row, dict) or model_row.get("installed") is not True:
+            raise ValueError(f"Managed ASR model is not installed: {managed_model_id}")
         draft["model"] = managed_model_id
         local.update(
             {

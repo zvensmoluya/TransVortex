@@ -120,7 +120,13 @@ class AsrOperationManager:
             thread.start()
             return operation
 
-    def start_setup(self, model_id: str) -> dict[str, Any]:
+    def start_setup(
+        self,
+        model_id: str,
+        *,
+        activate: Callable[[str], dict[str, Any]] | None = None,
+        activation_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._ensure_storage_ready()
         normalized_model_id = model_id.strip()
         runtime = self._catalog_entry("runtime", "")
@@ -157,13 +163,22 @@ class AsrOperationManager:
                 "created_at": now,
                 "updated_at": now,
                 "result": {},
+                "activate_on_complete": activate is not None,
+                "activation_request": dict(activation_request or {}),
                 "owner_pid": os.getpid(),
             }
             self._save_operation(operation)
             cancel_event = threading.Event()
             thread = threading.Thread(
                 target=self._run_setup,
-                args=(operation_id, runtime, model, runtime_total, cancel_event),
+                args=(
+                    operation_id,
+                    runtime,
+                    model,
+                    runtime_total,
+                    cancel_event,
+                    activate,
+                ),
                 name="transvortex-asr-setup",
                 daemon=True,
             )
@@ -383,6 +398,7 @@ class AsrOperationManager:
         model: dict[str, Any],
         runtime_total: int,
         cancel_event: threading.Event,
+        activate: Callable[[str], dict[str, Any]] | None,
     ) -> None:
         try:
             self._update(
@@ -420,10 +436,18 @@ class AsrOperationManager:
                     bytes_done=int(self.operation(operation_id).get("bytes_total") or 0),
                     current_file="",
                 )
+            activation_result: dict[str, Any] = {}
+            if activate is not None:
+                self._check_cancelled(cancel_event)
+                activation_result = activate(str(model.get("id") or ""))
             self._finish(
                 operation_id,
                 "completed",
-                result={"runtime": runtime_result, "model": model_result},
+                result={
+                    "runtime": runtime_result,
+                    "model": model_result,
+                    "activation": activation_result,
+                },
             )
         except _OperationCancelled:
             self._finish(
@@ -435,7 +459,13 @@ class AsrOperationManager:
         except AsrOperationError as exc:
             self._finish(operation_id, "failed", error_code=exc.code, message=str(exc))
         except Exception as exc:  # noqa: BLE001 - background operation must persist a terminal state
-            self._finish(operation_id, "failed", error_code="install_failed", message=str(exc))
+            phase = str(self.operation(operation_id).get("phase") or "")
+            self._finish(
+                operation_id,
+                "failed",
+                error_code="activation_failed" if phase == "activate" else "install_failed",
+                message=str(exc),
+            )
         finally:
             with self._lock:
                 self._cancel_events.pop(operation_id, None)

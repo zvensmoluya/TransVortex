@@ -288,11 +288,23 @@ def test_setup_installs_runtime_and_model_as_one_operation(tmp_path: Path) -> No
         catalog=catalog,
         client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)),
     )
+    paths = asr_runtime_paths(tmp_path)
+    activated: list[str] = []
 
-    started = manager.start_setup("small")
+    def activate(model_id: str) -> dict:
+        activated.append(model_id)
+        assert (paths.models_root / "small" / "pinned-revision" / "model.bin").is_file()
+        return {"ok": True, "provider": "local", "model": model_id}
+
+    started = manager.start_setup(
+        "small",
+        activate=activate,
+        activation_request={"provider": "local", "device": "cpu"},
+    )
     completed = _wait_terminal(manager, started["id"])
 
-    paths = asr_runtime_paths(tmp_path)
+    assert started["activate_on_complete"] is True
+    assert started["activation_request"] == {"provider": "local", "device": "cpu"}
     assert completed["kind"] == "setup"
     assert completed["state"] == "completed"
     assert completed["phase"] == "activate"
@@ -300,6 +312,12 @@ def test_setup_installs_runtime_and_model_as_one_operation(tmp_path: Path) -> No
     assert completed["phase_count"] == 3
     assert completed["bytes_done"] == len(archive) + len(model_content)
     assert completed["bytes_total"] == len(archive) + len(model_content)
+    assert completed["result"]["activation"] == {
+        "ok": True,
+        "provider": "local",
+        "model": "small",
+    }
+    assert activated == ["small"]
     assert (paths.components_root / "faster-whisper" / "1.0.0" / "python.exe").is_file()
     assert (paths.models_root / "small" / "pinned-revision" / "model.bin").read_bytes() == model_content
 

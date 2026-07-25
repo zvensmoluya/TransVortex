@@ -4269,6 +4269,7 @@ void main() {
           managedAsr: true,
           localModelSource: 'external',
           localModelPath: r'D:\Models\faster-whisper-large-v3',
+          managedModelSize: 'large-v3',
           asrLocal: const {
             'paths': {
               'app_data_root': r'C:\Users\tester\AppData\Local\TransVortex',
@@ -4279,7 +4280,14 @@ void main() {
               'installed': true,
               'artifact': {'published': true, 'size': 100},
             },
-            'models': [],
+            'models': [
+              {
+                'id': 'large-v3',
+                'display_name': 'Whisper Large v3',
+                'installed': false,
+                'size': 3113851289,
+              },
+            ],
             'accelerators': [],
             'environments': [],
             'operations': [],
@@ -4316,14 +4324,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('应用下载'), findsOneWidget);
-    expect(find.text('已有模型'), findsOneWidget);
+    expect(find.text('应用管理'), findsOneWidget);
+    expect(find.text('本地已有'), findsOneWidget);
+    expect(find.text('当前使用'), findsOneWidget);
+    expect(find.text('正在使用'), findsOneWidget);
+    expect(find.text('更换模型'), findsOneWidget);
+    expect(find.text('本地已有模型'), findsOneWidget);
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
     expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
     expect(find.text('已启用'), findsNothing);
     expect(find.text('验证并启用'), findsNothing);
+
+    await tester.tap(find.text('应用管理'));
+    await tester.pump();
+    expect(find.text('下载应用管理副本 · 2.9 GB'), findsOneWidget);
+    expect(find.text('下载并启用'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -4476,7 +4493,7 @@ void main() {
       expect(activatedResources?['device'], 'cuda');
       expect(activatedResources?['compute_type'], 'float16');
       expect(find.text('NVIDIA（外部资源，已验证）'), findsOneWidget);
-      expect(find.text('当前运行：NVIDIA · float16 · 外部资源已验证'), findsOneWidget);
+      expect(find.text('本地已有模型 · NVIDIA · float16 · 外部资源已验证'), findsOneWidget);
       expectNoFlutterException();
     },
   );
@@ -4816,7 +4833,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
-    await tester.tap(find.text('应用下载'));
+    await tester.tap(find.text('应用管理'));
     await tester.pump();
     expect(find.text('应用设置'), findsOneWidget);
 
@@ -4829,7 +4846,7 @@ void main() {
     expect(rememberedExternal, 'large-v3');
     expect(rememberedExternalPath, r'D:\Models\large-v3');
 
-    await tester.tap(find.text('已有模型'));
+    await tester.tap(find.text('本地已有'));
     await tester.pump();
     expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
     expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
@@ -5097,13 +5114,14 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings starts one managed setup task', (tester) async {
+  testWidgets('ASR settings defers managed activation until setup completes', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
-    Map<String, Object?>? savedDraft;
     Map<String, Object?>? setupParams;
     final snapshot = _desktopSnapshot(
       withAsrProviders: false,
@@ -5133,10 +5151,6 @@ void main() {
     bridge.attachServiceCaller((method, params) async {
       calls.add(method);
       if (method == 'desktop.snapshot') return snapshot.raw;
-      if (method == 'asr.provider.save') {
-        savedDraft = Map<String, Object?>.from(params['provider_draft'] as Map);
-        return {'ok': true, 'provider': 'faster_whisper_large_v3'};
-      }
       if (method == 'asr.setup.start') {
         setupParams = Map<String, Object?>.from(params);
         return {
@@ -5164,7 +5178,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('应用下载'), findsOneWidget);
+    expect(find.text('应用管理'), findsOneWidget);
     expect(find.text('Whisper Small'), findsWidgets);
     expect(find.text('自动（当前：CPU）'), findsOneWidget);
     expect(find.text('下载并启用'), findsOneWidget);
@@ -5173,11 +5187,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(calls, containsAllInOrder(['asr.provider.save', 'asr.setup.start']));
+    expect(calls, contains('asr.setup.start'));
+    expect(calls, isNot(contains('asr.provider.save')));
     expect(calls, isNot(contains('asr.component.install')));
-    expect(setupParams, {'model_id': 'small'});
-    expect((savedDraft?['local'] as Map?)?['model_source'], 'managed');
-    expect((savedDraft?['local'] as Map?)?['device'], 'auto');
+    expect(setupParams, {
+      'model_id': 'small',
+      'activate_on_complete': true,
+      'provider': 'faster_whisper_large_v3',
+      'device': 'auto',
+      'compute_type': 'auto',
+    });
     expect(find.text('正在下载本地识别引擎'), findsOneWidget);
     expect(find.textContaining('关闭此窗口'), findsOneWidget);
     expectNoFlutterException();
@@ -5262,6 +5281,7 @@ void main() {
     await tester.ensureVisible(
       find.byKey(const ValueKey('asr-download-storage-change')),
     );
+    await tester.pump(const Duration(milliseconds: 100));
     await tester.tap(find.byKey(const ValueKey('asr-download-storage-change')));
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 200));

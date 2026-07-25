@@ -177,6 +177,60 @@ asr_providers:
         )
 
 
+def test_asr_resource_activation_creates_local_worker_only_after_model_is_installed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr: {provider: cloud_asr}
+asr_providers:
+  - name: cloud_asr
+    kind: remote
+    protocol: openai_transcriptions
+    model: whisper-1
+    base_url: https://api.openai.com/v1
+""".strip(),
+        encoding="utf-8",
+    )
+    installed = False
+
+    def runtime_snapshot(_root_dir: Path) -> dict:
+        return {"models": [{"id": "small", "installed": installed}]}
+
+    monkeypatch.setattr(
+        "transvortex.app.asr_admin.asr_runtime_snapshot",
+        runtime_snapshot,
+    )
+
+    with pytest.raises(ValueError, match="not installed"):
+        activate_asr_resources(
+            root_dir=tmp_path,
+            provider_name="local_whisper",
+            managed_model_id="small",
+            device="cpu",
+            create_if_missing=True,
+        )
+    assert load_app_config(root_dir=tmp_path).pipeline.asr_provider == "cloud_asr"
+
+    installed = True
+    result = activate_asr_resources(
+        root_dir=tmp_path,
+        provider_name="local_whisper",
+        managed_model_id="small",
+        device="cpu",
+        create_if_missing=True,
+    )
+    config = load_app_config(root_dir=tmp_path)
+
+    assert result["ok"] is True
+    assert config.pipeline.asr_provider == "local_whisper"
+    assert config.asr_providers["local_whisper"].kind == "local_worker"
+    assert config.asr_providers["local_whisper"].model == "small"
+
+
 def test_artifacts_directory_environment_overrides_workspace_yaml(
     tmp_path: Path, monkeypatch
 ) -> None:

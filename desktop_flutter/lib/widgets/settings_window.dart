@@ -766,6 +766,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           )
         else ...[
           _localWhisperSettings(
+            provider,
             modelIds,
             selectedModel,
             runtime: runtime,
@@ -778,6 +779,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Widget _localWhisperSettings(
+    AsrProviderOption? provider,
     List<String> modelIds,
     String selectedModel, {
     required AsrComponentOption? runtime,
@@ -787,6 +789,22 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _localWhisperCurrentSummary(provider),
+        const SizedBox(height: T.s16),
+        Row(
+          children: [
+            const Icon(
+              Icons.swap_horiz_rounded,
+              size: 18,
+              color: T.accentStrong,
+            ),
+            const SizedBox(width: T.s8),
+            Text('更换模型', style: T.tSection),
+            const SizedBox(width: T.s12),
+            const Expanded(child: Divider(height: 1, color: T.line)),
+          ],
+        ),
+        const SizedBox(height: T.s8),
         Container(
           key: const ValueKey('asr-local-configuration'),
           width: double.infinity,
@@ -799,36 +817,16 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: T.accentSoft,
-                      borderRadius: BorderRadius.circular(T.rMd),
-                    ),
-                    child: const Icon(
-                      Icons.tune_rounded,
-                      size: 18,
-                      color: T.accentStrong,
-                    ),
-                  ),
-                  const SizedBox(width: T.s8),
-                  Expanded(
-                    child: _AsrSourceToggle(
-                      selected: _asrModelSource,
-                      onChanged: _probingAsrModel || _savingAsr
-                          ? null
-                          : _setAsrModelSource,
-                    ),
-                  ),
-                ],
+              _AsrSourceToggle(
+                selected: _asrModelSource,
+                onChanged: _probingAsrModel || _savingAsr
+                    ? null
+                    : _setAsrModelSource,
               ),
               const SizedBox(height: T.s12),
               if (_asrModelSource == 'managed')
                 _managedWhisperModelSettings(
+                  provider,
                   modelIds,
                   selectedModel,
                   runtime: runtime,
@@ -845,20 +843,26 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }
 
   Widget _managedWhisperModelSettings(
+    AsrProviderOption? provider,
     List<String> modelIds,
     String selectedModel, {
     required AsrComponentOption? runtime,
     required AsrComponentOption model,
     required AsrStorageOption storage,
   }) {
-    final executionDetail = _asrExecutionDetail();
+    final current = _localWhisperCurrent(provider);
+    final downloadsManagedCopy =
+        current.ready &&
+        current.modelSource == 'external' &&
+        current.modelId == selectedModel &&
+        !model.installed;
     return Column(
       children: [
         Row(
           children: [
             Expanded(
               child: _AsrSelect(
-                label: 'Whisper 模型',
+                label: '要使用的模型',
                 value: selectedModel,
                 items: {for (final id in modelIds) id: _asrModelLabel(id)},
                 onChanged: _probingAsrModel || _savingAsr
@@ -870,13 +874,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             Expanded(child: _asrDeviceSelect()),
           ],
         ),
-        if (executionDetail.isNotEmpty) ...[
-          const SizedBox(height: T.s4),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text('当前运行：$executionDetail', style: T.tCaption),
-          ),
-        ],
         const SizedBox(height: T.s4),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
@@ -890,6 +887,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           requiredDownloadBytes:
               (runtime?.installed == true ? 0 : runtime?.size ?? 0) +
               (model.installed ? 0 : model.size),
+          modelDownloadDetail: downloadsManagedCopy
+              ? '下载应用管理副本 · ${_formatBytes(model.size)}'
+              : null,
         ),
       ],
     );
@@ -899,7 +899,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     AsrComponentOption? runtime,
     AsrStorageOption storage,
   ) {
-    final executionDetail = _asrExecutionDetail();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -916,13 +915,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ),
         const SizedBox(height: T.s8),
         SizedBox(width: 220, child: _asrDeviceSelect()),
-        if (executionDetail.isNotEmpty) ...[
-          const SizedBox(height: T.s4),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('当前运行：$executionDetail', style: T.tCaption),
-          ),
-        ],
         const SizedBox(height: T.s8),
         _AsrDownloadPlan(
           runtimeReady: runtime?.installed == true,
@@ -1070,6 +1062,43 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               : '应用管理资源'
         : '';
     return [device, compute, if (source.isNotEmpty) source].join(' · ');
+  }
+
+  _LocalWhisperCurrent _localWhisperCurrent(AsrProviderOption? provider) {
+    final snapshot = _snapshot;
+    final active = snapshot?.asrActiveExecution;
+    final hasProvider = provider != null && provider.name.isNotEmpty;
+    final activeMatches =
+        hasProvider &&
+        active != null &&
+        active.provider == provider.name &&
+        active.kind == 'local_worker';
+    final local = _stringMap(provider?.raw['local']);
+    final modelId = activeMatches && active.model.isNotEmpty
+        ? active.model
+        : provider?.model ?? '';
+    final modelSource = activeMatches && active.modelSource.isNotEmpty
+        ? active.modelSource
+        : '${local['model_source'] ?? ''}'.trim();
+    final modelPath = activeMatches && active.modelPath.isNotEmpty
+        ? active.modelPath
+        : '${local['model_path'] ?? ''}'.trim();
+    final ready = activeMatches ? active.canRun : provider?.canRun ?? false;
+    return _LocalWhisperCurrent(
+      configured: hasProvider && modelId.isNotEmpty,
+      isDefault: hasProvider && provider.name == snapshot?.asrProviderName,
+      ready: ready,
+      modelId: modelId,
+      modelSource: modelSource,
+      modelPath: modelPath,
+      executionDetail: activeMatches && active.canRun
+          ? _asrExecutionDetail()
+          : '',
+    );
+  }
+
+  Widget _localWhisperCurrentSummary(AsrProviderOption? provider) {
+    return _LocalWhisperCurrentSummary(current: _localWhisperCurrent(provider));
   }
 
   void _setAsrModelSource(String source) {
@@ -1390,11 +1419,14 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   }) async {
     final device = _device.text.trim().isEmpty ? 'auto' : _device.text.trim();
     final activeExecution = snapshot.asrActiveExecution;
-    final computeType =
+    final accelerator = _asrAcceleratorTarget(snapshot, device);
+    final resolvesToCuda =
         device == 'cuda' ||
-            (device == 'auto' && activeExecution.resolvedDevice == 'cuda')
-        ? _localComputeType
-        : 'auto';
+        (device == 'auto' &&
+            (activeExecution.resolvedDevice == 'cuda' ||
+                accelerator.managedId != null ||
+                accelerator.registrationId != null));
+    final computeType = resolvesToCuda ? _localComputeType : 'auto';
     String? managedModelId;
     String? modelRegistrationId;
     if (_asrModelSource == 'external') {
@@ -1418,64 +1450,64 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       managedModelId = _managedModelId;
     }
 
-    String? managedAcceleratorId;
-    String? acceleratorRegistrationId;
-    if (device == 'cuda') {
-      bool managedReady(AsrComponentOption item) {
-        if (!item.installed) return false;
-        final hardware = _stringMap(item.raw['hardware_probe']);
-        final cuda = _stringMap(hardware['cuda']);
-        return hardware['ok'] == true && cuda['available'] == true;
-      }
-
-      if (activeExecution.acceleratorSource == 'external') {
-        for (final item in snapshot.asrRegisteredAccelerators) {
-          if (item.id == activeExecution.acceleratorRegistrationId &&
-              item.ready &&
-              item.cudaAvailable) {
-            acceleratorRegistrationId = item.id;
-            break;
-          }
-        }
-      } else if (activeExecution.acceleratorSource == 'managed') {
-        for (final item in snapshot.asrAccelerators) {
-          if (item.id == activeExecution.acceleratorId && managedReady(item)) {
-            managedAcceleratorId = item.id;
-            break;
-          }
-        }
-      }
-      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
-        for (final item in snapshot.asrRegisteredAccelerators) {
-          if (item.ready && item.cudaAvailable) {
-            acceleratorRegistrationId = item.id;
-            break;
-          }
-        }
-      }
-      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
-        for (final item in snapshot.asrAccelerators) {
-          if (managedReady(item)) {
-            managedAcceleratorId = item.id;
-            break;
-          }
-        }
-      }
-      if (acceleratorRegistrationId == null && managedAcceleratorId == null) {
-        throw StateError('NVIDIA 加速资源尚未完成验证。');
-      }
+    if (device == 'cuda' &&
+        accelerator.registrationId == null &&
+        accelerator.managedId == null) {
+      throw StateError('NVIDIA 加速资源尚未完成验证。');
     }
 
     await _client.activateAsrResources(
       provider: providerName,
       managedModelId: managedModelId,
       modelRegistrationId: modelRegistrationId,
-      managedAcceleratorId: managedAcceleratorId,
-      acceleratorRegistrationId: acceleratorRegistrationId,
+      managedAcceleratorId: accelerator.managedId,
+      acceleratorRegistrationId: accelerator.registrationId,
       device: device,
       computeType: computeType,
       expectedVersion: snapshot.pipelineFileVersion,
     );
+  }
+
+  ({String? managedId, String? registrationId}) _asrAcceleratorTarget(
+    DesktopSnapshot snapshot,
+    String device,
+  ) {
+    if (device == 'cpu') return (managedId: null, registrationId: null);
+    final active = snapshot.asrActiveExecution;
+
+    bool managedReady(AsrComponentOption item) {
+      if (!item.installed) return false;
+      final hardware = _stringMap(item.raw['hardware_probe']);
+      final cuda = _stringMap(hardware['cuda']);
+      return hardware['ok'] == true && cuda['available'] == true;
+    }
+
+    if (active.acceleratorSource == 'external') {
+      for (final item in snapshot.asrRegisteredAccelerators) {
+        if (item.id == active.acceleratorRegistrationId &&
+            item.ready &&
+            item.cudaAvailable) {
+          return (managedId: null, registrationId: item.id);
+        }
+      }
+    } else if (active.acceleratorSource == 'managed') {
+      for (final item in snapshot.asrAccelerators) {
+        if (item.id == active.acceleratorId && managedReady(item)) {
+          return (managedId: item.id, registrationId: null);
+        }
+      }
+    }
+    for (final item in snapshot.asrRegisteredAccelerators) {
+      if (item.ready && item.cudaAvailable) {
+        return (managedId: null, registrationId: item.id);
+      }
+    }
+    for (final item in snapshot.asrAccelerators) {
+      if (managedReady(item)) {
+        return (managedId: item.id, registrationId: null);
+      }
+    }
+    return (managedId: null, registrationId: null);
   }
 
   AsrProviderOption? _selectedAsrOption() {
@@ -1491,7 +1523,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ? 'small'
         : _managedModelId.trim();
     final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
-    final intendedDraft = _asrDraft(providerName);
     _asrOperationDismissTimer?.cancel();
     _asrOperationDismissTimer = null;
     setState(() {
@@ -1503,22 +1534,31 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final latest = await _client.desktopSnapshot();
       if (!mounted) return;
       setState(() => _snapshot = latest);
-      await _client.asrProviderSave(
-        providerDraft: intendedDraft,
-        expectedVersion: latest.pipelineFileVersion,
+      final device = _device.text.trim().isEmpty ? 'auto' : _device.text.trim();
+      final accelerator = _asrAcceleratorTarget(latest, device);
+      if (device == 'cuda' &&
+          accelerator.registrationId == null &&
+          accelerator.managedId == null) {
+        throw StateError('NVIDIA 加速资源尚未完成验证。');
+      }
+      final resolvesToCuda =
+          device == 'cuda' ||
+          (device == 'auto' &&
+              (accelerator.managedId != null ||
+                  accelerator.registrationId != null));
+      final operation = await _client.asrSetupStart(
+        modelId,
+        activateOnComplete: true,
+        provider: providerName,
+        managedAcceleratorId: accelerator.managedId,
+        acceleratorRegistrationId: accelerator.registrationId,
+        device: device,
+        computeType: resolvesToCuda ? _localComputeType : 'auto',
       );
-      final operation = await _client.asrSetupStart(modelId);
       if (!mounted) return;
       setState(() {
         _activeAsrOperation = operation;
-        _asrDraftDirty = false;
       });
-      await widget.bridge.setAsrDefault(
-        '${_asrLabelForDraft(intendedDraft)} · ${_asrModelLabel(modelId)}',
-        configured: false,
-      );
-      await widget.bridge.refreshServiceSnapshot();
-      if (!mounted) return;
       _startAsrOperationPolling();
     } on Object catch (error) {
       if (!mounted) return;
@@ -1566,7 +1606,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       if (!operation.active) {
         _asrOperationPoll?.cancel();
         _asrOperationPoll = null;
-        await _loadConfig(preserveAsrDraft: true);
+        final activatedSetup =
+            operation.kind == 'setup' && operation.state == 'completed';
+        await _loadConfig(preserveAsrDraft: !activatedSetup);
         if (!mounted) return;
         await widget.bridge.refreshServiceSnapshot();
         if (!mounted) return;
@@ -1639,6 +1681,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     if (operation == null || operation.active) return;
     setState(() => _activeAsrOperation = null);
     if (operation.kind == 'setup') {
+      _managedModelId = operation.itemId;
+      _model.text = operation.itemId;
       await _startManagedAsrSetup();
       return;
     }
@@ -2931,6 +2975,123 @@ class _AsrOverview extends StatelessWidget {
   }
 }
 
+class _LocalWhisperCurrent {
+  const _LocalWhisperCurrent({
+    required this.configured,
+    required this.isDefault,
+    required this.ready,
+    required this.modelId,
+    required this.modelSource,
+    required this.modelPath,
+    required this.executionDetail,
+  });
+
+  final bool configured;
+  final bool isDefault;
+  final bool ready;
+  final String modelId;
+  final String modelSource;
+  final String modelPath;
+  final String executionDetail;
+}
+
+class _LocalWhisperCurrentSummary extends StatelessWidget {
+  const _LocalWhisperCurrentSummary({required this.current});
+
+  final _LocalWhisperCurrent current;
+
+  @override
+  Widget build(BuildContext context) {
+    final (status, color) = !current.configured
+        ? ('尚未配置', T.muted)
+        : current.isDefault && current.ready
+        ? ('正在使用', T.ok)
+        : current.isDefault
+        ? ('需要处理', T.warn)
+        : ('已配置', T.accentStrong);
+    final source = switch (current.modelSource) {
+      'external' => '本地已有模型',
+      'managed' => '应用管理模型',
+      _ => '',
+    };
+    final details = [
+      if (source.isNotEmpty) source,
+      if (current.executionDetail.isNotEmpty) current.executionDetail,
+    ].join(' · ');
+    return Container(
+      key: const ValueKey('asr-current-configuration'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: T.skySoft.withValues(alpha: 0.42),
+        border: Border.all(color: T.line),
+        borderRadius: BorderRadius.circular(T.rSm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                current.ready
+                    ? Icons.check_circle_outline_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                size: 20,
+                color: color,
+              ),
+              const SizedBox(width: T.s8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('当前使用', style: T.tCaption),
+                    const SizedBox(height: 2),
+                    Text(
+                      current.modelId.isEmpty
+                          ? '本机 Whisper'
+                          : _asrModelLabel(current.modelId),
+                      style: T.tBody.copyWith(fontWeight: T.wBold),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              _AsrStatusChip(label: status, color: color),
+            ],
+          ),
+          if (details.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            Text(details, style: T.tCaption),
+          ],
+          if (current.modelSource == 'external' &&
+              current.modelPath.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            Row(
+              children: [
+                const Icon(Icons.folder_outlined, size: 16, color: T.muted),
+                const SizedBox(width: T.s8),
+                Expanded(
+                  child: Tooltip(
+                    message: current.modelPath,
+                    child: Text(
+                      current.modelPath,
+                      style: T.tCaption,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _AsrSourceToggle extends StatelessWidget {
   const _AsrSourceToggle({required this.selected, required this.onChanged});
 
@@ -2950,12 +3111,14 @@ class _AsrSourceToggle extends StatelessWidget {
       child: Row(
         children: [
           _AsrSourceChoice(
-            label: '应用下载',
+            key: const ValueKey('asr-source-managed'),
+            label: '应用管理',
             selected: selected == 'managed',
             onTap: onChanged == null ? null : () => onChanged!('managed'),
           ),
           _AsrSourceChoice(
-            label: '已有模型',
+            key: const ValueKey('asr-source-external'),
+            label: '本地已有',
             selected: selected == 'external',
             onTap: onChanged == null ? null : () => onChanged!('external'),
           ),
@@ -2967,6 +3130,7 @@ class _AsrSourceToggle extends StatelessWidget {
 
 class _AsrSourceChoice extends StatefulWidget {
   const _AsrSourceChoice({
+    super.key,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -3143,6 +3307,7 @@ class _AsrDownloadPlan extends StatelessWidget {
     required this.requiredDownloadBytes,
     this.onChangeStorage,
     this.externalModel = false,
+    this.modelDownloadDetail,
   });
 
   final bool runtimeReady;
@@ -3155,6 +3320,7 @@ class _AsrDownloadPlan extends StatelessWidget {
   final int requiredDownloadBytes;
   final VoidCallback? onChangeStorage;
   final bool externalModel;
+  final String? modelDownloadDetail;
 
   @override
   Widget build(BuildContext context) {
@@ -3196,7 +3362,7 @@ class _AsrDownloadPlan extends StatelessWidget {
               label: modelLabel,
               detail: externalModel
                   ? '选择模型并完成兼容性测试'
-                  : '需下载 ${_formatBytes(modelSize)}',
+                  : modelDownloadDetail ?? '需下载 ${_formatBytes(modelSize)}',
             ),
           ],
           if (requiredDownloadBytes > 0) ...[
@@ -3691,13 +3857,7 @@ void _drawSparkle(Canvas canvas, Offset center, double radius, Color color) {
 }
 
 String _asrModelLabel(String modelId) {
-  if (modelId.startsWith('custom-')) return '自定义 Whisper';
-  return switch (modelId) {
-    'small' => 'Whisper Small',
-    'medium' => 'Whisper Medium',
-    'large-v3' => 'Whisper Large v3',
-    _ => modelId,
-  };
+  return whisperModelLabel(modelId);
 }
 
 String _asrExternalModelLabel(String modelId) {
