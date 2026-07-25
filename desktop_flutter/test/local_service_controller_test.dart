@@ -25,6 +25,21 @@ void main() {
     },
   );
 
+  test('controller forwards bounded shutdown timeouts', () async {
+    final handle = _FakeHandle.ready();
+    final controller = LocalServiceController(
+      sessionFactory: () async => handle,
+    );
+    const rpcTimeout = Duration(milliseconds: 120);
+    const exitTimeout = Duration(milliseconds: 240);
+
+    await controller.start();
+    await controller.shutdown(rpcTimeout: rpcTimeout, exitTimeout: exitTimeout);
+
+    expect(handle.shutdownRpcTimeout, rpcTimeout);
+    expect(handle.shutdownExitTimeout, exitTimeout);
+  });
+
   test('controller reports degraded health', () async {
     final controller = LocalServiceController(
       sessionFactory: () async => _FakeHandle.degraded(),
@@ -254,6 +269,8 @@ class _FakeHandle implements LocalServiceHandle {
   final _exit = Completer<int>();
   final _FakeTransport transport;
   bool shutdownCalled = false;
+  Duration? shutdownRpcTimeout;
+  Duration? shutdownExitTimeout;
 
   @override
   late final AppServiceClient client;
@@ -267,6 +284,8 @@ class _FakeHandle implements LocalServiceHandle {
     Duration exitTimeout = const Duration(seconds: 2),
   }) async {
     shutdownCalled = true;
+    shutdownRpcTimeout = rpcTimeout;
+    shutdownExitTimeout = exitTimeout;
   }
 
   void completeExit(int code) {

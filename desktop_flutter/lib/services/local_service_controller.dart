@@ -194,7 +194,10 @@ class LocalServiceController extends ChangeNotifier {
     }
   }
 
-  Future<void> shutdown() async {
+  Future<void> shutdown({
+    Duration rpcTimeout = const Duration(seconds: 2),
+    Duration exitTimeout = const Duration(seconds: 2),
+  }) async {
     final session = _detachCurrentSession();
     _starting = null;
     if (session == null) {
@@ -206,7 +209,7 @@ class LocalServiceController extends ChangeNotifier {
       return;
     }
     try {
-      await session.shutdown();
+      await session.shutdown(rpcTimeout: rpcTimeout, exitTimeout: exitTimeout);
     } on Object catch (error) {
       _set(
         LocalServiceSnapshot(

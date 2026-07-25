@@ -266,6 +266,11 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
+  static const _exitRpcTimeout = Duration(milliseconds: 500);
+  static const _exitProcessTimeout = Duration(milliseconds: 500);
+  static const _exitPluginTimeout = Duration(milliseconds: 750);
+  static const _toolWindowInventoryTimeout = Duration(milliseconds: 750);
+
   late final LocalServiceController _service;
   late final bool _ownsService;
   late final MainWindowController _controller;
@@ -514,9 +519,9 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     if (_exitRequested || _exitRequestInProgress) return;
     _exitRequestInProgress = true;
     try {
-      await _focusMainWindow();
       final shouldCancelActiveWork = _hasActiveWork;
       if (shouldCancelActiveWork) {
+        await _focusMainWindow();
         final confirmed = await _confirmCancelAndExit();
         if (confirmed != true) return;
       }
@@ -525,20 +530,43 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       if (shouldCancelActiveWork && !await _cancelActiveTasksForExit()) return;
       _exitRequested = true;
       try {
-        await windowManager.setPreventClose(false);
+        await windowManager.hide().timeout(_exitPluginTimeout);
+      } on Object {
+        // Continue with destruction if the native hide acknowledgement is late.
+      }
+      try {
+        await windowManager.setPreventClose(false).timeout(_exitPluginTimeout);
       } on Object {
         // destroy() below bypasses prevent-close if this best-effort call fails.
       }
       final trayService = _trayService;
-      if (trayService != null) await _disposeTrayService(trayService);
-      await _service.shutdown();
+      await Future.wait([
+        _bestEffortExitCleanup(
+          _service.shutdown(
+            rpcTimeout: _exitRpcTimeout,
+            exitTimeout: _exitProcessTimeout,
+          ),
+        ),
+        if (trayService != null)
+          _bestEffortExitCleanup(
+            _disposeTrayService(trayService).timeout(_exitPluginTimeout),
+          ),
+      ]);
       try {
-        await windowManager.destroy();
+        await windowManager.destroy().timeout(_exitPluginTimeout);
       } on Object {
         exit(0);
       }
     } finally {
       if (!_exitRequested) _exitRequestInProgress = false;
+    }
+  }
+
+  Future<void> _bestEffortExitCleanup(Future<void> cleanup) async {
+    try {
+      await cleanup;
+    } on Object {
+      // The process exit below is the final cleanup boundary.
     }
   }
 
@@ -618,6 +646,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<bool> _closeToolWindows() async {
+    if (_toolWindows.isEmpty) return true;
+    await _pruneClosedToolWindows();
     final entries = _toolWindows.entries.toList(growable: false);
     for (final entry in entries) {
       final controller = entry.value;
@@ -669,6 +699,20 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       _toolWindows.remove(entry.key);
     }
     return true;
+  }
+
+  Future<void> _pruneClosedToolWindows() async {
+    try {
+      final windows = await WindowController.getAll().timeout(
+        _toolWindowInventoryTimeout,
+      );
+      final liveWindowIds = windows.map((window) => window.windowId).toSet();
+      _toolWindows.removeWhere(
+        (_, controller) => !liveWindowIds.contains(controller.windowId),
+      );
+    } on Object {
+      // Fall back to the per-window close checks when inventory is unavailable.
+    }
   }
 
   Future<bool> _toolWindowStillExists(WindowController controller) async {

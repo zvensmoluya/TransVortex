@@ -127,6 +127,32 @@ void main() {
   });
 
   test(
+    'LocalServiceSession kills a service that misses the exit budget',
+    () async {
+      final process = _FakeProcess();
+      final transport = JsonRpcTransport(
+        stdout: process.stdout,
+        stdin: process.stdin,
+        stderr: process.stderr,
+        exitCode: process.exitCode,
+        defaultTimeout: const Duration(seconds: 1),
+      );
+      final session = LocalServiceSession(
+        process: process,
+        transport: transport,
+        client: AppServiceClient(transport),
+      );
+
+      await session.shutdown(
+        rpcTimeout: const Duration(milliseconds: 10),
+        exitTimeout: const Duration(milliseconds: 10),
+      );
+
+      expect(process.killed, isTrue);
+    },
+  );
+
+  test(
     'AppServiceClient parses service info, health, and snapshot readiness',
     () async {
       final client = AppServiceClient(
@@ -2276,6 +2302,7 @@ DesktopAppPaths _desktopPaths(Directory appDataRoot) {
 
 class _FakeProcess implements Process {
   final _exit = Completer<int>();
+  bool killed = false;
 
   @override
   Future<int> get exitCode => _exit.future;
@@ -2294,6 +2321,7 @@ class _FakeProcess implements Process {
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    killed = true;
     if (!_exit.isCompleted) {
       _exit.complete(0);
     }
