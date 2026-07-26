@@ -79,17 +79,32 @@ class JobLine extends StatelessWidget {
               const Text('识别，交给', style: T.tBody),
             ] else
               const Text('源语，直接交给', style: T.tBody),
-            _Word(
-              label: translationLabel,
-              fullLabel: view.translationConfigured
-                  ? (view.translationDetail.isNotEmpty
-                        ? view.translationDetail
-                        : view.translationLabel)
-                  : null,
-              warn: !view.translationConfigured,
-              onPick: view.translationConfigured
-                  ? onPickTranslation
-                  : onConfigureTranslation,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _Word(
+                  label: translationLabel,
+                  fullLabel: view.translationConfigured
+                      ? (view.translationDetail.isNotEmpty
+                            ? view.translationDetail
+                            : view.translationLabel)
+                      : null,
+                  warn: !view.translationConfigured,
+                  onPick: view.translationConfigured
+                      ? onPickTranslation
+                      : onConfigureTranslation,
+                ),
+                if (view.reasoningConfigurable) ...[
+                  const SizedBox(width: 2),
+                  _Word(
+                    key: const ValueKey('job-reasoning-effort'),
+                    label: view.reasoningSupport.compactLabel,
+                    leadingIcon: Icons.bolt_rounded,
+                    tooltip: '本次思考程度：${view.reasoningDetail}',
+                    onPick: onPickReasoning,
+                  ),
+                ],
+              ],
             ),
             const Text('翻译成', style: T.tBody),
             LanguagePickerAnchor(
@@ -105,15 +120,6 @@ class JobLine extends StatelessWidget {
                 onPick: openMenu,
               ),
             ),
-            if (view.reasoningConfigurable) ...[
-              const Text('，思考程度', style: T.tBody),
-              _Word(
-                key: const ValueKey('job-reasoning-effort'),
-                label: _compactReasoningLabel(view.reasoningDetail),
-                tooltip: '思考程度：${view.reasoningDetail}',
-                onPick: onPickReasoning,
-              ),
-            ],
           ],
         ),
         const SizedBox(height: T.s8),
@@ -146,12 +152,14 @@ class _Word extends StatefulWidget {
     required this.onPick,
     this.fullLabel,
     this.tooltip,
+    this.leadingIcon,
     this.warn = false,
   });
 
   final String label;
   final String? fullLabel;
   final String? tooltip;
+  final IconData? leadingIcon;
   final VoidCallback onPick;
   final bool warn;
 
@@ -207,20 +215,31 @@ class _WordState extends State<_Word> with SingleTickerProviderStateMixin {
             padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 190),
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    TextSpan(text: widget.label),
-                    if (widget.warn) const TextSpan(text: ' ●'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget.leadingIcon != null) ...[
+                    Icon(widget.leadingIcon, size: 14, color: color),
+                    const SizedBox(width: 1),
                   ],
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: T.wMedium,
-                    color: color,
+                  Flexible(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: widget.label),
+                          if (widget.warn) const TextSpan(text: ' ●'),
+                        ],
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: T.wMedium,
+                          color: color,
+                        ),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                ],
               ),
             ),
           ),
@@ -232,10 +251,6 @@ class _WordState extends State<_Word> with SingleTickerProviderStateMixin {
         ? content
         : DesignedTooltip(message: fullLabel, child: content);
   }
-}
-
-String _compactReasoningLabel(String label) {
-  return label.replaceFirst('当前：', '');
 }
 
 String _compactEngineLabel(String label) {

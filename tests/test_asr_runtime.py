@@ -28,6 +28,7 @@ from transvortex.app.asr_runtime import (
     resolve_whisper_runtime,
     save_asr_runtime_state,
     save_external_environment,
+    set_registered_model_label,
 )
 from transvortex.app.media_inspect import inspect_media_source
 from transvortex.app.models import (
@@ -1101,11 +1102,17 @@ def test_managed_runtime_accepts_loadable_custom_ctranslate2_model(
         },
     )
 
-    result = probe_external_model(root_dir=tmp_path, model_path=model_root, device="cpu")
+    result = probe_external_model(
+        root_dir=tmp_path,
+        model_path=model_root,
+        device="cpu",
+        user_label="日语访谈模型",
+    )
 
     assert result["ok"] is True
     assert result["model"]["model_id"].startswith("custom-")
     assert result["model"]["display_name"] == "Custom faster-whisper model"
+    assert result["model"]["user_label"] == "日语访谈模型"
     assert result["model"]["catalog_config_match"] is False
     provider = AsrProviderConfig(
         name="custom-whisper",
@@ -1120,6 +1127,20 @@ def test_managed_runtime_accepts_loadable_custom_ctranslate2_model(
         ),
     )
     assert asr_provider_readiness(provider, root_dir=tmp_path)["can_run"] is True
+
+    renamed = set_registered_model_label(
+        root_dir=tmp_path,
+        registration_id=result["model"]["id"],
+        user_label="访谈模型新版",
+    )
+    assert renamed["model"]["user_label"] == "访谈模型新版"
+
+    reprobed = probe_external_model(
+        root_dir=tmp_path,
+        model_path=model_root,
+        device="cpu",
+    )
+    assert reprobed["model"]["user_label"] == "访谈模型新版"
 
 
 def test_media_inspection_only_requires_asr_when_video_has_no_selected_subtitle(

@@ -40,7 +40,7 @@ Agent 可以使用自己的本机工具、下载能力和环境知识完成范�
 - `managed`：调用计划广告的 `setup-apply --resource model --item-id <model-id>`；
 - `external`：Agent 自行下载、转换或定位兼容的 CTranslate2 Whisper 模型，然后调用 `model-probe` 或 `model-register`。
 
-`model-register` 会由固定 runtime 实际加载模型并运行最小转录。成功结果中的 registration ID 再交给 `resources-activate --model-registration-id <id>`。TransVortex 只登记并使用外部目录，不接管其文件生命周期。
+`model-register` 会由固定 runtime 实际加载模型并运行最小转录。Agent 可附加 `--label <display-name>` 写入面向用户的显示名称；它只修改登记元数据，不重命名或移动模型目录。成功结果中的 registration ID 再交给 `resources-activate --model-registration-id <id>`。TransVortex 只登记并使用外部目录，不接管其文件生命周期。
 
 ### GPU 加速
 

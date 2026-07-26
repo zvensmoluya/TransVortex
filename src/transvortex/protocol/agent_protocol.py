@@ -136,7 +136,7 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "network_access": False,
                 "ownership": "external",
                 "writes": ["resource registration"],
-                "command": "transvortex --root <config-root> asr model-register --model-path <model-path> --providers-file <providers-file> --json",
+                "command": "transvortex --root <config-root> asr model-register --model-path <model-path> [--label <display-name>] --providers-file <providers-file> --json",
             },
             "asr accelerator-probe": {
                 "long_running": False,

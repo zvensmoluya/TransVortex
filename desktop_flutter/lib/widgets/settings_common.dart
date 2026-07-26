@@ -1212,12 +1212,16 @@ class SegmentButton extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.width = 150,
+    this.statusLabel,
+    this.statusColor = T.ok,
   });
   final String label;
   final String detail;
   final bool selected;
   final VoidCallback? onTap;
   final double width;
+  final String? statusLabel;
+  final Color statusColor;
 
   @override
   State<SegmentButton> createState() => _SegmentButtonState();
@@ -1255,12 +1259,54 @@ class _SegmentButtonState extends State<SegmentButton> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                widget.label,
-                style: T.tBody.copyWith(
-                  color: widget.onTap == null ? T.muted : T.ink,
-                  fontWeight: widget.selected ? T.wBold : T.wRegular,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.tBody.copyWith(
+                        color: widget.onTap == null ? T.muted : T.ink,
+                        fontWeight: widget.selected ? T.wBold : T.wRegular,
+                      ),
+                    ),
+                  ),
+                  if (widget.statusLabel case final status?) ...[
+                    const SizedBox(width: T.s4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: T.s4,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: widget.statusColor.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(T.rSm),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: widget.statusColor,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            status,
+                            style: T.tCaption.copyWith(
+                              color: widget.statusColor,
+                              fontWeight: T.wBold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 2),
               Text(widget.detail, style: T.tCaption),

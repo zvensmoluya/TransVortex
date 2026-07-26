@@ -1482,15 +1482,45 @@ class MainWindowController extends ChangeNotifier {
     );
     final label = option?.displayLabel ?? providerName;
     final rawModel = model ?? option?.model ?? '';
-    final modelText = whisperModelLabel(rawModel, includeEngine: false);
+    var modelText = whisperModelLabel(rawModel, includeEngine: false);
     if (option?.kind == 'local_worker' && modelText.isNotEmpty) {
       final local = _asStringMap(option?.raw['local']);
-      final source = '${local['model_source'] ?? ''}' == 'external'
-          ? '本地已有'
-          : '应用管理';
+      final external = '${local['model_source'] ?? ''}' == 'external';
+      if (external) {
+        final active = snapshot?.asrActiveExecution;
+        final activeUserLabel =
+            active != null &&
+                active.provider == option?.name &&
+                active.model == rawModel
+            ? active.modelUserLabel.trim()
+            : '';
+        if (activeUserLabel.isNotEmpty) modelText = activeUserLabel;
+        final modelPath = '${local['model_path'] ?? ''}'.trim();
+        for (final registration
+            in snapshot?.asrRegisteredModels ??
+                const <AsrRegisteredResourceOption>[]) {
+          if (registration.resourceId != rawModel ||
+              !_sameWindowsPath(registration.path, modelPath)) {
+            continue;
+          }
+          final userLabel = registration.userLabel.trim();
+          if (activeUserLabel.isEmpty && userLabel.isNotEmpty) {
+            modelText = userLabel;
+          }
+          break;
+        }
+      }
+      final source = external ? '本地已有' : '应用管理';
       return '$label · $modelText（$source）';
     }
     return modelText.isEmpty ? label : '$label · $modelText';
+  }
+
+  static bool _sameWindowsPath(String left, String right) {
+    if (left.trim().isEmpty || right.trim().isEmpty) return false;
+    String normalize(String value) =>
+        value.trim().replaceAll('/', r'\').toLowerCase();
+    return normalize(left) == normalize(right);
   }
 
   static bool _providerHasKey(DesktopSnapshot? snapshot, String providerName) {

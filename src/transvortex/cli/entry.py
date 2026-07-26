@@ -980,6 +980,12 @@ def _build_parser() -> argparse.ArgumentParser:
             help=("Register" if save_result else "Probe") + " an Agent- or user-prepared Whisper model",
         )
         command.add_argument("--model-path", required=True)
+        if save_result:
+            command.add_argument(
+                "--label",
+                default=None,
+                help="Optional user-facing name for a registered external model",
+            )
         command.add_argument("--providers-file", dest="setup_providers_file", default=None)
         command.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
         command.add_argument("--compute-type", default="auto")
@@ -1163,6 +1169,7 @@ def main() -> None:
                 accelerator_root=Path(args.accelerator_root) if args.accelerator_root else None,
                 timeout_seconds=args.timeout_seconds,
                 save=asr_command == "model-register",
+                user_label=args.label if asr_command == "model-register" else None,
             )
             payload.update(
                 {

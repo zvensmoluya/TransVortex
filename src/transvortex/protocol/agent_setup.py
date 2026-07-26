@@ -1322,6 +1322,8 @@ def _snapshot_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "id": str(raw.get("id") or ""),
                 "model_id": str(raw.get("model_id") or ""),
                 "model_path": str(raw.get("model_path") or ""),
+                "display_name": str(raw.get("display_name") or ""),
+                "user_label": str(raw.get("user_label") or ""),
                 "signature": str(raw.get("signature") or ""),
                 "updated_at": str(raw.get("updated_at") or ""),
                 "probe": {
@@ -2049,7 +2051,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             "plan": "transvortex --root <config-root> asr setup-plan --providers-file <providers-file> --json",
             "verify": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
             "apply_managed": "transvortex --root <config-root> asr setup-apply --resource <resource> --item-id <item-id> --providers-file <providers-file> --json",
-            "register_model": "transvortex --root <config-root> asr model-register --model-path <model-path> --providers-file <providers-file> --json",
+            "register_model": "transvortex --root <config-root> asr model-register --model-path <model-path> [--label <display-name>] --providers-file <providers-file> --json",
             "register_accelerator": "transvortex --root <config-root> asr accelerator-register --accelerator-root <accelerator-root> --providers-file <providers-file> --json",
             "activate": "transvortex --root <config-root> asr resources-activate <resource-selection-or-device-settings> --providers-file <providers-file> --json",
             "protocol": "transvortex --root <config-root> agent-info --json",

@@ -285,6 +285,8 @@ def test_external_resource_cli_registers_and_activates(tmp_path: Path, monkeypat
             "model-register",
             "--model-path",
             str(tmp_path / "model"),
+            "--label",
+            "访谈模型",
             "--providers-file",
             str(providers_file),
             "--json",
@@ -297,6 +299,7 @@ def test_external_resource_cli_registers_and_activates(tmp_path: Path, monkeypat
     assert model_payload["kind"] == "model_register"
     assert model_payload["ownership"] == "external"
     assert captured["model"]["save"] is True
+    assert captured["model"]["user_label"] == "访谈模型"
 
     def activate(**kwargs):  # noqa: ANN003
         captured["activation"] = kwargs

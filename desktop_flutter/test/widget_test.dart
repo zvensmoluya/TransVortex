@@ -1667,7 +1667,7 @@ void main() {
 
     await tester.tap(find.text('real-model'));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('思考程度'), findsOneWidget);
+    expect(find.text('本次思考程度'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('translation-reasoning-effort')),
       findsOneWidget,
@@ -1738,8 +1738,14 @@ void main() {
 
     expect(find.byKey(const ValueKey('job-reasoning-effort')), findsOneWidget);
     expect(find.text('高'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('job-reasoning-effort')));
+    expect(find.byIcon(Icons.bolt_rounded), findsOneWidget);
+    expect(find.text('，思考程度'), findsNothing);
+    await tester.tap(find.byIcon(Icons.bolt_rounded));
     await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      find.byKey(const ValueKey('reasoning-effort-picker')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('reasoning-mode-manual')), findsOneWidget);
     expect(find.text('高'), findsWidgets);
     await tester.tapAt(const Offset(8, 120));
@@ -4266,6 +4272,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
+    var modelUserLabel = '日语访谈模型';
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -4273,7 +4280,7 @@ void main() {
           localModelSource: 'external',
           localModelPath: r'D:\Models\faster-whisper-large-v3',
           managedModelSize: 'large-v3',
-          asrLocal: const {
+          asrLocal: {
             'paths': {
               'app_data_root': r'C:\Users\tester\AppData\Local\TransVortex',
             },
@@ -4299,6 +4306,8 @@ void main() {
                 'id': 'model-large-registration',
                 'model_id': 'large-v3',
                 'model_path': r'D:\Models\faster-whisper-large-v3',
+                'display_name': 'Whisper Large v3',
+                'user_label': modelUserLabel,
                 'signature': 'fixture-signature',
                 'probe': {
                   'ok': true,
@@ -4313,6 +4322,10 @@ void main() {
             ],
           },
         ).raw;
+      }
+      if (method == 'asr.model.label.set') {
+        modelUserLabel = '${params['user_label'] ?? ''}';
+        return {'ok': true};
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -4329,16 +4342,33 @@ void main() {
 
     expect(find.text('应用管理'), findsOneWidget);
     expect(find.text('本地已有'), findsOneWidget);
-    expect(find.text('当前使用'), findsOneWidget);
-    expect(find.text('正在使用'), findsOneWidget);
-    expect(find.text('更换模型'), findsOneWidget);
-    expect(find.text('本地已有模型'), findsOneWidget);
+    expect(find.text('当前使用'), findsNothing);
+    expect(find.text('当前默认'), findsOneWidget);
+    expect(find.text('本机识别方案'), findsOneWidget);
+    expect(find.text('已应用且可用'), findsOneWidget);
+    expect(find.text('日语访谈模型'), findsWidgets);
+    expect(
+      find.textContaining(r'D:\Models\faster-whisper-large-v3'),
+      findsNothing,
+    );
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
     expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
     expect(find.text('已启用'), findsNothing);
     expect(find.text('验证并启用'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('asr-model-rename')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('asr-model-user-label-input')),
+      '采访专用模型',
+    );
+    await tester.tap(find.byKey(const ValueKey('asr-model-user-label-save')));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(modelUserLabel, '采访专用模型');
+    expect(find.text('采访专用模型'), findsWidgets);
 
     await tester.tap(find.text('应用管理'));
     await tester.pump();
@@ -4482,9 +4512,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('NVIDIA（外部资源，已验证）').last);
       await tester.pumpAndSettle();
-      expect(find.text('应用设置'), findsOneWidget);
+      expect(find.text('应用更改'), findsOneWidget);
 
-      await tester.tap(find.text('应用设置'));
+      await tester.tap(find.text('应用更改'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
@@ -4496,7 +4526,10 @@ void main() {
       expect(activatedResources?['device'], 'cuda');
       expect(activatedResources?['compute_type'], 'float16');
       expect(find.text('NVIDIA（外部资源，已验证）'), findsOneWidget);
-      expect(find.text('本地已有模型 · NVIDIA · float16 · 外部资源已验证'), findsOneWidget);
+      expect(
+        find.text('Whisper Large v3 · 本地已有 · NVIDIA · float16'),
+        findsOneWidget,
+      );
       expectNoFlutterException();
     },
   );
@@ -4626,7 +4659,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining(customPath), findsWidgets);
+    expect(find.textContaining(customPath), findsNothing);
     expect(find.text('自定义 Whisper · 等待兼容性测试'), findsOneWidget);
 
     await tester.tap(find.text('验证并启用'));
@@ -4835,12 +4868,15 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('asr-model-open-location')),
+      findsOneWidget,
+    );
     await tester.tap(find.text('应用管理'));
     await tester.pump();
-    expect(find.text('应用设置'), findsOneWidget);
+    expect(find.text('应用更改'), findsOneWidget);
 
-    await tester.tap(find.text('应用设置'));
+    await tester.tap(find.text('应用更改'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -4851,9 +4887,12 @@ void main() {
 
     await tester.tap(find.text('本地已有'));
     await tester.pump();
-    expect(find.textContaining(r'D:\Models\large-v3'), findsWidgets);
-    expect(find.text('Whisper Large v3 · 可在本机运行'), findsOneWidget);
-    expect(find.text('应用设置'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('asr-model-open-location')),
+      findsOneWidget,
+    );
+    expect(find.text('已通过兼容性测试，可在本机运行'), findsOneWidget);
+    expect(find.text('应用更改'), findsOneWidget);
     expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });

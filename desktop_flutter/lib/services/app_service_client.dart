@@ -849,13 +849,25 @@ class AppServiceClient {
     String device = 'auto',
     String computeType = 'auto',
     String? acceleratorRoot,
+    String? userLabel,
   }) {
     return call('asr.model.probe', {
       'model_path': modelPath,
       'device': device,
       'compute_type': computeType,
       'accelerator_root': ?acceleratorRoot,
+      'user_label': ?userLabel,
     }, const Duration(minutes: 3)).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> setExternalAsrModelLabel({
+    required String registrationId,
+    required String userLabel,
+  }) {
+    return call('asr.model.label.set', {
+      'registration_id': registrationId,
+      'user_label': userLabel,
+    }).then(_stringMap);
   }
 
   Future<Map<String, Object?>> activateAsrResources({
@@ -2067,6 +2079,8 @@ class AsrRegisteredResourceOption {
     required this.id,
     required this.kind,
     this.resourceId = '',
+    this.displayName = '',
+    this.userLabel = '',
     this.path = '',
     this.root = '',
     this.version = '',
@@ -2082,6 +2096,8 @@ class AsrRegisteredResourceOption {
   final String id;
   final String kind;
   final String resourceId;
+  final String displayName;
+  final String userLabel;
   final String path;
   final String root;
   final String version;
@@ -2092,6 +2108,14 @@ class AsrRegisteredResourceOption {
   final String probeDevice;
   final String probeComputeType;
   final Map<String, Object?> raw;
+
+  String get effectiveLabel {
+    final custom = userLabel.trim();
+    if (custom.isNotEmpty) return custom;
+    final detected = displayName.trim();
+    if (detected.isNotEmpty) return detected;
+    return resourceId;
+  }
 
   factory AsrRegisteredResourceOption.fromJson(
     Object? value, {
@@ -2106,6 +2130,14 @@ class AsrRegisteredResourceOption {
       kind: kind,
       resourceId:
           _stringValue(map[kind == 'model' ? 'model_id' : 'accelerator_id']) ??
+          '',
+      displayName:
+          _stringValue(map['display_name']) ??
+          _stringValue(map['displayName']) ??
+          '',
+      userLabel:
+          _stringValue(map['user_label']) ??
+          _stringValue(map['userLabel']) ??
           '',
       path: _stringValue(map['model_path']) ?? '',
       root: _stringValue(map['root']) ?? '',
@@ -2134,6 +2166,8 @@ class AsrActiveExecution {
     this.modelSource = '',
     this.modelRegistrationId = '',
     this.modelPath = '',
+    this.modelDisplayName = '',
+    this.modelUserLabel = '',
     this.modelReady = false,
     this.acceleratorSource = '',
     this.acceleratorId = '',
@@ -2159,6 +2193,8 @@ class AsrActiveExecution {
   final String modelSource;
   final String modelRegistrationId;
   final String modelPath;
+  final String modelDisplayName;
+  final String modelUserLabel;
   final bool modelReady;
   final String acceleratorSource;
   final String acceleratorId;
@@ -2189,6 +2225,8 @@ class AsrActiveExecution {
       modelSource: _stringValue(model['source']) ?? '',
       modelRegistrationId: _stringValue(model['registration_id']) ?? '',
       modelPath: _stringValue(model['path']) ?? '',
+      modelDisplayName: _stringValue(model['display_name']) ?? '',
+      modelUserLabel: _stringValue(model['user_label']) ?? '',
       modelReady: model['ready'] == true,
       acceleratorSource: _stringValue(accelerator['source']) ?? '',
       acceleratorId: _stringValue(accelerator['id']) ?? '',

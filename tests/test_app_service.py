@@ -503,6 +503,7 @@ def test_app_service_validates_existing_model_with_managed_runtime(tmp_path: Pat
                 "model_path": str(tmp_path / "large-v3"),
                 "device": "cpu",
                 "compute_type": "int8",
+                "user_label": "访谈模型",
             },
         ),
         root_dir=tmp_path,
@@ -513,6 +514,50 @@ def test_app_service_validates_existing_model_with_managed_runtime(tmp_path: Pat
     assert captured["model_path"] == tmp_path / "large-v3"
     assert captured["device"] == "cpu"
     assert captured["compute_type"] == "int8"
+    assert captured["user_label"] == "访谈模型"
+
+
+def test_app_service_renames_registered_model_without_changing_its_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+    captured = {}
+
+    def fake_set_label(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return {
+            "ok": True,
+            "registration": {
+                "id": kwargs["registration_id"],
+                "user_label": kwargs["user_label"],
+            },
+        }
+
+    monkeypatch.setattr(
+        "transvortex.app.desktop_api.set_registered_model_label",
+        fake_set_label,
+    )
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.model.label.set",
+            {
+                "registration_id": "model-large-registration",
+                "user_label": "访谈模型",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["ok"] is True
+    assert captured == {
+        "root_dir": tmp_path,
+        "registration_id": "model-large-registration",
+        "user_label": "访谈模型",
+    }
 
 
 def test_app_service_discovers_existing_models_below_selected_folder(

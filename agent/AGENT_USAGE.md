@@ -70,7 +70,7 @@ their registration IDs to the active local worker:
 
 ```powershell
 transvortex asr model-probe --model-path <model-path> --json
-transvortex asr model-register --model-path <model-path> --json
+transvortex asr model-register --model-path <model-path> [--label <display-name>] --json
 transvortex asr accelerator-probe --accelerator-root <accelerator-root> --json
 transvortex asr accelerator-register --accelerator-root <accelerator-root> --json
 transvortex asr resources-activate --model-registration-id <id> --json

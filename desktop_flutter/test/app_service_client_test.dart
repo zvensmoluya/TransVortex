@@ -1603,6 +1603,24 @@ routing:
     },
   );
 
+  test('AppServiceClient changes an external ASR model display name', () async {
+    final transport = _RecordingTransport({
+      'asr.model.label.set': {'ok': true},
+    });
+    final client = AppServiceClient(transport);
+
+    await client.setExternalAsrModelLabel(
+      registrationId: 'model-reg',
+      userLabel: '日语访谈模型',
+    );
+
+    expect(transport.calls.single.method, 'asr.model.label.set');
+    expect(transport.calls.single.params, {
+      'registration_id': 'model-reg',
+      'user_label': '日语访谈模型',
+    });
+  });
+
   test('DesktopSnapshot projects active external CUDA execution', () {
     final snapshot = DesktopSnapshot.fromJson({
       'config': {
@@ -1612,6 +1630,8 @@ routing:
               'id': 'model-reg',
               'model_id': 'large-v3',
               'model_path': r'D:\Models\large-v3',
+              'display_name': 'Whisper Large v3',
+              'user_label': '日语访谈模型',
               'probe': {
                 'ok': true,
                 'model': {'device': 'cuda', 'compute_type': 'float16'},
@@ -1645,6 +1665,8 @@ routing:
               'source': 'external',
               'registration_id': 'model-reg',
               'path': r'D:\Models\large-v3',
+              'display_name': 'Whisper Large v3',
+              'user_label': '日语访谈模型',
               'ready': true,
             },
             'accelerator': {
@@ -1667,10 +1689,12 @@ routing:
 
     expect(snapshot.asrRegisteredModels.single.id, 'model-reg');
     expect(snapshot.asrRegisteredModels.single.probeDevice, 'cuda');
+    expect(snapshot.asrRegisteredModels.single.effectiveLabel, '日语访谈模型');
     expect(snapshot.asrRegisteredAccelerators.single.id, 'accelerator-reg');
     expect(snapshot.asrRegisteredAccelerators.single.cudaAvailable, isTrue);
     expect(snapshot.asrActiveExecution.resolvedDevice, 'cuda');
     expect(snapshot.asrActiveExecution.computeType, 'float16');
+    expect(snapshot.asrActiveExecution.modelUserLabel, '日语访谈模型');
     expect(
       snapshot.asrActiveExecution.acceleratorRegistrationId,
       'accelerator-reg',

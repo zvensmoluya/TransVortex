@@ -2222,7 +2222,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                     color: T.accentStrong,
                   ),
                   const SizedBox(width: T.s8),
-                  Text('思考程度', style: T.tBody),
+                  Text('本次思考程度', style: T.tBody),
                   const Spacer(),
                   Flexible(
                     child: Text(

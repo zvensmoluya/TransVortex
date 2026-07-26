@@ -67,13 +67,26 @@ void main() {
           snapshot: _desktopSnapshot(
             asrKind: 'local_worker',
             asrModelSource: 'external',
+            asrLocal: const {
+              'active_execution': {
+                'provider': 'local',
+                'kind': 'local_worker',
+                'model': 'large-v3',
+                'can_run': true,
+                'model_resource': {
+                  'source': 'external',
+                  'user_label': '日语访谈模型',
+                  'ready': true,
+                },
+              },
+            },
           ),
         ),
       );
       addTearDown(external.dispose);
       await external.startService();
 
-      expect(external.view.asrLabel, '本机 Whisper · Large v3（本地已有）');
+      expect(external.view.asrLabel, '本机 Whisper · 日语访谈模型（本地已有）');
     },
   );
 

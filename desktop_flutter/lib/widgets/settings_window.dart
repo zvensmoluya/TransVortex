@@ -114,6 +114,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _copyingAgentHandoff = false;
   bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
+  bool _renamingAsrModel = false;
   bool _changingAsrStorage = false;
   bool _asrDraftDirty = false;
   String _asrModelSource = 'managed';
@@ -469,9 +470,14 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _loading ||
         _savingAsr ||
         _probingAsrModel ||
+        _renamingAsrModel ||
         _testingAsr ||
         _copyingAgentHandoff;
     final showFeedback = busy || _error != null || _message != null;
+    final snapshot = _snapshot;
+    final activeSelection = snapshot == null
+        ? ''
+        : _asrSelectionIdForProvider(snapshot, snapshot.asrProviderName);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -480,9 +486,11 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             Expanded(
               child: _SegmentedEngines(
                 selected: _selectedAsrProvider,
+                active: activeSelection,
                 onPick:
                     _savingAsr ||
                         _probingAsrModel ||
+                        _renamingAsrModel ||
                         _testingAsr ||
                         _copyingAgentHandoff
                     ? null
@@ -685,13 +693,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final managedReady = runtime?.installed == true && model.installed;
     final isCurrentDefault =
         provider != null && provider.name == _snapshot?.asrProviderName;
-    final currentReady =
-        isCurrentDefault &&
-        provider.readiness.canRun &&
-        !_asrDraftDirty &&
-        (_asrModelSource == 'external'
-            ? _detectedExternalModelId.isNotEmpty
-            : managedReady);
+    final savedReady = provider?.readiness.canRun ?? false;
+    final needsPrimaryAction =
+        _asrDraftDirty || !savedReady || !isCurrentDefault;
     final footer = <Widget>[];
     if (operation != null && !operation.active) {
       if (operation.state == 'failed' || operation.state == 'cancelled') {
@@ -704,55 +708,70 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         );
         footer.add(ActionButton(label: '调整设置', onTap: _dismissAsrOperation));
       }
-    } else if (!active && _asrModelSource == 'managed' && !currentReady) {
-      footer.add(
-        ActionButton(
-          label: _savingAsr
-              ? '正在启动'
-              : !storageAvailable
-              ? '保存位置不可用'
-              : !storageHasSpace
-              ? '保存空间不足'
-              : managedReady
-              ? '应用设置'
-              : '下载并启用',
-          strong: true,
-          onTap: _savingAsr || _changingAsrStorage || !storageHasSpace
-              ? null
-              : managedReady
-              ? _saveAsrProvider
-              : _startManagedAsrSetup,
-        ),
-      );
-    } else if (!active && _asrModelSource == 'external' && !currentReady) {
-      final runtimeReady = runtime?.installed == true;
-      final verified = _detectedExternalModelId.isNotEmpty;
-      footer.add(
-        ActionButton(
-          label: runtimeReady
-              ? _probingAsrModel
-                    ? '验证中'
-                    : verified
-                    ? '应用设置'
-                    : '验证并启用'
-              : '下载识别引擎',
-          strong: true,
-          onTap: _changingAsrStorage
-              ? null
-              : runtimeReady
-              ? _probingAsrModel || _externalModelPath.text.isEmpty
-                    ? null
-                    : verified
-                    ? () => _saveAsrProvider(
-                        successMessage:
-                            '${_asrExternalModelLabel(_detectedExternalModelId)} 已设为默认。',
-                      )
-                    : _probeExternalAsrModel
-              : storageHasSpace
-              ? () => _startAsrInstall('runtime')
-              : null,
-        ),
-      );
+    } else if (!active && needsPrimaryAction) {
+      if (_asrDraftDirty) {
+        footer.add(ActionButton(label: '撤销修改', onTap: _discardLocalAsrDraft));
+      }
+      if (_asrModelSource == 'managed') {
+        final actionLabel = managedReady
+            ? _asrDraftDirty
+                  ? '应用更改'
+                  : savedReady && !isCurrentDefault
+                  ? '设为默认'
+                  : '应用设置'
+            : '下载并启用';
+        footer.add(
+          ActionButton(
+            label: _savingAsr
+                ? '正在启动'
+                : !storageAvailable
+                ? '保存位置不可用'
+                : !storageHasSpace
+                ? '保存空间不足'
+                : actionLabel,
+            strong: true,
+            onTap: _savingAsr || _changingAsrStorage || !storageHasSpace
+                ? null
+                : managedReady
+                ? _saveAsrProvider
+                : _startManagedAsrSetup,
+          ),
+        );
+      } else {
+        final runtimeReady = runtime?.installed == true;
+        final verified = _detectedExternalModelId.isNotEmpty;
+        final actionLabel = verified
+            ? _asrDraftDirty
+                  ? '应用更改'
+                  : savedReady && !isCurrentDefault
+                  ? '设为默认'
+                  : '应用设置'
+            : '验证并启用';
+        footer.add(
+          ActionButton(
+            label: runtimeReady
+                ? _probingAsrModel
+                      ? '验证中'
+                      : actionLabel
+                : '下载识别引擎',
+            strong: true,
+            onTap: _changingAsrStorage
+                ? null
+                : runtimeReady
+                ? _probingAsrModel || _externalModelPath.text.isEmpty
+                      ? null
+                      : verified
+                      ? () => _saveAsrProvider(
+                          successMessage:
+                              '${_externalModelDisplayLabel(_detectedExternalModelId, _externalModelPath.text)} 已设为默认。',
+                        )
+                      : _probeExternalAsrModel
+                : storageHasSpace
+                ? () => _startAsrInstall('runtime')
+                : null,
+          ),
+        );
+      }
     }
 
     return ToolPanel(
@@ -788,8 +807,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _localWhisperCurrentSummary(provider),
-        const SizedBox(height: T.s16),
         Row(
           children: [
             const Icon(
@@ -798,7 +815,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               color: T.accentStrong,
             ),
             const SizedBox(width: T.s8),
-            Text('更换模型', style: T.tSection),
+            Text('本机识别方案', style: T.tSection),
             const SizedBox(width: T.s12),
             const Expanded(child: Divider(height: 1, color: T.line)),
           ],
@@ -834,6 +851,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                 )
               else
                 _externalWhisperModelSettings(runtime, storage),
+              const SizedBox(height: T.s12),
+              _localWhisperPlanStatus(provider, selectedModel),
             ],
           ),
         ),
@@ -898,19 +917,35 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     AsrComponentOption? runtime,
     AsrStorageOption storage,
   ) {
+    final modelId = _locatedExternalModelId.isEmpty
+        ? _externalDraftModelId
+        : _locatedExternalModelId;
+    final registration = _registeredExternalModel(
+      modelId,
+      _externalModelPath.text,
+    );
+    final modelLabel = modelId.isEmpty ? '' : _asrExternalModelLabel(modelId);
+    final displayLabel = modelId.isEmpty
+        ? ''
+        : _externalModelDisplayLabel(modelId, _externalModelPath.text);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _AsrExternalModelPicker(
           path: _externalModelPath.text,
-          modelLabel: _locatedExternalModelId.isEmpty
-              ? ''
-              : _asrExternalModelLabel(_locatedExternalModelId),
+          modelLabel: modelLabel,
+          displayLabel: displayLabel,
           verified: _detectedExternalModelId.isNotEmpty,
-          busy: _discoveringAsrModels,
-          onPick: _discoveringAsrModels || _probingAsrModel
+          busy: _discoveringAsrModels || _renamingAsrModel,
+          onPick: _discoveringAsrModels || _probingAsrModel || _renamingAsrModel
               ? null
               : _pickExternalModelPath,
+          onOpen: _externalModelPath.text.trim().isEmpty
+              ? null
+              : () => _openExternalModelPath(_externalModelPath.text),
+          onRename: registration == null || _renamingAsrModel
+              ? null
+              : () => _renameExternalAsrModel(registration),
         ),
         const SizedBox(height: T.s8),
         SizedBox(width: 220, child: _asrDeviceSelect()),
@@ -1096,8 +1131,92 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     );
   }
 
-  Widget _localWhisperCurrentSummary(AsrProviderOption? provider) {
-    return _LocalWhisperCurrentSummary(current: _localWhisperCurrent(provider));
+  Widget _localWhisperPlanStatus(
+    AsrProviderOption? provider,
+    String selectedModel,
+  ) {
+    final current = _localWhisperCurrent(provider);
+    if (_asrDraftDirty) {
+      return _AsrPlanStatus(
+        key: const ValueKey('asr-plan-status-dirty'),
+        title: '尚未应用',
+        detail:
+            '将从「${_localWhisperCurrentLabel(current)}」改为「${_localWhisperDraftLabel(selectedModel)}」',
+        color: T.accentStrong,
+        icon: Icons.swap_horiz_rounded,
+      );
+    }
+    if (!current.configured) {
+      return const _AsrPlanStatus(
+        key: ValueKey('asr-plan-status-empty'),
+        title: '尚未配置',
+        detail: '选择模型来源、模型和运算方式后即可准备本机识别。',
+        color: T.muted,
+        icon: Icons.radio_button_unchecked_rounded,
+      );
+    }
+    if (current.isDefault && current.ready) {
+      return _AsrPlanStatus(
+        key: const ValueKey('asr-plan-status-ready'),
+        title: '已应用且可用',
+        detail: _localWhisperCurrentLabel(current),
+        color: T.ok,
+        icon: Icons.check_circle_outline_rounded,
+      );
+    }
+    if (current.isDefault) {
+      return _AsrPlanStatus(
+        key: const ValueKey('asr-plan-status-needs-action'),
+        title: '当前方案需要处理',
+        detail: _localWhisperCurrentLabel(current),
+        color: T.warn,
+        icon: Icons.error_outline_rounded,
+      );
+    }
+    return _AsrPlanStatus(
+      key: const ValueKey('asr-plan-status-saved'),
+      title: current.ready ? '方案已保存，可设为默认' : '方案尚未就绪',
+      detail: _localWhisperCurrentLabel(current),
+      color: current.ready ? T.accentStrong : T.warn,
+      icon: current.ready
+          ? Icons.bookmark_outline_rounded
+          : Icons.error_outline_rounded,
+    );
+  }
+
+  String _localWhisperCurrentLabel(_LocalWhisperCurrent current) {
+    if (!current.configured) return '尚未配置';
+    final modelLabel = current.modelSource == 'external'
+        ? _externalModelDisplayLabel(current.modelId, current.modelPath)
+        : _asrModelLabel(current.modelId);
+    final execution = current.executionDetail
+        .split(' · ')
+        .take(2)
+        .where((part) => part.isNotEmpty)
+        .join(' · ');
+    return [
+      modelLabel,
+      current.modelSource == 'external' ? '本地已有' : '应用管理',
+      if (execution.isNotEmpty) execution,
+    ].join(' · ');
+  }
+
+  String _localWhisperDraftLabel(String selectedModel) {
+    final modelLabel = _asrModelSource == 'external'
+        ? _externalModelDisplayLabel(selectedModel, _externalModelPath.text)
+        : _asrModelLabel(selectedModel);
+    final device = switch (_device.text.trim()) {
+      'cuda' => 'NVIDIA',
+      'cpu' => 'CPU',
+      _ => '自动',
+    };
+    return [
+      modelLabel,
+      _asrModelSource == 'external' ? '本地已有' : '应用管理',
+      device,
+      if (_device.text.trim() == 'cuda' && _localComputeType.isNotEmpty)
+        _localComputeType,
+    ].join(' · ');
   }
 
   void _setAsrModelSource(String source) {
@@ -1306,6 +1425,15 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _localComputeType == _savedLocalComputeType;
   }
 
+  void _discardLocalAsrDraft() {
+    if (_savingAsr || _probingAsrModel) return;
+    setState(() {
+      _loadAsrDraftFields();
+      _message = null;
+      _error = null;
+    });
+  }
+
   AsrRegisteredResourceOption? _registeredExternalModel(
     String modelId,
     String modelPath,
@@ -1323,6 +1451,12 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       return registration;
     }
     return null;
+  }
+
+  String _externalModelDisplayLabel(String modelId, String modelPath) {
+    final registration = _registeredExternalModel(modelId, modelPath);
+    final userLabel = registration?.userLabel.trim() ?? '';
+    return userLabel.isNotEmpty ? userLabel : _asrExternalModelLabel(modelId);
   }
 
   void _markAsrDraftDirty() {
@@ -1747,6 +1881,53 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _discoveringAsrModels = false);
+    }
+  }
+
+  Future<void> _openExternalModelPath(String path) async {
+    final target = path.trim();
+    if (target.isEmpty) return;
+    try {
+      await _pathOpener.openDirectory(target);
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = _friendlySettingsError(error));
+    }
+  }
+
+  Future<void> _renameExternalAsrModel(
+    AsrRegisteredResourceOption registration,
+  ) async {
+    if (_renamingAsrModel || registration.id.isEmpty) return;
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _AsrModelRenameDialog(
+        initialValue: registration.userLabel,
+        automaticLabel: registration.displayName.trim().isNotEmpty
+            ? registration.displayName.trim()
+            : _asrExternalModelLabel(registration.resourceId),
+      ),
+    );
+    if (!mounted || selected == null) return;
+    setState(() {
+      _renamingAsrModel = true;
+      _message = null;
+      _error = null;
+    });
+    try {
+      await _client.setExternalAsrModelLabel(
+        registrationId: registration.id,
+        userLabel: selected.trim(),
+      );
+      await _loadConfig(preserveAsrDraft: true, silent: true);
+      if (!mounted) return;
+      setState(() {
+        _message = selected.trim().isEmpty ? '已恢复自动模型名称。' : '模型显示名称已保存。';
+      });
+      await widget.bridge.refreshServiceSnapshot();
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _renamingAsrModel = false);
     }
   }
 
@@ -2843,9 +3024,14 @@ class _AsrFeedbackBar extends StatelessWidget {
 }
 
 class _SegmentedEngines extends StatelessWidget {
-  const _SegmentedEngines({required this.selected, required this.onPick});
+  const _SegmentedEngines({
+    required this.selected,
+    required this.active,
+    required this.onPick,
+  });
 
   final String selected;
+  final String active;
   final ValueChanged<String>? onPick;
 
   @override
@@ -2865,6 +3051,7 @@ class _SegmentedEngines extends StatelessWidget {
               label: items[index].$2,
               detail: items[index].$3,
               selected: selected == items[index].$1,
+              statusLabel: active == items[index].$1 ? '当前默认' : null,
               onTap: onPick == null ? null : () => onPick!(items[index].$1),
             ),
           ),
@@ -2996,97 +3183,46 @@ class _LocalWhisperCurrent {
   final String executionDetail;
 }
 
-class _LocalWhisperCurrentSummary extends StatelessWidget {
-  const _LocalWhisperCurrentSummary({required this.current});
+class _AsrPlanStatus extends StatelessWidget {
+  const _AsrPlanStatus({
+    super.key,
+    required this.title,
+    required this.detail,
+    required this.color,
+    required this.icon,
+  });
 
-  final _LocalWhisperCurrent current;
+  final String title;
+  final String detail;
+  final Color color;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
-    final (status, color) = !current.configured
-        ? ('尚未配置', T.muted)
-        : current.isDefault && current.ready
-        ? ('正在使用', T.ok)
-        : current.isDefault
-        ? ('需要处理', T.warn)
-        : ('已配置', T.accentStrong);
-    final source = switch (current.modelSource) {
-      'external' => '本地已有模型',
-      'managed' => '应用管理模型',
-      _ => '',
-    };
-    final details = [
-      if (source.isNotEmpty) source,
-      if (current.executionDetail.isNotEmpty) current.executionDetail,
-    ].join(' · ');
     return Container(
-      key: const ValueKey('asr-current-configuration'),
       width: double.infinity,
-      padding: const EdgeInsets.all(T.s12),
+      padding: const EdgeInsets.symmetric(horizontal: T.s12, vertical: T.s8),
       decoration: BoxDecoration(
-        color: T.skySoft.withValues(alpha: 0.42),
-        border: Border.all(color: T.line),
+        color: color.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(T.rSm),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Icon(
-                current.ready
-                    ? Icons.check_circle_outline_rounded
-                    : Icons.radio_button_unchecked_rounded,
-                size: 20,
-                color: color,
-              ),
-              const SizedBox(width: T.s8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('当前使用', style: T.tCaption),
-                    const SizedBox(height: 2),
-                    Text(
-                      current.modelId.isEmpty
-                          ? '本机 Whisper'
-                          : _asrModelLabel(current.modelId),
-                      style: T.tBody.copyWith(fontWeight: T.wBold),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: T.s12),
-              _AsrStatusChip(label: status, color: color),
-            ],
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: T.s8),
+          Text(
+            title,
+            style: T.tCaption.copyWith(color: color, fontWeight: T.wBold),
           ),
-          if (details.isNotEmpty) ...[
-            const SizedBox(height: T.s8),
-            Text(details, style: T.tCaption),
-          ],
-          if (current.modelSource == 'external' &&
-              current.modelPath.isNotEmpty) ...[
-            const SizedBox(height: T.s8),
-            Row(
-              children: [
-                const Icon(Icons.folder_outlined, size: 16, color: T.muted),
-                const SizedBox(width: T.s8),
-                Expanded(
-                  child: Tooltip(
-                    message: current.modelPath,
-                    child: Text(
-                      current.modelPath,
-                      style: T.tCaption,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ],
+          const SizedBox(width: T.s8),
+          Expanded(
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: T.tCaption,
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -3221,20 +3357,84 @@ class _AsrStatusChip extends StatelessWidget {
   }
 }
 
+class _AsrModelRenameDialog extends StatefulWidget {
+  const _AsrModelRenameDialog({
+    required this.initialValue,
+    required this.automaticLabel,
+  });
+
+  final String initialValue;
+  final String automaticLabel;
+
+  @override
+  State<_AsrModelRenameDialog> createState() => _AsrModelRenameDialogState();
+}
+
+class _AsrModelRenameDialogState extends State<_AsrModelRenameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialValue.trim(),
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改模型显示名称'),
+      content: SizedBox(
+        width: 360,
+        child: TextField(
+          key: const ValueKey('asr-model-user-label-input'),
+          controller: _controller,
+          autofocus: true,
+          maxLength: 80,
+          decoration: InputDecoration(
+            labelText: '显示名称',
+            hintText: widget.automaticLabel,
+            helperText: '留空使用自动名称，不会改动模型文件夹。',
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          key: const ValueKey('asr-model-user-label-save'),
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
 class _AsrExternalModelPicker extends StatelessWidget {
   const _AsrExternalModelPicker({
     required this.path,
     required this.modelLabel,
+    required this.displayLabel,
     required this.verified,
     required this.busy,
     required this.onPick,
+    required this.onOpen,
+    required this.onRename,
   });
 
   final String path;
   final String modelLabel;
+  final String displayLabel;
   final bool verified;
   final bool busy;
   final VoidCallback? onPick;
+  final VoidCallback? onOpen;
+  final VoidCallback? onRename;
 
   @override
   Widget build(BuildContext context) {
@@ -3242,7 +3442,9 @@ class _AsrExternalModelPicker extends StatelessWidget {
     final status = !hasPath
         ? '选择已有的 Whisper 模型文件夹'
         : verified
-        ? '$modelLabel · 可在本机运行'
+        ? displayLabel.isNotEmpty && displayLabel != modelLabel
+              ? '$modelLabel · 可在本机运行'
+              : '已通过兼容性测试，可在本机运行'
         : modelLabel.isEmpty
         ? '等待识别模型'
         : '$modelLabel · 等待兼容性测试';
@@ -3267,14 +3469,15 @@ class _AsrExternalModelPicker extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Tooltip(
-                  message: path,
-                  child: Text(
-                    hasPath ? path : '尚未选择',
-                    style: T.tBody,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                Text(
+                  hasPath
+                      ? displayLabel.isEmpty
+                            ? modelLabel
+                            : displayLabel
+                      : '尚未选择',
+                  style: T.tBody.copyWith(fontWeight: T.wMedium),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(status, style: T.tCaption),
@@ -3282,9 +3485,23 @@ class _AsrExternalModelPicker extends StatelessWidget {
             ),
           ),
           const SizedBox(width: T.s8),
+          if (hasPath)
+            IconButton(
+              key: const ValueKey('asr-model-open-location'),
+              tooltip: path,
+              onPressed: onOpen,
+              icon: const Icon(Icons.folder_open_rounded, size: 19),
+            ),
+          if (onRename != null)
+            IconButton(
+              key: const ValueKey('asr-model-rename'),
+              tooltip: '修改显示名称',
+              onPressed: onRename,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+            ),
           ActionButton(
             label: busy
-                ? '查找中'
+                ? '处理中'
                 : hasPath
                 ? '重新选择'
                 : '选择',

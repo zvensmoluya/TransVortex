@@ -49,6 +49,7 @@ from .asr_runtime import (
     probe_external_model,
     probe_python_environment,
     save_external_environment,
+    set_registered_model_label,
 )
 from .asr_testing import run_asr_connection_test
 from .config import _read_yaml, load_app_config, resolve_providers_file
@@ -83,6 +84,7 @@ SERVICE_CAPABILITIES = [
     "asr_storage_settings",
     "asr_model_discovery",
     "asr_model_probe",
+    "asr_model_label",
     "asr_accelerator_probe",
     "asr_resource_activation",
     "asr_environment_probe",
@@ -168,6 +170,7 @@ class DesktopApi:
             "asr.hardware.probe": self.asr_hardware_probe,
             "asr.model.discover": self.asr_model_discover,
             "asr.model.probe": self.asr_model_probe,
+            "asr.model.label.set": self.asr_model_label_set,
             "asr.accelerator.probe": self.asr_accelerator_probe,
             "asr.resources.activate": self.asr_resources_activate,
             "asr.environment.discover": self.asr_environment_discover,
@@ -595,6 +598,7 @@ class DesktopApi:
             if (raw_accelerator_root := _optional_text(params, "accelerator_root", "acceleratorRoot"))
             else None,
             timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
+            user_label=_optional_text(params, "user_label", "userLabel", "label"),
         )
 
     def asr_model_discover(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -611,6 +615,24 @@ class DesktopApi:
             save=_optional_bool(params, "save") is True,
             timeout_seconds=_optional_float(params, "timeout_seconds", "timeoutSeconds") or 120.0,
         )
+
+    def asr_model_label_set(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return set_registered_model_label(
+                root_dir=self.root_dir,
+                registration_id=_required_text(
+                    params,
+                    "registration_id",
+                    "registrationId",
+                    "id",
+                ),
+                user_label=str(
+                    params.get("user_label", params.get("userLabel", params.get("label", "")))
+                    or ""
+                ),
+            )
+        except ValueError as exc:
+            raise DesktopApiError("asr_model_label_invalid", str(exc)) from exc
 
     def asr_resources_activate(self, params: dict[str, Any]) -> dict[str, Any]:
         return activate_asr_resources(

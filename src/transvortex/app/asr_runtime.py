@@ -20,6 +20,7 @@ from .models import AsrProviderConfig
 
 
 ASR_RUNTIME_STATE_VERSION = 1
+ASR_MODEL_USER_LABEL_MAX_LENGTH = 80
 ASR_STORAGE_CONFIG_VERSION = 1
 WHISPER_HOST_PROTOCOL_VERSION = 1
 APP_DATA_ROOT_ENV = "TRANSVORTEX_HOME"
@@ -330,6 +331,8 @@ def asr_active_execution_snapshot(
     model_source = str(provider.local.model_source or "managed")
     model_path = str(provider.local.model_path or "") if model_source == "external" else ""
     registration_id = ""
+    registered_model: dict[str, Any] | None = None
+    model_row: dict[str, Any] | None = None
     model_ready = False
     if model_source == "external":
         normalized_path = ""
@@ -358,6 +361,7 @@ def asr_active_execution_snapshot(
                 is not None
             ):
                 registration_id = candidate_id
+                registered_model = raw
                 model_ready = True
                 break
     else:
@@ -376,6 +380,18 @@ def asr_active_execution_snapshot(
         "id": provider.model,
         "registration_id": registration_id,
         "path": model_path,
+        "display_name": (
+            str(registered_model.get("display_name") or "")
+            if registered_model is not None
+            else str(model_row.get("display_name") or "")
+            if isinstance(model_row, dict)
+            else ""
+        ),
+        "user_label": (
+            str(registered_model.get("user_label") or "")
+            if registered_model is not None
+            else ""
+        ),
         "state": "ready" if model_ready else "needs_action",
         "ready": model_ready,
     }
@@ -1067,6 +1083,7 @@ def probe_external_model(
     accelerator_root: Path | None = None,
     timeout_seconds: float = 120.0,
     save: bool = True,
+    user_label: str | None = None,
     app_data_root: Path | None = None,
 ) -> dict[str, Any]:
     paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
@@ -1173,6 +1190,7 @@ def probe_external_model(
             probe=probe,
             signature=final_signature,
             identity=identity,
+            user_label=user_label,
         )
     else:
         record = {
@@ -1180,6 +1198,7 @@ def probe_external_model(
             "model_id": model_id,
             "model_path": str(resolved_model),
             "display_name": str(identity.get("display_name") or model_id),
+            "user_label": _normalize_external_model_user_label(user_label),
             "catalog_model_id": str(identity.get("catalog_model_id") or ""),
             "catalog_config_match": identity.get("catalog_config_match") is True,
             "model_format": str(identity.get("model_format") or "ctranslate2"),
@@ -1554,12 +1573,27 @@ def _save_registered_model(
     probe: dict[str, Any],
     signature: str,
     identity: dict[str, Any] | None = None,
+    user_label: str | None = None,
 ) -> dict[str, Any]:
     resolved = model_path.expanduser().resolve()
+    state = load_asr_runtime_state(paths)
+    key = _external_model_key(resolved)
+    existing = (state.get("models") or {}).get(key)
+    existing_label = (
+        str(existing.get("user_label") or "")
+        if isinstance(existing, dict)
+        else ""
+    )
+    normalized_label = (
+        existing_label
+        if user_label is None
+        else _normalize_external_model_user_label(user_label)
+    )
     record = {
         "model_id": model_id,
         "model_path": str(resolved),
         "display_name": str((identity or {}).get("display_name") or model_id),
+        "user_label": normalized_label,
         "catalog_model_id": str((identity or {}).get("catalog_model_id") or ""),
         "catalog_config_match": (identity or {}).get("catalog_config_match") is True,
         "model_format": str((identity or {}).get("model_format") or "ctranslate2"),
@@ -1569,11 +1603,48 @@ def _save_registered_model(
         "updated_at": utc_now_iso(),
     }
     paths.state_file.parent.mkdir(parents=True, exist_ok=True)
-    state = load_asr_runtime_state(paths)
-    key = _external_model_key(resolved)
     state.setdefault("models", {})[key] = record
     save_asr_runtime_state(paths, state)
     return dict(record, id=key)
+
+
+def set_registered_model_label(
+    *,
+    root_dir: Path,
+    registration_id: str,
+    user_label: str,
+    app_data_root: Path | None = None,
+) -> dict[str, Any]:
+    paths = asr_runtime_paths(root_dir, app_data_root=app_data_root)
+    state = load_asr_runtime_state(paths)
+    models = state.get("models")
+    normalized_id = str(registration_id or "").strip()
+    if not normalized_id or not isinstance(models, dict):
+        raise ValueError("External ASR model registration was not found")
+    existing = models.get(normalized_id)
+    if not isinstance(existing, dict):
+        raise ValueError("External ASR model registration was not found")
+    normalized_label = _normalize_external_model_user_label(user_label)
+    record = dict(existing)
+    record["user_label"] = normalized_label
+    record["updated_at"] = utc_now_iso()
+    models[normalized_id] = record
+    save_asr_runtime_state(paths, state)
+    return {
+        "ok": True,
+        "model": dict(record, id=normalized_id),
+    }
+
+
+def _normalize_external_model_user_label(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if len(normalized) > ASR_MODEL_USER_LABEL_MAX_LENGTH:
+        raise ValueError(
+            f"ASR model display name must be at most {ASR_MODEL_USER_LABEL_MAX_LENGTH} characters"
+        )
+    if any(ord(character) < 32 for character in normalized):
+        raise ValueError("ASR model display name cannot contain control characters")
+    return normalized
 
 
 def model_catalog_entry(catalog: dict[str, Any], model_id: str) -> dict[str, Any] | None:
