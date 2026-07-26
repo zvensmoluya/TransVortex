@@ -1510,7 +1510,7 @@ class MainWindowController extends ChangeNotifier {
           break;
         }
       }
-      final source = external ? '本地已有' : '应用管理';
+      final source = external ? '本地文件夹' : '应用下载';
       return '$label · $modelText（$source）';
     }
     return modelText.isEmpty ? label : '$label · $modelText';

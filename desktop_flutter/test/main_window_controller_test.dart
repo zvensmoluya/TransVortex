@@ -86,7 +86,7 @@ void main() {
       addTearDown(external.dispose);
       await external.startService();
 
-      expect(external.view.asrLabel, '本机 Whisper · 日语访谈模型（本地已有）');
+      expect(external.view.asrLabel, '本机 Whisper · 日语访谈模型（本地文件夹）');
     },
   );
 
