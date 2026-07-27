@@ -2226,7 +2226,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
                   const Spacer(),
                   Flexible(
                     child: Text(
-                      view.reasoningSupport.compactLabel,
+                      view.reasoningLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: T.tCaption,

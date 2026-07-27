@@ -685,7 +685,7 @@ void main() {
 
     expect(controller.view.reasoningConfigurable, isTrue);
     expect(controller.view.reasoningLabel, '低');
-    expect(controller.view.reasoningDetail, '自动（当前：低）');
+    expect(controller.view.reasoningDetail, '低（模型默认）');
     final disabled = controller.view.reasoningOptions.firstWhere(
       (option) => option.value == 'none',
     );

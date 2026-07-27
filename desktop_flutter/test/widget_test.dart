@@ -1746,7 +1746,14 @@ void main() {
       find.byKey(const ValueKey('reasoning-effort-picker')),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('reasoning-mode-manual')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reasoning-effort-slider')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reasoning-reset-default')),
+      findsOneWidget,
+    );
     expect(find.text('高'), findsWidgets);
     await tester.tapAt(const Offset(8, 120));
     await tester.pump(const Duration(milliseconds: 200));
@@ -2698,6 +2705,24 @@ void main() {
           widget is TextField && widget.decoration?.hintText == '例如 7890',
     );
     expect(portField, findsOneWidget);
+    await tester.tap(portField);
+    await tester.enterText(portField, '7');
+    await tester.pump();
+    var textField = tester.widget<TextField>(portField);
+    expect(textField.controller?.text, '7');
+    expect(
+      textField.controller?.selection,
+      const TextSelection.collapsed(offset: 1),
+      reason: 'rebuilding after a digit must preserve the insertion caret',
+    );
+
+    await tester.enterText(portField, '78');
+    await tester.pump();
+    textField = tester.widget<TextField>(portField);
+    expect(
+      textField.controller?.selection,
+      const TextSelection.collapsed(offset: 2),
+    );
     await tester.enterText(portField, '7890');
     await tester.pump();
     expect(find.text('代理地址：http://127.0.0.1:7890'), findsOneWidget);
@@ -2880,7 +2905,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('translation settings discovers models before enabling them', (
+  testWidgets('enabling a discovered model keeps the current editor', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(820, 600));
@@ -2926,8 +2951,10 @@ void main() {
     );
     await tester.ensureVisible(discoveredModel);
     await tester.pumpAndSettle();
+    expect(find.text('模型翻译设置 · real-model'), findsOneWidget);
     await tester.tap(discoveredModel);
-    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('模型翻译设置 · real-model'), findsOneWidget);
     await tester.drag(find.byType(ListView).last, const Offset(0, 360));
     await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView).last, const Offset(0, 360));
@@ -3361,38 +3388,26 @@ void main() {
       find.byKey(const ValueKey('reasoning-effort-picker')),
     );
     expect(pickerSize.width, 320);
-    expect(pickerSize.height, lessThan(240));
-    expect(find.byKey(const ValueKey('reasoning-mode-auto')), findsOneWidget);
-    expect(find.byKey(const ValueKey('reasoning-mode-manual')), findsOneWidget);
+    expect(pickerSize.height, lessThan(280));
+    expect(
+      find.byKey(const ValueKey('reasoning-effort-slider')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reasoning-current-effort')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reasoning-default-badge')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('reasoning-reset-default')), findsNothing);
     expect(
       find.byKey(const ValueKey('reasoning-mode-service-default')),
       findsNothing,
     );
-    expect(find.byKey(const ValueKey('reasoning-manual-slider')), findsNothing);
-
-    final collapsedHeight = pickerSize.height;
-    await tester.tap(find.byKey(const ValueKey('reasoning-mode-manual')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 90));
-    final midHeight = tester
-        .getSize(find.byKey(const ValueKey('reasoning-effort-picker')))
-        .height;
-    expect(midHeight, greaterThan(collapsedHeight));
-    await tester.pumpAndSettle();
-    final expandedHeight = tester
-        .getSize(find.byKey(const ValueKey('reasoning-effort-picker')))
-        .height;
-    expect(expandedHeight, greaterThan(midHeight));
-    expect(
-      find.byKey(const ValueKey('reasoning-manual-slider')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('reasoning-manual-current')),
-      findsOneWidget,
-    );
     final sliderRect = tester.getRect(
-      find.byKey(const ValueKey('reasoning-manual-slider')),
+      find.byKey(const ValueKey('reasoning-effort-slider')),
     );
     await tester.tapAt(Offset(sliderRect.right - 24, sliderRect.center.dy));
     await tester.pumpAndSettle();
@@ -3409,6 +3424,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('高'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('reasoning-reset-default')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const ValueKey('reasoning-advanced-toggle')));
     await tester.pumpAndSettle();
@@ -3416,7 +3435,7 @@ void main() {
       find.byKey(const ValueKey('reasoning-mode-service-default')),
       findsOneWidget,
     );
-    await tester.tap(find.byKey(const ValueKey('reasoning-mode-auto')));
+    await tester.tap(find.byKey(const ValueKey('reasoning-reset-default')));
     await tester.pumpAndSettle();
     // The primary picker lists connection then model pills; tap the backup
     // model under the RealProvider connection to set it as primary.

@@ -1083,7 +1083,7 @@ class TranslationSettingsController extends ChangeNotifier {
     _draft.models = _draft.models.where((m) => m != model).toList();
     _draft.modelConfigs.remove(model);
     if (_draft.selectedModel == model) {
-      _draft.selectedModel = _draft.models.isEmpty ? null : _draft.models.first;
+      _draft.selectedModel = null;
     }
     _bumpDraft();
     notifyListeners();
@@ -1596,7 +1596,6 @@ class TranslationSettingsController extends ChangeNotifier {
       _draft.models = [..._draft.models, normalized];
     }
     _ensureModelRuntimeDraft(normalized);
-    _draft.selectedModel = normalized;
   }
 
   String _modelDiscoveryKeyForDraft() {

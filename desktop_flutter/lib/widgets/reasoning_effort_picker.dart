@@ -22,7 +22,11 @@ Future<String?> showReasoningEffortPicker(
       const margin = 8.0;
       const gap = 6.0;
       const panelWidth = 320.0;
-      final panelHeight = support.manualChoices.isEmpty ? 210.0 : 316.0;
+      final usesServiceDefault =
+          support.currentValue == reasoningEffortServiceDefault;
+      final panelHeight = support.manualChoices.isEmpty
+          ? (usesServiceDefault ? 210.0 : 170.0)
+          : (usesServiceDefault ? 270.0 : 230.0);
       final maxLeft = size.width - panelWidth - margin;
       final left = anchorRect.left.clamp(
         margin,
@@ -106,8 +110,8 @@ class _ReasoningEffortButtonState extends State<ReasoningEffortButton> {
     final enabled = widget.onChanged != null;
     final prefix = widget.labelPrefix?.trim() ?? '';
     final label = prefix.isEmpty
-        ? widget.support.compactLabel
-        : '$prefix · ${widget.support.compactLabel}';
+        ? widget.support.displayLabel
+        : '$prefix · ${widget.support.displayLabel}';
     final child = MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
@@ -175,30 +179,19 @@ class _ReasoningEffortPanel extends StatefulWidget {
 }
 
 class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
-  late String _manualValue = widget.support.effectiveManualValue;
-  late _ReasoningPolicy _policy = switch (widget.support.currentValue) {
-    reasoningEffortAuto => _ReasoningPolicy.automatic,
-    reasoningEffortServiceDefault => _ReasoningPolicy.serviceDefault,
-    _ => _ReasoningPolicy.manual,
-  };
-  late bool _advancedExpanded = _policy == _ReasoningPolicy.serviceDefault;
+  late String _sliderValue = widget.support.effectiveManualValue;
+  late bool _advancedExpanded =
+      widget.support.currentValue == reasoningEffortServiceDefault;
 
   void _select(String value) =>
       Navigator.of(context, rootNavigator: true).pop(value);
-
-  void _showManual() {
-    setState(() {
-      _policy = _ReasoningPolicy.manual;
-      _advancedExpanded = false;
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
     final support = widget.support;
     final manual = support.manualChoices;
     final selectedIndex = manual.indexWhere(
-      (choice) => choice.value == _manualValue,
+      (choice) => choice.value == _sliderValue,
     );
     final sliderIndex = selectedIndex < 0 ? 0 : selectedIndex;
     final reduceMotion =
@@ -206,9 +199,9 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
     final motionDuration = reduceMotion
         ? Duration.zero
         : const Duration(milliseconds: 180);
-    final automaticLabel = support.automaticEffort.isEmpty
-        ? ''
-        : '当前：${reasoningEffortLabel(support.automaticEffort)}';
+    final usesModelDefault = support.currentValue == reasoningEffortAuto;
+    final usesServiceDefault =
+        support.currentValue == reasoningEffortServiceDefault;
     return Material(
       color: T.surface,
       elevation: 12,
@@ -233,62 +226,31 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
                 Text('思考程度', style: T.tSection),
               ],
             ),
-            const SizedBox(height: T.s8),
-            _PolicyRow(
-              key: const ValueKey('reasoning-mode-auto'),
-              label: '自动',
-              selected: _policy == _ReasoningPolicy.automatic,
-              trailing: automaticLabel.isEmpty
-                  ? null
-                  : _AnimatedEffortLabel(
-                      label: automaticLabel,
-                      duration: motionDuration,
-                    ),
-              duration: motionDuration,
-              onTap: () => _select(reasoningEffortAuto),
-            ),
+            const SizedBox(height: T.s12),
             if (manual.isNotEmpty)
-              _PolicyRow(
-                key: const ValueKey('reasoning-mode-manual'),
-                label: '手动',
-                selected: _policy == _ReasoningPolicy.manual,
-                trailing: _policy == _ReasoningPolicy.manual
-                    ? _AnimatedEffortLabel(
-                        label: manual[sliderIndex].label,
-                        duration: motionDuration,
-                        accent: true,
-                      )
-                    : null,
-                duration: motionDuration,
-                onTap: _showManual,
+              _EffortSliderControl(
+                choices: manual,
+                selectedIndex: sliderIndex,
+                automaticEffort: support.automaticEffort,
+                usesModelDefault: usesModelDefault,
+                usesServiceDefault: usesServiceDefault,
+                onChanged: (index) {
+                  setState(() => _sliderValue = manual[index].value);
+                },
+                onChangeEnd: (index) => _select(manual[index].value),
+                onResetDefault: usesModelDefault
+                    ? null
+                    : () => _select(reasoningEffortAuto),
+              )
+            else
+              _DefaultOnlyControl(
+                label: support.detailLabel,
+                usesModelDefault: usesModelDefault,
+                onResetDefault: usesModelDefault
+                    ? null
+                    : () => _select(reasoningEffortAuto),
               ),
-            AnimatedSwitcher(
-              duration: motionDuration,
-              reverseDuration: motionDuration,
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) {
-                return SizeTransition(
-                  sizeFactor: animation,
-                  alignment: Alignment.topCenter,
-                  child: FadeTransition(opacity: animation, child: child),
-                );
-              },
-              child: _policy == _ReasoningPolicy.manual && manual.isNotEmpty
-                  ? _ManualEffortControl(
-                      key: const ValueKey('reasoning-manual-controls'),
-                      choices: manual,
-                      selectedIndex: sliderIndex,
-                      onChanged: (index) {
-                        setState(() => _manualValue = manual[index].value);
-                      },
-                      onChangeEnd: (index) => _select(manual[index].value),
-                    )
-                  : const SizedBox(
-                      key: ValueKey('reasoning-manual-controls-hidden'),
-                    ),
-            ),
-            const SizedBox(height: T.s4),
+            const SizedBox(height: T.s8),
             const Divider(height: 1, color: T.line),
             const SizedBox(height: T.s4),
             _AdvancedToggle(
@@ -318,7 +280,7 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
                       child: _PolicyRow(
                         key: const ValueKey('reasoning-mode-service-default'),
                         label: '由模型服务决定',
-                        selected: _policy == _ReasoningPolicy.serviceDefault,
+                        selected: usesServiceDefault,
                         duration: motionDuration,
                         onTap: () => _select(reasoningEffortServiceDefault),
                       ),
@@ -334,8 +296,6 @@ class _ReasoningEffortPanelState extends State<_ReasoningEffortPanel> {
   }
 }
 
-enum _ReasoningPolicy { automatic, manual, serviceDefault }
-
 class _PolicyRow extends StatelessWidget {
   const _PolicyRow({
     super.key,
@@ -343,14 +303,12 @@ class _PolicyRow extends StatelessWidget {
     required this.selected,
     required this.duration,
     required this.onTap,
-    this.trailing,
   });
 
   final String label;
   final bool selected;
   final Duration duration;
   final VoidCallback onTap;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -391,10 +349,6 @@ class _PolicyRow extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing case final value?) ...[
-                const SizedBox(width: T.s8),
-                value,
-              ],
             ],
           ),
         ),
@@ -443,76 +397,68 @@ class _PolicyIndicator extends StatelessWidget {
   }
 }
 
-class _AnimatedEffortLabel extends StatelessWidget {
-  const _AnimatedEffortLabel({
-    required this.label,
-    required this.duration,
-    this.accent = false,
-  });
-
-  final String label;
-  final Duration duration;
-  final bool accent;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSwitcher(
-      duration: duration,
-      transitionBuilder: (child, animation) {
-        final offset = Tween<Offset>(
-          begin: const Offset(0, 0.18),
-          end: Offset.zero,
-        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
-        return FadeTransition(
-          opacity: animation,
-          child: SlideTransition(position: offset, child: child),
-        );
-      },
-      child: Text(
-        label,
-        key: ValueKey(label),
-        style: T.tCaption.copyWith(
-          color: accent ? T.accentStrong : T.muted,
-          fontWeight: accent ? T.wBold : T.wRegular,
-        ),
-      ),
-    );
-  }
-}
-
-class _ManualEffortControl extends StatelessWidget {
-  const _ManualEffortControl({
-    super.key,
+class _EffortSliderControl extends StatelessWidget {
+  const _EffortSliderControl({
     required this.choices,
     required this.selectedIndex,
+    required this.automaticEffort,
+    required this.usesModelDefault,
+    required this.usesServiceDefault,
     required this.onChanged,
     required this.onChangeEnd,
+    required this.onResetDefault,
   });
 
   final List<ReasoningEffortChoice> choices;
   final int selectedIndex;
+  final String automaticEffort;
+  final bool usesModelDefault;
+  final bool usesServiceDefault;
   final ValueChanged<int> onChanged;
   final ValueChanged<int> onChangeEnd;
+  final VoidCallback? onResetDefault;
 
   @override
   Widget build(BuildContext context) {
+    final currentLabel = choices[selectedIndex].label;
+    final normalizedAutomatic = automaticEffort.trim().isEmpty
+        ? ''
+        : normalizeReasoningEffort(automaticEffort);
+    final automaticChoice = choices.where(
+      (choice) => choice.value == normalizedAutomatic,
+    );
+    final automaticLabel = automaticChoice.isEmpty
+        ? ''
+        : automaticChoice.first.label;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(T.s4, T.s4, T.s4, T.s8),
+      padding: const EdgeInsets.symmetric(horizontal: T.s4),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              Text('具体档位', style: T.tCaption),
+              Text(usesServiceDefault ? '选择明确档位' : '当前档位', style: T.tCaption),
               const Spacer(),
-              Text(
-                choices[selectedIndex].label,
-                key: const ValueKey('reasoning-manual-current'),
-                style: T.tCaption.copyWith(
-                  color: T.accentStrong,
-                  fontWeight: T.wBold,
+              if (usesServiceDefault)
+                Text(
+                  '当前由服务决定',
+                  key: const ValueKey('reasoning-current-effort'),
+                  style: T.tCaption.copyWith(color: T.muted),
+                )
+              else ...[
+                Text(
+                  currentLabel,
+                  key: const ValueKey('reasoning-current-effort'),
+                  style: T.tCaption.copyWith(
+                    color: T.accentStrong,
+                    fontWeight: T.wBold,
+                  ),
                 ),
-              ),
+                if (usesModelDefault) ...[
+                  const SizedBox(width: T.s8),
+                  const _ModelDefaultBadge(),
+                ],
+              ],
             ],
           ),
           if (choices.length > 1) ...[
@@ -531,7 +477,7 @@ class _ManualEffortControl extends StatelessWidget {
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
               ),
               child: Slider(
-                key: const ValueKey('reasoning-manual-slider'),
+                key: const ValueKey('reasoning-effort-slider'),
                 value: selectedIndex.toDouble(),
                 min: 0,
                 max: (choices.length - 1).toDouble(),
@@ -549,8 +495,125 @@ class _ManualEffortControl extends StatelessWidget {
                 Text(choices.last.label, style: T.tCaption),
               ],
             ),
+          ] else ...[
+            const SizedBox(height: T.s8),
+            InkWell(
+              key: const ValueKey('reasoning-effort-single-choice'),
+              borderRadius: BorderRadius.circular(T.rSm),
+              onTap: () => onChangeEnd(0),
+              child: Container(
+                width: double.infinity,
+                height: 34,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: T.accentSoft.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(T.rSm),
+                  border: Border.all(color: T.accent),
+                ),
+                child: Text('使用$currentLabel档', style: T.tCaption),
+              ),
+            ),
           ],
+          const SizedBox(height: T.s8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  automaticLabel.isEmpty ? '模型默认档位未标注' : '模型默认：$automaticLabel',
+                  key: const ValueKey('reasoning-model-default'),
+                  style: T.tCaption.copyWith(
+                    color: usesModelDefault ? T.accentStrong : T.muted,
+                  ),
+                ),
+              ),
+              if (onResetDefault case final reset?)
+                _ResetDefaultAction(onTap: reset),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _DefaultOnlyControl extends StatelessWidget {
+  const _DefaultOnlyControl({
+    required this.label,
+    required this.usesModelDefault,
+    required this.onResetDefault,
+  });
+
+  final String label;
+  final bool usesModelDefault;
+  final VoidCallback? onResetDefault;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(T.s8),
+      decoration: BoxDecoration(
+        color: T.accentSoft.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(T.rSm),
+        border: Border.all(color: T.line),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: T.tCaption)),
+          if (usesModelDefault)
+            const _ModelDefaultBadge()
+          else if (onResetDefault case final reset?)
+            _ResetDefaultAction(onTap: reset),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModelDefaultBadge extends StatelessWidget {
+  const _ModelDefaultBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('reasoning-default-badge'),
+      padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: 2),
+      decoration: BoxDecoration(
+        color: T.accentSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: T.accent.withValues(alpha: 0.72)),
+      ),
+      child: Text(
+        '模型默认',
+        style: T.tCaption.copyWith(
+          color: T.accentStrong,
+          fontWeight: T.wMedium,
+        ),
+      ),
+    );
+  }
+}
+
+class _ResetDefaultAction extends StatelessWidget {
+  const _ResetDefaultAction({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      key: const ValueKey('reasoning-reset-default'),
+      borderRadius: BorderRadius.circular(T.rSm),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: T.s8, vertical: T.s4),
+        child: Text(
+          '恢复模型默认',
+          style: T.tCaption.copyWith(
+            color: T.accentStrong,
+            fontWeight: T.wMedium,
+          ),
+        ),
       ),
     );
   }

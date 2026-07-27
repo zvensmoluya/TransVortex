@@ -98,7 +98,7 @@ class JobLine extends StatelessWidget {
                   const SizedBox(width: 2),
                   _Word(
                     key: const ValueKey('job-reasoning-effort'),
-                    label: view.reasoningSupport.compactLabel,
+                    label: view.reasoningLabel,
                     leadingIcon: Icons.bolt_rounded,
                     tooltip: '本次思考程度：${view.reasoningDetail}',
                     onPick: onPickReasoning,

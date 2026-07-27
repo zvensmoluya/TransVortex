@@ -69,22 +69,29 @@ class ReasoningEffortSupport {
   }
 
   String get compactLabel {
-    if (currentValue == reasoningEffortAuto && automaticEffort.isNotEmpty) {
-      return '自动 · ${reasoningEffortLabel(automaticEffort)}';
-    }
-    return reasoningEffortLabel(currentValue);
+    return displayLabel;
   }
 
   String get displayLabel {
-    if (currentValue == reasoningEffortAuto && automaticEffort.isNotEmpty) {
-      return reasoningEffortLabel(automaticEffort);
+    if (currentValue == reasoningEffortAuto) {
+      final automatic = normalizeReasoningEffort(automaticEffort);
+      return automaticEffort.isEmpty ||
+              automatic == reasoningEffortAuto ||
+              automatic == reasoningEffortServiceDefault
+          ? '模型默认'
+          : reasoningEffortLabel(automatic);
     }
     return reasoningEffortLabel(currentValue);
   }
 
   String get detailLabel {
-    if (currentValue == reasoningEffortAuto && automaticEffort.isNotEmpty) {
-      return '自动（当前：${reasoningEffortLabel(automaticEffort)}）';
+    if (currentValue == reasoningEffortAuto) {
+      final automatic = normalizeReasoningEffort(automaticEffort);
+      return automaticEffort.isEmpty ||
+              automatic == reasoningEffortAuto ||
+              automatic == reasoningEffortServiceDefault
+          ? '模型默认'
+          : '${reasoningEffortLabel(automatic)}（模型默认）';
     }
     return reasoningEffortLabel(currentValue);
   }
@@ -187,8 +194,12 @@ ReasoningEffortSupport buildReasoningEffortSupport({
       for (final value in normalizedValues)
         ReasoningEffortChoice(
           value: value,
-          label: value == reasoningEffortAuto && automatic.isNotEmpty
-              ? '自动（当前：${reasoningEffortLabel(automatic)}）'
+          label: value == reasoningEffortAuto
+              ? automatic.isNotEmpty &&
+                        automatic != reasoningEffortAuto &&
+                        automatic != reasoningEffortServiceDefault
+                    ? '模型默认（${reasoningEffortLabel(automatic)}）'
+                    : '模型默认'
               : reasoningEffortLabel(value),
         ),
     ],

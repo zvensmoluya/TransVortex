@@ -359,10 +359,7 @@ void main() {
         controller.selectModel('openai/gpt-5.6-terra');
 
         expect(controller.connectionTestReasoningSupport.supported, isTrue);
-        expect(
-          controller.connectionTestReasoningSupport.compactLabel,
-          '自动 · 低',
-        );
+        expect(controller.connectionTestReasoningSupport.compactLabel, '低');
 
         controller.setConnectionTestReasoningEffort('high');
         await controller.testConnection();
@@ -733,7 +730,12 @@ void main() {
         controller.toggleDiscoveredModel('gpt-4o-mini');
 
         expect(controller.draft.models, contains('gpt-4o-mini'));
-        expect(controller.selectedModel, 'gpt-4o-mini');
+        expect(
+          controller.selectedModel,
+          'gpt-4o',
+          reason:
+              'enabling an upstream model must not change the model being edited',
+        );
         final methods = callsAfterInitialLoad().map((c) => c.method).toList();
         expect(methods, isNot(contains('provider.routing.save')));
       },

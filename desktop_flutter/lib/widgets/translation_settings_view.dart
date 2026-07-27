@@ -123,7 +123,16 @@ class _TranslationSettingsViewState extends State<TranslationSettingsView> {
     final networkKey = '${c.networkMode}:${c.proxyPort}';
     if (networkKey != _seededNetworkKey) {
       _seededNetworkKey = networkKey;
-      _proxyPort.text = c.proxyPort;
+      // User edits already live in this controller. Reassigning the same text
+      // after every controller notification resets the caret on desktop and
+      // makes subsequent digits overwrite the previous one. Only reseed when
+      // the authoritative value actually differs (initial load/external sync).
+      if (_proxyPort.text != c.proxyPort) {
+        _proxyPort.value = TextEditingValue(
+          text: c.proxyPort,
+          selection: TextSelection.collapsed(offset: c.proxyPort.length),
+        );
+      }
     }
     final discoveryContext = '${c.creating}:${c.modelDiscoveryKey}';
     if (!c.isBusy && discoveryContext != _seededModelDiscoveryContext) {
