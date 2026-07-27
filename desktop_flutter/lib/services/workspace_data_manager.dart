@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'desktop_app_paths.dart';
 
 const String workspaceMarkerName = '.transvortex-workspace.json';
+const String agentHandoffCacheName = 'AgentHandoffs';
+const String agentHandoffStateName = 'handoff.json';
 
 typedef WorkspacePathsResolver = DesktopAppPaths Function();
 typedef WorkspaceCopyProgress = void Function(int copiedBytes, int totalBytes);
@@ -93,6 +96,11 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
     final cache = currentPaths().cacheRoot.absolute;
     if (!await cache.exists()) return;
     await for (final entity in cache.list(followLinks: false)) {
+      if (entity is Directory &&
+          _basename(entity.path) == agentHandoffCacheName) {
+        await _clearAgentHandoffCache(entity);
+        continue;
+      }
       await entity.delete(recursive: true);
     }
   }
@@ -213,6 +221,31 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
         await source.list(followLinks: false).isEmpty) {
       await source.delete();
     }
+  }
+}
+
+Future<void> _clearAgentHandoffCache(Directory root) async {
+  await for (final entity in root.list(followLinks: false)) {
+    if (entity is Directory && await _isActiveAgentHandoff(entity)) continue;
+    await entity.delete(recursive: true);
+  }
+  if (await root.exists() && await root.list(followLinks: false).isEmpty) {
+    await root.delete();
+  }
+}
+
+Future<bool> _isActiveAgentHandoff(Directory directory) async {
+  final stateFile = File(_join(directory.path, agentHandoffStateName));
+  if (!await stateFile.exists()) return false;
+  try {
+    final decoded = jsonDecode(await stateFile.readAsString());
+    return decoded is Map &&
+        decoded['schema_version'] == 1 &&
+        decoded['product'] == 'TransVortex' &&
+        decoded['handoff_id'] == _basename(directory.path) &&
+        decoded['status'] == 'launched';
+  } on Object {
+    return false;
   }
 }
 

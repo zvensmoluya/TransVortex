@@ -517,8 +517,19 @@ void main() {
       ),
     );
     final bridge = WindowStateBridge.main(WindowStateStore());
+    var openedCodex = false;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') return _desktopSnapshot().raw;
+      if (method == 'agent.client.get') return _codexAgentClientPayload();
+      if (method == 'agent.client.open') {
+        openedCodex = true;
+        return {
+          'launched': true,
+          'pid': 100,
+          'workspace': r'D:\TransVortex\Cache\AgentHandoffs\ClientOpen',
+          'client': _codexAgentClientPayload(),
+        };
+      }
       if (method == 'agent.entry.get') {
         return {
           'schema_version': 1,
@@ -570,7 +581,9 @@ void main() {
     await tester.tap(find.text('Agent / CLI'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Agent 接入已就绪'), findsOneWidget);
+    expect(find.text('Codex CLI 已就绪'), findsOneWidget);
+    expect(find.text('TransVortex Agent 接口'), findsOneWidget);
+    expect(find.text('打开 Codex'), findsOneWidget);
     expect(find.text('复制交接信息'), findsOneWidget);
     expect(find.text('定位稳定入口'), findsOneWidget);
     expect(find.text('打开版本文档'), findsOneWidget);
@@ -582,6 +595,11 @@ void main() {
     await tester.pump();
     expect(clipboardText, 'read stable entry');
     expect(find.text('交接信息已复制，可交给 Agent。'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('agent-client-open')));
+    await tester.pump();
+    expect(openedCodex, isTrue);
+    expect(find.text('Codex CLI 已打开，尚未发送任务。'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('agent-entry-reveal')));
     await tester.pump();
@@ -3979,7 +3997,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR settings copy the on-demand Agent environment handoff', (
+  testWidgets('ASR settings confirm, copy, and send scoped Agent handoffs', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
@@ -4002,6 +4020,8 @@ void main() {
     );
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? launchParams;
+    var clientReady = true;
     bridge.attachServiceCaller((method, params) async {
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
@@ -4022,6 +4042,21 @@ void main() {
             'register': 'register existing resources',
             'full': 'read ASR workflow',
           },
+        };
+      }
+      if (method == 'agent.client.get') {
+        return _codexAgentClientPayload(ready: clientReady);
+      }
+      if (method == 'agent.handoff.launch') {
+        launchParams = Map<String, Object?>.from(params);
+        return {
+          'launched': true,
+          'pid': 101,
+          'workspace': r'D:\TransVortex\Cache\AgentHandoffs\handoff_1',
+          'handoff_id': 'handoff_1',
+          'workflow': 'asr_environment',
+          'scope': params['scope'],
+          'client': _codexAgentClientPayload(),
         };
       }
       throw RpcRemoteException('method_not_found', method);
@@ -4047,8 +4082,42 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('asr-agent-scope-accelerator')));
     await tester.pumpAndSettle();
 
+    expect(clipboardText, isNull);
+    expect(find.text('交给 Agent'), findsWidgets);
+    expect(find.text('准备 GPU 加速'), findsOneWidget);
+    expect(find.text('发送给 Codex'), findsOneWidget);
+    expect(find.textContaining('Codex 账户额度'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('agent-handoff-copy')));
+    await tester.pumpAndSettle();
     expect(clipboardText, 'prepare NVIDIA resources');
-    expect(find.text('“准备 GPU 加速”已复制，可交给 Agent；返回本窗口时会自动刷新。'), findsOneWidget);
+    expect(find.text('“准备 GPU 加速”交接已复制；返回本窗口时会自动刷新。'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('asr-agent-scope-model')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-handoff-send')));
+    await tester.pumpAndSettle();
+
+    expect(launchParams, {
+      'workflow': 'asr_environment',
+      'scope': 'prepare_model',
+    });
+    expect(find.text('“准备模型”已发送给 Codex；返回本窗口时会自动刷新。'), findsOneWidget);
+
+    clientReady = false;
+    await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('asr-agent-scope-inspect')));
+    await tester.pumpAndSettle();
+    expect(find.text('未检测到 Codex CLI，仍可复制交接。'), findsOneWidget);
+    final sendButton = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('agent-handoff-send')),
+    );
+    expect(sendButton.onPressed, isNull);
+    await tester.tap(find.byKey(const ValueKey('agent-handoff-copy')));
+    await tester.pumpAndSettle();
+    expect(clipboardText, 'inspect this machine');
     expectNoFlutterException();
   });
 
@@ -7177,6 +7246,23 @@ LocalServiceController _readyController({DesktopSnapshot? snapshot}) {
       snapshot: snapshot ?? _desktopSnapshot(),
     ),
   );
+}
+
+Map<String, Object?> _codexAgentClientPayload({bool ready = true}) {
+  return {
+    'schema_version': 1,
+    'id': 'codex_cli',
+    'name': 'Codex CLI',
+    'default': true,
+    'detected': ready,
+    'ready': ready,
+    'launch_supported': true,
+    'executable': ready ? r'C:\Users\tester\AppData\Roaming\npm\codex.cmd' : '',
+    'version': ready ? '0.144.6' : '',
+    'version_label': ready ? 'codex-cli 0.144.6' : '',
+    'status_code': ready ? 'ready' : 'codex_cli_not_found',
+    'message': ready ? 'Codex CLI is ready' : 'Codex CLI was not found',
+  };
 }
 
 Map<String, Object?> _managedAsrResources({bool modelInstalled = true}) {

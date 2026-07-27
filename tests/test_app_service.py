@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import transvortex.app_service as app_service_module
 from transvortex.app.desktop_api import DesktopApi, task_payload
@@ -101,6 +102,52 @@ def test_agent_entry_rpc_reports_source_runtime_as_unregistered(tmp_path: Path) 
     assert response["error"]["code"] == "agent_install_not_registered"
 
 
+def test_agent_client_rpc_returns_codex_status(tmp_path: Path, monkeypatch) -> None:
+    expected = {
+        "id": "codex_cli",
+        "name": "Codex CLI",
+        "ready": True,
+        "version": "0.144.6",
+    }
+    monkeypatch.setattr("transvortex.app.desktop_api.codex_client_status", lambda: expected)
+
+    response = handle_line(DesktopApi(root_dir=tmp_path), _request("agent.client.get"), root_dir=tmp_path)
+
+    assert response["result"] == expected
+
+
+def test_agent_handoff_rpc_uses_advertised_scope_and_cache(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setattr(
+        "transvortex.app.desktop_api.agent_entry_service_payload",
+        lambda *, config_root: {
+            "config_root": str(config_root),
+            "asr_environment_handoffs": {"prepare_model": "prepare and verify the model"},
+        },
+    )
+    captured: dict[str, Any] = {}
+
+    def launch(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True, "launched": True, "handoff_id": "handoff_test"}
+
+    monkeypatch.setattr("transvortex.app.desktop_api.launch_asr_agent_handoff", launch)
+
+    response = handle_line(
+        DesktopApi(root_dir=tmp_path),
+        _request(
+            "agent.handoff.launch",
+            {"workflow": "asr_environment", "scope": "prepare_model"},
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"]["handoff_id"] == "handoff_test"
+    assert captured["scope"] == "prepare_model"
+    assert captured["handoff_text"] == "prepare and verify the model"
+    assert captured["cache_root"] == tmp_path / "artifacts" / ".cache"
+
+
 def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     _write_config(tmp_path)
     stopped = []
@@ -118,6 +165,8 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert info["result"]["protocol_version"] == 1
     assert "runtime_pump" in info["result"]["capabilities"]
     assert "derived_translation" in info["result"]["capabilities"]
+    assert "agent_client" in info["result"]["capabilities"]
+    assert "agent_handoff" in info["result"]["capabilities"]
     assert "asr_model_discovery" in info["result"]["capabilities"]
     assert "asr_accelerator_probe" in info["result"]["capabilities"]
     assert "asr_resource_activation" in info["result"]["capabilities"]
@@ -967,6 +1016,28 @@ def test_app_service_rejects_workspace_switch_with_queued_task(tmp_path: Path, m
 
     response = handle_line(
         service,
+        _request("workspace.storage.set", {"workspace_root": str(tmp_path / "Next")}),
+        root_dir=config_root,
+    )
+
+    assert response["error"]["code"] == "workspace_busy"
+    assert not (config_root / "workspace_storage.json").exists()
+
+
+def test_app_service_rejects_workspace_switch_with_active_agent_handoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_root = tmp_path / "Config"
+    config_root.mkdir()
+    _write_config(config_root)
+    monkeypatch.setattr(
+        "transvortex.app.desktop_api.has_active_agent_handoffs",
+        lambda _cache_root: True,
+    )
+
+    response = handle_line(
+        DesktopApi(root_dir=config_root),
         _request("workspace.storage.set", {"workspace_root": str(tmp_path / "Next")}),
         root_dir=config_root,
     )

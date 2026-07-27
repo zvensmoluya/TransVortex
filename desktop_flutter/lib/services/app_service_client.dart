@@ -588,6 +588,25 @@ class AppServiceClient {
     return AgentEntryInfo.fromJson(await _transport.call('agent.entry.get'));
   }
 
+  Future<AgentClientInfo> agentClient() async {
+    return AgentClientInfo.fromJson(await _transport.call('agent.client.get'));
+  }
+
+  Future<AgentLaunchResult> openAgentClient() async {
+    return AgentLaunchResult.fromJson(
+      await _transport.call('agent.client.open'),
+    );
+  }
+
+  Future<AgentLaunchResult> launchAsrAgentHandoff(String scope) async {
+    return AgentLaunchResult.fromJson(
+      await _transport.call('agent.handoff.launch', {
+        'workflow': 'asr_environment',
+        'scope': scope,
+      }),
+    );
+  }
+
   Future<DesktopSnapshot> desktopSnapshot() async {
     return DesktopSnapshot.fromJson(await _transport.call('desktop.snapshot'));
   }
@@ -1076,6 +1095,90 @@ class AgentEntryInfo {
   }
 
   String documentPath(String name) => _stringValue(documents[name]) ?? '';
+}
+
+class AgentClientInfo {
+  const AgentClientInfo({
+    required this.schemaVersion,
+    required this.id,
+    required this.name,
+    required this.isDefault,
+    required this.detected,
+    required this.ready,
+    required this.launchSupported,
+    required this.executable,
+    required this.version,
+    required this.versionLabel,
+    required this.statusCode,
+    required this.message,
+  });
+
+  final int schemaVersion;
+  final String id;
+  final String name;
+  final bool isDefault;
+  final bool detected;
+  final bool ready;
+  final bool launchSupported;
+  final String executable;
+  final String version;
+  final String versionLabel;
+  final String statusCode;
+  final String message;
+
+  factory AgentClientInfo.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AgentClientInfo(
+      schemaVersion: _intValue(map['schema_version']) ?? 0,
+      id: _stringValue(map['id']) ?? '',
+      name: _stringValue(map['name']) ?? 'Codex CLI',
+      isDefault: map['default'] == true,
+      detected: map['detected'] == true,
+      ready: map['ready'] == true,
+      launchSupported: map['launch_supported'] == true,
+      executable: _stringValue(map['executable']) ?? '',
+      version: _stringValue(map['version']) ?? '',
+      versionLabel: _stringValue(map['version_label']) ?? '',
+      statusCode: _stringValue(map['status_code']) ?? 'unknown',
+      message: _stringValue(map['message']) ?? '',
+    );
+  }
+}
+
+class AgentLaunchResult {
+  const AgentLaunchResult({
+    required this.launched,
+    required this.pid,
+    required this.workspace,
+    required this.handoffId,
+    required this.handoffDocument,
+    required this.workflow,
+    required this.scope,
+    required this.client,
+  });
+
+  final bool launched;
+  final int? pid;
+  final String workspace;
+  final String handoffId;
+  final String handoffDocument;
+  final String workflow;
+  final String scope;
+  final AgentClientInfo client;
+
+  factory AgentLaunchResult.fromJson(Object? value) {
+    final map = _stringMap(value);
+    return AgentLaunchResult(
+      launched: map['launched'] == true,
+      pid: _intValue(map['pid']),
+      workspace: _stringValue(map['workspace']) ?? '',
+      handoffId: _stringValue(map['handoff_id']) ?? '',
+      handoffDocument: _stringValue(map['handoff_document']) ?? '',
+      workflow: _stringValue(map['workflow']) ?? '',
+      scope: _stringValue(map['scope']) ?? '',
+      client: AgentClientInfo.fromJson(map['client']),
+    );
+  }
 }
 
 class ServiceHealth {

@@ -143,6 +143,18 @@ def test_release_pipeline_requires_windowless_python() -> None:
         assert "pythonw.exe" in content, relative_path
 
 
+def test_release_pipeline_requires_the_agent_client_runtime_module() -> None:
+    packaging = (ROOT / "scripts" / "package_flutter_release.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"python\\Lib\\site-packages\\transvortex\\app\\agent_client.py"' in packaging
+    assert (
+        '"runtime\\python\\Lib\\site-packages\\transvortex\\app\\agent_client.py"'
+        in packaging
+    )
+
+
 def test_release_packages_an_empty_provider_seed_and_a_neutral_example() -> None:
     product_seed = yaml.safe_load(
         (ROOT / "providers.desktop.yaml").read_text(encoding="utf-8")

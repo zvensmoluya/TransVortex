@@ -273,6 +273,64 @@ void main() {
     expect(entry.asrEnvironmentHandoffs['prepare_model'], 'model handoff');
   });
 
+  test(
+    'AppServiceClient parses and launches the default Agent client',
+    () async {
+      final clientPayload = {
+        'schema_version': 1,
+        'id': 'codex_cli',
+        'name': 'Codex CLI',
+        'default': true,
+        'detected': true,
+        'ready': true,
+        'launch_supported': true,
+        'executable': r'C:\Users\tester\AppData\Roaming\npm\codex.cmd',
+        'version': '0.144.6',
+        'version_label': 'codex-cli 0.144.6',
+        'status_code': 'ready',
+        'message': 'Codex CLI is ready',
+      };
+      final transport = _RecordingTransport({
+        'agent.client.get': clientPayload,
+        'agent.client.open': {
+          'launched': true,
+          'pid': 100,
+          'workspace': r'D:\TransVortex\Cache\AgentHandoffs\ClientOpen',
+          'client': clientPayload,
+        },
+        'agent.handoff.launch': {
+          'launched': true,
+          'pid': 101,
+          'workspace': r'D:\TransVortex\Cache\AgentHandoffs\handoff_1',
+          'handoff_id': 'handoff_1',
+          'handoff_document':
+              r'D:\TransVortex\Cache\AgentHandoffs\handoff_1\handoff.md',
+          'workflow': 'asr_environment',
+          'scope': 'prepare_model',
+          'client': clientPayload,
+        },
+      });
+      final client = AppServiceClient(transport);
+
+      final status = await client.agentClient();
+      final opened = await client.openAgentClient();
+      final handoff = await client.launchAsrAgentHandoff('prepare_model');
+
+      expect(status.ready, isTrue);
+      expect(status.version, '0.144.6');
+      expect(status.executable, endsWith('codex.cmd'));
+      expect(opened.launched, isTrue);
+      expect(opened.pid, 100);
+      expect(handoff.handoffId, 'handoff_1');
+      expect(handoff.scope, 'prepare_model');
+      expect(transport.calls.last.method, 'agent.handoff.launch');
+      expect(transport.calls.last.params, {
+        'workflow': 'asr_environment',
+        'scope': 'prepare_model',
+      });
+    },
+  );
+
   test('ServiceHealth active task label uses user facing text', () {
     final active = ServiceHealth.fromJson({
       'service': 'transvortex.app_service',

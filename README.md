@@ -113,8 +113,11 @@ transvortex asr setup-verify --json --strict
 ```
 
 契约不会自行安装 Whisper、CUDA、模型或凭据，也不表示用户已经批准 apply。
-Flutter 的“应用设置 → Agent / CLI”可以复制短交接并打开当前资料；语音识别
-设置中的“交给 Agent”只附加 ASR workflow 指针，不把整份 Prompt 写入剪贴板。
+Flutter 的“应用设置 → Agent / CLI”会检测用户环境中的 Codex CLI，并把客户端
+状态与 TransVortex 的稳定 Agent 接口分开显示。语音识别设置中的“交给 Agent”
+先确认任务范围，再允许复制短交接或发送给 Codex；直接发送会在工作区缓存中
+创建一次性交接目录，通过交互式 `codex -C` 打开新会话，不覆盖用户的 Codex
+审批与沙箱设置。
 其中 setup-plan 的 `ok` 只表示契约生成成功；是否可运行要看 `ready`、
 `plan_status` 和 `blocking_items`，最终以 setup-verify 的 `ok` 为准。
 

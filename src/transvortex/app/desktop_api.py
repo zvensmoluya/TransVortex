@@ -31,6 +31,13 @@ from ..providers.model_catalog import model_catalog_payload
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
 from ..utils import read_json, to_plain
+from .agent_client import (
+    AgentClientError,
+    codex_client_status,
+    has_active_agent_handoffs,
+    launch_asr_agent_handoff,
+    launch_codex_client,
+)
 from .agent_entry import AgentEntryError, agent_entry_service_payload
 from .asr_admin import (
     activate_asr_resources,
@@ -89,6 +96,8 @@ SERVICE_CAPABILITIES = [
     "asr_resource_activation",
     "asr_environment_probe",
     "agent_entry",
+    "agent_client",
+    "agent_handoff",
     "media_inspection",
     "result_workspace",
     "event_cursor",
@@ -135,6 +144,9 @@ class DesktopApi:
             "desktop.ping": self.ping,
             "desktop.snapshot": self.desktop_snapshot,
             "agent.entry.get": self.agent_entry_get,
+            "agent.client.get": self.agent_client_get,
+            "agent.client.open": self.agent_client_open,
+            "agent.handoff.launch": self.agent_handoff_launch,
             "catalog.status": self.catalog_status,
             "catalog.rebuild": self.catalog_rebuild,
             "config.get": self.config_get,
@@ -229,6 +241,34 @@ class DesktopApi:
         try:
             return agent_entry_service_payload(config_root=self.root_dir)
         except AgentEntryError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def agent_client_get(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return codex_client_status()
+
+    def agent_client_open(self, _params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        try:
+            return launch_codex_client(cache_root=config.pipeline.cache_dir)
+        except AgentClientError as exc:
+            raise DesktopApiError(exc.code, str(exc)) from exc
+
+    def agent_handoff_launch(self, params: dict[str, Any]) -> dict[str, Any]:
+        workflow = _optional_text(params, "workflow") or "asr_environment"
+        if workflow != "asr_environment":
+            raise DesktopApiError("agent_handoff_workflow_invalid", "Unsupported Agent handoff workflow")
+        scope = _required_text(params, "scope")
+        try:
+            entry = agent_entry_service_payload(config_root=self.root_dir)
+            handoffs = entry.get("asr_environment_handoffs")
+            handoff_text = handoffs.get(scope, "") if isinstance(handoffs, dict) else ""
+            config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+            return launch_asr_agent_handoff(
+                cache_root=config.pipeline.cache_dir,
+                scope=scope,
+                handoff_text=str(handoff_text),
+            )
+        except (AgentClientError, AgentEntryError) as exc:
             raise DesktopApiError(exc.code, str(exc)) from exc
 
     def ping(self, _params: dict[str, Any]) -> dict[str, Any]:
@@ -364,6 +404,11 @@ class DesktopApi:
             raise DesktopApiError(
                 "workspace_busy",
                 "Wait for active and queued tasks before changing the workspace",
+            )
+        if has_active_agent_handoffs(config.pipeline.cache_dir):
+            raise DesktopApiError(
+                "workspace_busy",
+                "Wait for active Agent handoffs before changing the workspace",
             )
         workspace_root = Path(_required_text(params, "workspace_root", "workspaceRoot")).expanduser()
         unexpected = _unexpected_workspace_entries(workspace_root)

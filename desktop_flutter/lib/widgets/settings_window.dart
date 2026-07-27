@@ -507,34 +507,34 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-full'),
                   leadingIcon: const Icon(Icons.build_circle_outlined),
-                  onPressed: () => _copyAsrAgentHandoff('full', '完整准备'),
+                  onPressed: () => _openAsrAgentHandoff('full', '完整准备'),
                   child: const Text('完整准备本机识别'),
                 ),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-model'),
                   leadingIcon: const Icon(Icons.view_in_ar_rounded),
                   onPressed: () =>
-                      _copyAsrAgentHandoff('prepare_model', '准备模型'),
+                      _openAsrAgentHandoff('prepare_model', '准备模型'),
                   child: const Text('只准备模型'),
                 ),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-accelerator'),
                   leadingIcon: const Icon(Icons.memory_rounded),
                   onPressed: () =>
-                      _copyAsrAgentHandoff('prepare_accelerator', '准备 GPU 加速'),
+                      _openAsrAgentHandoff('prepare_accelerator', '准备 GPU 加速'),
                   child: const Text('只准备 GPU 加速'),
                 ),
                 const Divider(height: 1),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-register'),
                   leadingIcon: const Icon(Icons.link_rounded),
-                  onPressed: () => _copyAsrAgentHandoff('register', '接入已有资源'),
+                  onPressed: () => _openAsrAgentHandoff('register', '接入已有资源'),
                   child: const Text('接入已有资源'),
                 ),
                 MenuItemButton(
                   key: const ValueKey('asr-agent-scope-inspect'),
                   leadingIcon: const Icon(Icons.manage_search_rounded),
-                  onPressed: () => _copyAsrAgentHandoff('inspect', '了解本机环境'),
+                  onPressed: () => _openAsrAgentHandoff('inspect', '了解本机环境'),
                   child: const Text('了解本机环境'),
                 ),
               ],
@@ -2231,7 +2231,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     }
   }
 
-  Future<void> _copyAsrAgentHandoff(String scope, String label) async {
+  Future<void> _openAsrAgentHandoff(String scope, String label) async {
     if (_copyingAgentHandoff) return;
     setState(() {
       _copyingAgentHandoff = true;
@@ -2239,7 +2239,12 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _message = null;
     });
     try {
-      final entry = await _client.agentEntry();
+      final results = await Future.wait<Object>([
+        _client.agentEntry(),
+        _client.agentClient(),
+      ]);
+      final entry = results[0] as AgentEntryInfo;
+      final agentClient = results[1] as AgentClientInfo;
       final scopedText = entry.asrEnvironmentHandoffs[scope]?.trim() ?? '';
       final text = scopedText.isNotEmpty
           ? scopedText
@@ -2247,9 +2252,35 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       if (text.isEmpty) {
         throw StateError('ASR Agent handoff is empty');
       }
-      await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      setState(() => _message = '“$label”已复制，可交给 Agent；返回本窗口时会自动刷新。');
+      setState(() => _copyingAgentHandoff = false);
+      final action = await showDialog<_AgentHandoffAction>(
+        context: context,
+        builder: (dialogContext) => _AgentHandoffDialog(
+          scope: scope,
+          label: label,
+          client: agentClient,
+        ),
+      );
+      if (action == null || !mounted) return;
+      setState(() => _copyingAgentHandoff = true);
+      switch (action) {
+        case _AgentHandoffAction.copy:
+          await Clipboard.setData(ClipboardData(text: text));
+          if (mounted) {
+            setState(() => _message = '“$label”交接已复制；返回本窗口时会自动刷新。');
+          }
+          break;
+        case _AgentHandoffAction.send:
+          final result = await _client.launchAsrAgentHandoff(scope);
+          if (!result.launched) {
+            throw StateError('Codex CLI did not launch');
+          }
+          if (mounted) {
+            setState(() => _message = '“$label”已发送给 Codex；返回本窗口时会自动刷新。');
+          }
+          break;
+      }
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlyAgentEntryError(error));
@@ -4975,6 +5006,116 @@ class _DiagnosticMetricStrip extends StatelessWidget {
   }
 }
 
+enum _AgentHandoffAction { copy, send }
+
+class _AgentHandoffDialog extends StatelessWidget {
+  const _AgentHandoffDialog({
+    required this.scope,
+    required this.label,
+    required this.client,
+  });
+
+  final String scope;
+  final String label;
+  final AgentClientInfo client;
+
+  @override
+  Widget build(BuildContext context) {
+    final version = client.version.isEmpty ? '' : ' · v${client.version}';
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.terminal_rounded, size: 21, color: T.accentStrong),
+          SizedBox(width: T.s8),
+          Text('交给 Agent'),
+        ],
+      ),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: T.tSection),
+            const SizedBox(height: T.s4),
+            Text(_agentHandoffScopeSummary(scope), style: T.tCaption),
+            const SizedBox(height: T.s16),
+            const Divider(height: 1, color: T.line),
+            const SizedBox(height: T.s12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  client.ready
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.error_outline_rounded,
+                  size: 18,
+                  color: client.ready ? T.ok : T.warn,
+                ),
+                const SizedBox(width: T.s8),
+                Expanded(
+                  child: Text(
+                    client.ready
+                        ? '发送至 Codex CLI$version'
+                        : _agentHandoffClientStatus(client),
+                    style: T.tBody,
+                  ),
+                ),
+              ],
+            ),
+            if (client.ready) ...[
+              const SizedBox(height: T.s8),
+              const Text(
+                '发送会创建新的 Codex 会话并使用你的 Codex 账户额度；命令审批沿用 Codex 当前设置。',
+                style: T.tCaption,
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('agent-handoff-cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        OutlinedButton.icon(
+          key: const ValueKey('agent-handoff-copy'),
+          onPressed: () => Navigator.of(context).pop(_AgentHandoffAction.copy),
+          icon: const Icon(Icons.content_copy_rounded, size: 17),
+          label: const Text('复制交接'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('agent-handoff-send'),
+          onPressed: client.ready
+              ? () => Navigator.of(context).pop(_AgentHandoffAction.send)
+              : null,
+          icon: const Icon(Icons.terminal_rounded, size: 17),
+          label: const Text('发送给 Codex'),
+        ),
+      ],
+    );
+  }
+}
+
+String _agentHandoffScopeSummary(String scope) {
+  return switch (scope) {
+    'inspect' => '只检查本机环境并给出可执行方案。',
+    'prepare_model' => '准备、接入并验证适合当前电脑的 Whisper 模型。',
+    'prepare_accelerator' => '准备、接入并验证本机 NVIDIA GPU 加速。',
+    'register' => '探测并接入用户已经准备好的模型或 GPU 资源。',
+    _ => '把本机语音识别环境准备到可用，并完成严格验证。',
+  };
+}
+
+String _agentHandoffClientStatus(AgentClientInfo client) {
+  return switch (client.statusCode) {
+    'codex_cli_not_found' => '未检测到 Codex CLI，仍可复制交接。',
+    'codex_cli_terminal_unsupported' => '当前系统暂不支持直接打开 Codex CLI。',
+    _ => 'Codex CLI 当前不可用，仍可复制交接。',
+  };
+}
+
 class _DiagnosticCount extends StatelessWidget {
   const _DiagnosticCount({required this.status, required this.count});
 
@@ -5071,8 +5212,24 @@ String? _stringValue(Object? value) {
 String _friendlySettingsError(Object error) => friendlySettingsError(error);
 
 String _friendlyAgentEntryError(Object error) {
-  if (error is RpcRemoteException && error.code.startsWith('agent_')) {
-    return '当前运行方式没有可用的安装版 Agent 入口。';
+  if (error is RpcRemoteException) {
+    if (const {
+      'agent_install_not_registered',
+      'agent_install_invalid',
+      'agent_documents_missing',
+      'agent_cli_missing',
+    }.contains(error.code)) {
+      return '当前运行方式没有可用的安装版 Agent 入口。';
+    }
+    return switch (error.code) {
+      'codex_cli_not_found' => '没有检测到 Codex CLI，请确认安装后可从 PATH 启动。',
+      'codex_cli_probe_failed' => 'Codex CLI 已找到，但当前无法运行。',
+      'codex_cli_terminal_unsupported' => '当前系统暂不支持从 TransVortex 打开 Codex CLI。',
+      'codex_cli_launch_failed' => 'Codex CLI 启动失败，请在终端中检查 codex 是否可用。',
+      'agent_handoff_scope_invalid' ||
+      'agent_handoff_workflow_invalid' => '这项 Agent 任务当前不可用。',
+      _ => _friendlySettingsError(error),
+    };
   }
   return _friendlySettingsError(error);
 }

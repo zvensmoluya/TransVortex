@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -98,6 +99,55 @@ void main() {
 
     expect(await paths.cacheRoot.list().isEmpty, isTrue);
     expect(await paths.tasksRoot.exists(), isTrue);
+  });
+
+  test('cache cleanup preserves active Agent handoff workspaces', () async {
+    final handoffRoot = Directory(
+      '${paths.cacheRoot.path}${Platform.pathSeparator}$agentHandoffCacheName',
+    );
+    final active = Directory(
+      '${handoffRoot.path}${Platform.pathSeparator}handoff_active',
+    );
+    final completed = Directory(
+      '${handoffRoot.path}${Platform.pathSeparator}handoff_completed',
+    );
+    for (final directory in [active, completed]) {
+      await directory.create(recursive: true);
+      await File(
+        '${directory.path}${Platform.pathSeparator}handoff.md',
+      ).writeAsString('handoff');
+    }
+    await File(
+      '${active.path}${Platform.pathSeparator}$agentHandoffStateName',
+    ).writeAsString(
+      jsonEncode({
+        'schema_version': 1,
+        'product': 'TransVortex',
+        'handoff_id': 'handoff_active',
+        'status': 'launched',
+      }),
+    );
+    await File(
+      '${completed.path}${Platform.pathSeparator}$agentHandoffStateName',
+    ).writeAsString(
+      jsonEncode({
+        'schema_version': 1,
+        'product': 'TransVortex',
+        'handoff_id': 'handoff_completed',
+        'status': 'completed',
+      }),
+    );
+
+    await manager.clearCache();
+
+    expect(await active.exists(), isTrue);
+    expect(await completed.exists(), isFalse);
+    expect(
+      await File(
+        '${paths.cacheRoot.path}${Platform.pathSeparator}audio.tmp',
+      ).exists(),
+      isFalse,
+    );
   });
 
   test('discarding a failed copy keeps a pre-existing target folder', () async {

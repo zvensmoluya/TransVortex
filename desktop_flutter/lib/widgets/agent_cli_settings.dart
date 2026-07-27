@@ -22,6 +22,7 @@ class AgentCliSettings extends StatefulWidget {
 class _AgentCliSettingsState extends State<AgentCliSettings> {
   late final PathOpener _pathOpener = widget.pathOpener ?? SystemPathOpener();
   AgentEntryInfo? _entry;
+  AgentClientInfo? _agentClient;
   bool _loading = false;
   bool _acting = false;
   String? _message;
@@ -41,9 +42,15 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
       _error = null;
     });
     try {
-      final entry = await widget.client.agentEntry();
+      final results = await Future.wait<Object>([
+        widget.client.agentEntry(),
+        widget.client.agentClient(),
+      ]);
       if (!mounted) return;
-      setState(() => _entry = entry);
+      setState(() {
+        _entry = results[0] as AgentEntryInfo;
+        _agentClient = results[1] as AgentClientInfo;
+      });
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _agentEntryError(error));
@@ -76,6 +83,14 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
     );
   }
 
+  Future<void> _openClient() async {
+    if (_acting || _agentClient?.ready != true) return;
+    await _runAction(() async {
+      final result = await widget.client.openAgentClient();
+      if (!result.launched) throw StateError('Codex CLI did not launch');
+    }, success: 'Codex CLI 已打开，尚未发送任务。');
+  }
+
   Future<void> _runAction(
     Future<void> Function() action, {
     required String success,
@@ -98,10 +113,11 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
   @override
   Widget build(BuildContext context) {
     final entry = _entry;
-    if (_loading && entry == null) {
+    final agentClient = _agentClient;
+    if (_loading && (entry == null || agentClient == null)) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
-    if (entry == null) {
+    if (entry == null || agentClient == null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -122,10 +138,16 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
     return ToolPanel(
       footer: [
         ActionButton(
+          key: const ValueKey('agent-client-open'),
+          label: '打开 Codex',
+          icon: Icons.terminal_rounded,
+          strong: true,
+          onTap: _acting || !agentClient.ready ? null : _openClient,
+        ),
+        ActionButton(
           key: const ValueKey('agent-entry-copy'),
           label: '复制交接信息',
           icon: Icons.content_copy_rounded,
-          strong: true,
           onTap: _acting ? null : _copyEntry,
         ),
         ActionButton(
@@ -146,21 +168,30 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
           width: double.infinity,
           padding: const EdgeInsets.all(T.s12),
           decoration: BoxDecoration(
-            color: T.skySoft.withValues(alpha: 0.62),
+            color: agentClient.ready
+                ? T.skySoft.withValues(alpha: 0.62)
+                : T.warn.withValues(alpha: 0.10),
             border: Border.all(color: T.line),
             borderRadius: BorderRadius.circular(T.rSm),
           ),
           child: Row(
             children: [
-              const Icon(Icons.terminal_rounded, size: 20, color: T.sky),
+              Icon(
+                agentClient.ready
+                    ? Icons.terminal_rounded
+                    : Icons.error_outline_rounded,
+                size: 20,
+                color: agentClient.ready ? T.sky : T.warn,
+              ),
               const SizedBox(width: T.s8),
               Expanded(
                 child: Text(
-                  entry.registered ? 'Agent 接入已就绪' : 'Agent 接入未登记',
+                  _agentClientStatusLabel(agentClient),
                   style: T.tBody.copyWith(fontWeight: T.wBold),
                 ),
               ),
-              Text('v${entry.appVersion}', style: T.tCaption),
+              if (agentClient.version.isNotEmpty)
+                Text('v${agentClient.version}', style: T.tCaption),
             ],
           ),
         ),
@@ -173,39 +204,70 @@ class _AgentCliSettingsState extends State<AgentCliSettings> {
         ],
         const SizedBox(height: T.s16),
         SettingsSection(
-          title: '稳定交接入口',
+          title: 'Agent 客户端',
           children: [
-            ReadonlyRow(label: '交接文件', value: entry.entryDocument),
+            const ReadonlyRow(label: '默认接收', value: 'Codex CLI'),
             const SizedBox(height: T.s8),
-            ReadonlyRow(label: '安装定位', value: entry.entryState),
+            ReadonlyRow(
+              label: '检测状态',
+              value: agentClient.ready
+                  ? '可用'
+                  : _agentClientUnavailableLabel(agentClient),
+            ),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(
+              label: '客户端版本',
+              value: agentClient.versionLabel.isEmpty
+                  ? '未知'
+                  : agentClient.versionLabel,
+            ),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(label: '执行程序', value: agentClient.executable),
+            const SizedBox(height: T.s12),
+            ActionButton(
+              key: const ValueKey('agent-client-refresh'),
+              label: '重新检测',
+              icon: Icons.refresh_rounded,
+              onTap: _acting || _loading ? null : _load,
+            ),
           ],
         ),
         SettingsSection(
-          title: '当前版本资源',
-          children: [
-            ReadonlyRow(label: '程序目录', value: entry.installRoot),
-            const SizedBox(height: T.s8),
-            ReadonlyRow(label: '配置目录', value: entry.configRoot),
-            const SizedBox(height: T.s8),
-            ReadonlyRow(label: 'Agent 文档', value: entry.docsRoot),
-          ],
-        ),
-        SettingsSection(
-          title: 'CLI 契约',
+          title: 'TransVortex Agent 接口',
           divider: false,
           children: [
-            ReadonlyRow(
-              label: '执行程序',
-              value: entry.cliArgvPrefix.isEmpty
-                  ? ''
-                  : entry.cliArgvPrefix.first,
-            ),
+            ReadonlyRow(label: '接口状态', value: entry.registered ? '已登记' : '未登记'),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(label: '应用版本', value: 'v${entry.appVersion}'),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(label: '稳定入口', value: entry.entryDocument),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(label: '能力定位', value: entry.entryState),
+            const SizedBox(height: T.s8),
+            ReadonlyRow(label: '版本文档', value: entry.docsRoot),
             const SizedBox(height: T.s8),
             ReadonlyRow(label: '协议版本', value: entry.protocolVersion),
           ],
         ),
       ],
     );
+  }
+}
+
+String _agentClientStatusLabel(AgentClientInfo client) {
+  if (client.ready) return 'Codex CLI 已就绪';
+  if (!client.detected) return '未检测到 Codex CLI';
+  return 'Codex CLI 暂不可用';
+}
+
+String _agentClientUnavailableLabel(AgentClientInfo client) {
+  switch (client.statusCode) {
+    case 'codex_cli_not_found':
+      return '未检测到';
+    case 'codex_cli_terminal_unsupported':
+      return '当前系统不支持启动';
+    default:
+      return '运行异常';
   }
 }
 
@@ -218,6 +280,18 @@ String _agentEntryError(Object error) {
         'agent_cli_missing',
       }.contains(error.code)) {
     return '当前运行方式没有可用的安装版 Agent 入口。';
+  }
+  if (error is RpcRemoteException) {
+    switch (error.code) {
+      case 'codex_cli_not_found':
+        return '没有检测到 Codex CLI，请确认安装后可从 PATH 启动。';
+      case 'codex_cli_probe_failed':
+        return 'Codex CLI 已找到，但当前无法运行。';
+      case 'codex_cli_terminal_unsupported':
+        return '当前系统暂不支持从 TransVortex 打开 Codex CLI。';
+      case 'codex_cli_launch_failed':
+        return 'Codex CLI 启动失败，请在终端中检查 codex 是否可用。';
+    }
   }
   return friendlySettingsError(error);
 }
