@@ -62,6 +62,14 @@ void main() {
   test(
     'controller distinguishes external and app-managed Whisper models',
     () async {
+      final managed = MainWindowController(
+        service: _readyController(
+          snapshot: _desktopSnapshot(
+            asrKind: 'local_worker',
+            asrModelSource: 'managed',
+          ),
+        ),
+      );
       final external = MainWindowController(
         service: _readyController(
           snapshot: _desktopSnapshot(
@@ -83,9 +91,12 @@ void main() {
           ),
         ),
       );
+      addTearDown(managed.dispose);
       addTearDown(external.dispose);
+      await managed.startService();
       await external.startService();
 
+      expect(managed.view.asrLabel, '本机 Whisper · Large v3');
       expect(external.view.asrLabel, '本机 Whisper · 日语访谈模型（本地文件夹）');
     },
   );
