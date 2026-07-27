@@ -9,9 +9,11 @@
 状态：功能已实现，待真实服务验收。
 
 当前实现：
-- 已接入 OpenRouter `/api/v1/audio/transcriptions` JSON 传输、用户级凭据解析、桌面设置入口和模型专项 profile。
+- 已接入 OpenRouter `/api/v1/audio/transcriptions` JSON 传输、完整任务预检、用户级凭据解析、桌面设置入口和模型专项 profile。
 - 当前显式支持 `openai/whisper-large-v3` 与 `x-ai/grok-stt-1.0`，不会自动开放 OpenRouter 模型目录中的其他 transcription 模型。
 - Whisper profile 要求上游返回 segment timestamps；只有文本时明确失败。Grok profile 暂按短窗生成粗时间轴，并在界面标为“实验性”。
+- OpenRouter 平台层会解析官方结构化错误，区分余额不足、权限、限流、请求拒绝和上游不可用；重试会读取有界的 `Retry-After`，成功与失败诊断都会保留不含凭据的 `X-Generation-Id`。
+- 共享边界只覆盖 HTTP、错误和追踪元数据，不把 ASR profile、时间轴或请求字段与翻译 provider 共用。
 
 尚缺证据：
 - 自动测试只使用模拟 HTTP 响应，没有读取现有用户密钥，也没有产生 OpenRouter 计费请求。

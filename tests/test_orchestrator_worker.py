@@ -8,6 +8,7 @@ from textwrap import dedent
 from transvortex.core.orchestrator import (
     _asr_runs_concurrently,
     _checkpoint_status_payload,
+    _preflight,
     _translation_progress_callback,
     _write_translation_experiment_artifacts,
     create_pipeline_task,
@@ -222,6 +223,58 @@ providers:
             """
         ).strip(),
         encoding="utf-8",
+    )
+
+
+def test_openrouter_asr_protocol_passes_full_task_preflight(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  provider: openrouter_asr
+asr_providers:
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    base_url: https://openrouter.ai/api/v1
+    endpoint: /audio/transcriptions
+    model: openai/whisper-large-v3
+    auth:
+      type: bearer
+      env_key: OPENROUTER_API_KEY
+      credential_id: openrouter_asr
+        """.strip(),
+        encoding="utf-8",
+    )
+    input_file = tmp_path / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "example-token")
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.resolve_media_executable",
+        lambda name: Path(f"C:/bin/{name}.exe"),
+    )
+
+    task_id, artifacts_dir = create_pipeline_task(
+        root_dir=tmp_path,
+        input_file=input_file,
+        source_lang="ja",
+        target_lang="zh-CN",
+        input_type="video_asr",
+    )
+    config = load_app_config(root_dir=tmp_path)
+    store = TaskStore(artifacts_dir)
+
+    _preflight(
+        config,
+        store,
+        store.load_task(task_id),
+        None,
+        root_dir=tmp_path,
+        providers_file=None,
     )
 
 

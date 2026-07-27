@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from .openrouter import OPENROUTER_BASE_URL, OPENROUTER_ENV_KEY
 
-OPENROUTER_ASR_BASE_URL = "https://openrouter.ai/api/v1"
+
+OPENROUTER_ASR_BASE_URL = OPENROUTER_BASE_URL
 OPENROUTER_ASR_ENDPOINT = "/audio/transcriptions"
-OPENROUTER_ASR_ENV_KEY = "OPENROUTER_API_KEY"
+OPENROUTER_ASR_ENV_KEY = OPENROUTER_ENV_KEY
 OPENROUTER_ASR_CREDENTIAL_ID = "openrouter_asr"
 OPENROUTER_ASR_DEFAULT_MODEL = "openai/whisper-large-v3"
 

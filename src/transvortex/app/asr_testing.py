@@ -35,6 +35,24 @@ def _safe_transport_meta(raw: Any) -> dict[str, Any]:
     return {key: raw[key] for key in sorted(_SAFE_TRANSPORT_KEYS) if key in raw}
 
 
+def _safe_exception_details(exc: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {"error_type": type(exc).__name__}
+    for attribute in (
+        "status_code",
+        "retry_after_seconds",
+        "openrouter_error_type",
+        "provider_code",
+        "generation_id",
+    ):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            details[attribute] = value
+    transport_error_type = str(getattr(exc, "error_type", "") or "").strip()
+    if transport_error_type:
+        details["transport_error_type"] = transport_error_type
+    return details
+
+
 def run_asr_connection_test(
     provider: AsrProviderConfig,
     *,
@@ -66,7 +84,7 @@ def run_asr_connection_test(
             "provider": provider.name,
             "protocol": provider.protocol,
             "model": provider.model,
-            "error_type": type(exc).__name__,
+            **_safe_exception_details(exc),
         }
         ok = False
         code = _test_error_code(exc)
@@ -115,10 +133,15 @@ def _test_error_code(exc: Exception) -> str:
         "bad_schema",
         "auth_error",
         "bad_gateway",
+        "content_policy_violation",
         "connection_failed",
         "credential_missing",
         "http_error",
+        "invalid_request",
         "network_error",
+        "not_found",
+        "payload_too_large",
+        "payment_required",
         "provider_server_error",
         "provider_preflight_failed",
         "provider_timeout",
@@ -127,6 +150,7 @@ def _test_error_code(exc: Exception) -> str:
         "service_unreachable",
         "service_unavailable",
         "gateway_timeout",
+        "unprocessable",
         "unsupported_auth",
         "openrouter_asr_timestamps_missing",
         "unsupported_openrouter_asr_model",

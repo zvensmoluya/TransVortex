@@ -115,6 +115,8 @@ def _active_asr_provider(config: AppConfig):
 
 
 def _is_retryable_asr_exception(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) == 413:
+        return True
     if is_retryable_http_error(exc):
         return True
     lowered = str(exc).lower()
@@ -1163,7 +1165,11 @@ def _preflight(
             if readiness.get("can_run") is not True:
                 raise RuntimeError(f"ASR provider is not ready: {readiness.get('code', 'unavailable')}")
         elif asr_provider.kind in {"local_server", "remote"}:
-            if asr_provider.protocol not in {"openai_transcriptions", "funasr_openai"}:
+            if asr_provider.protocol not in {
+                "openai_transcriptions",
+                "funasr_openai",
+                "openrouter_stt",
+            }:
                 raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
             if asr_provider.auth.type == "bearer":
                 credential = resolve_credential(

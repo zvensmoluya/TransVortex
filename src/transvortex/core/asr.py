@@ -27,6 +27,7 @@ from ..app.asr_runtime import (
 )
 from ..app.models import AsrProviderConfig
 from ..http import DEFAULT_JSON_HEADERS, merge_default_headers, request_json_with_retry
+from ..openrouter import request_openrouter_json_with_retry
 from ..openrouter_asr import (
     require_openrouter_asr_model_profile,
 )
@@ -834,7 +835,7 @@ class OpenRouterSttAsrClient:
             payload[str(name)] = value
 
         url = _build_cloud_asr_url(self.config.base_url, self.config.endpoint)
-        response, transport_meta = request_json_with_retry(
+        response, transport_meta = request_openrouter_json_with_retry(
             "POST",
             url,
             json_payload=payload,

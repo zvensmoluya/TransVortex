@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 
 import httpx
@@ -16,17 +18,30 @@ DEFAULT_JSON_HEADERS = {
     "Accept": "application/json",
     "User-Agent": DEFAULT_USER_AGENT,
 }
-RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 524, 529}
+MAX_RETRY_AFTER_SECONDS = 60.0
 
 _HTTP2_AVAILABLE: bool | None = None
 _CLIENTS: dict[tuple, httpx.Client] = {}
 
 
 class HttpTransportError(RuntimeError):
-    def __init__(self, error_type: str, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        error_type: str,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_type = error_type
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
+StatusErrorFactory = Callable[[httpx.Response, str], HttpTransportError | None]
+PayloadErrorFactory = Callable[[Any, httpx.Response, str], HttpTransportError | None]
 
 
 def merge_default_headers(headers: dict[str, str] | None = None, **defaults: str) -> dict[str, str]:
@@ -210,6 +225,10 @@ def _classify_http_status(code: int) -> str:
         return "service_unavailable"
     if code == 504:
         return "gateway_timeout"
+    if code == 524:
+        return "gateway_timeout"
+    if code == 529:
+        return "service_unavailable"
     if 500 <= code <= 599:
         return "provider_server_error"
     return "bad_schema"
@@ -285,14 +304,44 @@ def response_text_preview(response: httpx.Response) -> str:
         return ""
 
 
-def raise_for_status(response: httpx.Response, *, context: str = "upstream") -> None:
+def response_retry_after_seconds(response: httpx.Response) -> float | None:
+    raw = str(response.headers.get("retry-after") or "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    return max(0.0, seconds)
+
+
+def raise_for_status(
+    response: httpx.Response,
+    *,
+    context: str = "upstream",
+    status_error_factory: StatusErrorFactory | None = None,
+) -> None:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        retry_after_seconds = response_retry_after_seconds(response)
+        if status_error_factory is not None:
+            mapped = status_error_factory(response, context)
+            if mapped is not None:
+                if mapped.retry_after_seconds is None:
+                    mapped.retry_after_seconds = retry_after_seconds
+                raise mapped from exc
         raise HttpTransportError(
             classify_http_error(exc),
             f"{context} returned HTTP {response.status_code}: {response_text_preview(response)}",
             status_code=response.status_code,
+            retry_after_seconds=retry_after_seconds,
         ) from exc
 
 
@@ -315,7 +364,8 @@ def transport_meta(
         "streaming": streaming,
         "attempts": max(1, int(attempts)),
     }
-    generation_id = str(response.headers.get("x-generation-id") or "").strip()
+    headers = getattr(response, "headers", {})
+    generation_id = str(headers.get("x-generation-id") or "").strip()
     if generation_id:
         meta["generation_id"] = generation_id
     if stream_meta:
@@ -346,6 +396,8 @@ def request_json_with_retry(
     context: str = "upstream",
     trust_env: bool = True,
     network: Any | None = None,
+    status_error_factory: StatusErrorFactory | None = None,
+    payload_error_factory: PayloadErrorFactory | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     attempts = max(1, int(retry or 1))
     request_headers = _request_headers(headers, json_body=json_payload is not None)
@@ -369,11 +421,19 @@ def request_json_with_retry(
                     files=files,
                     headers=request_headers,
                 )
-                raise_for_status(response, context=context)
+                raise_for_status(
+                    response,
+                    context=context,
+                    status_error_factory=status_error_factory,
+                )
                 try:
                     payload = response.json()
                 except json.JSONDecodeError as exc:
                     raise HttpTransportError("bad_schema", f"bad_schema: invalid JSON response: {exc}") from exc
+                if payload_error_factory is not None:
+                    payload_error = payload_error_factory(payload, response, context)
+                    if payload_error is not None:
+                        raise payload_error
                 return payload, transport_meta(
                     response,
                     streaming=False,
@@ -384,7 +444,14 @@ def request_json_with_retry(
                 last_exc = exc
                 if attempt + 1 >= attempts or not is_retryable_http_error(exc):
                     raise
-                time.sleep(min(0.5 * (2**attempt), 4.0))
+                retry_after_seconds = getattr(exc, "retry_after_seconds", None)
+                delay = (
+                    float(retry_after_seconds)
+                    if isinstance(retry_after_seconds, (int, float))
+                    and retry_after_seconds > 0
+                    else min(0.5 * (2**attempt), 4.0)
+                )
+                time.sleep(min(delay, MAX_RETRY_AFTER_SECONDS))
         if last_exc is not None:
             raise last_exc
         raise HttpTransportError("network_error", "http request failed before attempting request")

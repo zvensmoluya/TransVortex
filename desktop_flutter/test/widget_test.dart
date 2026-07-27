@@ -4325,6 +4325,7 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     Map<String, Object?>? testedDraft;
+    var asrTestResult = <String, Object?>{'ok': true, 'code': 'ready'};
     final openRouterProvider = <String, Object?>{
       'name': 'openrouter_asr',
       'kind': 'remote',
@@ -4365,7 +4366,7 @@ void main() {
         testedDraft = Map<String, Object?>.from(
           params['provider_draft']! as Map,
         );
-        return {'ok': true, 'code': 'ready'};
+        return asrTestResult;
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -4380,6 +4381,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('OpenRouter'), findsOneWidget);
+    expect(find.text('Whisper / Grok'), findsOneWidget);
     expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
     expect(find.textContaining('时间轴候选：要求分段时间戳'), findsOneWidget);
     expect(find.textContaining('音频会上传到 OpenRouter'), findsOneWidget);
@@ -4399,6 +4401,11 @@ void main() {
     expect(testedDraft?['base_url'], 'https://openrouter.ai/api/v1');
     expect(testedDraft?['endpoint'], '/audio/transcriptions');
     expect((testedDraft?['auth'] as Map?)?['env_key'], 'OPENROUTER_API_KEY');
+
+    asrTestResult = {'ok': false, 'code': 'payment_required'};
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('模型服务账户余额不足'), findsOneWidget);
     expectNoFlutterException();
   });
 

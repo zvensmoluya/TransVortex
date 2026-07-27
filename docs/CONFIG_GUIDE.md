@@ -370,6 +370,8 @@ asr_providers:
 - ASR 使用独立 provider，不复用翻译 provider routing；不同 ASR 服务用各自的 `protocol` 接入，例如 `openai_transcriptions`、`openrouter_stt` 和 `funasr_openai`，不通过通用 response mapping 互相模拟。
 - `openrouter_stt` 使用 OpenRouter 的 `/api/v1/audio/transcriptions` JSON 接口，音频会编码为 base64 放入 `input_audio` 上传。桌面端从用户级凭据中的 `openrouter_asr` 读取密钥，并以 `OPENROUTER_API_KEY` 作为开发兼容兜底；Provider YAML 不保存密钥。
 - OpenRouter ASR 采用“共享传输 + 显式模型 profile”，不会把模型目录中所有 transcription 模型自动视为兼容。当前只开放 `openai/whisper-large-v3` 和实验性的 `x-ai/grok-stt-1.0`；新增模型前必须验证请求参数、响应结构和时间轴语义，再加入 profile。
+- OpenRouter 的可复用平台层只处理结构化错误、`Retry-After`、`X-Generation-Id` 和通用 HTTP 语义，不持有 ASR 或翻译模型规则。未来即使增加 OpenRouter 翻译 provider，也只能复用这一层；翻译 payload、prompt、路由与 ASR 时间轴/profile 继续分别实现。
+- OpenRouter 聊天接口的 provider routing 参数当前不适用于 transcription endpoint。`openrouter_stt` 不发送 `order`、`only`、`allow_fallbacks`、`data_collection` 或 `sort`；请求中的 `provider` 仅承载当前模型 profile 明确允许的 provider-specific options。
 - `openai/whisper-large-v3` 请求 `verbose_json + segment timestamps`。真实有声请求如果只有 `text`、没有 `segments`，任务会以 `openrouter_asr_timestamps_missing` 明确失败，不会伪造可用于成片的时间轴。OpenRouter 文档说明这组字段只由 OpenAI-compatible 上游稳定支持，因此桌面端将该模型标为“候选”，真实路由仍需验收。
 - `x-ai/grok-stt-1.0` 在 OpenRouter 模型页声明原生 word timestamps、说话人分离和多声道能力，但当前标准 STT 文档只保证 `text + usage`，没有公布这些字段的归一化响应结构。首版标为“实验性”，按约 20 秒短窗生成粗时间轴，不承诺单词级时间戳或说话人信息。
 - OpenRouter 的 ASR prompt 不放在 multipart 表单中。Whisper profile 会按文档把提示词映射到 `provider.options.groq.prompt`；Grok profile 当前不发送 prompt。`extra_json_fields` 和 `provider_options` 会按具体 profile 白名单校验，未知字段会失败关闭，避免把某个上游的参数误发给另一个模型。
@@ -382,7 +384,7 @@ asr_providers:
 - ASR 边界风险检测会在 source cleaning 之后运行，标记过长段、多句揉在一起、文本密度过高、重叠或缺失 segment 时间戳等问题；风险写入 `meta.asr_risk` 并汇总到 `quality/asr_boundary_quality.json`。该检测默认不阻断任务、不自动重听，只让后续字幕优化和 reflow 对高风险 ASR 段更保守。
 - `asr_providers[].request` 按协议生效。OpenAI transcription 支持 `prompt`、`temperature`、`timestamp_granularities`、`include` 和受限 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。OpenRouter 使用 JSON 请求，只读取 profile 允许的 `extra_json_fields` 和 `provider_options`，不读取 `extra_form_fields`。FunASR 官方 OpenAI-compatible server 对齐 `file`、`model`、`language` 和 `response_format`，`funasr_openai` 不发送 `prompt`、`temperature`、`timestamp_granularities`、`include` 或扩展字段。
 - `asr_providers[].http2` 默认 `true`，表示云端 ASR 优先使用统一 `httpx` 传输层的 HTTP/2；客户端或服务端不可用时会按实际能力降级，并在 ASR meta 中记录实际协议。
-- `asr_providers[].retry` 控制 HTTP ASR 请求短重试次数，timeout、429 和 5xx 会重试；重试仍失败会保留失败，不会静默丢弃音频片段。
+- `asr_providers[].retry` 控制 HTTP ASR 请求短重试次数，timeout、429 和 5xx 会重试；OpenRouter 返回 `Retry-After` 时会在有界范围内优先采用该等待时间。重试仍失败会保留失败，不会静默丢弃音频片段。
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。
 - `asr.provider` 选择 ASR provider；`--asr-model` 只覆盖 ASR provider 的模型字段，不影响翻译模型。
 - ASR、SRT、内嵌字幕和外部 segments 都会归一化为 `source/segments.normalized.jsonl`，翻译层只读取统一 `Segment`。

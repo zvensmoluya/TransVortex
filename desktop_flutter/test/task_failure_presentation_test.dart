@@ -47,6 +47,20 @@ void main() {
       expect(presentation.reason, contains('OpenRouter'));
     });
 
+    test('routes OpenRouter account errors back to ASR settings', () {
+      final presentation = taskFailurePresentation(
+        errorInfo: const {
+          'code': 'provider_payment_required',
+          'stage': 'ASR',
+          'retryable': false,
+        },
+      );
+
+      expect(presentation.target, TaskFailureRecoveryTarget.asrSettings);
+      expect(presentation.actionLabel, '检查识别设置');
+      expect(presentation.reason, contains('余额不足'));
+    });
+
     test('resumes transient provider failures from an existing checkpoint', () {
       final presentation = taskFailurePresentation(
         canResume: true,

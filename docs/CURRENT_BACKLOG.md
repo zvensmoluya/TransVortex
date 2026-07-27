@@ -1,6 +1,6 @@
 # TransVortex 当前待办
 
-更新时间：2026-07-24
+更新时间：2026-07-27
 
 本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
 
@@ -47,7 +47,7 @@
 | Agent 准备环境与资源接入契约 | 待验收 | v2 已拆分 provider mode 与 runtime / 模型 / GPU 加速来源，提供托管 apply、Agent 本机侦查与准备、外部资源 probe/register、activate 和 strict verify；Flutter 交接按侦查、模型、GPU 加速、已有资源接入和完整准备区分范围，并已支持复制或通过隔离工作区直接发送给用户环境中的 Codex CLI。剩余工作是随公开组件发布完成真实下载、NVIDIA 环境准备与干净机器验收 | [`../agent/README.md`](../agent/README.md)、[`../agent/workflows/ASR_ENVIRONMENT_SETUP.md`](../agent/workflows/ASR_ENVIRONMENT_SETUP.md) |
 | 术语能力归位 | 待决策 | 区分生成术语建议、使用术语和维护术语，并明确回流与优先级语义 | [`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
 | 高级翻译与识别设置 | 待实现 | 补齐 fallback routing、mapping、识别高级参数和诊断修复联动 | [`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
-| OpenRouter 云 ASR 真实服务验收 | 待验收 | 用专用测试密钥验证 Whisper segment 时间戳和 Grok 实际归一化响应；当前共享传输、两个专项 profile、凭据和桌面入口已实现，自动测试没有产生付费请求 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) |
+| OpenRouter 云 ASR 真实服务验收 | 待验收 | 用专用测试密钥验证 Whisper segment 时间戳和 Grok 实际归一化响应；当前平台错误/重试语义、完整任务预检、两个专项 profile、凭据和 Flutter 入口已实现，自动测试没有产生付费请求 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) |
 
 ## P2：体验深化
 

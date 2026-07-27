@@ -3355,7 +3355,7 @@ class _SegmentedEngines extends StatelessWidget {
     const items = [
       ('faster_whisper_large_v3', '本机 Whisper', '本机运行'),
       ('openai_whisper', 'OpenAI Whisper', '云端识别'),
-      ('openrouter_asr', 'OpenRouter', '云端模型'),
+      ('openrouter_asr', 'OpenRouter', 'Whisper / Grok'),
       ('funasr_sensevoice_local', 'FunASR', '本地服务'),
     ];
     return Row(
@@ -5312,7 +5312,12 @@ String _friendlyAsrConnectionTestError(Object? rawCode) {
   return switch (code) {
     'credential_missing' => '连接测试失败：请先填写或保存这个识别服务的 API key。',
     'auth_error' => '连接测试失败：密钥无效或没有调用这个模型的权限。',
+    'payment_required' => '连接测试失败：模型服务账户余额不足，请充值或更换可用密钥。',
     'rate_limit' => '连接测试失败：上游触发限流，请稍后再试。',
+    'not_found' => '连接测试失败：当前模型不存在或暂时不可用，请确认所选模型。',
+    'invalid_request' || 'unprocessable' => '连接测试失败：当前模型不接受这组专项请求参数。',
+    'payload_too_large' => '连接测试失败：上传音频超过模型服务限制。',
+    'content_policy_violation' => '连接测试失败：模型服务因账户或内容策略拒绝了请求。',
     'request_timeout' ||
     'provider_timeout' ||
     'gateway_timeout' => '连接测试失败：上游响应超时，请稍后再试。',

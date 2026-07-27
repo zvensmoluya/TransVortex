@@ -31,9 +31,26 @@ def error_info(
     }
 
 
+def _transport_error_details(exc: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for attribute in (
+        "status_code",
+        "retry_after_seconds",
+        "openrouter_error_type",
+        "provider_code",
+        "generation_id",
+    ):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            details[attribute] = value
+    return details
+
+
 def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str, Any]:
     message = str(exc)
     lowered = message.lower()
+    transport_error_type = str(getattr(exc, "error_type", "") or "").strip().lower()
+    transport_details = _transport_error_details(exc)
     if exc.__class__.__name__ == "RequestValidationError":
         return error_info(
             code="invalid_request",
@@ -42,6 +59,93 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             message=message,
             hint_zh="请求参数不符合任务接口契约，请检查 request JSON 或 CLI 参数组合。",
             retryable=False,
+        )
+    if transport_error_type == "payment_required":
+        return error_info(
+            code="provider_payment_required",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务账户余额不足，请充值或更换可用凭据后重试。",
+            retryable=False,
+            details=transport_details,
+        )
+    if transport_error_type == "auth_error":
+        return error_info(
+            code="provider_auth_error",
+            error_type="config_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务凭据无效或没有调用权限，请检查 API key 和账户权限。",
+            retryable=False,
+            details=transport_details,
+        )
+    if transport_error_type == "rate_limit":
+        return error_info(
+            code="provider_rate_limit",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务正在限流，请按服务返回的等待时间稍后重试。",
+            retryable=True,
+            details=transport_details,
+        )
+    if transport_error_type == "payload_too_large":
+        return error_info(
+            code="provider_payload_too_large",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="上传内容超过模型服务限制；程序已尝试缩短识别分片，仍失败时请进一步减小分片。",
+            retryable=True,
+            details=transport_details,
+        )
+    if transport_error_type in {"invalid_request", "not_found", "unprocessable"}:
+        return error_info(
+            code="provider_request_rejected",
+            error_type="config_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务不接受当前请求，请检查服务地址、模型和专项适配配置。",
+            retryable=False,
+            details=transport_details,
+        )
+    if transport_error_type == "content_policy_violation":
+        return error_info(
+            code="provider_content_policy_violation",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务因内容策略拒绝了本次请求，请检查服务账户策略或改用其他识别方案。",
+            retryable=False,
+            details=transport_details,
+        )
+    if transport_error_type in {"bad_gateway", "service_unavailable", "provider_server_error"}:
+        return error_info(
+            code="provider_retryable_http_error",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务端或上游暂时不可用，可以稍后重试。",
+            retryable=True,
+            details=transport_details,
+        )
+    if transport_error_type in {
+        "connect_timeout",
+        "read_timeout",
+        "write_timeout",
+        "pool_timeout",
+        "provider_timeout",
+        "gateway_timeout",
+    }:
+        return error_info(
+            code="provider_timeout",
+            error_type="provider_timeout",
+            stage=stage,
+            message=message,
+            hint_zh="模型服务请求超时，可以重试，或减小识别分片。",
+            retryable=True,
+            details=transport_details,
         )
     if "task cancelled" in lowered:
         return error_info(

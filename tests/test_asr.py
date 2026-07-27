@@ -69,7 +69,10 @@ def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch)
             "attempts": 1,
         }
 
-    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    monkeypatch.setattr(
+        "transvortex.core.asr.request_json_with_retry",
+        fake_request_json_with_retry,
+    )
     client = OpenAITranscriptionsAsrClient(
         AsrProviderConfig(
             name="openai",
@@ -431,7 +434,10 @@ def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, m
             "generation_id": "gen_test",
         }
 
-    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    monkeypatch.setattr(
+        "transvortex.core.asr.request_openrouter_json_with_retry",
+        fake_request_json_with_retry,
+    )
     monkeypatch.setattr(
         "transvortex.core.asr.resolve_credential",
         lambda **_kwargs: SimpleNamespace(
@@ -506,7 +512,7 @@ def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, m
     ]
 
     monkeypatch.setattr(
-        "transvortex.core.asr.request_json_with_retry",
+        "transvortex.core.asr.request_openrouter_json_with_retry",
         lambda *_args, **_kwargs: ({"text": "whole window"}, {"transport": "httpx"}),
     )
     with pytest.raises(RuntimeError, match="openrouter_asr_timestamps_missing"):
@@ -522,7 +528,10 @@ def test_openrouter_grok_is_explicit_text_only_experimental_profile(tmp_path, mo
         captured.update(kwargs)
         return {"text": "hello from grok", "usage": {"seconds": 2.0}}, {"transport": "httpx"}
 
-    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    monkeypatch.setattr(
+        "transvortex.core.asr.request_openrouter_json_with_retry",
+        fake_request_json_with_retry,
+    )
     monkeypatch.setattr(
         "transvortex.core.asr.resolve_credential",
         lambda **_kwargs: SimpleNamespace(

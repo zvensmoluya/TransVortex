@@ -84,6 +84,7 @@ TaskFailureRecoveryTarget _recoveryTarget({
         'service_unavailable',
         'timeout',
         'upstream',
+        'payload_too_large',
       }.any(lowerCode.contains);
 
   if (lowerCode == 'task_cancelled') {
@@ -176,6 +177,22 @@ String _failureReason({
       return 'OpenRouter 上游只返回了转写文本，没有返回制作字幕所需的时间轴。请改用已支持时间戳的识别模型。';
     case 'unsupported_openrouter_asr_model':
       return '这个 OpenRouter 识别模型尚未完成专项适配，请选择已支持的模型。';
+    case 'provider_payment_required':
+      return '模型服务账户余额不足，请充值或更换可用凭据。';
+    case 'provider_auth_error':
+      return asrContext
+          ? '语音识别凭据无效或没有调用权限，请检查识别设置。'
+          : '翻译模型凭据无效或没有调用权限，请检查翻译设置。';
+    case 'provider_rate_limit':
+      return '模型服务正在限流，请稍后重试。';
+    case 'provider_request_rejected':
+      return asrContext
+          ? '识别服务不接受当前模型的专项请求，请检查识别设置。'
+          : '翻译服务不接受当前模型请求，请检查翻译设置。';
+    case 'provider_payload_too_large':
+      return '上传内容超过模型服务限制，请减小任务分片后重试。';
+    case 'provider_content_policy_violation':
+      return '模型服务因账户或内容策略拒绝了本次请求。';
     case 'missing_executable':
       return '应用所需的媒体组件不可用，请查看任务线索并修复或重新安装 TransVortex。';
     case 'input_not_found':
