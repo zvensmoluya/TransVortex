@@ -13,7 +13,7 @@
 - 当前显式支持 `openai/whisper-large-v3` 与 `x-ai/grok-stt-1.0`，不会自动开放 OpenRouter 模型目录中的其他 transcription 模型。
 - Whisper profile 要求上游返回 segment timestamps；只有文本时明确失败。Grok profile 暂按短窗生成粗时间轴，并在界面标为“实验性”。
 - OpenRouter 平台层会解析官方结构化错误，区分余额不足、权限、限流、请求拒绝和上游不可用；重试会读取有界的 `Retry-After`，成功与失败诊断都会保留不含凭据的 `X-Generation-Id`。
-- 成功响应中的 `usage.cost`、`usage.seconds` 和 token 字段会按 generation ID 去重并聚合到 `source/asr/openrouter_usage.json` 与任务诊断；单次响应先写 usage receipt，后续 fallback、分裂重试、失败、取消或进程中断不会丢掉已发生的费用。Flutter 会区分完整的“OpenRouter 用量”和字段不全的“OpenRouter 已报告用量”。设置页另有普通 key 的 `/api/v1/key` 用量/限额查询，不发模型请求；需要 management key 的账户 `/credits` 不接入 ASR 凭据。最终费用仍以 OpenRouter Activity 和账单为准。
+- 成功响应中的 `usage.cost`、`usage.seconds` 和 token 字段会按 generation ID 去重并聚合到 `source/asr/openrouter_usage.json` 与任务诊断；单次响应先写 usage receipt，后续 fallback、分裂重试、失败、取消或进程中断不会丢掉已发生的费用。Flutter 会区分完整的“OpenRouter 用量”和字段不全的“OpenRouter 已报告用量”。进入已配置密钥的 OpenRouter ASR 设置时会自动调用普通 key 可访问的 `/api/v1/key` 展示周期用量/限额，原“查询用量”按钮用于手动刷新；该查询不发模型请求，并以 5 秒单次请求快速失败。需要 management key 的账户 `/credits` 不接入 ASR 凭据。最终费用仍以 OpenRouter Activity 和账单为准。
 - 共享边界只覆盖 HTTP、错误和追踪元数据，不把 ASR profile、时间轴或请求字段与翻译 provider 共用。
 
 已完成证据（2026-07-27）：

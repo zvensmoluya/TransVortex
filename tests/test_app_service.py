@@ -738,9 +738,9 @@ asr_providers:
 
     assert response["result"] == {"currency": "USD", "usage_usd": 0.25}
     assert captured["api_key"] == "example-token"
-    assert captured["timeout"] == 30.0
+    assert captured["timeout"] == 5.0
     assert captured["http2"] is True
-    assert captured["retry"] == 2
+    assert captured["retry"] == 1
     assert captured["network"].mode == "system"
     assert "example-token" not in json.dumps(response)
 
@@ -776,8 +776,8 @@ def test_app_service_reads_openrouter_asr_usage_for_draft_with_explicit_key(tmp_
 
     assert response["result"] == {"currency": "USD", "usage_usd": 1.5}
     assert captured["api_key"] == "one-time-key"
-    assert captured["timeout"] == 30.0
-    assert captured["retry"] == 2
+    assert captured["timeout"] == 5.0
+    assert captured["retry"] == 1
     assert "one-time-key" not in json.dumps(response)
 
 

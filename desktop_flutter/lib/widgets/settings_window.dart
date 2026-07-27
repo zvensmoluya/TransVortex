@@ -108,6 +108,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   String? _selectedDiagnosticCheck;
   String? _message;
   String? _error;
+  String? _openRouterUsageMessage;
+  String? _openRouterUsageError;
+  String? _openRouterUsageAutoLoadedFor;
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
@@ -138,6 +141,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _loadingDiagnosticResult = false;
   int _configLoadRevision = 0;
   int _visibleConfigLoads = 0;
+  int _openRouterUsageRequestRevision = 0;
 
   bool get _isTranslation => widget.type == AppWindowType.translationSettings;
   bool get _isAsr => widget.type == AppWindowType.asrSettings;
@@ -288,6 +292,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _startAsrOperationPolling();
       }
       _syncMainLabels(snapshot);
+      if (_isAsr) _maybeLoadOpenRouterUsage();
       if (widget.smoke != null) {
         await _writeSettingsSmokeReport(snapshot);
       }
@@ -477,7 +482,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _probingAsrModel ||
         _renamingAsrModel ||
         _testingAsr ||
-        _checkingOpenRouterUsage ||
         _copyingAgentHandoff;
     final showFeedback = busy || _error != null || _message != null;
     final snapshot = _snapshot;
@@ -498,7 +502,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                         _probingAsrModel ||
                         _renamingAsrModel ||
                         _testingAsr ||
-                        _checkingOpenRouterUsage ||
                         _copyingAgentHandoff
                     ? null
                     : _pickAsrProvider,
@@ -595,17 +598,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ActionButton(
           label: _savingAsr ? '保存中' : '保存并设为默认',
           strong: true,
-          onTap: _savingAsr || _testingAsr || _checkingOpenRouterUsage
-              ? null
-              : _saveAsrProvider,
+          onTap: _savingAsr || _testingAsr ? null : _saveAsrProvider,
         ),
         if (kind == 'local_server' || kind == 'remote')
           ActionButton(
             label: _testingAsr ? '测试中' : '测试连接',
             icon: Icons.wifi_tethering_rounded,
-            onTap: _testingAsr || _savingAsr || _checkingOpenRouterUsage
-                ? null
-                : _testAsrProvider,
+            onTap: _testingAsr || _savingAsr ? null : _testAsrProvider,
           ),
         if (isOpenRouter)
           ActionButton(
@@ -614,7 +613,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             icon: Icons.receipt_long_outlined,
             onTap: _checkingOpenRouterUsage || _savingAsr || _testingAsr
                 ? null
-                : _checkOpenRouterUsage,
+                : () => _checkOpenRouterUsage(),
           ),
       ],
       footnote: kind == 'remote'
@@ -628,6 +627,18 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           readiness: provider?.readiness,
           draftDirty: _asrDraftDirty,
         ),
+        if (isOpenRouter &&
+            (_checkingOpenRouterUsage ||
+                _openRouterUsageMessage != null ||
+                _openRouterUsageError != null)) ...[
+          const SizedBox(height: T.s8),
+          _AsrFeedbackBar(
+            busy: _checkingOpenRouterUsage,
+            busyText: '正在读取 OpenRouter 密钥用量…',
+            error: _openRouterUsageError,
+            message: _openRouterUsageMessage,
+          ),
+        ],
         const SizedBox(height: T.s8),
         if (kind == 'local_inprocess') ...[
           Row(
@@ -694,7 +705,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                   : 'OpenAI API key（留空则沿用已保存密钥）',
               controller: _key,
               obscure: true,
-              onChanged: (_) => _markAsrDraftDirty(),
+              onChanged: (_) => isOpenRouter
+                  ? _markOpenRouterKeyChanged()
+                  : _markAsrDraftDirty(),
             ),
           ],
         ],
@@ -1577,12 +1590,18 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
 
   void _pickAsrProvider(String providerName) {
     if (_savingAsr || _probingAsrModel || _testingAsr) return;
+    _openRouterUsageRequestRevision += 1;
     setState(() {
       _selectedAsrProvider = providerName;
       _loadAsrDraftFields();
+      _checkingOpenRouterUsage = false;
+      _openRouterUsageMessage = null;
+      _openRouterUsageError = null;
+      _openRouterUsageAutoLoadedFor = null;
       _message = null;
       _error = null;
     });
+    _maybeLoadOpenRouterUsage(force: true);
   }
 
   void _loadAsrDraftFields() {
@@ -1714,6 +1733,19 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   void _markAsrDraftDirty() {
     if (_asrDraftDirty) return;
     setState(() {
+      _asrDraftDirty = true;
+      _message = null;
+      _error = null;
+    });
+  }
+
+  void _markOpenRouterKeyChanged() {
+    _openRouterUsageRequestRevision += 1;
+    setState(() {
+      _checkingOpenRouterUsage = false;
+      _openRouterUsageMessage = null;
+      _openRouterUsageError = null;
+      _openRouterUsageAutoLoadedFor = null;
       _asrDraftDirty = true;
       _message = null;
       _error = null;
@@ -2363,24 +2395,55 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     }
   }
 
+  void _maybeLoadOpenRouterUsage({bool force = false}) {
+    if (!_isAsr || widget.smoke != null) return;
+    final draft = _asrDraft(_selectedAsrProvider);
+    if ('${draft['protocol'] ?? ''}' != 'openrouter_stt') return;
+    final providerName = _asrProviderNameForSelection(_selectedAsrProvider);
+    final hasCredential =
+        _keyTextOrNull() != null || _selectedAsrOption()?.hasKey == true;
+    if (!hasCredential) return;
+    if (!force && _openRouterUsageAutoLoadedFor == providerName) return;
+    _openRouterUsageAutoLoadedFor = providerName;
+    unawaited(_checkOpenRouterUsage());
+  }
+
   Future<void> _checkOpenRouterUsage() async {
+    final requestRevision = ++_openRouterUsageRequestRevision;
+    final selectedProvider = _selectedAsrProvider;
+    final providerDraft = _asrDraft(selectedProvider);
+    _openRouterUsageAutoLoadedFor = _asrProviderNameForSelection(
+      selectedProvider,
+    );
     setState(() {
       _checkingOpenRouterUsage = true;
-      _error = null;
-      _message = null;
+      _openRouterUsageError = null;
     });
     try {
       final result = await _client.asrProviderUsage(
-        providerDraft: _asrDraft(_selectedAsrProvider),
+        providerDraft: providerDraft,
         apiKey: _keyTextOrNull(),
       );
-      if (!mounted) return;
-      setState(() => _message = _openRouterKeyUsageMessage(result));
+      if (!mounted ||
+          requestRevision != _openRouterUsageRequestRevision ||
+          selectedProvider != _selectedAsrProvider) {
+        return;
+      }
+      setState(() {
+        _openRouterUsageMessage = _openRouterKeyUsageMessage(result);
+        _openRouterUsageError = null;
+      });
     } on Object catch (error) {
-      if (!mounted) return;
-      setState(() => _error = _friendlySettingsError(error));
+      if (!mounted ||
+          requestRevision != _openRouterUsageRequestRevision ||
+          selectedProvider != _selectedAsrProvider) {
+        return;
+      }
+      setState(() => _openRouterUsageError = _friendlySettingsError(error));
     } finally {
-      if (mounted) setState(() => _checkingOpenRouterUsage = false);
+      if (mounted && requestRevision == _openRouterUsageRequestRevision) {
+        setState(() => _checkingOpenRouterUsage = false);
+      }
     }
   }
 
@@ -5344,23 +5407,38 @@ String? _stringValue(Object? value) {
 }
 
 String _openRouterKeyUsageMessage(Map<String, Object?> usage) {
-  final spent = _nonNegativeFiniteNumber(usage['usage_usd']);
+  final totalSpent = _nonNegativeFiniteNumber(usage['usage_usd']);
   final limit = _nonNegativeFiniteNumber(usage['limit_usd']);
   final remaining = _nonNegativeFiniteNumber(usage['limit_remaining_usd']);
+  final reset = '${usage['limit_reset'] ?? ''}';
+  final (spent, spentLabel, resetLabel) = switch (reset) {
+    'daily' => (
+      _nonNegativeFiniteNumber(usage['usage_daily_usd']) ?? totalSpent,
+      '今日已用',
+      '每日重置',
+    ),
+    'weekly' => (
+      _nonNegativeFiniteNumber(usage['usage_weekly_usd']) ?? totalSpent,
+      '本周已用',
+      '每周重置',
+    ),
+    'monthly' => (
+      _nonNegativeFiniteNumber(usage['usage_monthly_usd']) ?? totalSpent,
+      '本月已用',
+      '每月重置',
+    ),
+    _ => (totalSpent, '该密钥已用', ''),
+  };
   final parts = <String>[];
   if (spent != null && limit != null) {
-    parts.add('已用 ${_formatUsageUsd(spent)} / ${_formatUsageUsd(limit)}');
+    parts.add(
+      '$spentLabel ${_formatUsageUsd(spent)} / ${_formatUsageUsd(limit)}',
+    );
   } else if (spent != null) {
-    parts.add('已用 ${_formatUsageUsd(spent)}');
+    parts.add('$spentLabel ${_formatUsageUsd(spent)}');
   }
   if (remaining != null) parts.add('剩余 ${_formatUsageUsd(remaining)}');
-  final reset = switch ('${usage['limit_reset'] ?? ''}') {
-    'daily' => '每日重置',
-    'weekly' => '每周重置',
-    'monthly' => '每月重置',
-    _ => '',
-  };
-  if (reset.isNotEmpty && limit != null) parts.add(reset);
+  if (resetLabel.isNotEmpty && limit != null) parts.add(resetLabel);
   return parts.isEmpty
       ? 'OpenRouter 没有返回可展示的密钥用量。'
       : 'OpenRouter 密钥用量：${parts.join(' · ')}';

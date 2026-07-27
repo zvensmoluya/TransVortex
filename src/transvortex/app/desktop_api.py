@@ -83,6 +83,8 @@ from .workspace_storage import WorkspaceStorageError, save_workspace_storage
 TERMINAL_STATUSES = {"DONE", "FAILED", "CANCELLED", "INTERRUPTED"}
 PROTOCOL_VERSION = 1
 SERVICE_NAME = "transvortex.app_service"
+OPENROUTER_USAGE_QUERY_TIMEOUT_SECONDS = 5.0
+OPENROUTER_USAGE_QUERY_ATTEMPTS = 1
 SERVICE_CAPABILITIES = [
     "desktop_snapshot",
     "runtime",
@@ -579,9 +581,9 @@ class DesktopApi:
             )
         return fetch_openrouter_current_key_usage(
             credential.key,
-            timeout=min(max(float(provider.execution.timeout_seconds), 1.0), 30.0),
+            timeout=OPENROUTER_USAGE_QUERY_TIMEOUT_SECONDS,
             http2=bool(provider.http2),
-            retry=min(max(1, int(provider.execution.retry or 1)), 3),
+            retry=OPENROUTER_USAGE_QUERY_ATTEMPTS,
             network=provider.network,
         )
 

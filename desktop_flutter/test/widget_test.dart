@@ -4326,6 +4326,8 @@ void main() {
     final bridge = WindowStateBridge.main(store);
     Map<String, Object?>? testedDraft;
     Map<String, Object?>? usageDraft;
+    var usageCalls = 0;
+    final initialUsage = Completer<Map<String, Object?>>();
     var asrTestResult = <String, Object?>{'ok': true, 'code': 'ready'};
     final openRouterProvider = <String, Object?>{
       'name': 'openrouter_asr',
@@ -4370,17 +4372,20 @@ void main() {
         return asrTestResult;
       }
       if (method == 'asr.provider.usage') {
+        usageCalls += 1;
         usageDraft = Map<String, Object?>.from(
           params['provider_draft']! as Map,
         );
         expect(params.containsKey('api_key'), isFalse);
-        return <String, Object?>{
+        final usage = <String, Object?>{
           'currency': 'USD',
           'usage_usd': 0.25,
           'limit_usd': 1.0,
           'limit_remaining_usd': 0.75,
           'limit_reset': 'monthly',
         };
+        if (usageCalls == 1) return initialUsage.future;
+        return usage;
       }
       throw RpcRemoteException('method_not_found', method);
     });
@@ -4399,7 +4404,37 @@ void main() {
     expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
     expect(find.textContaining('时间轴候选：要求分段时间戳'), findsOneWidget);
     expect(find.textContaining('音频会上传到 OpenRouter'), findsOneWidget);
+    expect(find.text('查询中'), findsOneWidget);
+    expect(
+      tester
+          .widget<ActionButton>(find.widgetWithText(ActionButton, '保存并设为默认'))
+          .onTap,
+      isNotNull,
+    );
+    expect(
+      tester
+          .widget<ActionButton>(find.widgetWithText(ActionButton, '测试连接'))
+          .onTap,
+      isNotNull,
+    );
+    expect(usageCalls, 1);
+
+    initialUsage.complete({
+      'currency': 'USD',
+      'usage_usd': 0.25,
+      'limit_usd': 1.0,
+      'limit_remaining_usd': 0.75,
+      'limit_reset': 'monthly',
+    });
+    await tester.pumpAndSettle();
+
     expect(find.text('查询用量'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'OpenRouter 密钥用量：本月已用 \$0.25 / \$1.00 · 剩余 \$0.75 · 每月重置',
+      ),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('Whisper Large V3'));
     await tester.pumpAndSettle();
@@ -4412,10 +4447,11 @@ void main() {
 
     expect(
       find.textContaining(
-        'OpenRouter 密钥用量：已用 \$0.25 / \$1.00 · 剩余 \$0.75 · 每月重置',
+        'OpenRouter 密钥用量：本月已用 \$0.25 / \$1.00 · 剩余 \$0.75 · 每月重置',
       ),
       findsOneWidget,
     );
+    expect(usageCalls, 2);
     expect(usageDraft?['protocol'], 'openrouter_stt');
     expect(usageDraft?['model'], 'x-ai/grok-stt-1.0');
 
