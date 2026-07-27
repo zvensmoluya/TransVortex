@@ -799,6 +799,8 @@ def provider_test_fingerprint(provider: AsrProviderConfig) -> str:
                 "timestamp_granularities": provider.request.timestamp_granularities,
                 "include": provider.request.include,
                 "extra_form_fields": provider.request.extra_form_fields,
+                "extra_json_fields": provider.request.extra_json_fields,
+                "provider_options": provider.request.provider_options,
                 "array_format": provider.request.array_format,
                 "send_response_format": provider.request.send_response_format,
                 "send_temperature": provider.request.send_temperature,

@@ -331,6 +331,8 @@ class AsrProviderRequestConfig:
     timestamp_granularities: list[str] = field(default_factory=lambda: ["segment"])
     include: list[str] = field(default_factory=list)
     extra_form_fields: dict[str, Any] = field(default_factory=dict)
+    extra_json_fields: dict[str, Any] = field(default_factory=dict)
+    provider_options: dict[str, Any] = field(default_factory=dict)
     array_format: str = "brackets"  # repeat | brackets
     send_response_format: bool = True
     send_temperature: bool = True

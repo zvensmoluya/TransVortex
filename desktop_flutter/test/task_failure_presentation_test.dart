@@ -33,6 +33,20 @@ void main() {
       expect(presentation.reason, contains('语音识别凭据'));
     });
 
+    test('explains missing OpenRouter subtitle timestamps', () {
+      final presentation = taskFailurePresentation(
+        errorInfo: const {
+          'code': 'openrouter_asr_timestamps_missing',
+          'stage': 'ASR',
+        },
+      );
+
+      expect(presentation.target, TaskFailureRecoveryTarget.asrSettings);
+      expect(presentation.actionLabel, '检查识别设置');
+      expect(presentation.reason, contains('时间轴'));
+      expect(presentation.reason, contains('OpenRouter'));
+    });
+
     test('resumes transient provider failures from an existing checkpoint', () {
       final presentation = taskFailurePresentation(
         canResume: true,

@@ -7,14 +7,17 @@ import httpx
 import pytest
 
 from transvortex.app.models import (
+    AsrAuthConfig,
     AsrExecutionConfig,
     AsrLocalConfig,
     AsrProviderConfig,
+    AsrProviderRequestConfig,
     AsrRuntimeConfig,
 )
 from transvortex.core.asr import (
     AsrEngine,
     OpenAITranscriptionsAsrClient,
+    OpenRouterSttAsrClient,
     build_asr_client,
     _build_cloud_asr_url,
     _normalize_whisper_language,
@@ -206,7 +209,12 @@ def test_cloud_asr_retries_retryable_request_errors(tmp_path, monkeypatch) -> No
         attempts["count"] += 1
         if attempts["count"] == 1:
             raise httpx.ReadTimeout("The read operation timed out", request=request)
-        return httpx.Response(200, json={"text": "ok"}, request=request)
+        return httpx.Response(
+            200,
+            json={"text": "ok"},
+            headers={"X-Generation-Id": "gen_retry_test"},
+            request=request,
+        )
 
     transport = httpx.MockTransport(handler)
 
@@ -224,6 +232,7 @@ def test_cloud_asr_retries_retryable_request_errors(tmp_path, monkeypatch) -> No
     assert payload == {"text": "ok"}
     assert attempts["count"] == 2
     assert meta["attempts"] == 2
+    assert meta["generation_id"] == "gen_retry_test"
 
 
 def test_cloud_asr_does_not_retry_non_retryable_request_errors(tmp_path, monkeypatch) -> None:
@@ -399,6 +408,195 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
     assert fallback.rows[0]["meta"]["transport"] == "httpx"
     assert fallback.rows[0]["start"] == 5.0
     assert fallback.rows[0]["end"] == 5.1
+
+
+def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    captured = {}
+
+    def fake_request_json_with_retry(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return {
+            "text": "こんにちは",
+            "segments": [
+                {"start": 0.2, "end": 1.4, "text": "こんにちは", "avg_logprob": -0.1}
+            ],
+            "usage": {"seconds": 1.5, "cost": 0.0001},
+        }, {
+            "transport": "httpx",
+            "http_version": "HTTP/2",
+            "generation_id": "gen_test",
+        }
+
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    monkeypatch.setattr(
+        "transvortex.core.asr.resolve_credential",
+        lambda **_kwargs: SimpleNamespace(
+            found=True,
+            key="secret",
+            credential_id="openrouter_asr",
+            env_key="OPENROUTER_API_KEY",
+        ),
+    )
+    provider = AsrProviderConfig(
+        name="openrouter_asr",
+        kind="remote",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="openai/whisper-large-v3",
+        auth=AsrAuthConfig(
+            type="bearer",
+            env_key="OPENROUTER_API_KEY",
+            credential_id="openrouter_asr",
+        ),
+        execution=AsrExecutionConfig(timeout_seconds=120, retry=2),
+        request=AsrProviderRequestConfig(
+            response_format="verbose_json",
+            temperature=0,
+            timestamp_granularities=["segment"],
+            array_format="repeat",
+        ),
+    )
+
+    result = build_asr_client(provider).transcribe_segment(
+        audio,
+        10.0,
+        source_lang="ja-JP",
+        prompt="Names: Subaru",
+    )
+
+    assert isinstance(build_asr_client(provider), OpenRouterSttAsrClient)
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://openrouter.ai/api/v1/audio/transcriptions"
+    assert "files" not in captured
+    payload = captured["json_payload"]
+    assert payload["model"] == "openai/whisper-large-v3"
+    assert payload["input_audio"] == {"data": "UklGRg==", "format": "wav"}
+    assert payload["language"] == "ja"
+    assert payload["response_format"] == "verbose_json"
+    assert payload["timestamp_granularities"] == ["segment"]
+    assert payload["provider"] == {
+        "options": {"groq": {"prompt": "Names: Subaru"}}
+    }
+    assert result.raw_response["usage"]["cost"] == 0.0001
+    assert result.transport_meta["generation_id"] == "gen_test"
+    assert result.rows == [
+        {
+            "start": 10.2,
+            "end": 11.4,
+            "text": "こんにちは",
+            "confidence": -0.1,
+            "meta": {
+                "provider": "openrouter_asr",
+                "protocol": "openrouter_stt",
+                "source": "asr",
+                "transport": "httpx",
+                "http_version": "HTTP/2",
+                "generation_id": "gen_test",
+                "service": "openrouter",
+                "model": "openai/whisper-large-v3",
+                "openrouter_model_status": "candidate",
+                "openrouter_timeline_mode": "segments_required",
+            },
+        }
+    ]
+
+    monkeypatch.setattr(
+        "transvortex.core.asr.request_json_with_retry",
+        lambda *_args, **_kwargs: ({"text": "whole window"}, {"transport": "httpx"}),
+    )
+    with pytest.raises(RuntimeError, match="openrouter_asr_timestamps_missing"):
+        build_asr_client(provider).transcribe_segment(audio, 0.0)
+
+
+def test_openrouter_grok_is_explicit_text_only_experimental_profile(tmp_path, monkeypatch) -> None:
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    captured = {}
+
+    def fake_request_json_with_retry(_method, _url, **kwargs):
+        captured.update(kwargs)
+        return {"text": "hello from grok", "usage": {"seconds": 2.0}}, {"transport": "httpx"}
+
+    monkeypatch.setattr("transvortex.core.asr.request_json_with_retry", fake_request_json_with_retry)
+    monkeypatch.setattr(
+        "transvortex.core.asr.resolve_credential",
+        lambda **_kwargs: SimpleNamespace(
+            found=True,
+            key="secret",
+            credential_id="openrouter_asr",
+            env_key="OPENROUTER_API_KEY",
+        ),
+    )
+    provider = AsrProviderConfig(
+        name="openrouter_asr",
+        kind="remote",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        auth=AsrAuthConfig(
+            type="bearer",
+            env_key="OPENROUTER_API_KEY",
+            credential_id="openrouter_asr",
+        ),
+        request=AsrProviderRequestConfig(
+            response_format="json",
+            timestamp_granularities=[],
+            send_timestamp_granularities=False,
+            send_prompt=False,
+        ),
+    )
+
+    result = build_asr_client(provider).transcribe_segment(
+        audio,
+        5.0,
+        source_lang="en",
+        prompt="ignored",
+    )
+
+    payload = captured["json_payload"]
+    assert payload["model"] == "x-ai/grok-stt-1.0"
+    assert payload["response_format"] == "json"
+    assert "timestamp_granularities" not in payload
+    assert "provider" not in payload
+    assert result.rows[0]["start"] == 5.0
+    assert result.rows[0]["end"] == 5.1
+    assert result.rows[0]["meta"]["warning"] == "openrouter_text_only_timestamps"
+    assert result.rows[0]["meta"]["openrouter_model_status"] == "experimental"
+
+
+def test_openrouter_rejects_models_without_an_explicit_profile() -> None:
+    provider = AsrProviderConfig(
+        name="openrouter_asr",
+        kind="remote",
+        protocol="openrouter_stt",
+        model="deepgram/nova-3",
+    )
+    with pytest.raises(RuntimeError, match="unsupported_openrouter_asr_model"):
+        build_asr_client(provider)
+
+
+def test_openrouter_rejects_provider_options_not_allowed_by_model_profile() -> None:
+    provider = AsrProviderConfig(
+        name="openrouter_asr",
+        kind="remote",
+        protocol="openrouter_stt",
+        model="x-ai/grok-stt-1.0",
+        request=AsrProviderRequestConfig(
+            response_format="json",
+            timestamp_granularities=[],
+            provider_options={"xai": {"diarize": True}},
+        ),
+    )
+    client = build_asr_client(provider)
+
+    with pytest.raises(RuntimeError, match="unsupported_openrouter_provider_option"):
+        client._validate_request_config()
 
 
 def test_funasr_openai_protocol_uses_local_server_fields_and_adapter_parser(tmp_path, monkeypatch) -> None:

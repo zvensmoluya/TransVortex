@@ -8,6 +8,15 @@ from typing import Any
 
 import yaml
 
+from ..openrouter_asr import (
+    OPENROUTER_ASR_BASE_URL,
+    OPENROUTER_ASR_CREDENTIAL_ID,
+    OPENROUTER_ASR_DEFAULT_MODEL,
+    OPENROUTER_ASR_ENDPOINT,
+    OPENROUTER_ASR_ENV_KEY,
+    openrouter_asr_admin_defaults,
+    require_openrouter_asr_model_profile,
+)
 from .models import (
     AppConfig,
     AsrAcceleratorConfig,
@@ -572,7 +581,12 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
 
 
 ASR_PROVIDER_KINDS = {"local_inprocess", "local_worker", "local_server", "remote"}
-ASR_PROVIDER_PROTOCOLS = {"faster_whisper", "openai_transcriptions", "funasr_openai"}
+ASR_PROVIDER_PROTOCOLS = {
+    "faster_whisper",
+    "openai_transcriptions",
+    "funasr_openai",
+    "openrouter_stt",
+}
 ASR_AUTH_TYPES = {"none", "bearer"}
 ASR_RUNTIME_SOURCES = {"inprocess", "managed", "external"}
 ASR_MODEL_SOURCES = {"managed", "external"}
@@ -597,7 +611,30 @@ def _reject_legacy_asr_fields(asr_raw: dict[str, Any]) -> None:
         )
 
 
-def _default_asr_chunking(kind: str, protocol: str = "") -> AsrChunkingConfig:
+def _default_asr_chunking(
+    kind: str,
+    protocol: str = "",
+    model: str = "",
+) -> AsrChunkingConfig:
+    if protocol == "openrouter_stt":
+        raw = openrouter_asr_admin_defaults(model)["chunking"]
+        silence = raw["silence"]
+        return AsrChunkingConfig(
+            mode=str(raw["mode"]),
+            window_seconds=float(raw["window_seconds"]),
+            max_window_seconds=float(raw["max_window_seconds"]),
+            min_window_seconds=float(raw["min_window_seconds"]),
+            overlap_seconds=float(raw["overlap_seconds"]),
+            short_audio_seconds=float(raw["short_audio_seconds"]),
+            max_upload_mb=float(raw["max_upload_mb"]),
+            silence=AsrSilenceChunkingConfig(
+                noise_db=float(silence["noise_db"]),
+                min_silence_seconds=float(silence["min_silence_seconds"]),
+                cut_padding_seconds=float(silence["cut_padding_seconds"]),
+                fallback_mode=str(silence["fallback_mode"]),
+            ),
+            fuzzy_dedupe=bool(raw["fuzzy_dedupe"]),
+        )
     if protocol == "funasr_openai":
         return AsrChunkingConfig(
             mode="none",
@@ -623,7 +660,22 @@ def _default_asr_chunking(kind: str, protocol: str = "") -> AsrChunkingConfig:
     return AsrChunkingConfig()
 
 
-def _default_asr_execution(kind: str) -> AsrExecutionConfig:
+def _default_asr_execution(
+    kind: str,
+    protocol: str = "",
+    model: str = "",
+) -> AsrExecutionConfig:
+    if protocol == "openrouter_stt":
+        raw = openrouter_asr_admin_defaults(model)["execution"]
+        return AsrExecutionConfig(
+            concurrency=int(raw["concurrency"]),
+            adaptive_concurrency=bool(raw["adaptive_concurrency"]),
+            min_concurrency=int(raw["min_concurrency"]),
+            max_concurrency=int(raw["max_concurrency"]),
+            max_inflight_upload_mb=float(raw["max_inflight_upload_mb"]),
+            timeout_seconds=int(raw["timeout_seconds"]),
+            retry=int(raw["retry"]),
+        )
     if kind == "remote":
         return AsrExecutionConfig(
             concurrency=8,
@@ -645,14 +697,23 @@ def _default_asr_preprocessing(kind: str) -> AsrPreprocessingConfig:
     )
 
 
-def _parse_asr_auth(raw: Any, *, kind: str) -> AsrAuthConfig:
+def _parse_asr_auth(
+    raw: Any,
+    *,
+    kind: str,
+    default_env_key: str = "TVX_MODEL_API_KEY",
+    default_credential_id: str = "",
+) -> AsrAuthConfig:
     auth_raw = raw if isinstance(raw, dict) else {}
     default_type = "bearer" if kind == "remote" else "none"
     auth_type = _to_str(auth_raw.get("type"), default_type).strip().lower()
     if auth_type not in ASR_AUTH_TYPES:
         raise ValueError(f"Unsupported ASR auth.type: {auth_type}")
-    env_key = _to_str(auth_raw.get("env_key"), "TVX_MODEL_API_KEY")
-    credential_id = _to_str(auth_raw.get("credential_id"), env_key)
+    env_key = _to_str(auth_raw.get("env_key"), default_env_key)
+    credential_id = _to_str(
+        auth_raw.get("credential_id"),
+        default_credential_id or env_key,
+    )
     if auth_type == "none":
         env_key = ""
         credential_id = ""
@@ -794,7 +855,29 @@ def _parse_asr_preprocessing(raw: Any, *, default: AsrPreprocessingConfig) -> As
     )
 
 
-def _default_asr_request_for_protocol(protocol: str) -> AsrProviderRequestConfig:
+def _default_asr_request_for_protocol(
+    protocol: str,
+    model: str = "",
+) -> AsrProviderRequestConfig:
+    if protocol == "openrouter_stt":
+        raw = openrouter_asr_admin_defaults(model)["request"]
+        return AsrProviderRequestConfig(
+            response_format=str(raw["response_format"]),
+            temperature=float(raw["temperature"]),
+            timestamp_granularities=list(raw["timestamp_granularities"]),
+            include=[],
+            extra_form_fields={},
+            extra_json_fields={},
+            provider_options={},
+            array_format=str(raw["array_format"]),
+            send_response_format=bool(raw["send_response_format"]),
+            send_temperature=bool(raw["send_temperature"]),
+            send_timestamp_granularities=bool(raw["send_timestamp_granularities"]),
+            send_language=bool(raw["send_language"]),
+            send_prompt=bool(raw["send_prompt"]),
+            language_field=str(raw["language_field"]),
+            prompt_field=str(raw["prompt_field"]),
+        )
     if protocol == "funasr_openai":
         return AsrProviderRequestConfig(
             timestamp_granularities=[],
@@ -823,24 +906,67 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
         raise ValueError(f"Unsupported ASR protocol: {protocol}")
     if kind in {"local_inprocess", "local_worker"} and protocol != "faster_whisper":
         raise ValueError(f"ASR provider kind {kind} requires protocol faster_whisper")
-    if kind in {"local_server", "remote"} and protocol not in {"openai_transcriptions", "funasr_openai"}:
-        raise ValueError(f"ASR provider kind {kind} requires protocol openai_transcriptions or funasr_openai")
+    if kind in {"local_server", "remote"} and protocol not in {
+        "openai_transcriptions",
+        "funasr_openai",
+        "openrouter_stt",
+    }:
+        raise ValueError(
+            f"ASR provider kind {kind} requires protocol "
+            "openai_transcriptions, funasr_openai, or openrouter_stt"
+        )
     if protocol == "funasr_openai" and kind != "local_server":
         raise ValueError("ASR protocol funasr_openai requires kind local_server")
-    model = _to_str(row.get("model"), "large-v3" if protocol == "faster_whisper" else "whisper-1")
+    if protocol == "openrouter_stt" and kind != "remote":
+        raise ValueError("ASR protocol openrouter_stt requires kind remote")
+    default_model = (
+        "large-v3"
+        if protocol == "faster_whisper"
+        else OPENROUTER_ASR_DEFAULT_MODEL
+        if protocol == "openrouter_stt"
+        else "whisper-1"
+    )
+    model = _to_str(row.get("model"), default_model)
+    if protocol == "openrouter_stt":
+        require_openrouter_asr_model_profile(model)
     request_raw = row.get("request") if isinstance(row.get("request"), dict) else {}
-    default_execution = _default_asr_execution(kind)
-    default_chunking = _default_asr_chunking(kind, protocol)
+    default_execution = _default_asr_execution(kind, protocol, model)
+    default_chunking = _default_asr_chunking(kind, protocol, model)
     default_preprocessing = _default_asr_preprocessing(kind)
-    default_request = _default_asr_request_for_protocol(protocol)
+    default_request = _default_asr_request_for_protocol(protocol, model)
+    default_base_url = (
+        OPENROUTER_ASR_BASE_URL
+        if protocol == "openrouter_stt"
+        else "https://api.openai.com/v1"
+    )
+    default_endpoint = (
+        OPENROUTER_ASR_ENDPOINT
+        if protocol == "openrouter_stt"
+        else "/v1/audio/transcriptions"
+    )
+    default_env_key = (
+        OPENROUTER_ASR_ENV_KEY
+        if protocol == "openrouter_stt"
+        else "TVX_MODEL_API_KEY"
+    )
+    default_credential_id = (
+        OPENROUTER_ASR_CREDENTIAL_ID
+        if protocol == "openrouter_stt"
+        else ""
+    )
     return AsrProviderConfig(
         name=name,
         kind=kind,
         protocol=protocol,
-        base_url=_to_str(row.get("base_url"), "https://api.openai.com/v1").rstrip("/"),
-        endpoint=_to_str(row.get("endpoint"), "/v1/audio/transcriptions"),
+        base_url=_to_str(row.get("base_url"), default_base_url).rstrip("/"),
+        endpoint=_to_str(row.get("endpoint"), default_endpoint),
         model=model,
-        auth=_parse_asr_auth(row.get("auth"), kind=kind),
+        auth=_parse_asr_auth(
+            row.get("auth"),
+            kind=kind,
+            default_env_key=default_env_key,
+            default_credential_id=default_credential_id,
+        ),
         local=_parse_asr_local(row.get("local"), model=model),
         runtime=_parse_asr_runtime(row.get("runtime"), kind=kind),
         accelerator=_parse_asr_accelerator(row.get("accelerator"), kind=kind),
@@ -858,6 +984,12 @@ def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
             include=_to_str_list(request_raw.get("include"), default_request.include),
             extra_form_fields=dict(request_raw.get("extra_form_fields") or {})
             if isinstance(request_raw.get("extra_form_fields"), dict)
+            else {},
+            extra_json_fields=dict(request_raw.get("extra_json_fields") or {})
+            if isinstance(request_raw.get("extra_json_fields"), dict)
+            else {},
+            provider_options=dict(request_raw.get("provider_options") or {})
+            if isinstance(request_raw.get("provider_options"), dict)
             else {},
             array_format=_to_str(request_raw.get("array_format"), default_request.array_format),
             send_response_format=_to_bool(

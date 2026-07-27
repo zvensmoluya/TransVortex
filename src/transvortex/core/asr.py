@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import copy
 import importlib.util
 import json
 import os
@@ -25,6 +27,9 @@ from ..app.asr_runtime import (
 )
 from ..app.models import AsrProviderConfig
 from ..http import DEFAULT_JSON_HEADERS, merge_default_headers, request_json_with_retry
+from ..openrouter_asr import (
+    require_openrouter_asr_model_profile,
+)
 from ..utils import write_json
 
 
@@ -38,6 +43,16 @@ ASR_EXTRA_FORM_RESERVED_FIELDS = {
     "timestamp_granularities[]",
     "include",
     "include[]",
+}
+
+OPENROUTER_EXTRA_JSON_RESERVED_FIELDS = {
+    "model",
+    "input_audio",
+    "language",
+    "temperature",
+    "response_format",
+    "timestamp_granularities",
+    "provider",
 }
 
 _CUDA_WHEEL_DLL_SUBDIRS = (
@@ -470,6 +485,26 @@ class _WindowsKillJob:
         self.handle = None
 
 
+def _resolve_asr_api_key(
+    config: AsrProviderConfig,
+    *,
+    root_dir: Path | None,
+) -> str:
+    if config.auth.type == "none":
+        return ""
+    if config.auth.type != "bearer":
+        raise RuntimeError(f"unsupported_asr_auth_type: {config.auth.type}")
+    credential = resolve_credential(
+        env_key=config.env_key,
+        credential_id=config.credential_id,
+        provider_name=config.name,
+        root_dir=root_dir,
+    )
+    if not credential.found:
+        raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
+    return credential.key
+
+
 class OpenAITranscriptionsAsrClient:
     def __init__(self, config: AsrProviderConfig) -> None:
         self.config = config
@@ -486,19 +521,7 @@ class OpenAITranscriptionsAsrClient:
         policy_code = asr_provider_endpoint_policy_code(self.config)
         if policy_code:
             raise RuntimeError(policy_code)
-        api_key = ""
-        if self.config.auth.type == "bearer":
-            credential = resolve_credential(
-                env_key=self.config.env_key,
-                credential_id=self.config.credential_id,
-                provider_name=self.config.name,
-                root_dir=root_dir,
-            )
-            if not credential.found:
-                raise RuntimeError(f"Missing credential: {credential.credential_id or credential.env_key}")
-            api_key = credential.key
-        elif self.config.auth.type != "none":
-            raise RuntimeError(f"unsupported_asr_auth_type: {self.config.auth.type}")
+        api_key = _resolve_asr_api_key(self.config, root_dir=root_dir)
         if self.config.request.response_format != "verbose_json":
             raise RuntimeError(
                 f"unsupported_asr_response_format_for_segments: {self.config.request.response_format}"
@@ -634,6 +657,211 @@ class OpenAITranscriptionsAsrClient:
         return data, files
 
 
+class OpenRouterSttAsrClient:
+    def __init__(self, config: AsrProviderConfig) -> None:
+        self.config = config
+        try:
+            self.profile = require_openrouter_asr_model_profile(config.model)
+        except ValueError as exc:
+            raise RuntimeError(f"unsupported_openrouter_asr_model: {config.model}") from exc
+
+    def transcribe_segment(
+        self,
+        audio_path: Path,
+        segment_start_offset: float,
+        *,
+        source_lang: str | None = None,
+        prompt: str = "",
+        root_dir: Path | None = None,
+    ) -> AsrTranscriptionResult:
+        policy_code = asr_provider_endpoint_policy_code(self.config)
+        if policy_code:
+            raise RuntimeError(policy_code)
+        if self.config.auth.type != "bearer":
+            raise RuntimeError(f"unsupported_openrouter_auth_type: {self.config.auth.type}")
+        api_key = _resolve_asr_api_key(self.config, root_dir=root_dir)
+        self._validate_request_config()
+        response, transport_meta = self._call_openrouter_stt(
+            audio_path,
+            api_key=api_key,
+            source_lang=source_lang,
+            prompt=prompt,
+        )
+        transport_meta = {
+            **transport_meta,
+            "service": "openrouter",
+            "openrouter_model": self.profile.model,
+            "timeline_mode": self.profile.timeline_mode,
+            "model_status": self.profile.status,
+        }
+        rows = _map_openai_transcription_rows(
+            response=response,
+            config=self.config,
+            segment_start_offset=segment_start_offset,
+            transport_meta=transport_meta,
+        )
+        for row in rows:
+            row.setdefault("meta", {}).update(self._row_profile_meta())
+        if rows:
+            return AsrTranscriptionResult(
+                rows=rows,
+                raw_response=response,
+                transport_meta=transport_meta,
+            )
+
+        text = str(response.get("text", "")).strip()
+        if not text:
+            return AsrTranscriptionResult(
+                rows=[],
+                raw_response=response,
+                transport_meta=transport_meta,
+            )
+        if self.profile.timeline_mode == "segments_required":
+            raise RuntimeError(
+                f"openrouter_asr_timestamps_missing: {self.profile.model}"
+            )
+        return AsrTranscriptionResult(
+            rows=[
+                {
+                    "start": segment_start_offset,
+                    "end": segment_start_offset + _fallback_audio_duration_seconds(audio_path),
+                    "text": text,
+                    "confidence": None,
+                    "meta": {
+                        "provider": self.config.name,
+                        "protocol": self.config.protocol,
+                        "source": "asr",
+                        "warning": "openrouter_text_only_timestamps",
+                        **_asr_row_transport_meta(transport_meta),
+                        **self._row_profile_meta(),
+                    },
+                }
+            ],
+            raw_response=response,
+            transport_meta=transport_meta,
+        )
+
+    def _validate_request_config(self) -> None:
+        request = self.config.request
+        if request.response_format != self.profile.response_format:
+            raise RuntimeError(
+                "unsupported_openrouter_response_format_for_model: "
+                f"{self.profile.model}/{request.response_format}"
+            )
+        if request.include:
+            raise RuntimeError("unsupported_openrouter_request_field: include")
+        if request.extra_form_fields:
+            raise RuntimeError(
+                "unsupported_openrouter_request_field: extra_form_fields; "
+                "use extra_json_fields"
+            )
+        extra_json_fields = getattr(request, "extra_json_fields", {})
+        if not isinstance(extra_json_fields, dict):
+            raise RuntimeError("invalid_openrouter_request_field: extra_json_fields")
+        for name in extra_json_fields:
+            if name in OPENROUTER_EXTRA_JSON_RESERVED_FIELDS:
+                raise RuntimeError(f"reserved_openrouter_json_field: {name}")
+            if name not in self.profile.allowed_extra_json_fields:
+                raise RuntimeError(
+                    f"unsupported_openrouter_model_parameter: {self.profile.model}/{name}"
+                )
+        provider_options = getattr(request, "provider_options", {})
+        if not isinstance(provider_options, dict):
+            raise RuntimeError("invalid_openrouter_request_field: provider_options")
+        allowed_provider_options = set(self.profile.allowed_provider_options)
+        for provider_name, raw_options in provider_options.items():
+            if not isinstance(raw_options, dict):
+                raise RuntimeError(
+                    "invalid_openrouter_provider_options: "
+                    f"{self.profile.model}/{provider_name}"
+                )
+            for option_name in raw_options:
+                option_path = f"{provider_name}.{option_name}"
+                if option_path not in allowed_provider_options:
+                    raise RuntimeError(
+                        "unsupported_openrouter_provider_option: "
+                        f"{self.profile.model}/{option_path}"
+                    )
+
+    def _call_openrouter_stt(
+        self,
+        audio_path: Path,
+        *,
+        api_key: str,
+        source_lang: str | None = None,
+        prompt: str = "",
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        audio_format = _openrouter_audio_format(audio_path)
+        request = self.config.request
+        payload: dict[str, Any] = {
+            "model": self.profile.model,
+            "input_audio": {
+                "data": base64.b64encode(audio_path.read_bytes()).decode("ascii"),
+                "format": audio_format,
+            },
+        }
+        language = _normalize_whisper_language(source_lang)
+        if language and _asr_request_bool(request, "send_language", True):
+            payload["language"] = language
+        if _asr_request_bool(request, "send_temperature", True):
+            payload["temperature"] = float(request.temperature)
+        if _asr_request_bool(request, "send_response_format", True):
+            payload["response_format"] = request.response_format
+        if _asr_request_bool(request, "send_timestamp_granularities", True):
+            granularities = [
+                str(item).strip()
+                for item in request.timestamp_granularities
+                if str(item).strip()
+            ]
+            if granularities:
+                payload["timestamp_granularities"] = granularities
+
+        options = copy.deepcopy(getattr(request, "provider_options", {}) or {})
+        prompt = str(prompt or "").strip()
+        if (
+            prompt
+            and _asr_request_bool(request, "send_prompt", True)
+            and self.profile.prompt_mode == "groq_provider_option"
+        ):
+            groq = options.get("groq")
+            if not isinstance(groq, dict):
+                groq = {}
+                options["groq"] = groq
+            groq["prompt"] = prompt
+        if options:
+            payload["provider"] = {"options": options}
+        for name, value in (getattr(request, "extra_json_fields", {}) or {}).items():
+            payload[str(name)] = value
+
+        url = _build_cloud_asr_url(self.config.base_url, self.config.endpoint)
+        response, transport_meta = request_json_with_retry(
+            "POST",
+            url,
+            json_payload=payload,
+            headers=merge_default_headers(
+                {"Authorization": f"Bearer {api_key}"},
+                **DEFAULT_JSON_HEADERS,
+            ),
+            timeout=float(self.config.execution.timeout_seconds),
+            http2=bool(getattr(self.config, "http2", True)),
+            retry=max(1, int(getattr(self.config.execution, "retry", 1) or 1)),
+            context="OpenRouter STT upstream",
+            trust_env=True,
+            network=self.config.network,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("bad_schema: unexpected OpenRouter STT response")
+        return response, transport_meta
+
+    def _row_profile_meta(self) -> dict[str, Any]:
+        return {
+            "service": "openrouter",
+            "model": self.profile.model,
+            "openrouter_model_status": self.profile.status,
+            "openrouter_timeline_mode": self.profile.timeline_mode,
+        }
+
+
 class FunASROpenAIAsrClient(OpenAITranscriptionsAsrClient):
     def transcribe_segment(
         self,
@@ -698,7 +926,13 @@ def build_asr_client(
     config: AsrProviderConfig | None,
     *,
     root_dir: Path | None = None,
-) -> FasterWhisperAsrAdapter | FasterWhisperProcessAsrAdapter | OpenAITranscriptionsAsrClient | FunASROpenAIAsrClient:
+) -> (
+    FasterWhisperAsrAdapter
+    | FasterWhisperProcessAsrAdapter
+    | OpenAITranscriptionsAsrClient
+    | OpenRouterSttAsrClient
+    | FunASROpenAIAsrClient
+):
     if config is None:
         raise RuntimeError("Missing ASR provider config")
     if config.kind == "local_inprocess" and config.protocol == "faster_whisper":
@@ -707,6 +941,8 @@ def build_asr_client(
         return FasterWhisperProcessAsrAdapter(config, root_dir=root_dir)
     if config.kind in {"local_server", "remote"} and config.protocol == "openai_transcriptions":
         return OpenAITranscriptionsAsrClient(config)
+    if config.kind == "remote" and config.protocol == "openrouter_stt":
+        return OpenRouterSttAsrClient(config)
     if config.kind == "local_server" and config.protocol == "funasr_openai":
         return FunASROpenAIAsrClient(config)
     raise RuntimeError(f"unsupported_asr_provider: {config.kind}/{config.protocol}")
@@ -833,10 +1069,25 @@ def _fallback_audio_duration_seconds(audio_path: Path) -> float:
     return 0.1
 
 
+def _openrouter_audio_format(audio_path: Path) -> str:
+    suffix = audio_path.suffix.lower().lstrip(".")
+    aliases = {"wave": "wav", "oga": "ogg"}
+    normalized = aliases.get(suffix, suffix)
+    if normalized not in {"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}:
+        raise RuntimeError(f"unsupported_openrouter_audio_format: {suffix or 'unknown'}")
+    return normalized
+
+
 def _asr_row_transport_meta(meta: dict[str, Any]) -> dict[str, Any]:
     return {
         key: meta[key]
-        for key in ("transport", "http_version", "http2_requested", "http2_enabled")
+        for key in (
+            "transport",
+            "http_version",
+            "http2_requested",
+            "http2_enabled",
+            "generation_id",
+        )
         if key in meta
     }
 

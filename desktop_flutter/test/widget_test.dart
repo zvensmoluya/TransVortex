@@ -4199,7 +4199,7 @@ void main() {
     expect(configuration, findsOneWidget);
     expect(tester.getSize(configuration).width, 860);
     expect(tester.getCenter(configuration).dx, closeTo(960, 1));
-    expect(find.byType(SegmentButton), findsNWidgets(3));
+    expect(find.byType(SegmentButton), findsNWidgets(4));
     expectNoFlutterException();
   });
 
@@ -4308,6 +4308,7 @@ void main() {
       expect(find.textContaining('默认识别：'), findsNothing);
       expect(find.text('本机 Whisper'), findsWidgets);
       expect(find.text('OpenAI Whisper'), findsOneWidget);
+      expect(find.text('OpenRouter'), findsOneWidget);
       expect(find.text('FunASR'), findsOneWidget);
       expect(find.text('已保存方案'), findsNothing);
       expect(find.text('下载并启用'), findsOneWidget);
@@ -4315,6 +4316,91 @@ void main() {
       expectNoFlutterException();
     },
   );
+
+  testWidgets('ASR settings exposes curated OpenRouter model profiles', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? testedDraft;
+    final openRouterProvider = <String, Object?>{
+      'name': 'openrouter_asr',
+      'kind': 'remote',
+      'protocol': 'openrouter_stt',
+      'base_url': 'https://openrouter.ai/api/v1',
+      'endpoint': '/audio/transcriptions',
+      'model': 'openai/whisper-large-v3',
+      'auth': {
+        'type': 'bearer',
+        'env_key': 'OPENROUTER_API_KEY',
+        'credential_id': 'openrouter_asr',
+      },
+      'has_key': true,
+      'readiness': {'state': 'ready', 'code': 'ready', 'can_run': true},
+      'available_models': [
+        {
+          'model': 'openai/whisper-large-v3',
+          'display_name': 'Whisper Large V3',
+          'status': 'candidate',
+          'notes_zh': '要求分段时间戳。',
+        },
+        {
+          'model': 'x-ai/grok-stt-1.0',
+          'display_name': 'Grok STT 1.0',
+          'status': 'experimental',
+          'notes_zh': '当前按短音频窗口生成粗时间轴。',
+        },
+      ],
+    };
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          activeAsrProvider: 'openrouter_asr',
+          additionalAsrProviders: {'openrouter_asr': openRouterProvider},
+        ).raw;
+      }
+      if (method == 'asr.provider.test') {
+        testedDraft = Map<String, Object?>.from(
+          params['provider_draft']! as Map,
+        );
+        return {'ok': true, 'code': 'ready'};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('OpenRouter'), findsOneWidget);
+    expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
+    expect(find.textContaining('时间轴候选：要求分段时间戳'), findsOneWidget);
+    expect(find.textContaining('音频会上传到 OpenRouter'), findsOneWidget);
+
+    await tester.tap(find.text('Whisper Large V3'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Grok STT 1.0 · 实验性').last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('实验性模型：当前按短音频窗口'), findsOneWidget);
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('真实语音时间轴仍需在任务中验证'), findsOneWidget);
+    expect(testedDraft?['protocol'], 'openrouter_stt');
+    expect(testedDraft?['model'], 'x-ai/grok-stt-1.0');
+    expect(testedDraft?['base_url'], 'https://openrouter.ai/api/v1');
+    expect(testedDraft?['endpoint'], '/audio/transcriptions');
+    expect((testedDraft?['auth'] as Map?)?['env_key'], 'OPENROUTER_API_KEY');
+    expectNoFlutterException();
+  });
 
   testWidgets('ASR settings shows unsaved state for edited OpenAI draft', (
     tester,
@@ -7307,6 +7393,8 @@ DesktopSnapshot _desktopSnapshot({
   bool localModelSizeOnly = false,
   bool withProviders = true,
   bool withAsrProviders = true,
+  String activeAsrProvider = 'local',
+  Map<String, Object?> additionalAsrProviders = const {},
   bool managedAsr = false,
   String localModel = 'large-v3',
   String localModelSource = 'managed',
@@ -7409,7 +7497,7 @@ DesktopSnapshot _desktopSnapshot({
       'active_routing_profile': activeProfile['id'],
       'routing_profiles': routingProfiles,
       'routing_profile_next_seq': multiRoutingProfiles ? 3 : 1,
-      'pipeline': {'asr_provider': 'local'},
+      'pipeline': {'asr_provider': activeAsrProvider},
       'pipeline_file_version': {'mtime_ns': 1, 'size': 2},
       'providers_file_version': {'mtime_ns': 3, 'size': 4},
       'network': {'mode': 'system', 'proxy_port': 0},
@@ -7631,6 +7719,7 @@ DesktopSnapshot _desktopSnapshot({
                         : '',
                   },
               },
+              ...additionalAsrProviders,
             }
           : const {},
       if (asrLocal.isNotEmpty) 'asr_local': asrLocal,

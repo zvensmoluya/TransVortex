@@ -25,6 +25,7 @@ PUMP_INTERVAL_SECONDS = 1.0
 
 
 def main(argv: list[str] | None = None) -> None:
+    _configure_utf8_stdio()
     parser = argparse.ArgumentParser(prog="transvortex.app_service")
     parser.add_argument("--root", default=".", help="Project root")
     parser.add_argument(
@@ -80,6 +81,15 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         pump.stop()
         pump.join(timeout=3.0)
+
+
+def _configure_utf8_stdio() -> None:
+    # JSON-RPC is an UTF-8 protocol even when Windows inherits a legacy console
+    # code page. Model metadata may contain localized user-facing text.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8")
 
 
 def serve(service: DesktopApi, *, root_dir: Path) -> None:

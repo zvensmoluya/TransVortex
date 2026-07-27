@@ -120,6 +120,36 @@ def test_local_whisper_model_source_is_independent_from_runtime() -> None:
     assert provider.local.external_model_path == r"D:\Models\faster-whisper-large-v3"
 
 
+def test_openrouter_admin_switches_to_grok_profile_without_whisper_settings() -> None:
+    provider = draft_to_asr_provider_config(
+        {
+            "name": "openrouter_asr",
+            "kind": "remote",
+            "protocol": "openrouter_stt",
+            "model": "x-ai/grok-stt-1.0",
+            "request": {
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["segment"],
+            },
+            "chunking": {
+                "max_window_seconds": 60,
+                "overlap_seconds": 3,
+            },
+        }
+    )
+
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.endpoint == "/audio/transcriptions"
+    assert provider.env_key == "OPENROUTER_API_KEY"
+    assert provider.credential_id == "openrouter_asr"
+    assert provider.request.response_format == "json"
+    assert provider.request.timestamp_granularities == []
+    assert provider.request.send_timestamp_granularities is False
+    assert provider.request.send_prompt is False
+    assert provider.chunking.max_window_seconds == 20
+    assert provider.chunking.overlap_seconds == 0
+
+
 def test_asr_resource_activation_can_apply_local_worker_device_settings(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
     (tmp_path / "pipeline.yaml").write_text(
@@ -698,6 +728,75 @@ routing:
     assert provider.model == "whisper-1"
     assert provider.env_key == "OPENAI_API_KEY"
     assert provider.credential_id == "openai_whisper"
+
+
+def test_desktop_product_includes_curated_openrouter_asr(tmp_path: Path) -> None:
+    providers_file = tmp_path / "providers.yaml"
+    providers_file.write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    pipeline_file = Path(__file__).resolve().parents[1] / "pipeline.desktop.yaml"
+
+    cfg = load_app_config(
+        root_dir=tmp_path,
+        providers_file=providers_file,
+        pipeline_file=pipeline_file,
+    )
+    provider = cfg.asr_providers["openrouter_asr"]
+
+    assert provider.kind == "remote"
+    assert provider.protocol == "openrouter_stt"
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.endpoint == "/audio/transcriptions"
+    assert provider.model == "openai/whisper-large-v3"
+    assert provider.env_key == "OPENROUTER_API_KEY"
+    assert provider.credential_id == "openrouter_asr"
+    assert provider.execution.concurrency == 4
+    assert provider.chunking.max_window_seconds == 60
+    assert provider.chunking.overlap_seconds == 3
+    assert provider.request.response_format == "verbose_json"
+    assert provider.request.timestamp_granularities == ["segment"]
+
+
+def test_openrouter_asr_protocol_rejects_models_without_a_profile(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        """
+providers:
+  - name: p1
+    api_type: openai
+    base_url: https://example.com/v1
+    env_key: EXAMPLE_KEY
+    models: [m1]
+routing:
+  primary: {provider: p1, model: m1}
+        """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+asr:
+  provider: openrouter_asr
+asr_providers:
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    model: deepgram/nova-3
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported OpenRouter ASR model"):
+        load_app_config(root_dir=tmp_path)
 
 
 def test_provider_base_url_and_model_dynamic(tmp_path: Path) -> None:

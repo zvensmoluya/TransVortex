@@ -20,3 +20,16 @@ def test_runtime_error_hint_is_user_facing() -> None:
     assert info["code"] == "runtime_error"
     assert "events.json" not in info["hint_zh"]
     assert "stderr" not in info["hint_zh"]
+
+
+def test_classify_openrouter_missing_timestamps_as_asr_configuration_error() -> None:
+    info = classify_exception(
+        RuntimeError(
+            "openrouter_asr_timestamps_missing: openai/whisper-large-v3"
+        ),
+        stage="ASR",
+    )
+
+    assert info["code"] == "openrouter_asr_timestamps_missing"
+    assert info["retryable"] is False
+    assert "时间轴" in info["hint_zh"]

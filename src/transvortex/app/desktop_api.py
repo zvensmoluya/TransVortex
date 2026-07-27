@@ -15,6 +15,10 @@ from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
 from ..core.orchestrator import task_status_json
 from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
+from ..openrouter_asr import (
+    openrouter_asr_model_profile,
+    openrouter_asr_model_profiles_payload,
+)
 from ..providers.admin import (
     custom_adapter_template_payload,
     delete_provider_config,
@@ -849,6 +853,10 @@ def config_payload(
             has_key = credential.found
         provider_payload = to_plain(provider)
         provider_payload.pop("network", None)
+        if provider.protocol == "openrouter_stt":
+            profile = openrouter_asr_model_profile(provider.model)
+            provider_payload["available_models"] = openrouter_asr_model_profiles_payload()
+            provider_payload["model_profile"] = profile.to_payload() if profile else {}
         asr_providers[name] = {
             **provider_payload,
             "credential_source": credential_source,

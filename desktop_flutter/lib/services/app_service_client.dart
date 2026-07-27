@@ -1966,7 +1966,11 @@ class AsrProviderOption {
       'local_worker' || 'local_inprocess' => '本机 Whisper',
       'local_server' => protocol == 'funasr_openai' ? 'FunASR' : '本地服务',
       'remote' =>
-        protocol == 'openai_transcriptions' ? 'OpenAI Whisper' : '云端识别',
+        protocol == 'openai_transcriptions'
+            ? 'OpenAI Whisper'
+            : protocol == 'openrouter_stt'
+            ? 'OpenRouter · ${_openRouterAsrModelLabel(model)}'
+            : '云端识别',
       _ => displayName.isNotEmpty ? displayName : name,
     };
   }
@@ -1990,6 +1994,7 @@ class AsrProviderOption {
     if (kind == 'local_server' || lower.contains('funasr')) {
       return 'funasr_openai';
     }
+    if (lower.contains('openrouter')) return 'openrouter_stt';
     return 'openai_transcriptions';
   }
 
@@ -1998,6 +2003,14 @@ class AsrProviderOption {
         lower.contains('faster_whisper') ||
         lower.contains('faster-whisper');
   }
+}
+
+String _openRouterAsrModelLabel(String model) {
+  return switch (model.trim()) {
+    'openai/whisper-large-v3' => 'Whisper Large V3',
+    'x-ai/grok-stt-1.0' => 'Grok STT 1.0',
+    _ => model.trim().isEmpty ? '语音识别' : model.trim(),
+  };
 }
 
 class AsrReadiness {

@@ -397,7 +397,11 @@ def _process_asr_manifest_item(
     except Exception as exc:
         if (
             allow_split_retry
-            and provider.protocol in {"openai_transcriptions", "funasr_openai"}
+            and provider.protocol in {
+                "openai_transcriptions",
+                "funasr_openai",
+                "openrouter_stt",
+            }
             and _is_retryable_asr_exception(exc)
             and task is not None
             and root_dir is not None

@@ -344,6 +344,22 @@ asr_providers:
       include: []
       array_format: brackets
       extra_form_fields: {}
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    base_url: https://openrouter.ai/api/v1
+    endpoint: /audio/transcriptions
+    model: openai/whisper-large-v3
+    auth:
+      type: bearer
+      env_key: OPENROUTER_API_KEY
+      credential_id: openrouter_asr
+    request:
+      response_format: verbose_json
+      temperature: 0
+      timestamp_granularities: [segment]
+      extra_json_fields: {}
+      provider_options: {}
 ```
 
 说明：
@@ -351,7 +367,12 @@ asr_providers:
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
 - `asr.local.max_initial_timestamp` 控制每个 ASR 解码窗口第一句可出现的最晚时间，默认 `30.0` 秒，约等于 Whisper 的一个音频上下文窗口，用于避免片段开头有静音、空镜、标题卡时首句被硬拉到 0 秒附近。本地 ASR 还会传入 `beam_size`、`temperature`、`condition_on_previous_text` 和 `hotwords`；`vad_filter` 固定为 `false`，避免 faster-whisper 内部再丢弃无人声区间。
 - 当前本地 ASR 的默认档位是 `large-v3 + cuda + int8_float16`，并默认关闭 `condition_on_previous_text`。这套配置适合有 NVIDIA GPU 的机器；如果要迁回 CPU 或更低显存环境，手动把 `device` 和 `model_size` 降回去即可。
-- ASR 使用独立 provider，不复用翻译 provider routing；不同 ASR 服务用各自的 `protocol` 接入，例如 `openai_transcriptions` 和 `funasr_openai`，不通过通用 response mapping 互相模拟。
+- ASR 使用独立 provider，不复用翻译 provider routing；不同 ASR 服务用各自的 `protocol` 接入，例如 `openai_transcriptions`、`openrouter_stt` 和 `funasr_openai`，不通过通用 response mapping 互相模拟。
+- `openrouter_stt` 使用 OpenRouter 的 `/api/v1/audio/transcriptions` JSON 接口，音频会编码为 base64 放入 `input_audio` 上传。桌面端从用户级凭据中的 `openrouter_asr` 读取密钥，并以 `OPENROUTER_API_KEY` 作为开发兼容兜底；Provider YAML 不保存密钥。
+- OpenRouter ASR 采用“共享传输 + 显式模型 profile”，不会把模型目录中所有 transcription 模型自动视为兼容。当前只开放 `openai/whisper-large-v3` 和实验性的 `x-ai/grok-stt-1.0`；新增模型前必须验证请求参数、响应结构和时间轴语义，再加入 profile。
+- `openai/whisper-large-v3` 请求 `verbose_json + segment timestamps`。真实有声请求如果只有 `text`、没有 `segments`，任务会以 `openrouter_asr_timestamps_missing` 明确失败，不会伪造可用于成片的时间轴。OpenRouter 文档说明这组字段只由 OpenAI-compatible 上游稳定支持，因此桌面端将该模型标为“候选”，真实路由仍需验收。
+- `x-ai/grok-stt-1.0` 在 OpenRouter 模型页声明原生 word timestamps、说话人分离和多声道能力，但当前标准 STT 文档只保证 `text + usage`，没有公布这些字段的归一化响应结构。首版标为“实验性”，按约 20 秒短窗生成粗时间轴，不承诺单词级时间戳或说话人信息。
+- OpenRouter 的 ASR prompt 不放在 multipart 表单中。Whisper profile 会按文档把提示词映射到 `provider.options.groq.prompt`；Grok profile 当前不发送 prompt。`extra_json_fields` 和 `provider_options` 会按具体 profile 白名单校验，未知字段会失败关闭，避免把某个上游的参数误发给另一个模型。
 - `funasr_openai` 面向用户自行启动的 FunASR 本地 OpenAI-compatible 服务，默认 `chunking.mode: none`，优先把完整音频交给 FunASR 自己做 VAD、切句和时间戳；不要套用云端 OpenAI 上传限制下的 30 秒短切片。配置里的 3600 秒窗口只是避免 TransVortex 预先切碎常规长视频的上限哨兵，不代表官方保证任意 1 小时音频都稳定。
 - 长期 ASR hint 使用 prompt profile：正文保存在 `prompts/asr/*.md`，`pipeline.yaml` 只保存 `active_profile` 和 profile 元数据；临时任务可用 `--asr-prompt-text` 传入一次性 hint，不会写回配置文件。有效 ASR hint 会作为 OpenAI transcription `prompt` 发送，也会映射到本地 faster-whisper 的 `initial_prompt`；FunASR 官方 OpenAI-compatible server 当前没有 `prompt` 表单字段，`funasr_openai` 默认不会发送。
 - `asr.preprocessing.cloud_trim_silence` 只默认作用于 cloud ASR，使用 ffmpeg 分析真实静音并裁剪上传音频，返回时间轴会加回裁剪 offset；它不会识别背景音乐或环境声中的“无人声”。
@@ -359,7 +380,7 @@ asr_providers:
 - ASR 行进入 `source/segments.normalized.jsonl` 前会过滤确定性垃圾，例如纯音乐符号、替换字符乱码、长时间重复 hallucination；raw response 和 `source/asr/quality/*.json` 会保留诊断信息。
 - 连续周期回环不会覆盖 `text_src`：原始识别文本继续作为审计证据保存在 source artifact 中，清洗器只在 segment meta 写入有界的模型/展示视图。分片、术语初始化和最终双语排版使用该视图，避免把数百字机械重复送入模型或铺满画面。
 - ASR 边界风险检测会在 source cleaning 之后运行，标记过长段、多句揉在一起、文本密度过高、重叠或缺失 segment 时间戳等问题；风险写入 `meta.asr_risk` 并汇总到 `quality/asr_boundary_quality.json`。该检测默认不阻断任务、不自动重听，只让后续字幕优化和 reflow 对高风险 ASR 段更保守。
-- `asr_providers[].request` 按协议生效。OpenAI transcription 支持 `prompt`、`temperature`、`timestamp_granularities`、`include` 和受限 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。FunASR 官方 OpenAI-compatible server 对齐 `file`、`model`、`language` 和 `response_format`，`funasr_openai` 不发送 `prompt`、`temperature`、`timestamp_granularities`、`include` 或扩展字段。
+- `asr_providers[].request` 按协议生效。OpenAI transcription 支持 `prompt`、`temperature`、`timestamp_granularities`、`include` 和受限 `extra_form_fields`；保留字段不能在 `extra_form_fields` 中覆盖，`response_format` 第一版必须是 `verbose_json`。数组字段默认按 OpenAI curl 示例使用 `field[]`，需要重复同名 key 时可设 `array_format: repeat`。OpenRouter 使用 JSON 请求，只读取 profile 允许的 `extra_json_fields` 和 `provider_options`，不读取 `extra_form_fields`。FunASR 官方 OpenAI-compatible server 对齐 `file`、`model`、`language` 和 `response_format`，`funasr_openai` 不发送 `prompt`、`temperature`、`timestamp_granularities`、`include` 或扩展字段。
 - `asr_providers[].http2` 默认 `true`，表示云端 ASR 优先使用统一 `httpx` 传输层的 HTTP/2；客户端或服务端不可用时会按实际能力降级，并在 ASR meta 中记录实际协议。
 - `asr_providers[].retry` 控制 HTTP ASR 请求短重试次数，timeout、429 和 5xx 会重试；重试仍失败会保留失败，不会静默丢弃音频片段。
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。

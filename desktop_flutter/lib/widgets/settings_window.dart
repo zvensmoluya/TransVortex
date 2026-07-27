@@ -581,6 +581,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   Widget _asrDetails() {
     final draft = _asrDraft(_selectedAsrProvider);
     final kind = '${draft['kind']}';
+    final protocol = '${draft['protocol']}';
+    final isOpenRouter = protocol == 'openrouter_stt';
     final provider = _selectedAsrOption();
     if (kind == 'local_worker') {
       return _localWhisperSetupDetails(provider);
@@ -598,7 +600,11 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             onTap: _testingAsr ? null : _testAsrProvider,
           ),
       ],
-      footnote: kind == 'remote' ? '密钥保存在用户级凭据文件中。' : null,
+      footnote: kind == 'remote'
+          ? isOpenRouter
+                ? '音频会上传到 OpenRouter 并产生模型费用；密钥保存在用户级凭据文件中。'
+                : '密钥保存在用户级凭据文件中。'
+          : null,
       children: [
         _AsrOverview(
           label: _asrLabelForDraft(draft),
@@ -638,18 +644,37 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               ),
               const SizedBox(width: T.s12),
               Expanded(
-                child: Input(
-                  label: '模型',
-                  controller: _model,
-                  onChanged: (_) => _markAsrDraftDirty(),
-                ),
+                child: isOpenRouter
+                    ? _AsrSelect(
+                        label: 'OpenRouter 模型',
+                        value: _model.text,
+                        items: _openRouterModelItems(provider),
+                        onChanged: (model) {
+                          _model.text = model;
+                          _markAsrDraftDirty();
+                        },
+                      )
+                    : Input(
+                        label: '模型',
+                        controller: _model,
+                        onChanged: (_) => _markAsrDraftDirty(),
+                      ),
               ),
             ],
           ),
+          if (isOpenRouter) ...[
+            const SizedBox(height: T.s8),
+            Text(
+              _openRouterModelHint(provider, _model.text),
+              style: T.tCaption.copyWith(color: T.muted),
+            ),
+          ],
           if (kind == 'remote') ...[
             const SizedBox(height: T.s12),
             Input(
-              label: 'OpenAI API key（留空则沿用已保存密钥）',
+              label: isOpenRouter
+                  ? 'OpenRouter API key（留空则沿用已保存密钥）'
+                  : 'OpenAI API key（留空则沿用已保存密钥）',
               controller: _key,
               obscure: true,
               onChanged: (_) => _markAsrDraftDirty(),
@@ -2296,17 +2321,20 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       _message = null;
     });
     try {
+      final providerDraft = _asrDraft(_selectedAsrProvider);
       final result = await _client.asrProviderTest(
-        providerDraft: _asrDraft(_selectedAsrProvider),
+        providerDraft: providerDraft,
       );
       if (!mounted) return;
       setState(() {
         if (result['ok'] == true) {
-          _message = '连接和最小识别测试通过。';
+          _message = providerDraft['protocol'] == 'openrouter_stt'
+              ? '连接和最小请求通过；真实语音时间轴仍需在任务中验证。'
+              : '连接和最小识别测试通过。';
         } else {
           final message = '${result['message'] ?? ''}'.trim();
           _error = message.isEmpty
-              ? '连接测试失败：${result['code'] ?? 'connection_failed'}'
+              ? _friendlyAsrConnectionTestError(result['code'])
               : message;
         }
       });
@@ -2352,7 +2380,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ? editedEndpoint
         : (hasExisting && existing.endpoint.isNotEmpty
               ? existing.endpoint
-              : '/v1/audio/transcriptions');
+              : _defaultAsrEndpoint(protocol));
     final auth = hasExisting
         ? _stringMap(existing.raw['auth'])
         : const <String, Object?>{};
@@ -2402,7 +2430,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
             ? auth
             : {
                 'type': 'bearer',
-                'env_key': 'OPENAI_API_KEY',
+                'env_key': protocol == 'openrouter_stt'
+                    ? 'OPENROUTER_API_KEY'
+                    : 'OPENAI_API_KEY',
                 'credential_id': providerName,
               }
       else
@@ -2452,6 +2482,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         provider.protocol == 'funasr_openai') {
       return 'funasr_sensevoice_local';
     }
+    if (provider.protocol == 'openrouter_stt') return 'openrouter_asr';
     return 'openai_whisper';
   }
 
@@ -2470,6 +2501,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _asrPresetIdForName(providerName) == 'funasr_sensevoice_local') {
       return 'funasr_openai';
     }
+    if (_asrPresetIdForName(providerName) == 'openrouter_asr') {
+      return 'openrouter_stt';
+    }
     return 'openai_transcriptions';
   }
 
@@ -2486,6 +2520,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         lower.contains('sensevoice')) {
       return 'funasr_sensevoice_local';
     }
+    if (providerName == 'openrouter_asr' || lower.contains('openrouter')) {
+      return 'openrouter_asr';
+    }
     return 'openai_whisper';
   }
 
@@ -2494,6 +2531,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       return 'small';
     }
     if (protocol == 'funasr_openai') return 'sensevoice';
+    if (protocol == 'openrouter_stt') return 'openai/whisper-large-v3';
     return 'whisper-1';
   }
 
@@ -2501,7 +2539,16 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     if (kind == 'local_server' || protocol == 'funasr_openai') {
       return 'http://127.0.0.1:8899';
     }
+    if (protocol == 'openrouter_stt') {
+      return 'https://openrouter.ai/api/v1';
+    }
     return 'https://api.openai.com/v1';
+  }
+
+  String _defaultAsrEndpoint(String protocol) {
+    return protocol == 'openrouter_stt'
+        ? '/audio/transcriptions'
+        : '/v1/audio/transcriptions';
   }
 
   String _asrLabelForDraft(Map<String, Object?> draft) {
@@ -2509,9 +2556,47 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       'local_worker' || 'local_inprocess' => '本机 Whisper',
       'local_server' =>
         draft['protocol'] == 'funasr_openai' ? 'FunASR' : '本地服务',
-      'remote' => 'OpenAI Whisper',
+      'remote' =>
+        draft['protocol'] == 'openrouter_stt'
+            ? 'OpenRouter · ${_openRouterAsrModelLabel((draft['model'] ?? '').toString())}'
+            : 'OpenAI Whisper',
       _ => '${draft['name']}',
     };
+  }
+
+  Map<String, String> _openRouterModelItems(AsrProviderOption? provider) {
+    final result = <String, String>{};
+    for (final raw in _objectList(provider?.raw['available_models'])) {
+      final row = _stringMap(raw);
+      final model = '${row['model'] ?? ''}'.trim();
+      if (model.isEmpty) continue;
+      final display = '${row['display_name'] ?? ''}'.trim();
+      final status = '${row['status'] ?? ''}'.trim();
+      final suffix = status == 'experimental' ? ' · 实验性' : '';
+      result[model] = '${display.isEmpty ? model : display}$suffix';
+    }
+    if (result.isNotEmpty) return result;
+    return const {
+      'openai/whisper-large-v3': 'Whisper Large V3',
+      'x-ai/grok-stt-1.0': 'Grok STT 1.0 · 实验性',
+    };
+  }
+
+  String _openRouterModelHint(
+    AsrProviderOption? provider,
+    String selectedModel,
+  ) {
+    for (final raw in _objectList(provider?.raw['available_models'])) {
+      final row = _stringMap(raw);
+      if ('${row['model'] ?? ''}' != selectedModel) continue;
+      final notes = '${row['notes_zh'] ?? ''}'.trim();
+      final status = '${row['status'] ?? ''}'.trim();
+      final prefix = status == 'experimental' ? '实验性模型：' : '时间轴候选：';
+      return '$prefix$notes';
+    }
+    return selectedModel == 'x-ai/grok-stt-1.0'
+        ? '实验性模型：当前按短音频窗口生成粗时间轴。'
+        : '时间轴候选：要求服务返回分段时间戳，不会静默降级为整段字幕。';
   }
 
   String? _keyTextOrNull() {
@@ -3023,6 +3108,14 @@ String _diagnosticDetailValue(String key, Object? value) {
   };
 }
 
+String _openRouterAsrModelLabel(String model) {
+  return switch (model.trim()) {
+    'openai/whisper-large-v3' => 'Whisper Large V3',
+    'x-ai/grok-stt-1.0' => 'Grok STT 1.0',
+    _ => model.trim().isEmpty ? '语音识别' : model.trim(),
+  };
+}
+
 String _serviceValueLabel(String lower, {required String fallback}) {
   if (lower == 'local' || lower.contains('faster_whisper')) {
     return '本机语音识别';
@@ -3030,6 +3123,7 @@ String _serviceValueLabel(String lower, {required String fallback}) {
   if (lower.contains('funasr') || lower.contains('sensevoice')) {
     return 'FunASR';
   }
+  if (lower.contains('openrouter')) return 'OpenRouter';
   if (lower.contains('openai_whisper')) return 'OpenAI Whisper';
   return fallback;
 }
@@ -3048,6 +3142,7 @@ String _serviceProtocolLabel(String lower, {required String fallback}) {
     'faster_whisper' => 'faster-whisper',
     'funasr_openai' => 'FunASR 兼容接口',
     'openai_transcriptions' => 'OpenAI 转写接口',
+    'openrouter_stt' => 'OpenRouter 语音转写接口',
     _ => _translationProtocolLabel(fallback),
   };
 }
@@ -3260,6 +3355,7 @@ class _SegmentedEngines extends StatelessWidget {
     const items = [
       ('faster_whisper_large_v3', '本机 Whisper', '本机运行'),
       ('openai_whisper', 'OpenAI Whisper', '云端识别'),
+      ('openrouter_asr', 'OpenRouter', '云端模型'),
       ('funasr_sensevoice_local', 'FunASR', '本地服务'),
     ];
     return Row(
@@ -5210,6 +5306,28 @@ String? _stringValue(Object? value) {
 }
 
 String _friendlySettingsError(Object error) => friendlySettingsError(error);
+
+String _friendlyAsrConnectionTestError(Object? rawCode) {
+  final code = '${rawCode ?? 'connection_failed'}'.trim().toLowerCase();
+  return switch (code) {
+    'credential_missing' => '连接测试失败：请先填写或保存这个识别服务的 API key。',
+    'auth_error' => '连接测试失败：密钥无效或没有调用这个模型的权限。',
+    'rate_limit' => '连接测试失败：上游触发限流，请稍后再试。',
+    'request_timeout' ||
+    'provider_timeout' ||
+    'gateway_timeout' => '连接测试失败：上游响应超时，请稍后再试。',
+    'service_unreachable' ||
+    'service_unavailable' ||
+    'network_error' ||
+    'connection_failed' => '连接测试失败：暂时无法连接识别服务，请检查网络和服务地址。',
+    'openrouter_asr_timestamps_missing' =>
+      'OpenRouter 已返回文本，但没有返回制作字幕所需的时间轴；请改用已支持时间戳的模型。',
+    'unsupported_openrouter_asr_model' =>
+      '这个 OpenRouter 模型尚未完成专项适配，请选择列表中的已支持模型。',
+    'bad_schema' => '连接测试失败：上游返回了当前版本无法识别的结构。',
+    _ => '连接测试失败，请检查识别服务配置。',
+  };
+}
 
 String _friendlyAgentEntryError(Object error) {
   if (error is RpcRemoteException) {

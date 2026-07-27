@@ -172,6 +172,10 @@ String _failureReason({
           : '翻译模型凭据还没有配置，请在翻译设置中补充后再继续。';
     case 'missing_asr_dependency':
       return '本机识别组件还没有准备好，请在识别设置中完成安装或选择其他方案。';
+    case 'openrouter_asr_timestamps_missing':
+      return 'OpenRouter 上游只返回了转写文本，没有返回制作字幕所需的时间轴。请改用已支持时间戳的识别模型。';
+    case 'unsupported_openrouter_asr_model':
+      return '这个 OpenRouter 识别模型尚未完成专项适配，请选择已支持的模型。';
     case 'missing_executable':
       return '应用所需的媒体组件不可用，请查看任务线索并修复或重新安装 TransVortex。';
     case 'input_not_found':

@@ -6,6 +6,14 @@ from typing import Any
 
 import yaml
 
+from ..openrouter_asr import (
+    OPENROUTER_ASR_BASE_URL,
+    OPENROUTER_ASR_CREDENTIAL_ID,
+    OPENROUTER_ASR_DEFAULT_MODEL,
+    OPENROUTER_ASR_ENDPOINT,
+    OPENROUTER_ASR_ENV_KEY,
+    openrouter_asr_admin_defaults,
+)
 from ..utils import to_plain
 from .config import _parse_asr_provider, load_app_config
 from .credentials import auth_file_path, resolve_credential, write_auth_credential
@@ -137,7 +145,15 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
     defaults = ASR_PROVIDER_DEFAULTS[kind]
     protocol = _text(draft, "protocol", default=str(defaults["protocol"])).lower()
     name = _text(draft, "name", default=str(defaults["name"]))
-    model = _text(draft, "model", default=str(defaults["model"]))
+    model = _text(
+        draft,
+        "model",
+        default=(
+            OPENROUTER_ASR_DEFAULT_MODEL
+            if protocol == "openrouter_stt"
+            else str(defaults["model"])
+        ),
+    )
 
     row: dict[str, Any] = {
         "name": name,
@@ -214,6 +230,39 @@ def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
             row[key] = value
     if "http2" in draft:
         row["http2"] = bool(draft["http2"])
+
+    if protocol == "openrouter_stt":
+        row["name"] = name or "openrouter_asr"
+        row["base_url"] = _text(
+            draft,
+            "base_url",
+            "baseUrl",
+            default=OPENROUTER_ASR_BASE_URL,
+        ).rstrip("/")
+        row["endpoint"] = _text(
+            draft,
+            "endpoint",
+            default=OPENROUTER_ASR_ENDPOINT,
+        )
+        row["auth"] = {
+            "type": "bearer",
+            "env_key": _text(
+                auth,
+                "env_key",
+                "envKey",
+                default=OPENROUTER_ASR_ENV_KEY,
+            ),
+            "credential_id": _text(
+                auth,
+                "credential_id",
+                "credentialId",
+                default=OPENROUTER_ASR_CREDENTIAL_ID,
+            ),
+        }
+        # OpenRouter models are deliberately curated. Saving through the admin
+        # surface reapplies the selected model profile so settings from one
+        # model cannot leak into another model with a different response shape.
+        row.update(openrouter_asr_admin_defaults(model))
 
     return row
 

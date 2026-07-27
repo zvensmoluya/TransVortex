@@ -4,6 +4,31 @@
 
 这里的条目不是已承诺路线，也不是默认要立即实现的功能。它们用于保存真实使用中的现象、当前判断、验证条件和可能方向，避免讨论结论散落在聊天记录或路线文档里。
 
+## OpenRouter 云 ASR 真实服务兼容性
+
+状态：功能已实现，待真实服务验收。
+
+当前实现：
+- 已接入 OpenRouter `/api/v1/audio/transcriptions` JSON 传输、用户级凭据解析、桌面设置入口和模型专项 profile。
+- 当前显式支持 `openai/whisper-large-v3` 与 `x-ai/grok-stt-1.0`，不会自动开放 OpenRouter 模型目录中的其他 transcription 模型。
+- Whisper profile 要求上游返回 segment timestamps；只有文本时明确失败。Grok profile 暂按短窗生成粗时间轴，并在界面标为“实验性”。
+
+尚缺证据：
+- 自动测试只使用模拟 HTTP 响应，没有读取现有用户密钥，也没有产生 OpenRouter 计费请求。
+- 设置页的最小连接测试使用短静音探针，可以验证地址、凭据和基本协议，但不能证明真实有声音频会返回 segment 或 word timestamps。
+- 需要分别验证 Whisper 在 OpenRouter 实际路由下的 `verbose_json`、`segments`、prompt 和长音频分片行为，以及 Grok 实际响应是否透出 word timestamps、说话人和多声道字段。
+
+验收条件：
+- 使用专用测试密钥和可公开测试音频完成短音频、跨分片音频和至少一种非英语素材的真实请求，并保留脱敏后的响应结构与 `X-Generation-Id`。
+- Whisper 结果具有稳定、单调且可用于字幕的 segment 时间轴；如果某条路由不支持 `verbose_json`，产品提示能明确引导切换方案。
+- Grok 的粗时间轴偏差被量化；只有在确认 OpenRouter 归一化字段后，才接入 word timestamps、说话人或多声道能力。
+- 确认 OpenRouter 当前 STT 超时、文件大小、费用和数据处理边界与产品提示一致。
+
+暂不做：
+- 不在真实响应验证前加入更多 OpenRouter ASR 模型。
+- 不将模型页宣称的原生能力等同于 OpenRouter API 已经透出的标准字段。
+- 不用整段文本静默伪造 Whisper 的精确字幕时间轴。
+
 ## ASR 局部重复后的短时漏听
 
 状态：待验证，低优先级优化。

@@ -17,6 +17,11 @@ _SAFE_TRANSPORT_KEYS = {
     "http2_enabled",
     "streaming",
     "attempts",
+    "generation_id",
+    "service",
+    "openrouter_model",
+    "timeline_mode",
+    "model_status",
     "runtime_source",
     "runtime_id",
     "device",
@@ -123,6 +128,8 @@ def _test_error_code(exc: Exception) -> str:
         "service_unavailable",
         "gateway_timeout",
         "unsupported_auth",
+        "openrouter_asr_timestamps_missing",
+        "unsupported_openrouter_asr_model",
     }
     explicit = str(getattr(exc, "code", "") or getattr(exc, "error_type", "") or "").strip().lower()
     if explicit in known:

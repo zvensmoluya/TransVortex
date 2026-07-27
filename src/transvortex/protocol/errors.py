@@ -106,6 +106,24 @@ def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str,
             hint_zh="本地 ASR 缺少 faster-whisper，请安装 ASR 依赖或切换云端 ASR。",
             retryable=False,
         )
+    if "openrouter_asr_timestamps_missing" in lowered:
+        return error_info(
+            code="openrouter_asr_timestamps_missing",
+            error_type="provider_error",
+            stage=stage,
+            message=message,
+            hint_zh="OpenRouter 上游只返回了转写文本，没有返回制作字幕所需的时间轴。请在识别设置中改用已支持时间戳的模型，或切换本地识别。",
+            retryable=False,
+        )
+    if "unsupported_openrouter_asr_model" in lowered:
+        return error_info(
+            code="unsupported_openrouter_asr_model",
+            error_type="config_error",
+            stage=stage,
+            message=message,
+            hint_zh="当前 OpenRouter 识别模型尚未完成专项适配，请在识别设置中选择已支持的模型。",
+            retryable=False,
+        )
     if "provider preflight failed" in lowered:
         return error_info(
             code="provider_preflight_failed",

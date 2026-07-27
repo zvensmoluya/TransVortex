@@ -315,6 +315,9 @@ def transport_meta(
         "streaming": streaming,
         "attempts": max(1, int(attempts)),
     }
+    generation_id = str(response.headers.get("x-generation-id") or "").strip()
+    if generation_id:
+        meta["generation_id"] = generation_id
     if stream_meta:
         meta.update(stream_meta)
     return meta

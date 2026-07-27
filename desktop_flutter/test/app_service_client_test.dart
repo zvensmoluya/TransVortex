@@ -480,6 +480,13 @@ void main() {
             'has_key': true,
           },
           'openai_whisper': {'name': 'Whisper', 'has_key': true},
+          'openrouter_asr': {
+            'name': 'openrouter_asr',
+            'kind': 'remote',
+            'protocol': 'openrouter_stt',
+            'model': 'openai/whisper-large-v3',
+            'has_key': true,
+          },
         },
       },
       'tasks': [],
@@ -493,6 +500,10 @@ void main() {
     expect(byName['local']?.displayLabel, '本机 Whisper');
     expect(byName['funasr_sensevoice_local']?.displayLabel, 'FunASR');
     expect(byName['openai_whisper']?.displayLabel, 'OpenAI Whisper');
+    expect(
+      byName['openrouter_asr']?.displayLabel,
+      'OpenRouter · Whisper Large V3',
+    );
     expect(snapshot.asrLabel, 'FunASR');
   });
 

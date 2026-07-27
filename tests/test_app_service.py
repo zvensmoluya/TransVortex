@@ -875,6 +875,39 @@ def test_app_service_asr_provider_save_updates_pipeline_and_redacts_key(tmp_path
     assert config["asr_providers"]["openai_asr"]["has_key"] is True
 
 
+def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    service = DesktopApi(root_dir=tmp_path)
+
+    handle_line(
+        service,
+        _request(
+            "asr.provider.save",
+            {
+                "provider_draft": {
+                    "name": "openrouter_asr",
+                    "kind": "remote",
+                    "protocol": "openrouter_stt",
+                    "model": "x-ai/grok-stt-1.0",
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+    snapshot = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+    provider = snapshot["result"]["config"]["asr_providers"]["openrouter_asr"]
+
+    assert provider["model_profile"]["status"] == "experimental"
+    assert provider["model_profile"]["timeline_mode"] == "chunk"
+    assert [item["model"] for item in provider["available_models"]] == [
+        "openai/whisper-large-v3",
+        "x-ai/grok-stt-1.0",
+    ]
+    assert provider["request"]["response_format"] == "json"
+    assert provider["chunking"]["max_window_seconds"] == 20
+
+
 def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))

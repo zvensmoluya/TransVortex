@@ -170,6 +170,58 @@ asr_providers:
     preprocessing:
       trim_silence:
         enabled: false
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    base_url: https://openrouter.ai/api/v1
+    endpoint: /audio/transcriptions
+    model: openai/whisper-large-v3
+    auth:
+      type: bearer
+      env_key: OPENROUTER_API_KEY
+      credential_id: openrouter_asr
+    execution:
+      concurrency: 4
+      adaptive_concurrency: true
+      min_concurrency: 1
+      max_concurrency: 4
+      max_inflight_upload_mb: 64
+      timeout_seconds: 120
+      retry: 2
+    preprocessing:
+      trim_silence:
+        enabled: true
+        backend: ffmpeg_silencedetect
+        noise_db: -35
+        min_silence_seconds: 0.2
+        keep_preroll_seconds: 0.25
+        trim_trailing: true
+        keep_postroll_seconds: 0.1
+        min_upload_seconds: 0.5
+    chunking:
+      mode: silence
+      window_seconds: 60
+      max_window_seconds: 60
+      min_window_seconds: 8
+      overlap_seconds: 3
+      short_audio_seconds: 60
+      max_upload_mb: 24
+      silence:
+        noise_db: -35
+        min_silence_seconds: 0.25
+        cut_padding_seconds: 0.15
+        fallback_mode: hard_cut
+      fuzzy_dedupe: true
+    http2: true
+    request:
+      response_format: verbose_json
+      temperature: 0
+      timestamp_granularities: [segment]
+      include: []
+      array_format: repeat
+      extra_form_fields: {}
+      extra_json_fields: {}
+      provider_options: {}
   - name: funasr_sensevoice_local
     kind: local_server
     protocol: funasr_openai
