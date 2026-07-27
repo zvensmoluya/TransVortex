@@ -37,6 +37,9 @@ SetCompressor /SOLID lzma
 !ifndef INSTALLER_HEADER_BITMAP
   !error "INSTALLER_HEADER_BITMAP must point to the branded NSIS header bitmap"
 !endif
+!ifndef ASR_CONFIG_READER
+  !error "ASR_CONFIG_READER must point to the installer ASR config reader"
+!endif
 
 !define APP_NAME "TransVortex"
 !define APP_PUBLISHER "TransVortex Contributors"
@@ -434,6 +437,8 @@ FunctionEnd
 
 Function ResolveAsrStorageRoot
   StrCpy $AsrStorageRoot ""
+  Call ReadConfiguredAsrStorageRoot
+  StrCmp $AsrStorageRoot "" 0 asr_storage_root_done
   ReadRegStr $AsrStorageRoot HKCU "${APP_REGISTRY_KEY}" "AsrStorageLocation"
   StrCmp $AsrStorageRoot "" check_legacy_asr_storage asr_storage_root_done
 
@@ -456,6 +461,25 @@ use_profile_asr_storage:
   StrCpy $AsrStorageRoot "$LOCALAPPDATA\TransVortex"
 
 asr_storage_root_done:
+FunctionEnd
+
+Function ReadConfiguredAsrStorageRoot
+  IfFileExists "$LOCALAPPDATA\TransVortex\Config\asr_storage.json" 0 configured_asr_storage_done
+  IfFileExists "$INSTDIR\runtime\python\python.exe" 0 configured_asr_storage_done
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=resolve_asr_storage_config.py "${ASR_CONFIG_READER}"
+  Delete "$PLUGINSDIR\asr-storage.ini"
+  nsExec::Exec `"$INSTDIR\runtime\python\python.exe" -I -B "$PLUGINSDIR\resolve_asr_storage_config.py" --config-root "$LOCALAPPDATA\TransVortex\Config" --output-ini "$PLUGINSDIR\asr-storage.ini"`
+  Pop $0
+  StrCmp $0 "0" 0 configured_asr_storage_cleanup
+  ReadINIStr $AsrStorageRoot "$PLUGINSDIR\asr-storage.ini" "Storage" "Root"
+
+configured_asr_storage_cleanup:
+  Delete "$PLUGINSDIR\asr-storage.ini"
+  Delete "$PLUGINSDIR\resolve_asr_storage_config.py"
+
+configured_asr_storage_done:
 FunctionEnd
 
 Function WriteAsrStorageConfig

@@ -210,10 +210,14 @@ $licensePath = Join-Path $repoRoot "LICENSE"
 $iconPath = Join-Path $repoRoot "desktop_flutter\windows\runner\resources\app_icon.ico"
 $welcomeBitmapPath = Join-Path $repoRoot "installer\windows\assets\installer_welcome.bmp"
 $headerBitmapPath = Join-Path $repoRoot "installer\windows\assets\installer_header.bmp"
+$asrConfigReaderPath = Join-Path $repoRoot "installer\windows\resolve_asr_storage_config.py"
 foreach ($brandAsset in @($iconPath, $welcomeBitmapPath, $headerBitmapPath)) {
     if (-not (Test-Path -LiteralPath $brandAsset)) {
         throw "Installer brand asset not found: $brandAsset. Run scripts\build_brand_assets.ps1."
     }
+}
+if (-not (Test-Path -LiteralPath $asrConfigReaderPath)) {
+    throw "Installer ASR config reader not found: $asrConfigReaderPath"
 }
 
 $nsisArgs = @(
@@ -228,6 +232,7 @@ $nsisArgs = @(
     "/DAPP_ICON=$iconPath",
     "/DINSTALLER_WELCOME_BITMAP=$welcomeBitmapPath",
     "/DINSTALLER_HEADER_BITMAP=$headerBitmapPath",
+    "/DASR_CONFIG_READER=$asrConfigReaderPath",
     $nsiPath
 )
 & $makensis @nsisArgs | Out-Host

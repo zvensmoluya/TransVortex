@@ -75,6 +75,30 @@ def test_installer_preserves_classic_storage_defaults_for_existing_layouts() -> 
     assert "preserve_asr_storage_location:" in installer
 
 
+def test_installer_prefers_authoritative_asr_config_over_registry_hint() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+    resolver_start = installer.index("Function ResolveAsrStorageRoot")
+    resolver_end = installer.index("FunctionEnd", resolver_start)
+    resolver = installer[resolver_start:resolver_end]
+    reader_start = installer.index("Function ReadConfiguredAsrStorageRoot")
+    reader_end = installer.index("FunctionEnd", reader_start)
+    reader = installer[reader_start:reader_end]
+    build_script = (
+        ROOT / "scripts" / "build_windows_installer.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert resolver.index("Call ReadConfiguredAsrStorageRoot") < resolver.index(
+        'ReadRegStr $AsrStorageRoot HKCU "${APP_REGISTRY_KEY}" "AsrStorageLocation"'
+    )
+    assert 'IfFileExists "$INSTDIR\\runtime\\python\\python.exe"' in reader
+    assert 'File /oname=resolve_asr_storage_config.py "${ASR_CONFIG_READER}"' in reader
+    assert "nsExec::Exec" in reader
+    assert 'ReadINIStr $AsrStorageRoot "$PLUGINSDIR\\asr-storage.ini"' in reader
+    assert '"/DASR_CONFIG_READER=$asrConfigReaderPath"' in build_script
+
+
 def test_uninstaller_credential_copy_matches_shipped_product() -> None:
     installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
         encoding="utf-8"
