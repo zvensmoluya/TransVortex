@@ -1,14 +1,20 @@
 ﻿from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import shutil
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
+
+import pytest
 
 from transvortex.core.orchestrator import (
     _asr_runs_concurrently,
     _checkpoint_status_payload,
     _preflight,
+    _process_asr_manifest_item,
     _translation_progress_callback,
     _write_translation_experiment_artifacts,
     create_pipeline_task,
@@ -16,11 +22,29 @@ from transvortex.core.orchestrator import (
     run_pipeline,
     task_status_json,
 )
+from transvortex.core.openrouter_asr_usage import (
+    write_openrouter_asr_usage_artifact as _write_openrouter_asr_usage_artifact,
+)
 from transvortex.app.config import load_app_config
 from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
 from transvortex.http import HttpTransportError
 from transvortex.protocol.errors import PipelineTaskError
+
+
+def _record_openrouter_usage_in_child(args: tuple[str, int]) -> None:
+    source_dir, index = args
+    from transvortex.core.openrouter_asr_usage import record_openrouter_asr_usage_receipt
+
+    record_openrouter_asr_usage_receipt(
+        source_dir=Path(source_dir),
+        provider=SimpleNamespace(protocol="openrouter_stt", model="x-ai/grok-stt-1.0"),
+        raw_response={
+            "text": f"response {index}",
+            "usage": {"cost": 0.001 * (index + 1), "seconds": float(index + 1)},
+        },
+        transport_meta={"generation_id": f"concurrent_{index}"},
+    )
 
 
 def _write_config(root: Path) -> None:
@@ -76,6 +100,12 @@ def test_checkpoint_status_exposes_structured_asr_progress(tmp_path: Path) -> No
             "asr_done_count": 3,
             "asr_total_segments": 10,
             "source_segment_count": 42,
+            "asr_usage": {
+                "provider": "openrouter",
+                "request_count": 3,
+                "cost_usd": 0.0006,
+                "audio_seconds": 9.0,
+            },
         },
     )
 
@@ -85,6 +115,249 @@ def test_checkpoint_status_exposes_structured_asr_progress(tmp_path: Path) -> No
     assert payload["progress"] == 0.325
     assert payload["progress_detail"]["asr_done_count"] == 3
     assert payload["progress_detail"]["asr_total_segments"] == 10
+    assert payload["progress_detail"]["asr_usage"]["cost_usd"] == 0.0006
+
+
+def test_checkpoint_status_recovers_openrouter_usage_after_hard_interruption(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "artifacts")
+    task_id = "tvx_interrupted_usage"
+    store.save_checkpoint(task_id, {"status": "ASR", "asr_done_count": 0, "asr_total_segments": 1})
+    receipts_dir = store.task_dir(task_id) / "source" / "asr" / "usage_receipts"
+    receipts_dir.mkdir(parents=True)
+    (receipts_dir / "gen_interrupted.json").write_text(
+        json.dumps(
+            {
+                "receipt_id": "generation:gen_interrupted",
+                "provider": "openrouter",
+                "model": "x-ai/grok-stt-1.0",
+                "generation_id": "gen_interrupted",
+                "usage": {"cost": 0.0015, "seconds": 20.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = _checkpoint_status_payload(store, task_id)
+
+    usage = payload["progress_detail"]["asr_usage"]
+    assert usage["request_count"] == 1
+    assert usage["cost_usd"] == pytest.approx(0.0015)
+    assert usage["model"] == "x-ai/grok-stt-1.0"
+    assert (store.task_dir(task_id) / "source" / "asr" / "openrouter_usage.json").is_file()
+
+
+def test_openrouter_asr_usage_artifact_aggregates_related_and_split_responses(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    raw_dir = source_dir / "asr" / "raw"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "segment_00000.json").write_text(
+        json.dumps(
+            {
+                "text": "selected response",
+                "usage": {
+                    "cost": 0.001,
+                    "seconds": 2.0,
+                    "total_tokens": 3,
+                    "input_tokens": 2,
+                    "output_tokens": 1,
+                },
+                "_transport_meta": {"generation_id": "gen_1"},
+                "_related_responses": [
+                    {
+                        "text": "earlier successful response",
+                        "usage": {
+                            "cost": 0.002,
+                            "seconds": 3.0,
+                            "total_tokens": 5,
+                            "input_tokens": 3,
+                            "output_tokens": 2,
+                        },
+                        "_transport_meta": {"generation_id": "gen_3"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (raw_dir / "segment_00001.json").write_text(
+        json.dumps(
+            {
+                "split_retry": True,
+                "children": [
+                    {
+                        "text": "child response",
+                        "usage": {
+                            "cost": 0.003,
+                            "seconds": 4.0,
+                            "total_tokens": 7,
+                            "input_tokens": 4,
+                            "output_tokens": 3,
+                        },
+                        "_transport_meta": {"generation_id": "gen_2"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipts_dir = source_dir / "asr" / "usage_receipts"
+    receipts_dir.mkdir(parents=True)
+    (receipts_dir / "duplicate_gen_1.json").write_text(
+        json.dumps(
+            {
+                "receipt_id": "generation:gen_1",
+                "provider": "openrouter",
+                "model": "x-ai/grok-stt-1.0",
+                "generation_id": "gen_1",
+                "usage": {
+                    "cost": 0.001,
+                    "seconds": 2.0,
+                    "total_tokens": 3,
+                    "input_tokens": 2,
+                    "output_tokens": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    usage_path, summary = _write_openrouter_asr_usage_artifact(
+        {"source": source_dir},
+        SimpleNamespace(protocol="openrouter_stt", model="x-ai/grok-stt-1.0"),
+    )
+
+    assert usage_path == source_dir / "asr" / "openrouter_usage.json"
+    assert summary is not None
+    assert summary["provider"] == "openrouter"
+    assert summary["model"] == "x-ai/grok-stt-1.0"
+    assert summary["request_count"] == 3
+    assert summary["usage_response_count"] == 3
+    assert summary["generation_count"] == 3
+    assert summary["usage_complete"] is True
+    assert summary["cost_complete"] is True
+    assert summary["cost_usd"] == pytest.approx(0.006)
+    assert summary["audio_seconds"] == 9.0
+    assert summary["total_tokens"] == 15
+    assert summary["input_tokens"] == 9
+    assert summary["output_tokens"] == 6
+    assert json.loads(usage_path.read_text(encoding="utf-8")) == summary
+
+
+def test_openrouter_asr_usage_writer_removes_stale_artifact(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    usage_path = source_dir / "asr" / "openrouter_usage.json"
+    usage_path.parent.mkdir(parents=True)
+    usage_path.write_text('{"cost_usd": 1}', encoding="utf-8")
+
+    written_path, summary = _write_openrouter_asr_usage_artifact(
+        {"source": source_dir},
+        SimpleNamespace(protocol="openai_transcriptions", model="whisper-1"),
+    )
+
+    assert written_path is None
+    assert summary is None
+    assert not usage_path.exists()
+
+
+def test_openrouter_asr_usage_preserves_mixed_receipt_models(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    receipts_dir = source_dir / "asr" / "usage_receipts"
+    receipts_dir.mkdir(parents=True)
+    for index, model in enumerate(("x-ai/grok-stt-1.0", "openai/whisper-large-v3")):
+        (receipts_dir / f"receipt_{index}.json").write_text(
+            json.dumps(
+                {
+                    "receipt_id": f"generation:gen_{index}",
+                    "provider": "openrouter",
+                    "model": model,
+                    "generation_id": f"gen_{index}",
+                    "usage": {"cost": 0.001, "seconds": 2.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _usage_path, summary = _write_openrouter_asr_usage_artifact(
+        {"source": source_dir},
+        SimpleNamespace(protocol="openrouter_stt", model="openai/whisper-large-v3"),
+    )
+
+    assert summary is not None
+    assert summary["model"] == ""
+    assert summary["models"] == ["openai/whisper-large-v3", "x-ai/grok-stt-1.0"]
+    assert summary["request_count"] == 2
+    assert summary["cost_usd"] == pytest.approx(0.002)
+
+
+def test_openrouter_asr_usage_rebuilds_when_receipt_mtime_matches_stale_artifact(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    receipts_dir = source_dir / "asr" / "usage_receipts"
+    receipts_dir.mkdir(parents=True)
+    first_receipt = receipts_dir / "first.json"
+    first_receipt.write_text(
+        json.dumps(
+            {
+                "receipt_id": "generation:first",
+                "generation_id": "first",
+                "model": "x-ai/grok-stt-1.0",
+                "usage": {"cost": 0.001, "seconds": 1.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    usage_path, first_summary = _write_openrouter_asr_usage_artifact(
+        {"source": source_dir},
+        SimpleNamespace(protocol="openrouter_stt", model="x-ai/grok-stt-1.0"),
+    )
+    assert usage_path is not None
+    assert first_summary is not None
+    assert first_summary["request_count"] == 1
+
+    second_receipt = receipts_dir / "second.json"
+    second_receipt.write_text(
+        json.dumps(
+            {
+                "receipt_id": "generation:second",
+                "generation_id": "second",
+                "model": "x-ai/grok-stt-1.0",
+                "usage": {"cost": 0.002, "seconds": 2.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    directory_mtime = receipts_dir.stat().st_mtime_ns
+    usage_path.touch()
+    os.utime(usage_path, ns=(directory_mtime, directory_mtime))
+
+    _written_path, rebuilt = _write_openrouter_asr_usage_artifact(
+        {"source": source_dir},
+        SimpleNamespace(protocol="openrouter_stt", model="x-ai/grok-stt-1.0"),
+    )
+
+    assert rebuilt is not None
+    assert rebuilt["request_count"] == 2
+    assert rebuilt["receipt_file_count"] == 2
+    assert rebuilt["cost_usd"] == pytest.approx(0.003)
+
+
+def test_openrouter_asr_usage_serializes_concurrent_process_writers(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    work = [(str(source_dir), index) for index in range(8)]
+
+    with multiprocessing.get_context("spawn").Pool(processes=4) as pool:
+        pool.map(_record_openrouter_usage_in_child, work)
+
+    summary = json.loads(
+        (source_dir / "asr" / "openrouter_usage.json").read_text(encoding="utf-8")
+    )
+    assert summary["request_count"] == 8
+    assert summary["generation_count"] == 8
+    assert summary["receipt_file_count"] == 8
+    assert summary["cost_usd"] == pytest.approx(0.036)
+    assert summary["audio_seconds"] == 36.0
+    assert len(list((source_dir / "asr" / "usage_receipts").glob("*.json"))) == 8
 
 
 def test_local_worker_keeps_one_shared_asr_process_when_concurrency_is_higher(tmp_path: Path) -> None:
@@ -195,6 +468,10 @@ def _write_remote_asr_config(
     root: Path,
     *,
     provider_name: str = "cloud1",
+    protocol: str = "openai_transcriptions",
+    base_url: str = "https://api.example.com/v1",
+    endpoint: str = "/v1/audio/transcriptions",
+    model: str = "whisper-1",
     prompt: str = "",
     execution: str = "",
     preprocessing: str = "",
@@ -211,10 +488,10 @@ asr:
 asr_providers:
   - name: {provider_name}
     kind: remote
-    protocol: openai_transcriptions
-    base_url: https://api.example.com/v1
-    endpoint: /v1/audio/transcriptions
-    model: whisper-1
+    protocol: {protocol}
+    base_url: {base_url}
+    endpoint: {endpoint}
+    model: {model}
     auth:
       type: bearer
       env_key: PROVIDER_KEY
@@ -1021,9 +1298,392 @@ chunking:
     assert seen_paths == ["segment_00000.wav", "part_00000.wav"]
     preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
     assert preprocess["fallback_used"] is True
+    raw_response = json.loads((task_dir / "source" / "asr" / "raw" / "segment_00000.json").read_text(encoding="utf-8"))
+    assert raw_response["_related_responses"][0]["text"] == "♪♪"
     rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
     assert rows[0]["text"] == "やったわ"
     assert rows[0]["meta"]["audio_preprocess"]["fallback_used"] is True
+
+
+def test_openrouter_usage_survives_failure_after_a_billed_trimmed_request(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path
+    _write_config(root)
+    _write_remote_asr_config(
+        root,
+        provider_name="openrouter_asr",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: true
+        """,
+        chunking="""
+chunking:
+  mode: none
+        """,
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "example-token")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 10.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        part = segments_dir / "part_00000.wav"
+        part.write_bytes(b"audio")
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 10.0,
+                "trusted_start": 0.0,
+                "trusted_end": 10.0,
+                "path": str(part),
+            }
+        ]
+
+    def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(audio_path.read_bytes())
+        return {
+            "enabled": True,
+            "backend": "ffmpeg_silencedetect",
+            "source_path": str(audio_path),
+            "upload_path": str(upload_path),
+            "duration_seconds": 10.0,
+            "leading_silence_seconds": 0.5,
+            "trailing_silence_seconds": 0.0,
+            "trim_start_seconds": 0.25,
+            "trim_end_seconds": 10.0,
+            "skipped": False,
+            "reason": "trimmed",
+        }
+
+    class FakeOpenRouterAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(
+            self,
+            audio_path: Path,
+            segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            if audio_path.name != "segment_00000.wav":
+                raise RuntimeError("fallback upload failed")
+            return SimpleNamespace(
+                rows=[
+                    {
+                        "start": segment_start_offset,
+                        "end": segment_start_offset + 1.0,
+                        "text": "♪♪",
+                        "meta": {"source": "asr"},
+                    }
+                ],
+                raw_response={
+                    "text": "♪♪",
+                    "usage": {"cost": 0.001, "seconds": 9.75},
+                },
+                transport_meta={"generation_id": "gen_trimmed"},
+            )
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.prepare_cloud_asr_audio_upload", fake_prepare)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeOpenRouterAsrEngine)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.probe_provider",
+        lambda **_kwargs: {"checks": [{"status": "PASS"}]},
+    )
+
+    with pytest.raises(PipelineTaskError, match="fallback upload failed") as exc_info:
+        run_pipeline(
+            root_dir=root,
+            input_file=input_file,
+            source_lang="en",
+            target_lang="en",
+            input_type="video_asr",
+            cli_overrides={"source_mode": "asr"},
+        )
+
+    task_id = str(exc_info.value.task_id)
+    store = TaskStore(root / "artifacts")
+    task_dir = store.task_dir(task_id)
+    assert store.load_task(task_id).status == "FAILED"
+    checkpoint = json.loads((task_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["asr_usage"]["request_count"] == 1
+    assert checkpoint["asr_usage"]["cost_usd"] == pytest.approx(0.001)
+    status = _checkpoint_status_payload(store, task_id)
+    assert status["progress_detail"]["asr_usage"]["audio_seconds"] == 9.75
+    usage = json.loads(
+        (task_dir / "source" / "asr" / "openrouter_usage.json").read_text(encoding="utf-8")
+    )
+    assert usage["generation_count"] == 1
+    assert len(list((task_dir / "source" / "asr" / "usage_receipts").glob("*.json"))) == 1
+
+
+def test_openrouter_usage_survives_failure_after_a_successful_split_child(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    _write_remote_asr_config(
+        tmp_path,
+        provider_name="openrouter_asr",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 60
+  max_window_seconds: 60
+  min_window_seconds: 12
+  overlap_seconds: 0
+        """,
+    )
+    config = load_app_config(root_dir=tmp_path)
+    source_audio = tmp_path / "full_audio.wav"
+    source_audio.write_bytes(b"full")
+    parent_audio = tmp_path / "parent.wav"
+    parent_audio.write_bytes(b"parent")
+    paths = {
+        "source": tmp_path / "task" / "source",
+        "cache": tmp_path / "cache",
+        "media": tmp_path / "media",
+    }
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        children = []
+        for index, start in enumerate((0.0, 30.0)):
+            path = segments_dir / f"part_{index:05d}.wav"
+            path.write_bytes(str(index).encode("utf-8"))
+            children.append(
+                {
+                    "segment_index": index,
+                    "start": start,
+                    "duration": 30.0,
+                    "trusted_start": start,
+                    "trusted_end": start + 30.0,
+                    "path": str(path),
+                }
+            )
+        return children
+
+    class ParentAsr:
+        def transcribe_segment_result(
+            self,
+            _audio_path: Path,
+            _segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            raise RuntimeError("provider_timeout: split parent")
+
+    class ChildAsr:
+        def transcribe_segment_result(
+            self,
+            audio_path: Path,
+            segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            if audio_path.name == "part_00001.wav":
+                raise RuntimeError("second split child failed")
+            return SimpleNamespace(
+                rows=[
+                    {
+                        "start": segment_start_offset,
+                        "end": segment_start_offset + 1.0,
+                        "text": "first child",
+                        "meta": {"source": "asr"},
+                    }
+                ],
+                raw_response={
+                    "text": "first child",
+                    "usage": {"cost": 0.002, "seconds": 30.0},
+                },
+                transport_meta={"generation_id": "gen_child_0"},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator._build_asr_engine",
+        lambda *_args, **_kwargs: ChildAsr(),
+    )
+
+    with pytest.raises(RuntimeError, match="second split child failed"):
+        _process_asr_manifest_item(
+            item={
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 60.0,
+                "trusted_start": 0.0,
+                "trusted_end": 60.0,
+                "path": str(parent_audio),
+                "source_audio_path": str(source_audio),
+            },
+            asr=ParentAsr(),
+            paths=paths,
+            config=config,
+            task=SimpleNamespace(source_lang="en"),
+            root_dir=tmp_path,
+        )
+
+    usage = json.loads(
+        (paths["source"] / "asr" / "openrouter_usage.json").read_text(encoding="utf-8")
+    )
+    assert usage["request_count"] == 1
+    assert usage["cost_usd"] == pytest.approx(0.002)
+    assert usage["audio_seconds"] == 30.0
+    assert len(list((paths["source"] / "asr" / "usage_receipts").glob("*.json"))) == 1
+
+
+def test_openrouter_usage_is_kept_when_task_is_cancelled_after_a_response(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path
+    _write_config(root)
+    _write_remote_asr_config(
+        root,
+        provider_name="openrouter_asr",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        execution="""
+execution:
+  concurrency: 1
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+        chunking="""
+chunking:
+  mode: fixed
+  window_seconds: 10
+  overlap_seconds: 0
+        """,
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "example-token")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 20.0}
+
+    def fake_split_audio_for_asr(_audio_path: Path, segments_dir: Path, **_kwargs) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for index, start in enumerate((0.0, 10.0)):
+            path = segments_dir / f"part_{index:05d}.wav"
+            path.write_bytes(str(index).encode("utf-8"))
+            rows.append(
+                {
+                    "segment_index": index,
+                    "start": start,
+                    "duration": 10.0,
+                    "trusted_start": start,
+                    "trusted_end": start + 10.0,
+                    "path": str(path),
+                }
+            )
+        return rows
+
+    class FakeOpenRouterAsrEngine:
+        calls = 0
+
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(
+            self,
+            _audio_path: Path,
+            segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            type(self).calls += 1
+            if type(self).calls == 1:
+                store = TaskStore(root / "artifacts")
+                [task] = store.list_tasks()
+                store.request_cancel(task.task_id)
+            return SimpleNamespace(
+                rows=[
+                    {
+                        "start": segment_start_offset,
+                        "end": segment_start_offset + 1.0,
+                        "text": "first response",
+                        "meta": {"source": "asr"},
+                    }
+                ],
+                raw_response={
+                    "text": "first response",
+                    "usage": {"cost": 0.001, "seconds": 10.0},
+                },
+                transport_meta={"generation_id": "gen_before_cancel"},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeOpenRouterAsrEngine)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.probe_provider",
+        lambda **_kwargs: {"checks": [{"status": "PASS"}]},
+    )
+
+    with pytest.raises(PipelineTaskError) as exc_info:
+        run_pipeline(
+            root_dir=root,
+            input_file=input_file,
+            source_lang="en",
+            target_lang="en",
+            input_type="video_asr",
+            cli_overrides={"source_mode": "asr"},
+        )
+
+    task_id = str(exc_info.value.task_id)
+    store = TaskStore(root / "artifacts")
+    assert store.load_task(task_id).status == "CANCELLED"
+    checkpoint = store.load_checkpoint(task_id)
+    assert checkpoint["asr_usage"]["request_count"] == 1
+    assert checkpoint["asr_usage"]["cost_usd"] == pytest.approx(0.001)
+    assert FakeOpenRouterAsrEngine.calls == 1
 
 
 def test_cloud_asr_filters_hard_garbage_rows_before_source_artifact(tmp_path: Path, monkeypatch) -> None:

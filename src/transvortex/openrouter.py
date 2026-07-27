@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
 import httpx
 
-from .http import HttpTransportError, request_json_with_retry, response_retry_after_seconds
+from .http import (
+    DEFAULT_JSON_HEADERS,
+    HttpTransportError,
+    merge_default_headers,
+    request_json_with_retry,
+    response_retry_after_seconds,
+)
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_ENV_KEY = "OPENROUTER_API_KEY"
+OPENROUTER_CURRENT_KEY_URL = f"{OPENROUTER_BASE_URL}/key"
+
+
+_CURRENT_KEY_USD_FIELDS = {
+    "usage": "usage_usd",
+    "usage_daily": "usage_daily_usd",
+    "usage_weekly": "usage_weekly_usd",
+    "usage_monthly": "usage_monthly_usd",
+    "byok_usage": "byok_usage_usd",
+    "byok_usage_daily": "byok_usage_daily_usd",
+    "byok_usage_weekly": "byok_usage_weekly_usd",
+    "byok_usage_monthly": "byok_usage_monthly_usd",
+    "limit": "limit_usd",
+    "limit_remaining": "limit_remaining_usd",
+}
 
 
 _ERROR_TYPE_BY_STATUS = {
@@ -89,6 +111,90 @@ def request_openrouter_json_with_retry(
         payload_error_factory=_openrouter_payload_error,
         **kwargs,
     )
+
+
+def fetch_openrouter_current_key_usage(
+    api_key: str,
+    *,
+    timeout: float = 30.0,
+    http2: bool = True,
+    retry: int = 1,
+    network: Any | None = None,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Read spend metadata for the authenticated ordinary OpenRouter API key.
+
+    The upstream payload contains key identity and ownership fields.  Rebuild a
+    stable allowlisted response here instead of returning that payload through
+    the Local Service boundary.
+    """
+
+    normalized_key = str(api_key or "").strip()
+    if not normalized_key:
+        raise ValueError("OpenRouter API key is required")
+    payload, _transport_meta = request_openrouter_json_with_retry(
+        "GET",
+        OPENROUTER_CURRENT_KEY_URL,
+        headers=merge_default_headers(
+            {"Authorization": f"Bearer {normalized_key}"},
+            **DEFAULT_JSON_HEADERS,
+        ),
+        timeout=timeout,
+        http2=http2,
+        retry=retry,
+        client=client,
+        context="OpenRouter current key usage",
+        trust_env=True,
+        network=network,
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        raise HttpTransportError(
+            "bad_schema",
+            "bad_schema: unexpected OpenRouter current key response",
+        )
+    return _safe_current_key_usage(payload["data"])
+
+
+def _safe_current_key_usage(data: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {"currency": "USD"}
+    for upstream_name, stable_name in _CURRENT_KEY_USD_FIELDS.items():
+        result[stable_name] = _safe_usd_value(data.get(upstream_name))
+    limit_reset = data.get("limit_reset")
+    result["limit_reset"] = (
+        limit_reset
+        if isinstance(limit_reset, str) and limit_reset in {"daily", "weekly", "monthly"}
+        else None
+    )
+    result["is_free_tier"] = (
+        data.get("is_free_tier")
+        if isinstance(data.get("is_free_tier"), bool)
+        else None
+    )
+    result["expires_at"] = _safe_iso_timestamp(data.get("expires_at"))
+    return result
+
+
+def _safe_usd_value(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    return normalized if math.isfinite(normalized) else None
+
+
+def _safe_iso_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 80:
+        return None
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        normalized,
+    ):
+        return None
+    return normalized
 
 
 def _openrouter_status_error(

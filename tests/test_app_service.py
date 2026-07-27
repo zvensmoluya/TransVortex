@@ -168,6 +168,7 @@ def test_app_service_info_health_and_shutdown(tmp_path: Path) -> None:
     assert "agent_client" in info["result"]["capabilities"]
     assert "agent_handoff" in info["result"]["capabilities"]
     assert "asr_model_discovery" in info["result"]["capabilities"]
+    assert "asr_provider_usage" in info["result"]["capabilities"]
     assert "asr_accelerator_probe" in info["result"]["capabilities"]
     assert "asr_resource_activation" in info["result"]["capabilities"]
     assert "agent_entry" in info["result"]["capabilities"]
@@ -673,6 +674,219 @@ asr_providers:
     assert response["result"]["ok"] is True
     assert captured["provider"].protocol == "funasr_openai"
     assert captured["source_lang"] == "ja"
+
+
+def test_app_service_reads_openrouter_asr_usage_with_saved_credential(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENROUTER_TEST_KEY", raising=False)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  provider: openrouter_asr
+asr_providers:
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    model: openai/whisper-large-v3
+    base_url: https://openrouter.ai/api/v1
+    endpoint: /audio/transcriptions
+    auth:
+      type: bearer
+      env_key: OPENROUTER_TEST_KEY
+      credential_id: openrouter_asr
+        """.strip(),
+        encoding="utf-8",
+    )
+    service = DesktopApi(root_dir=tmp_path)
+    handle_line(
+        service,
+        _request("auth.set", {"credential_id": "openrouter_asr", "api_key": "example-token"}),
+        root_dir=tmp_path,
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_usage(api_key, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(api_key=api_key, **kwargs)
+        return {"currency": "USD", "usage_usd": 0.25}
+
+    monkeypatch.setattr("transvortex.app.desktop_api.fetch_openrouter_current_key_usage", fake_usage)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.usage",
+            {
+                "provider_draft": {
+                    "name": "openrouter_asr",
+                    "kind": "remote",
+                    "protocol": "openrouter_stt",
+                    "model": "openai/whisper-large-v3",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "endpoint": "/audio/transcriptions",
+                    "auth": {
+                        "type": "bearer",
+                        "env_key": "OPENROUTER_TEST_KEY",
+                        "credential_id": "openrouter_asr",
+                    },
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"] == {"currency": "USD", "usage_usd": 0.25}
+    assert captured["api_key"] == "example-token"
+    assert captured["timeout"] == 30.0
+    assert captured["http2"] is True
+    assert captured["retry"] == 2
+    assert captured["network"].mode == "system"
+    assert "example-token" not in json.dumps(response)
+
+
+def test_app_service_reads_openrouter_asr_usage_for_draft_with_explicit_key(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_usage(api_key, **kwargs):  # noqa: ANN001, ANN003
+        captured.update(api_key=api_key, **kwargs)
+        return {"currency": "USD", "usage_usd": 1.5}
+
+    monkeypatch.setattr("transvortex.app.desktop_api.fetch_openrouter_current_key_usage", fake_usage)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.usage",
+            {
+                "provider_draft": {
+                    "name": "openrouter_draft",
+                    "kind": "remote",
+                    "protocol": "openrouter_stt",
+                    "model": "x-ai/grok-stt-1.0",
+                    "base_url": "https://untrusted.example/api/v1",
+                },
+                "api_key": "one-time-key",
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["result"] == {"currency": "USD", "usage_usd": 1.5}
+    assert captured["api_key"] == "one-time-key"
+    assert captured["timeout"] == 30.0
+    assert captured["retry"] == 2
+    assert "one-time-key" not in json.dumps(response)
+
+
+def test_app_service_rejects_unsaved_openrouter_draft_credential_lookup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("SENSITIVE_UNRELATED_VALUE", "must-not-be-read")
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.usage",
+            {
+                "provider_draft": {
+                    "name": "untrusted_draft",
+                    "kind": "remote",
+                    "protocol": "openrouter_stt",
+                    "model": "x-ai/grok-stt-1.0",
+                    "auth": {
+                        "type": "bearer",
+                        "env_key": "SENSITIVE_UNRELATED_VALUE",
+                        "credential_id": "unrelated_credential",
+                    },
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["error"]["code"] == "openrouter_usage_explicit_key_required"
+    assert "must-not-be-read" not in json.dumps(response)
+
+
+def test_app_service_rejects_changed_credential_metadata_for_saved_openrouter_draft(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    (tmp_path / "pipeline.yaml").write_text(
+        """
+artifacts_dir: artifacts
+asr:
+  provider: openrouter_asr
+asr_providers:
+  - name: openrouter_asr
+    kind: remote
+    protocol: openrouter_stt
+    model: openai/whisper-large-v3
+    auth:
+      type: bearer
+      env_key: OPENROUTER_API_KEY
+      credential_id: openrouter_asr
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SENSITIVE_UNRELATED_VALUE", "must-not-be-read")
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.usage",
+            {
+                "provider_draft": {
+                    "name": "openrouter_asr",
+                    "kind": "remote",
+                    "protocol": "openrouter_stt",
+                    "model": "x-ai/grok-stt-1.0",
+                    "auth": {
+                        "type": "bearer",
+                        "env_key": "SENSITIVE_UNRELATED_VALUE",
+                        "credential_id": "openrouter_asr",
+                    },
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["error"]["code"] == "openrouter_usage_credential_mismatch"
+    assert "must-not-be-read" not in json.dumps(response)
+
+
+def test_app_service_rejects_usage_query_for_non_openrouter_asr(tmp_path: Path, monkeypatch) -> None:
+    _write_config(tmp_path)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.usage",
+            {
+                "provider_draft": {
+                    "name": "funasr",
+                    "kind": "local_server",
+                    "protocol": "funasr_openai",
+                    "model": "sensevoice",
+                    "base_url": "http://127.0.0.1:8899",
+                    "auth": {"type": "none"},
+                }
+            },
+        ),
+        root_dir=tmp_path,
+    )
+
+    assert response["error"]["code"] == "unsupported_asr_provider_usage"
 
 
 def test_app_service_forwards_reasoning_effort_to_provider_test(tmp_path: Path, monkeypatch) -> None:

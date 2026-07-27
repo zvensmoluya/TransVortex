@@ -111,6 +111,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
+  bool _checkingOpenRouterUsage = false;
   bool _copyingAgentHandoff = false;
   bool _discoveringAsrModels = false;
   bool _probingAsrModel = false;
@@ -476,6 +477,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         _probingAsrModel ||
         _renamingAsrModel ||
         _testingAsr ||
+        _checkingOpenRouterUsage ||
         _copyingAgentHandoff;
     final showFeedback = busy || _error != null || _message != null;
     final snapshot = _snapshot;
@@ -496,6 +498,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
                         _probingAsrModel ||
                         _renamingAsrModel ||
                         _testingAsr ||
+                        _checkingOpenRouterUsage ||
                         _copyingAgentHandoff
                     ? null
                     : _pickAsrProvider,
@@ -592,12 +595,26 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         ActionButton(
           label: _savingAsr ? '保存中' : '保存并设为默认',
           strong: true,
-          onTap: _savingAsr ? null : _saveAsrProvider,
+          onTap: _savingAsr || _testingAsr || _checkingOpenRouterUsage
+              ? null
+              : _saveAsrProvider,
         ),
         if (kind == 'local_server' || kind == 'remote')
           ActionButton(
             label: _testingAsr ? '测试中' : '测试连接',
-            onTap: _testingAsr ? null : _testAsrProvider,
+            icon: Icons.wifi_tethering_rounded,
+            onTap: _testingAsr || _savingAsr || _checkingOpenRouterUsage
+                ? null
+                : _testAsrProvider,
+          ),
+        if (isOpenRouter)
+          ActionButton(
+            key: const ValueKey('openrouter-key-usage'),
+            label: _checkingOpenRouterUsage ? '查询中' : '查询用量',
+            icon: Icons.receipt_long_outlined,
+            onTap: _checkingOpenRouterUsage || _savingAsr || _testingAsr
+                ? null
+                : _checkOpenRouterUsage,
           ),
       ],
       footnote: kind == 'remote'
@@ -2343,6 +2360,27 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       setState(() => _error = _friendlySettingsError(error));
     } finally {
       if (mounted) setState(() => _testingAsr = false);
+    }
+  }
+
+  Future<void> _checkOpenRouterUsage() async {
+    setState(() {
+      _checkingOpenRouterUsage = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final result = await _client.asrProviderUsage(
+        providerDraft: _asrDraft(_selectedAsrProvider),
+        apiKey: _keyTextOrNull(),
+      );
+      if (!mounted) return;
+      setState(() => _message = _openRouterKeyUsageMessage(result));
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlySettingsError(error));
+    } finally {
+      if (mounted) setState(() => _checkingOpenRouterUsage = false);
     }
   }
 
@@ -5303,6 +5341,40 @@ String? _stringValue(Object? value) {
   if (value == null) return null;
   final text = '$value';
   return text.isEmpty ? null : text;
+}
+
+String _openRouterKeyUsageMessage(Map<String, Object?> usage) {
+  final spent = _nonNegativeFiniteNumber(usage['usage_usd']);
+  final limit = _nonNegativeFiniteNumber(usage['limit_usd']);
+  final remaining = _nonNegativeFiniteNumber(usage['limit_remaining_usd']);
+  final parts = <String>[];
+  if (spent != null && limit != null) {
+    parts.add('已用 ${_formatUsageUsd(spent)} / ${_formatUsageUsd(limit)}');
+  } else if (spent != null) {
+    parts.add('已用 ${_formatUsageUsd(spent)}');
+  }
+  if (remaining != null) parts.add('剩余 ${_formatUsageUsd(remaining)}');
+  final reset = switch ('${usage['limit_reset'] ?? ''}') {
+    'daily' => '每日重置',
+    'weekly' => '每周重置',
+    'monthly' => '每月重置',
+    _ => '',
+  };
+  if (reset.isNotEmpty && limit != null) parts.add(reset);
+  return parts.isEmpty
+      ? 'OpenRouter 没有返回可展示的密钥用量。'
+      : 'OpenRouter 密钥用量：${parts.join(' · ')}';
+}
+
+double? _nonNegativeFiniteNumber(Object? value) {
+  final parsed = value is num ? value.toDouble() : double.tryParse('$value');
+  if (parsed == null || !parsed.isFinite || parsed < 0) return null;
+  return parsed;
+}
+
+String _formatUsageUsd(double amount) {
+  if (amount > 0 && amount < 0.01) return '\$${amount.toStringAsFixed(6)}';
+  return '\$${amount.toStringAsFixed(2)}';
 }
 
 String _friendlySettingsError(Object error) => friendlySettingsError(error);

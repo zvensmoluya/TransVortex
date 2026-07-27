@@ -15,6 +15,7 @@ from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
 from ..core.orchestrator import task_status_json
 from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
+from ..openrouter import fetch_openrouter_current_key_usage
 from ..openrouter_asr import (
     openrouter_asr_model_profile,
     openrouter_asr_model_profiles_payload,
@@ -91,6 +92,7 @@ SERVICE_CAPABILITIES = [
     "network_settings",
     "workspace_storage",
     "asr_provider_admin",
+    "asr_provider_usage",
     "asr_component_manager",
     "asr_storage_settings",
     "asr_model_discovery",
@@ -177,6 +179,7 @@ class DesktopApi:
             "asr.provider.save": self.asr_provider_save,
             "asr.status": self.asr_status,
             "asr.provider.test": self.asr_provider_test,
+            "asr.provider.usage": self.asr_provider_usage,
             "asr.setup.start": self.asr_setup_start,
             "asr.storage.set": self.asr_storage_set,
             "asr.component.install": self.asr_component_install,
@@ -522,6 +525,64 @@ class DesktopApi:
             provider,
             root_dir=self.root_dir,
             source_lang=_optional_text(params, "source_lang", "sourceLang") or "en",
+        )
+
+    def asr_provider_usage(self, params: dict[str, Any]) -> dict[str, Any]:
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        draft = _optional_dict(params, "provider_draft", "providerDraft")
+        explicit_key = _optional_text(params, "api_key", "apiKey")
+        if draft is not None:
+            provider = draft_to_asr_provider_config(draft, network=config.network)
+        else:
+            provider_name = _optional_text(params, "provider", "provider_name", "providerName")
+            provider_name = provider_name or config.pipeline.asr_provider
+            provider = config.asr_providers.get(provider_name)
+            if provider is None:
+                raise DesktopApiError("asr_provider_not_found", f"ASR provider not found: {provider_name}")
+        if provider.protocol != "openrouter_stt":
+            raise DesktopApiError(
+                "unsupported_asr_provider_usage",
+                "ASR provider usage is only available for openrouter_stt",
+            )
+        if provider.auth.type != "bearer":
+            raise DesktopApiError(
+                "unsupported_asr_provider_auth",
+                f"OpenRouter ASR usage requires bearer auth, not {provider.auth.type}",
+            )
+        credential_provider = provider
+        if draft is not None and explicit_key is None:
+            saved_provider = config.asr_providers.get(provider.name)
+            if saved_provider is None or saved_provider.protocol != "openrouter_stt":
+                raise DesktopApiError(
+                    "openrouter_usage_explicit_key_required",
+                    "An unsaved OpenRouter provider requires an explicit API key for usage lookup",
+                )
+            if (
+                provider.auth.type != saved_provider.auth.type
+                or provider.auth.env_key != saved_provider.auth.env_key
+                or provider.auth.credential_id != saved_provider.auth.credential_id
+            ):
+                raise DesktopApiError(
+                    "openrouter_usage_credential_mismatch",
+                    "OpenRouter provider draft credential metadata does not match the saved provider",
+                )
+            credential_provider = saved_provider
+        credential = resolve_provider_credential(
+            credential_provider,
+            root_dir=self.root_dir,
+            explicit_key=explicit_key,
+        )
+        if not credential.found:
+            raise DesktopApiError(
+                "credential_missing",
+                f"Missing credential: {credential.credential_id or credential.env_key}",
+            )
+        return fetch_openrouter_current_key_usage(
+            credential.key,
+            timeout=min(max(float(provider.execution.timeout_seconds), 1.0), 30.0),
+            http2=bool(provider.http2),
+            retry=min(max(1, int(provider.execution.retry or 1)), 3),
+            network=provider.network,
         )
 
     def asr_component_install(self, params: dict[str, Any]) -> dict[str, Any]:

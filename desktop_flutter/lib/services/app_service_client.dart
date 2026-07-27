@@ -793,6 +793,18 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> asrProviderUsage({
+    String? provider,
+    Map<String, Object?>? providerDraft,
+    String? apiKey,
+  }) {
+    return call('asr.provider.usage', {
+      'provider': ?provider,
+      'provider_draft': ?providerDraft,
+      'api_key': ?apiKey,
+    }).then(_stringMap);
+  }
+
   Future<AsrOperationStatus> asrSetupStart(
     String modelId, {
     bool activateOnComplete = false,
@@ -2844,6 +2856,23 @@ class TaskSummary {
   Map<String, int> get modelRequestCounts => _stringMap(
     progressDetail['model_request_counts'],
   ).map((key, value) => MapEntry(key, _intValue(value) ?? 0));
+  Map<String, Object?> get asrUsage => _stringMap(progressDetail['asr_usage']);
+  String get asrUsageProvider =>
+      (_stringValue(asrUsage['provider']) ?? '').trim().toLowerCase();
+  int get asrUsageRequestCount =>
+      _nonNegativeInt(asrUsage['request_count']) ?? 0;
+  double? get asrUsageCostUsd => _nonNegativeFiniteDouble(asrUsage['cost_usd']);
+  double? get asrUsageAudioSeconds =>
+      _nonNegativeFiniteDouble(asrUsage['audio_seconds']);
+  int? get asrUsageTotalTokens => _nonNegativeInt(asrUsage['total_tokens']);
+  int? get asrUsageInputTokens => _nonNegativeInt(asrUsage['input_tokens']);
+  int? get asrUsageOutputTokens => _nonNegativeInt(asrUsage['output_tokens']);
+  bool get asrUsageComplete => asrUsage['usage_complete'] == true;
+  bool get asrUsageCostComplete => asrUsage['cost_complete'] == true;
+  bool get hasOpenRouterAsrUsage =>
+      asrUsageProvider == 'openrouter' && asrUsageRequestCount > 0;
+  bool get hasCompleteOpenRouterAsrUsage =>
+      hasOpenRouterAsrUsage && asrUsageComplete && asrUsageCostComplete;
   String get qualityStatus =>
       (_stringValue(progressDetail['quality_status']) ?? '').toUpperCase();
   String get deliveryStatus =>
@@ -3087,6 +3116,18 @@ int? _intValue(Object? value) {
   if (value is num) return value.toInt();
   if (value is String) return int.tryParse(value);
   return null;
+}
+
+int? _nonNegativeInt(Object? value) {
+  final parsed = _intValue(value);
+  if (parsed == null || parsed < 0) return null;
+  return parsed;
+}
+
+double? _nonNegativeFiniteDouble(Object? value) {
+  final parsed = _numValue(value)?.toDouble();
+  if (parsed == null || !parsed.isFinite || parsed < 0) return null;
+  return parsed;
 }
 
 int _sumNumericLeaves(Object? value) {

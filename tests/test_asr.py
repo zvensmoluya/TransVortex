@@ -513,13 +513,24 @@ def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, m
 
     monkeypatch.setattr(
         "transvortex.core.asr.request_openrouter_json_with_retry",
-        lambda *_args, **_kwargs: ({"text": "whole window"}, {"transport": "httpx"}),
+        lambda *_args, **_kwargs: (
+            {
+                "text": "whole window",
+                "words": [
+                    {"word": "whole", "start": 0.0, "end": 0.5},
+                    {"word": "window", "start": 0.5, "end": 1.0},
+                ],
+            },
+            {"transport": "httpx"},
+        ),
     )
-    with pytest.raises(RuntimeError, match="openrouter_asr_timestamps_missing"):
+    with pytest.raises(RuntimeError, match="openrouter_asr_timestamps_missing") as exc_info:
         build_asr_client(provider).transcribe_segment(audio, 0.0)
+    assert exc_info.value.raw_response["text"] == "whole window"
+    assert exc_info.value.transport_meta["service"] == "openrouter"
 
 
-def test_openrouter_grok_is_explicit_text_only_experimental_profile(tmp_path, monkeypatch) -> None:
+def test_openrouter_grok_uses_chunk_fallback_and_normalizes_optional_words(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     captured = {}
@@ -577,6 +588,43 @@ def test_openrouter_grok_is_explicit_text_only_experimental_profile(tmp_path, mo
     assert result.rows[0]["end"] == 5.1
     assert result.rows[0]["meta"]["warning"] == "openrouter_text_only_timestamps"
     assert result.rows[0]["meta"]["openrouter_model_status"] == "experimental"
+
+    monkeypatch.setattr(
+        "transvortex.core.asr.request_openrouter_json_with_retry",
+        lambda *_args, **_kwargs: (
+            {
+                "text": "hello from grok",
+                "duration": 2.0,
+                "segments": [
+                    {"text": "coarser segment", "start": 0.0, "end": 2.0},
+                ],
+                "words": [
+                    {"text": "negative", "start": -0.2, "end": 0.0, "confidence": 0.5},
+                    {"text": "nan", "start": "NaN", "end": 0.2, "confidence": 0.5},
+                    {"text": "infinite", "start": 0.0, "end": "Infinity", "confidence": 0.5},
+                    {"text": "hello", "start": 0.1, "end": 0.6, "confidence": 0.9, "speaker": 0},
+                    {"text": "", "word": "from", "start": 0.7, "end": 1.0, "confidence": 2, "speaker": 0},
+                    {"text": "grok", "start": 1.1, "end": 1.8, "confidence": 0.7, "speaker": 1},
+                ],
+                "usage": {"seconds": 2.0, "cost": 0.00005},
+            },
+            {"transport": "httpx", "generation_id": "gen_words"},
+        ),
+    )
+
+    word_result = build_asr_client(provider).transcribe_segment(audio, 5.0, source_lang="en")
+
+    assert len(word_result.rows) == 1
+    assert word_result.rows[0]["start"] == 5.1
+    assert word_result.rows[0]["end"] == 6.8
+    assert word_result.rows[0]["confidence"] == pytest.approx(0.8)
+    assert "warning" not in word_result.rows[0]["meta"]
+    assert word_result.rows[0]["meta"]["timeline_source"] == "response.words"
+    assert word_result.rows[0]["meta"]["word_timestamps"] == [
+        {"text": "hello", "start": 5.1, "end": 5.6, "confidence": 0.9, "speaker": 0},
+        {"text": "from", "start": 5.7, "end": 6.0, "speaker": 0},
+        {"text": "grok", "start": 6.1, "end": 6.8, "confidence": 0.7, "speaker": 1},
+    ]
 
 
 def test_openrouter_rejects_models_without_an_explicit_profile() -> None:

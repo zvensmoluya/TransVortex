@@ -75,9 +75,9 @@ _OPENROUTER_ASR_MODEL_PROFILES = (
         min_window_seconds=5.0,
         overlap_seconds=0.0,
         fuzzy_dedupe=False,
-        notes_zh="OpenRouter 当前只保证整段文本结构；先按短音频窗口生成粗时间轴，等待真实响应验证单词时间戳。",
+        notes_zh="OpenRouter 当前只保证整段文本结构；若响应透出 words 会保留词级时间戳，否则按短音频窗口生成粗时间轴。",
         native_capabilities=("word_timestamps", "speaker_diarization", "multichannel"),
-        exposed_capabilities=("text", "usage"),
+        exposed_capabilities=("text", "usage", "word_timestamps_when_returned"),
     ),
 )
 

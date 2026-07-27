@@ -4,6 +4,7 @@ import base64
 import copy
 import importlib.util
 import json
+import math
 import os
 import posixpath
 import queue
@@ -695,12 +696,21 @@ class OpenRouterSttAsrClient:
             "timeline_mode": self.profile.timeline_mode,
             "model_status": self.profile.status,
         }
-        rows = _map_openai_transcription_rows(
-            response=response,
-            config=self.config,
-            segment_start_offset=segment_start_offset,
-            transport_meta=transport_meta,
-        )
+        rows: list[dict] = []
+        if "word_timestamps_when_returned" in self.profile.exposed_capabilities:
+            rows = _map_openrouter_word_timeline_row(
+                response=response,
+                config=self.config,
+                segment_start_offset=segment_start_offset,
+                transport_meta=transport_meta,
+            )
+        if not rows:
+            rows = _map_openai_transcription_rows(
+                response=response,
+                config=self.config,
+                segment_start_offset=segment_start_offset,
+                transport_meta=transport_meta,
+            )
         for row in rows:
             row.setdefault("meta", {}).update(self._row_profile_meta())
         if rows:
@@ -718,9 +728,12 @@ class OpenRouterSttAsrClient:
                 transport_meta=transport_meta,
             )
         if self.profile.timeline_mode == "segments_required":
-            raise RuntimeError(
+            error = RuntimeError(
                 f"openrouter_asr_timestamps_missing: {self.profile.model}"
             )
+            error.raw_response = response
+            error.transport_meta = transport_meta
+            raise error
         return AsrTranscriptionResult(
             rows=[
                 {
@@ -1131,6 +1144,76 @@ def _map_openai_transcription_rows(
             }
         )
     return rows
+
+
+def _map_openrouter_word_timeline_row(
+    *,
+    response: dict[str, Any],
+    config: AsrProviderConfig,
+    segment_start_offset: float,
+    transport_meta: dict[str, Any],
+) -> list[dict]:
+    raw_words = response.get("words")
+    if not isinstance(raw_words, list):
+        return []
+
+    words: list[dict[str, Any]] = []
+    confidences: list[float] = []
+    for item in raw_words:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or item.get("word") or "").strip()
+        start_seconds = _float_or_none(item.get("start"))
+        end_seconds = _float_or_none(item.get("end"))
+        if (
+            not text
+            or start_seconds is None
+            or end_seconds is None
+            or not math.isfinite(start_seconds)
+            or not math.isfinite(end_seconds)
+            or start_seconds < 0
+            or end_seconds <= start_seconds
+        ):
+            continue
+        word: dict[str, Any] = {
+            "text": text,
+            "start": start_seconds + segment_start_offset,
+            "end": end_seconds + segment_start_offset,
+        }
+        confidence = _float_or_none(item.get("confidence"))
+        if confidence is not None and math.isfinite(confidence) and 0 <= confidence <= 1:
+            word["confidence"] = confidence
+            confidences.append(confidence)
+        for field in ("speaker", "channel", "channel_index"):
+            if item.get(field) is not None:
+                word[field] = item[field]
+        words.append(word)
+    if not words:
+        return []
+
+    words.sort(key=lambda item: (float(item["start"]), float(item["end"])))
+    text = str(response.get("text", "")).strip()
+    if not text:
+        text = " ".join(str(item["text"]) for item in words).strip()
+    if not text:
+        return []
+    confidence = sum(confidences) / len(confidences) if confidences else None
+    return [
+        {
+            "start": float(words[0]["start"]),
+            "end": max(float(item["end"]) for item in words),
+            "text": text,
+            "confidence": confidence,
+            "meta": {
+                "provider": config.name,
+                "protocol": config.protocol,
+                "source": "asr",
+                "timeline_source": "response.words",
+                "word_timestamps": words,
+                **_asr_row_transport_meta(transport_meta),
+            },
+        }
+    ]
 
 
 def _map_funasr_openai_rows(

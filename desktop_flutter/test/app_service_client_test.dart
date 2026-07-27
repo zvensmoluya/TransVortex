@@ -1611,6 +1611,30 @@ routing:
     });
   });
 
+  test('AppServiceClient queries OpenRouter ASR key usage', () async {
+    final transport = _RecordingTransport({
+      'asr.provider.usage': {
+        'currency': 'USD',
+        'usage_usd': 1.25,
+        'limit_remaining_usd': 8.75,
+      },
+    });
+    final client = AppServiceClient(transport);
+
+    final result = await client.asrProviderUsage(
+      providerDraft: {'name': 'openrouter_asr', 'protocol': 'openrouter_stt'},
+      apiKey: 'one-time-key',
+    );
+
+    expect(result['usage_usd'], 1.25);
+    expect(transport.calls.single.method, 'asr.provider.usage');
+    expect(transport.calls.single.params['provider_draft'], {
+      'name': 'openrouter_asr',
+      'protocol': 'openrouter_stt',
+    });
+    expect(transport.calls.single.params['api_key'], 'one-time-key');
+  });
+
   test(
     'AppServiceClient validates an existing model with managed runtime',
     () async {
@@ -1828,6 +1852,17 @@ routing:
           'memory_bootstrap_classify': 1,
           'batch_recovery': 1,
         },
+        'asr_usage': {
+          'provider': 'OpenRouter',
+          'request_count': 2,
+          'cost_usd': '0.000182',
+          'audio_seconds': 6.9,
+          'total_tokens': 81,
+          'input_tokens': 64,
+          'output_tokens': 17,
+          'usage_complete': true,
+          'cost_complete': true,
+        },
       },
     });
 
@@ -1845,7 +1880,44 @@ routing:
     expect(task.translationTotalChunks, 4);
     expect(task.modelRequestCount, 7);
     expect(task.modelRequestCounts['batch_recovery'], 1);
+    expect(task.hasOpenRouterAsrUsage, isTrue);
+    expect(task.asrUsageRequestCount, 2);
+    expect(task.asrUsageCostUsd, 0.000182);
+    expect(task.asrUsageAudioSeconds, 6.9);
+    expect(task.asrUsageTotalTokens, 81);
+    expect(task.asrUsageInputTokens, 64);
+    expect(task.asrUsageOutputTokens, 17);
+    expect(task.asrUsageComplete, isTrue);
+    expect(task.asrUsageCostComplete, isTrue);
+    expect(task.hasCompleteOpenRouterAsrUsage, isTrue);
     expect(task.outputPaths['srt'], r'D:\out.srt');
+  });
+
+  test('TaskSummary safely ignores invalid ASR usage values', () {
+    final task = TaskSummary.fromJson({
+      'task_id': 'tvx_invalid_usage',
+      'status': 'DONE',
+      'progress_detail': {
+        'asr_usage': {
+          'provider': 'openrouter',
+          'request_count': -2,
+          'cost_usd': 'NaN',
+          'audio_seconds': -1,
+          'total_tokens': -3,
+          'usage_complete': true,
+          'cost_complete': false,
+        },
+      },
+    });
+
+    expect(task.hasOpenRouterAsrUsage, isFalse);
+    expect(task.asrUsageRequestCount, 0);
+    expect(task.asrUsageCostUsd, isNull);
+    expect(task.asrUsageAudioSeconds, isNull);
+    expect(task.asrUsageTotalTokens, isNull);
+    expect(task.asrUsageComplete, isTrue);
+    expect(task.asrUsageCostComplete, isFalse);
+    expect(task.hasCompleteOpenRouterAsrUsage, isFalse);
   });
 
   test('TaskSummary identifies completed work that still needs review', () {

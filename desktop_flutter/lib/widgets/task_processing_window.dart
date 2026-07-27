@@ -2143,6 +2143,7 @@ class _TaskSummaryPanel extends StatelessWidget {
       requestCounts,
       (mode) => mode.startsWith('quality_'),
     );
+    final openRouterUsage = _openRouterAsrUsageLabel(task);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: T.s12),
@@ -2173,6 +2174,13 @@ class _TaskSummaryPanel extends StatelessWidget {
             _InfoPill(
               label: '语音分窗',
               value: '${task.asrDoneCount}/${task.asrTotalSegments}',
+            ),
+          if (task.hasOpenRouterAsrUsage)
+            _InfoPill(
+              label: task.hasCompleteOpenRouterAsrUsage
+                  ? 'OpenRouter 用量'
+                  : 'OpenRouter 已报告用量',
+              value: openRouterUsage,
             ),
           if (task.translationTotalChunks > 0)
             _InfoPill(
@@ -2300,6 +2308,24 @@ int _requestModeTotal(
   return counts.entries
       .where((entry) => matches(entry.key))
       .fold(0, (total, entry) => total + entry.value);
+}
+
+String _openRouterAsrUsageLabel(TaskSummary task) {
+  final parts = <String>[];
+  final cost = task.asrUsageCostUsd;
+  if (cost != null) parts.add(_usdUsageLabel(cost));
+  final seconds = task.asrUsageAudioSeconds;
+  if (seconds != null) parts.add('${seconds.toStringAsFixed(2)} 秒');
+  if (parts.isNotEmpty) return parts.join(' · ');
+  return '${task.asrUsageRequestCount} 次';
+}
+
+String _usdUsageLabel(double amount) {
+  if (amount > 0 && amount < 0.000001) {
+    return '\$${amount.toStringAsExponential(2)}';
+  }
+  if (amount < 1) return '\$${amount.toStringAsFixed(6)}';
+  return '\$${amount.toStringAsFixed(4)}';
 }
 
 class _InfoPill extends StatelessWidget {

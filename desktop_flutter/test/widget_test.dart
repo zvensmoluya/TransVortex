@@ -4325,6 +4325,7 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     Map<String, Object?>? testedDraft;
+    Map<String, Object?>? usageDraft;
     var asrTestResult = <String, Object?>{'ok': true, 'code': 'ready'};
     final openRouterProvider = <String, Object?>{
       'name': 'openrouter_asr',
@@ -4368,6 +4369,19 @@ void main() {
         );
         return asrTestResult;
       }
+      if (method == 'asr.provider.usage') {
+        usageDraft = Map<String, Object?>.from(
+          params['provider_draft']! as Map,
+        );
+        expect(params.containsKey('api_key'), isFalse);
+        return <String, Object?>{
+          'currency': 'USD',
+          'usage_usd': 0.25,
+          'limit_usd': 1.0,
+          'limit_remaining_usd': 0.75,
+          'limit_reset': 'monthly',
+        };
+      }
       throw RpcRemoteException('method_not_found', method);
     });
 
@@ -4385,6 +4399,7 @@ void main() {
     expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
     expect(find.textContaining('时间轴候选：要求分段时间戳'), findsOneWidget);
     expect(find.textContaining('音频会上传到 OpenRouter'), findsOneWidget);
+    expect(find.text('查询用量'), findsOneWidget);
 
     await tester.tap(find.text('Whisper Large V3'));
     await tester.pumpAndSettle();
@@ -4392,6 +4407,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('实验性模型：当前按短音频窗口'), findsOneWidget);
+    await tester.tap(find.text('查询用量'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining(
+        'OpenRouter 密钥用量：已用 \$0.25 / \$1.00 · 剩余 \$0.75 · 每月重置',
+      ),
+      findsOneWidget,
+    );
+    expect(usageDraft?['protocol'], 'openrouter_stt');
+    expect(usageDraft?['model'], 'x-ai/grok-stt-1.0');
+
     await tester.tap(find.text('测试连接'));
     await tester.pumpAndSettle();
 
@@ -6559,6 +6586,16 @@ void main() {
             runtime: {'state': 'terminal'},
             createdAt: '2026-07-06T08:00:00',
             updatedAt: '2026-07-06T09:30:00',
+            progressDetail: {
+              'asr_usage': {
+                'provider': 'openrouter',
+                'request_count': 2,
+                'cost_usd': 0.000182,
+                'audio_seconds': 6.9,
+                'usage_complete': true,
+                'cost_complete': true,
+              },
+            },
           ),
           _task(
             taskId: 'tvx_processing_failed_123456',
@@ -6574,6 +6611,16 @@ void main() {
             runtime: {'can_resume': true, 'state': 'stale'},
             createdAt: '2026-07-05T08:00:00',
             updatedAt: '2026-07-05T08:30:00',
+            progressDetail: {
+              'asr_usage': {
+                'provider': 'openrouter',
+                'request_count': 2,
+                'cost_usd': 0.000091,
+                'audio_seconds': 3.45,
+                'usage_complete': true,
+                'cost_complete': false,
+              },
+            },
           ),
           _task(
             taskId: 'tvx_processing_running_123456',
@@ -6753,6 +6800,7 @@ void main() {
     expect(find.text('创建 2026-07-06 08:00:00'), findsOneWidget);
     expect(find.text('更新 2026-07-06 09:30:00'), findsOneWidget);
     expect(find.text('运行记录 已结束'), findsOneWidget);
+    expect(find.text('OpenRouter 用量 \$0.000182 · 6.90 秒'), findsOneWidget);
     expect(find.text('重新翻译'), findsOneWidget);
     await tester.tap(find.text('重新翻译'));
     await tester.pump(const Duration(milliseconds: 100));
@@ -6844,6 +6892,7 @@ void main() {
     expect(find.textContaining('env_key'), findsNothing);
     expect(find.text('重试性 可重试'), findsNothing);
     expect(find.text('运行状态 记录过期'), findsNothing);
+    expect(find.text('OpenRouter 已报告用量 \$0.000091 · 3.45 秒'), findsOneWidget);
 
     await tester.tap(find.text('检查识别设置'));
     await tester.pump(const Duration(milliseconds: 100));

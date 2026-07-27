@@ -25,6 +25,10 @@ from .media import (
     split_audio_for_asr,
 )
 from .media_tools import resolve_media_executable
+from .openrouter_asr_usage import (
+    record_openrouter_asr_usage_receipt as _record_openrouter_asr_usage_receipt,
+    write_openrouter_asr_usage_artifact as _write_openrouter_asr_usage_artifact,
+)
 from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.bootstrapper import bootstrap_memory
 from ..memory.presets import build_selected_presets_snapshot
@@ -271,6 +275,8 @@ def _write_asr_segment_artifacts(
         write_json(artifact_paths["preprocess"], preprocess_meta)
     if raw_response is not None:
         write_json(artifact_paths["raw"], raw_response)
+    else:
+        artifact_paths["raw"].unlink(missing_ok=True)
     filtered_rows, quality = filter_asr_rows_for_source(rows)
     write_json(artifact_paths["quality"], quality)
     write_segment_asr_output(artifact_paths["rows"], filtered_rows)
@@ -282,6 +288,32 @@ def _asr_raw_response_with_transport(raw_response: dict | None, transport_meta: 
     if not transport_meta:
         return raw_response
     return {**raw_response, "_transport_meta": transport_meta}
+
+
+def _asr_raw_response_with_related(
+    raw_response: dict | None,
+    related_responses: list[dict],
+) -> dict | None:
+    related = [item for item in related_responses if isinstance(item, dict)]
+    if not related:
+        return raw_response
+    payload = dict(raw_response or {})
+    payload["_related_responses"] = related
+    return payload
+
+
+def _sync_checkpoint_openrouter_asr_usage(
+    checkpoint: dict[str, Any],
+    *,
+    paths: dict[str, Path],
+    provider: Any,
+) -> tuple[Path | None, dict[str, Any] | None]:
+    usage_path, usage = _write_openrouter_asr_usage_artifact(paths, provider)
+    if usage is not None:
+        checkpoint["asr_usage"] = usage
+    else:
+        checkpoint.pop("asr_usage", None)
+    return usage_path, usage
 
 
 def _asr_previous_text(rows: list[dict]) -> str:
@@ -354,6 +386,7 @@ def _process_asr_manifest_item(
     root_dir: Path | None = None,
     allow_split_retry: bool = True,
     previous_text: str = "",
+    usage_source_dir: Path | None = None,
 ) -> dict[str, Any]:
     idx = int(item["segment_index"])
     artifact_paths = _asr_artifact_paths(paths, idx)
@@ -397,6 +430,12 @@ def _process_asr_manifest_item(
             prompt=segment_prompt,
         )
     except Exception as exc:
+        _record_openrouter_asr_usage_receipt(
+            source_dir=usage_source_dir or paths["source"],
+            provider=provider,
+            raw_response=getattr(exc, "raw_response", None),
+            transport_meta=dict(getattr(exc, "transport_meta", {}) or {}),
+        )
         if (
             allow_split_retry
             and provider.protocol in {
@@ -418,13 +457,39 @@ def _process_asr_manifest_item(
                 failure=exc,
             )
         raise
+    raw_response = _record_openrouter_asr_usage_receipt(
+        source_dir=usage_source_dir or paths["source"],
+        provider=provider,
+        raw_response=raw_response,
+        transport_meta=transport_meta,
+    )
     if preprocess_meta is not None:
         if preprocess_meta.get("reason") == "trimmed" and _should_retry_asr_without_preprocess(rows):
-            fallback_rows, fallback_raw_response, fallback_transport_meta = _transcribe_asr_segment(
-                asr,
-                audio_path,
-                float(item["start"]),
-                prompt=segment_prompt,
+            initial_raw_response = _asr_raw_response_with_transport(raw_response, transport_meta)
+            try:
+                fallback_rows, fallback_raw_response, fallback_transport_meta = _transcribe_asr_segment(
+                    asr,
+                    audio_path,
+                    float(item["start"]),
+                    prompt=segment_prompt,
+                )
+            except Exception as exc:
+                _record_openrouter_asr_usage_receipt(
+                    source_dir=usage_source_dir or paths["source"],
+                    provider=provider,
+                    raw_response=getattr(exc, "raw_response", None),
+                    transport_meta=dict(getattr(exc, "transport_meta", {}) or {}),
+                )
+                raise
+            fallback_raw_response = _record_openrouter_asr_usage_receipt(
+                source_dir=usage_source_dir or paths["source"],
+                provider=provider,
+                raw_response=fallback_raw_response,
+                transport_meta=fallback_transport_meta,
+            )
+            fallback_response = _asr_raw_response_with_transport(
+                fallback_raw_response,
+                fallback_transport_meta,
             )
             if not _should_retry_asr_without_preprocess(fallback_rows):
                 preprocess_meta["fallback_used"] = True
@@ -433,8 +498,16 @@ def _process_asr_manifest_item(
                 preprocess_meta["trim_start_seconds"] = 0.0
                 preprocess_meta["trim_end_seconds"] = float(item.get("duration", 0.0))
                 rows = fallback_rows
-                raw_response = fallback_raw_response
+                raw_response = _asr_raw_response_with_related(
+                    fallback_raw_response,
+                    [initial_raw_response] if initial_raw_response is not None else [],
+                )
                 transport_meta = fallback_transport_meta
+            else:
+                raw_response = _asr_raw_response_with_related(
+                    raw_response,
+                    [fallback_response] if fallback_response is not None else [],
+                )
         rows = _apply_audio_preprocess_meta(rows, preprocess_meta)
     _write_asr_segment_artifacts(
         artifact_paths=artifact_paths,
@@ -516,6 +589,7 @@ def _retry_asr_manifest_item_with_subsegments(
                 root_dir=root_dir,
                 allow_split_retry=False,
                 previous_text=child_previous_text,
+                usage_source_dir=paths["source"],
             )
         finally:
             close_child_asr = getattr(child_asr, "close", None)
@@ -568,6 +642,8 @@ def _complete_asr_segment(
     store: TaskStore,
     task_id: str,
     total_segments: int,
+    paths: dict[str, Path],
+    provider: Any,
     skipped: bool = False,
 ) -> None:
     asr_done.add(idx)
@@ -575,6 +651,11 @@ def _complete_asr_segment(
     checkpoint["asr_done_count"] = len(asr_done)
     checkpoint["asr_total_segments"] = max(0, int(total_segments))
     checkpoint["status"] = "ASR"
+    _sync_checkpoint_openrouter_asr_usage(
+        checkpoint,
+        paths=paths,
+        provider=provider,
+    )
     store.save_checkpoint(task_id, checkpoint)
     verb = "Skipped silent" if skipped else "Transcribed"
     store.append_event(
@@ -629,6 +710,8 @@ def _run_asr_segments_serial(
             store=store,
             task_id=task_id,
             total_segments=total_segments,
+            paths=paths,
+            provider=_active_asr_provider(config),
             skipped=bool(result.get("skipped")),
         )
         if _asr_uses_previous_text(config) and not result.get("skipped"):
@@ -758,6 +841,8 @@ def _run_asr_segments_concurrent(
                     store=store,
                     task_id=task_id,
                     total_segments=total_segments,
+                    paths=paths,
+                    provider=_active_asr_provider(config),
                     skipped=bool(result.get("skipped")),
                 )
                 successes += 1
@@ -830,6 +915,7 @@ def _progress_detail_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, An
         "source_segment_count",
         "asr_total_segments",
         "asr_done_count",
+        "asr_usage",
         "memory_current_mode",
         "memory_current_attempt",
         "memory_current_max_attempts",
@@ -920,6 +1006,17 @@ def _checkpoint_status_payload(store: TaskStore, task_id: str) -> dict[str, Any]
         "progress": _checkpoint_progress(checkpoint),
     }
     progress_detail = _progress_detail_from_checkpoint(checkpoint)
+    receipts_dir = store.task_dir(task_id) / "source" / "asr" / "usage_receipts"
+    if receipts_dir.is_dir():
+        try:
+            _usage_path, live_usage = _write_openrouter_asr_usage_artifact(
+                {"source": store.task_dir(task_id) / "source"},
+                None,
+            )
+        except Exception:
+            live_usage = None
+        if live_usage is not None:
+            progress_detail["asr_usage"] = live_usage
     if progress_detail:
         payload["progress_detail"] = progress_detail
     return payload
@@ -2320,8 +2417,22 @@ def _execute_task(
                         )
 
                 source_jsonl = persist_source_segments(paths, all_segments)
+                asr_usage_path, asr_usage = _sync_checkpoint_openrouter_asr_usage(
+                    checkpoint,
+                    paths=paths,
+                    provider=_active_asr_provider(config),
+                )
                 checkpoint["source_segment_count"] = len(all_segments)
                 store.save_checkpoint(task_id, checkpoint)
+                if asr_usage_path is not None:
+                    store.append_event(
+                        task_id,
+                        "artifact",
+                        stage="ASR",
+                        message="OpenRouter ASR usage ready",
+                        progress=0.52,
+                        details={"path": str(asr_usage_path), **(asr_usage or {})},
+                    )
                 store.append_event(
                     task_id,
                     "artifact",
@@ -2749,6 +2860,14 @@ def _execute_task(
     except TaskCancelled as exc:
         err = classify_exception(exc, stage=str(checkpoint.get("status", task.status)))
         store.update_task_status(task_id, "CANCELLED", error=str(exc), error_info=err)
+        try:
+            _sync_checkpoint_openrouter_asr_usage(
+                checkpoint,
+                paths=paths,
+                provider=_active_asr_provider(config),
+            )
+        except Exception:
+            pass
         checkpoint["status"] = "CANCELLED"
         checkpoint["error"] = str(exc)
         checkpoint["error_info"] = err
@@ -2770,6 +2889,14 @@ def _execute_task(
             pass
         err = classify_exception(exc, stage=str(checkpoint.get("status", task.status)))
         store.update_task_status(task_id, "FAILED", error=str(exc), error_info=err)
+        try:
+            _sync_checkpoint_openrouter_asr_usage(
+                checkpoint,
+                paths=paths,
+                provider=_active_asr_provider(config),
+            )
+        except Exception:
+            pass
         checkpoint["status"] = "FAILED"
         checkpoint["error"] = str(exc)
         checkpoint["error_info"] = err
