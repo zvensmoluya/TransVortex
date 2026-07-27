@@ -62,6 +62,28 @@ def test_installer_confirmation_recomputes_the_normalized_product_layout() -> No
     )
 
 
+def test_installer_directory_page_exposes_product_root_instead_of_app_root() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+    prepare_start = installer.index("Function DirectoryPagePrepare")
+    prepare_end = installer.index("FunctionEnd", prepare_start)
+    prepare = installer[prepare_start:prepare_end]
+    leave_start = installer.index("Function DirectoryPageLeave")
+    leave_end = installer.index("FunctionEnd", leave_start)
+    leave = installer[leave_start:leave_end]
+
+    assert '!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "TransVortex 产品根目录"' in installer
+    assert "!define MUI_DIRECTORYPAGE_VARIABLE $ProductRoot" in installer
+    assert "!define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPagePrepare" in installer
+    assert prepare.index("Call ResolveInstallLayout") < prepare.index(
+        'StrCpy $ProductRoot "$INSTDIR"'
+    )
+    assert leave.index('StrCpy $INSTDIR "$ProductRoot"') < leave.index(
+        "Call NormalizeInstallDirectory"
+    )
+
+
 def test_installer_preserves_classic_storage_defaults_for_existing_layouts() -> None:
     installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
         encoding="utf-8"

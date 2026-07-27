@@ -4035,6 +4035,7 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('交给 Agent'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('完整准备本机识别'), findsOneWidget);
@@ -4133,7 +4134,7 @@ void main() {
     expectNoFlutterException();
   });
 
-  testWidgets('ASR model plan does not mutate resource storage', (
+  testWidgets('ASR model plan presents managed resource storage as read only', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(760, 560));
@@ -4146,7 +4147,9 @@ void main() {
       'can_change': false,
       'change_blocker': 'managed_resources_present',
     };
+    final calls = <String>[];
     bridge.attachServiceCaller((method, params) async {
+      calls.add(method);
       if (method == 'desktop.snapshot') {
         return _desktopSnapshot(
           managedAsr: true,
@@ -4168,13 +4171,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.textContaining('当前版本不会'), findsNothing);
-    expect(find.byKey(const ValueKey('asr-download-storage')), findsOneWidget);
+    expect(find.byKey(const ValueKey('asr-apply-summary')), findsOneWidget);
+    expect(find.text(r'保存到 D:\TransVortex-ASR'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('asr-download-storage-change')),
       findsNothing,
     );
     expect(find.textContaining('已有组件固定在此位置'), findsNothing);
     expect(find.text('更改识别资源位置'), findsNothing);
+    expect(calls, isNot(contains('asr.storage.set')));
     expectNoFlutterException();
   });
 
@@ -4314,6 +4319,18 @@ void main() {
             },
             'models': [
               {
+                'id': 'small',
+                'display_name': 'Whisper Small',
+                'installed': true,
+                'size': 500000000,
+              },
+              {
+                'id': 'medium',
+                'display_name': 'Whisper Medium',
+                'installed': false,
+                'size': 1500000000,
+              },
+              {
                 'id': 'large-v3',
                 'display_name': 'Whisper Large v3',
                 'installed': false,
@@ -4366,11 +4383,9 @@ void main() {
     expect(find.text('本地已有'), findsNothing);
     expect(find.text('当前使用'), findsNothing);
     expect(find.text('当前默认'), findsOneWidget);
-    expect(find.text('本机识别方案'), findsOneWidget);
-    expect(
-      find.text('Whisper Large v3 · 本地文件夹 · 已通过兼容性测试 · 已应用且可用'),
-      findsOneWidget,
-    );
+    expect(find.text('当前方案'), findsOneWidget);
+    expect(find.text('调整本机 Whisper'), findsNothing);
+    expect(find.text('本地模型文件夹'), findsOneWidget);
     expect(find.text('日语访谈模型'), findsWidgets);
     expect(
       find.textContaining(r'D:\Models\faster-whisper-large-v3'),
@@ -4379,7 +4394,7 @@ void main() {
     expect(find.text('Python'), findsNothing);
     expect(find.textContaining('python.exe'), findsNothing);
     expect(find.text('查找登记环境'), findsNothing);
-    expect(find.text('放弃本次方案更改'), findsNothing);
+    expect(find.text('取消更改'), findsNothing);
     expect(find.text('已启用'), findsNothing);
     expect(find.text('验证并启用'), findsNothing);
 
@@ -4397,24 +4412,37 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('asr-model-change')));
     await tester.pumpAndSettle();
-    expect(find.text('下载并由应用管理'), findsOneWidget);
-    expect(find.text('使用本地模型文件夹'), findsOneWidget);
-    expect(find.text('放弃本次方案更改'), findsNothing);
+    expect(find.text('调整本机 Whisper'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('asr-managed-model-small')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('asr-managed-model-medium')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('asr-managed-model-large-v3')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('asr-external-model')), findsOneWidget);
+    expect(find.text('即将应用'), findsNothing);
+    expect(find.text('完成'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-cancel')));
+    await tester.tap(find.text('完成'));
     await tester.pumpAndSettle();
-    expect(find.text('放弃本次方案更改'), findsNothing);
+    expect(find.text('当前方案'), findsOneWidget);
+    expect(find.text('取消更改'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('asr-model-change')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-managed')));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-confirm')));
+    await tester.tap(find.byKey(const ValueKey('asr-managed-model-large-v3')));
     await tester.pumpAndSettle();
-    expect(find.text('待应用更改'), findsOneWidget);
+    expect(find.text('即将应用'), findsOneWidget);
     expect(find.textContaining('采访专用模型（本地文件夹）'), findsOneWidget);
-    expect(find.text('下载 2.9 GB 并切换'), findsOneWidget);
-    expect(find.text('放弃本次方案更改'), findsOneWidget);
+    expect(find.text('需要下载 2.9 GB'), findsOneWidget);
+    expect(find.text('下载并切换'), findsOneWidget);
+    expect(find.text('取消更改'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -4547,15 +4575,18 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 200));
 
+      expect(find.text('当前方案'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('asr-model-change')));
+      await tester.pumpAndSettle();
       expect(find.text('CPU'), findsOneWidget);
       expect(find.text('CPU（推荐）'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('运算方式:cpu')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('NVIDIA（外部资源，已验证）').last);
       await tester.pumpAndSettle();
-      expect(find.text('应用方案更改'), findsOneWidget);
+      expect(find.text('应用更改'), findsOneWidget);
 
-      await tester.tap(find.text('应用方案更改'));
+      await tester.tap(find.text('应用更改'));
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pump(const Duration(milliseconds: 200));
 
@@ -4566,8 +4597,8 @@ void main() {
       );
       expect(activatedResources?['device'], 'cuda');
       expect(activatedResources?['compute_type'], 'float16');
-      expect(find.text('NVIDIA（外部资源，已验证）'), findsOneWidget);
-      expect(find.text('本地文件夹 · 已通过兼容性测试 · 已应用且可用'), findsOneWidget);
+      expect(find.text('当前方案'), findsOneWidget);
+      expect(find.textContaining('NVIDIA · float16'), findsOneWidget);
       expectNoFlutterException();
     },
   );
@@ -4687,12 +4718,12 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('asr-model-change')));
     await tester.pumpAndSettle();
-    expect(find.text('使用本地模型文件夹'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-confirm')));
+    expect(find.byKey(const ValueKey('asr-external-model')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('asr-external-model')));
     await tester.pumpAndSettle();
 
     expect(find.text('找到 2 个模型'), findsOneWidget);
-    expect(find.text('Whisper Small'), findsOneWidget);
+    expect(find.text('Whisper Small'), findsWidgets);
     expect(find.text('自定义 Whisper'), findsOneWidget);
 
     await tester.tap(
@@ -4701,7 +4732,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining(customPath), findsNothing);
-    expect(find.text('本地文件夹 · 等待兼容性测试 · 待应用'), findsOneWidget);
+    expect(find.text('本地模型文件夹 · 等待验证'), findsOneWidget);
 
     await tester.tap(find.text('验证并启用'));
     await tester.pump(const Duration(milliseconds: 200));
@@ -4915,13 +4946,11 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('asr-model-change')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-managed')));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-confirm')));
+    await tester.tap(find.byKey(const ValueKey('asr-managed-model-small')));
     await tester.pumpAndSettle();
-    expect(find.text('应用方案更改'), findsOneWidget);
+    expect(find.text('应用更改'), findsOneWidget);
 
-    await tester.tap(find.text('应用方案更改'));
+    await tester.tap(find.text('应用更改'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -4932,17 +4961,17 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('asr-model-change')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-external')));
-    await tester.pump();
-    expect(find.text('已登记的模型'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('asr-model-choice-confirm')));
+    await tester.tap(find.byKey(const ValueKey('asr-external-model')));
+    await tester.pumpAndSettle();
+    expect(find.text('已登记模型'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('asr-external-choice-confirm')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('asr-model-open-location')),
       findsOneWidget,
     );
-    expect(find.text('本地文件夹 · 已通过兼容性测试 · 待应用'), findsOneWidget);
-    expect(find.text('应用方案更改'), findsOneWidget);
+    expect(find.text('本地模型文件夹 · 已验证'), findsOneWidget);
+    expect(find.text('应用更改'), findsOneWidget);
     expect(find.text('验证并启用'), findsNothing);
     expectNoFlutterException();
   });
@@ -5270,12 +5299,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('应用下载 · 需要下载'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('asr-managed-model-small')),
+      findsOneWidget,
+    );
+    expect(find.text('需下载 200 B'), findsOneWidget);
     expect(find.text('Whisper Small'), findsWidgets);
     expect(find.text('自动（当前：CPU）'), findsOneWidget);
-    expect(find.text('下载 300 B 并启用'), findsOneWidget);
+    expect(find.text('需要下载 300 B'), findsOneWidget);
+    expect(find.text('下载并启用'), findsOneWidget);
 
-    await tester.tap(find.text('下载 300 B 并启用'));
+    await tester.tap(find.text('下载并启用'));
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -5428,7 +5462,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('保存空间不足'), findsOneWidget);
-    expect(find.textContaining('本次下载至少需要'), findsOneWidget);
+    expect(find.textContaining('至少需要'), findsOneWidget);
     expect(find.text('更改'), findsNothing);
     expectNoFlutterException();
   });

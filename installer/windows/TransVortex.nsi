@@ -84,6 +84,8 @@ VIAddVersionKey /LANG=2052 "FileDescription" "${APP_NAME} 用户级安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_FILE_VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 
+Var ProductRoot
+
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\TransVortex.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "启动 TransVortex"
@@ -93,7 +95,10 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
 !define MUI_PAGE_HEADER_TEXT "许可协议"
 !define MUI_PAGE_HEADER_SUBTEXT "请阅读 TransVortex 的开源许可。"
 !insertmacro MUI_PAGE_LICENSE "${LICENSE_FILE}"
-!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 TransVortex 存放位置。安装器会在这里建立独立的 App、Data 和 Resources 目录；升级只替换 App。"
+!define MUI_DIRECTORYPAGE_TEXT_TOP "请选择 TransVortex 产品根目录。安装器会在该目录下建立独立的 App、Data 和 Resources；升级只替换 App。"
+!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "TransVortex 产品根目录"
+!define MUI_DIRECTORYPAGE_VARIABLE $ProductRoot
+!define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPagePrepare
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
 !define MUI_PAGE_HEADER_TEXT "选择 TransVortex 存放位置"
 !define MUI_PAGE_HEADER_SUBTEXT "程序、工作数据和识别资源使用相互隔离的子目录。"
@@ -129,7 +134,6 @@ Var WorkspaceNoticeLabel
 Var WorkspaceRoot
 Var WorkspaceLocked
 Var AsrStorageRoot
-Var ProductRoot
 Var ModernInstallLayout
 Var CleanupDialog
 Var CleanupAsrCheckbox
@@ -274,8 +278,18 @@ target_safe:
 FunctionEnd
 
 Function DirectoryPageLeave
+  StrCpy $INSTDIR "$ProductRoot"
   Call NormalizeInstallDirectory
   Call CheckInstallDirectorySafety
+FunctionEnd
+
+Function DirectoryPagePrepare
+  StrCmp $ProductRoot "" 0 directory_page_ready
+  Call ResolveInstallLayout
+  StrCmp $ProductRoot "" 0 directory_page_ready
+  StrCpy $ProductRoot "$INSTDIR"
+
+directory_page_ready:
 FunctionEnd
 
 Function ResolveWorkspaceRoot
