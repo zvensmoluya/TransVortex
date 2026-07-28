@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -102,7 +103,7 @@ class AsrEngineResolution:
     runtime: AsrProviderConfig
 
 
-ASR_INTENT_SCHEMA_VERSION = 1
+ASR_INTENT_SCHEMA_VERSION = 2
 
 
 def _mapping(value: Any, *, context: str) -> dict[str, Any]:
@@ -128,19 +129,31 @@ def _text(value: Any, *, default: str = "") -> str:
 def _number(value: Any, *, default: float) -> float:
     if value is None:
         return default
+    if isinstance(value, bool):
+        raise ValueError(f"expected a number, got {value!r}")
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"expected a number, got {value!r}") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"expected a finite number, got {value!r}")
+    return parsed
 
 
 def _integer(value: Any, *, default: int) -> int:
     if value is None:
         return default
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"expected an integer, got {value!r}") from exc
+    if isinstance(value, bool):
+        raise ValueError(f"expected an integer, got {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        raise ValueError(f"expected an integer, got {value!r}")
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        return int(value.strip())
+    raise ValueError(f"expected an integer, got {value!r}")
 
 
 def _boolean(value: Any, *, default: bool) -> bool:
@@ -475,7 +488,6 @@ def parse_asr_user_overrides(raw: Any) -> AsrUserOverrides:
             "window_target_seconds",
             "window_floor_seconds",
             "overlap_seconds",
-            "short_audio_bypass_seconds",
             "upload_soft_limit_bytes",
             "silence",
         },
@@ -552,7 +564,6 @@ def parse_asr_user_overrides(raw: Any) -> AsrUserOverrides:
             window_target_seconds=_optional_number(chunking_raw, "window_target_seconds"),
             window_floor_seconds=_optional_number(chunking_raw, "window_floor_seconds"),
             overlap_seconds=_optional_number(chunking_raw, "overlap_seconds"),
-            short_audio_bypass_seconds=_optional_number(chunking_raw, "short_audio_bypass_seconds"),
             upload_soft_limit_bytes=_optional_integer(chunking_raw, "upload_soft_limit_bytes"),
             silence=silence,
         )
@@ -624,7 +635,6 @@ def parse_asr_policy_snapshot(raw: Any) -> AsrPolicy:
             "window_target_seconds",
             "window_floor_seconds",
             "overlap_seconds",
-            "short_audio_bypass_seconds",
             "upload_soft_limit_bytes",
             "silence",
         },
@@ -679,10 +689,6 @@ def parse_asr_policy_snapshot(raw: Any) -> AsrPolicy:
             window_target_seconds=_number(chunking["window_target_seconds"], default=0.0),
             window_floor_seconds=_number(chunking["window_floor_seconds"], default=0.0),
             overlap_seconds=_number(chunking["overlap_seconds"], default=0.0),
-            short_audio_bypass_seconds=_number(
-                chunking["short_audio_bypass_seconds"],
-                default=0.0,
-            ),
             upload_soft_limit_bytes=(
                 None
                 if upload_limit is None
@@ -755,7 +761,6 @@ def recommended_asr_policy(spec: AsrEngineSpec) -> AsrPolicy:
                 window_target_seconds=120.0,
                 window_floor_seconds=12.0,
                 overlap_seconds=5.0,
-                short_audio_bypass_seconds=300.0,
                 upload_soft_limit_bytes=None,
             ),
             preprocessing=AsrPreprocessingPolicy(trim_silence=False),
@@ -775,7 +780,6 @@ def recommended_asr_policy(spec: AsrEngineSpec) -> AsrPolicy:
                 window_target_seconds=120.0,
                 window_floor_seconds=1.0,
                 overlap_seconds=0.0,
-                short_audio_bypass_seconds=120.0,
                 upload_soft_limit_bytes=64 * 1024 * 1024,
             ),
             preprocessing=AsrPreprocessingPolicy(trim_silence=False),
@@ -796,7 +800,6 @@ def recommended_asr_policy(spec: AsrEngineSpec) -> AsrPolicy:
                 window_target_seconds=profile.max_window_seconds,
                 window_floor_seconds=profile.min_window_seconds,
                 overlap_seconds=profile.overlap_seconds,
-                short_audio_bypass_seconds=profile.max_window_seconds,
                 upload_soft_limit_bytes=24 * 1024 * 1024,
             ),
             preprocessing=AsrPreprocessingPolicy(trim_silence=True),
@@ -816,7 +819,6 @@ def recommended_asr_policy(spec: AsrEngineSpec) -> AsrPolicy:
             window_target_seconds=120.0,
             window_floor_seconds=12.0,
             overlap_seconds=5.0,
-            short_audio_bypass_seconds=300.0,
             upload_soft_limit_bytes=24 * 1024 * 1024,
         ),
         preprocessing=AsrPreprocessingPolicy(trim_silence=True),
@@ -1024,7 +1026,10 @@ def parse_asr_capabilities_snapshot(raw: Any) -> AsrCapabilities:
             formats=tuple(str(item) for item in audio.get("formats") or []),
             max_duration_seconds=_capability_limit_from_plain(audio.get("max_duration_seconds")),
             max_upload_bytes=_capability_limit_from_plain(audio.get("max_upload_bytes")),
-            sample_rates_hz=tuple(int(item) for item in audio.get("sample_rates_hz") or []),
+            sample_rates_hz=tuple(
+                _integer(item, default=0)
+                for item in audio.get("sample_rates_hz") or []
+            ),
             max_channels=_optional_integer(audio, "max_channels"),
         ),
         timeline=AsrTimelineCapabilities(
@@ -1089,17 +1094,17 @@ def _runtime_provider_from_resolution(
     preprocessing = policy.preprocessing
     runtime_chunking = AsrChunkingConfig(
         mode=chunking.mode,
-        window_seconds=int(chunking.window_target_seconds),
-        max_window_seconds=int(chunking.window_target_seconds),
-        min_window_seconds=int(chunking.window_floor_seconds),
-        overlap_seconds=int(chunking.overlap_seconds),
-        short_audio_seconds=int(chunking.short_audio_bypass_seconds),
-        # The legacy adapter requires a numeric value. A large sentinel keeps
-        # an explicit domain-level `None` from silently becoming a 24 MiB cap.
+        window_seconds=chunking.window_target_seconds,
+        max_window_seconds=chunking.window_target_seconds,
+        min_window_seconds=chunking.window_floor_seconds,
+        overlap_seconds=chunking.overlap_seconds,
+        # Schema v2 has no auto mode; this field remains only in the temporary
+        # legacy runtime projection and cannot affect execution here.
+        short_audio_seconds=0.0,
         max_upload_mb=(
             chunking.upload_soft_limit_bytes / (1024 * 1024)
             if chunking.upload_soft_limit_bytes is not None
-            else 2048.0
+            else None
         ),
         silence=AsrSilenceChunkingConfig(
             noise_db=chunking.silence.noise_db,
@@ -1115,7 +1120,7 @@ def _runtime_provider_from_resolution(
         min_concurrency=execution.minimum_concurrency,
         max_concurrency=execution.maximum_concurrency,
         max_inflight_upload_mb=execution.max_inflight_audio_bytes / (1024 * 1024),
-        timeout_seconds=int(execution.request_deadline_seconds),
+        timeout_seconds=execution.request_deadline_seconds,
         retry=execution.max_attempts,
     )
     runtime_preprocessing = AsrPreprocessingConfig(

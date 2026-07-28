@@ -275,12 +275,12 @@ class AsrSilenceChunkingConfig:
 @dataclass
 class AsrChunkingConfig:
     mode: str = "silence"  # auto | fixed | none | silence
-    window_seconds: int = 300
-    max_window_seconds: int = 120
-    min_window_seconds: int = 12
-    overlap_seconds: int = 5
-    short_audio_seconds: int = 300
-    max_upload_mb: float = 24.0
+    window_seconds: float = 300.0
+    max_window_seconds: float = 120.0
+    min_window_seconds: float = 12.0
+    overlap_seconds: float = 5.0
+    short_audio_seconds: float = 300.0
+    max_upload_mb: float | None = 24.0
     silence: AsrSilenceChunkingConfig = field(default_factory=AsrSilenceChunkingConfig)
     fuzzy_dedupe: bool = True
 
@@ -292,7 +292,7 @@ class AsrExecutionConfig:
     min_concurrency: int = 1
     max_concurrency: int = 1
     max_inflight_upload_mb: float = 128.0
-    timeout_seconds: int = 300
+    timeout_seconds: float = 300.0
     retry: int = 2
 
 
@@ -403,7 +403,7 @@ class AsrProviderConfig:
         return self.auth.credential_id
 
     @property
-    def timeout_seconds(self) -> int:
+    def timeout_seconds(self) -> float:
         return self.execution.timeout_seconds
 
     @property

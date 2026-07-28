@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from transvortex.core import media
 
 
@@ -261,6 +263,120 @@ def test_split_audio_for_asr_fixed_ignores_single_upload_size_limit(monkeypatch,
 
     assert [round(item["start"]) for item in manifest] == [0, 270, 540]
     assert len(calls) == 3
+
+
+def test_split_audio_for_asr_preserves_fractional_window_values(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    planning: dict = {}
+
+    def fake_run(cmd: list[str]) -> None:
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"wav")
+
+    monkeypatch.setattr(media, "_run", fake_run)
+
+    manifest = media.split_audio_for_asr(
+        tmp_path / "audio.m4a",
+        tmp_path / "segments",
+        mode="fixed",
+        window_seconds=12.75,
+        overlap_seconds=0.5,
+        short_audio_seconds=0.0,
+        max_upload_mb=None,
+        duration_seconds=30.0,
+        validate_duration=False,
+        planning_metadata=planning,
+    )
+
+    assert [item[item.index("-ss") + 1] for item in calls] == [
+        "0.000",
+        "12.250",
+        "24.500",
+    ]
+    assert [item[item.index("-t") + 1] for item in calls] == [
+        "12.750",
+        "12.750",
+        "5.500",
+    ]
+    assert [item["start"] for item in manifest] == [0.0, 12.25, 24.5]
+    assert planning["effective_overlap_seconds"] == 0.5
+    assert planning["upload_limit_bytes"] is None
+
+
+def test_split_audio_for_asr_none_rejects_input_limits_before_encoding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(media, "_run", lambda cmd: calls.append(cmd))
+
+    with pytest.raises(RuntimeError, match="none_upload_limit_exceeded"):
+        media.split_audio_for_asr(
+            tmp_path / "audio.m4a",
+            tmp_path / "upload-limited",
+            mode="none",
+            window_seconds=30.0,
+            overlap_seconds=0.0,
+            short_audio_seconds=0.0,
+            max_upload_mb=0.001,
+            duration_seconds=30.0,
+        )
+    with pytest.raises(RuntimeError, match="none_duration_limit_exceeded"):
+        media.split_audio_for_asr(
+            tmp_path / "audio.m4a",
+            tmp_path / "duration-limited",
+            mode="none",
+            window_seconds=30.0,
+            overlap_seconds=0.0,
+            short_audio_seconds=0.0,
+            max_upload_mb=None,
+            max_duration_seconds=10.0,
+            duration_seconds=30.0,
+        )
+
+    assert calls == []
+
+
+def test_split_audio_for_asr_none_without_upload_limit_is_one_whole_window(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(cmd: list[str]) -> None:
+        Path(cmd[-1]).write_bytes(b"wav")
+
+    monkeypatch.setattr(media, "_run", fake_run)
+
+    manifest = media.split_audio_for_asr(
+        tmp_path / "audio.m4a",
+        tmp_path / "segments",
+        mode="none",
+        window_seconds=1.0,
+        overlap_seconds=0.0,
+        short_audio_seconds=0.0,
+        max_upload_mb=None,
+        duration_seconds=30.25,
+        validate_duration=False,
+    )
+
+    assert len(manifest) == 1
+    assert manifest[0]["duration"] == 30.25
+    assert manifest[0]["cut_reason"] == "whole_audio"
+
+
+def test_split_audio_for_asr_rejects_unknown_mode(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsupported ASR chunking mode"):
+        media.split_audio_for_asr(
+            tmp_path / "audio.m4a",
+            tmp_path / "segments",
+            mode="automatic-ish",
+            window_seconds=10.0,
+            overlap_seconds=0.0,
+            short_audio_seconds=0.0,
+            duration_seconds=30.0,
+        )
 
 
 def test_split_audio_for_asr_silence_uses_detected_boundaries(monkeypatch, tmp_path: Path) -> None:

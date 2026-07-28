@@ -19,6 +19,9 @@ from transvortex.asr_domain import (
     AsrAudioInputCapabilities,
     AsrCapabilities,
     AsrChunkingOverrides,
+    AsrDecodingOverrides,
+    AsrExecutionOverrides,
+    AsrHintCapabilities,
     AsrRuntimeCapabilities,
     AsrUserOverrides,
     CapabilityLimit,
@@ -224,7 +227,7 @@ def test_policy_defaults_are_constrained_by_capabilities_but_explicit_invalid_ov
         "runtime_parallelism_limit",
     }
 
-    with pytest.raises(ValueError, match="exceeds the engine capability"):
+    with pytest.raises(ValueError, match="exceeds the engine duration capability"):
         resolve_asr_policy(
             recommended_asr_policy(spec),
             AsrUserOverrides(
@@ -232,6 +235,195 @@ def test_policy_defaults_are_constrained_by_capabilities_but_explicit_invalid_ov
             ),
             capabilities,
         )
+
+
+def test_policy_preserves_fractional_seconds_through_runtime_projection(
+    tmp_path: Path,
+) -> None:
+    resolution = resolve_asr_engine(
+        {
+            "id": "local_whisper",
+            "type": "faster_whisper_worker",
+            "runtime": {"source": "managed", "id": "managed:faster-whisper"},
+            "model": {"source": "managed", "id": "large-v3"},
+            "policy_overrides": {
+                "chunking": {
+                    "window_target_seconds": 12.75,
+                    "window_floor_seconds": 1.25,
+                    "overlap_seconds": 0.5,
+                },
+                "preprocessing": {
+                    "minimum_seconds": 0.125,
+                    "preroll_seconds": 0.375,
+                    "postroll_seconds": 0.625,
+                    "minimum_upload_seconds": 0.875,
+                },
+                "execution": {"request_deadline_seconds": 10.75},
+            },
+        },
+        root_dir=tmp_path,
+    )
+
+    assert resolution.policy.policy.chunking.window_target_seconds == 12.75
+    assert resolution.runtime.chunking.window_seconds == 12.75
+    assert resolution.runtime.chunking.min_window_seconds == 1.25
+    assert resolution.runtime.chunking.overlap_seconds == 0.5
+    assert resolution.runtime.preprocessing.trim_silence.min_silence_seconds == 0.125
+    assert resolution.runtime.execution.timeout_seconds == 10.75
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"chunking": {"upload_soft_limit_bytes": 10.5}},
+        {"execution": {"target_concurrency": 1.5}},
+        {"execution": {"max_attempts": 2.5}},
+        {"decoding": {"beam_size": 3.5}},
+    ],
+)
+def test_policy_integer_fields_reject_fractional_values(overrides: dict) -> None:
+    with pytest.raises(ValueError, match="expected an integer"):
+        parse_asr_user_overrides(overrides)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_policy_seconds_reject_non_finite_values(value: float) -> None:
+    with pytest.raises(ValueError, match="expected a finite number"):
+        parse_asr_user_overrides(
+            {"execution": {"request_deadline_seconds": value}}
+        )
+
+
+def test_partial_overrides_keep_explicit_values_and_derive_compatible_defaults() -> None:
+    spec = parse_asr_engine_spec(
+        {
+            "id": "openrouter_asr",
+            "type": "openrouter_asr",
+            "model": "openai/whisper-large-v3",
+        }
+    )
+    capabilities = AsrCapabilities(
+        runtime=AsrRuntimeCapabilities(
+            max_parallelism=CapabilityLimit(hard_max=2, knowledge="verified")
+        )
+    )
+
+    target = resolve_asr_policy(
+        recommended_asr_policy(spec),
+        AsrUserOverrides(
+            execution=AsrExecutionOverrides(target_concurrency=2),
+            chunking=AsrChunkingOverrides(window_target_seconds=4.5),
+        ),
+        capabilities,
+    )
+    maximum = resolve_asr_policy(
+        recommended_asr_policy(spec),
+        AsrUserOverrides(
+            execution=AsrExecutionOverrides(maximum_concurrency=2),
+        ),
+        capabilities,
+    )
+
+    assert target.policy.execution.target_concurrency == 2
+    assert target.policy.execution.maximum_concurrency == 2
+    assert target.policy.chunking.window_target_seconds == 4.5
+    assert target.policy.chunking.window_floor_seconds == 4.5
+    assert target.policy.chunking.overlap_seconds < 4.5
+    assert maximum.policy.execution.target_concurrency == 2
+    assert maximum.policy.execution.maximum_concurrency == 2
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            AsrUserOverrides(
+                chunking=AsrChunkingOverrides(window_floor_seconds=181.0)
+            ),
+            "window_floor_seconds exceeds the engine duration capability",
+        ),
+        (
+            AsrUserOverrides(
+                chunking=AsrChunkingOverrides(overlap_seconds=180.0)
+            ),
+            "overlap_seconds exceeds the engine duration capability",
+        ),
+        (
+            AsrUserOverrides(
+                chunking=AsrChunkingOverrides(
+                    upload_soft_limit_bytes=2 * 1024 * 1024
+                )
+            ),
+            "upload_soft_limit_bytes exceeds the engine upload capability",
+        ),
+        (
+            AsrUserOverrides(
+                execution=AsrExecutionOverrides(minimum_concurrency=3)
+            ),
+            "minimum_concurrency exceeds the runtime parallelism capability",
+        ),
+        (
+            AsrUserOverrides(
+                decoding=AsrDecodingOverrides(condition_on_previous_text=True)
+            ),
+            "condition_on_previous_text is not supported by the engine",
+        ),
+    ],
+)
+def test_capability_denied_explicit_overrides_are_configuration_errors(
+    overrides: AsrUserOverrides,
+    message: str,
+) -> None:
+    spec = parse_asr_engine_spec(
+        {
+            "id": "openrouter_asr",
+            "type": "openrouter_asr",
+            "model": "openai/whisper-large-v3",
+        }
+    )
+    capabilities = AsrCapabilities(
+        audio_input=AsrAudioInputCapabilities(
+            max_duration_seconds=CapabilityLimit(hard_max=180),
+            max_upload_bytes=CapabilityLimit(hard_max=1024 * 1024),
+        ),
+        hints=AsrHintCapabilities(previous_text=False),
+        runtime=AsrRuntimeCapabilities(
+            max_parallelism=CapabilityLimit(hard_max=2)
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        resolve_asr_policy(recommended_asr_policy(spec), overrides, capabilities)
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        AsrCapabilities(
+            audio_input=AsrAudioInputCapabilities(
+                max_upload_bytes=CapabilityLimit(hard_max=1024.5)
+            )
+        ),
+        AsrCapabilities(
+            runtime=AsrRuntimeCapabilities(
+                max_parallelism=CapabilityLimit(hard_max=1.5)
+            )
+        ),
+    ],
+)
+def test_integer_capabilities_reject_fractional_values(
+    capabilities: AsrCapabilities,
+) -> None:
+    spec = parse_asr_engine_spec(
+        {
+            "id": "openrouter_asr",
+            "type": "openrouter_asr",
+            "model": "openai/whisper-large-v3",
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        resolve_asr_policy(recommended_asr_policy(spec), None, capabilities)
 
 
 def test_funasr_capability_and_policy_do_not_depend_on_openrouter() -> None:
@@ -314,6 +506,11 @@ def test_override_parser_rejects_transport_and_timeline_fields() -> None:
 
     with pytest.raises(ValueError, match="ASR chunking mode must be one of"):
         parse_asr_user_overrides({"chunking": {"mode": "auto"}})
+
+    with pytest.raises(ValueError, match="short_audio_bypass_seconds"):
+        parse_asr_user_overrides(
+            {"chunking": {"short_audio_bypass_seconds": 300}}
+        )
 
 
 def test_engine_schema_requires_an_explicit_non_empty_engine_list(tmp_path: Path) -> None:

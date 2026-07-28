@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 
 ASR_CONFIG_SCHEMA_VERSION = 2
-ASR_PLAN_SCHEMA_VERSION = 3
-ASR_RETRY_SCHEMA_VERSION = 1
+ASR_PLAN_SCHEMA_VERSION = 4
+ASR_RETRY_SCHEMA_VERSION = 2
 
 CapabilityKnowledge = Literal[
     "verified",
@@ -178,7 +179,6 @@ class AsrChunkingPolicy:
     window_target_seconds: float = 300.0
     window_floor_seconds: float = 12.0
     overlap_seconds: float = 5.0
-    short_audio_bypass_seconds: float = 300.0
     upload_soft_limit_bytes: int | None = 24 * 1024 * 1024
     silence: AsrSilencePolicy = field(default_factory=AsrSilencePolicy)
 
@@ -235,7 +235,6 @@ class AsrChunkingOverrides:
     window_target_seconds: float | None = None
     window_floor_seconds: float | None = None
     overlap_seconds: float | None = None
-    short_audio_bypass_seconds: float | None = None
     upload_soft_limit_bytes: int | None = None
     silence: AsrSilenceOverrides | None = None
 
@@ -359,10 +358,10 @@ class AsrSplitRetryStrategy:
     strategy_id: str
     strategy_version: int
     mode: Literal["fixed"]
-    window_seconds: int
-    minimum_window_seconds: int
-    overlap_seconds: int
-    max_upload_mb: float
+    window_seconds: float
+    minimum_window_seconds: float
+    overlap_seconds: float
+    max_upload_mb: float | None
 
 
 @dataclass(frozen=True)
@@ -432,33 +431,116 @@ def _replace_present(instance: Any, values: Any, prefix: str, sources: dict[str,
     return replace(instance, **updates)
 
 
+def _finite_policy_number(value: Any, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"asr policy {field_name} must be a finite number")
+    return float(value)
+
+
+def _policy_integer(value: Any, *, field_name: str, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "non-negative" if minimum == 0 else "positive"
+        raise ValueError(f"asr policy {field_name} must be a {qualifier} integer")
+    return value
+
+
+def _duration_capability_value(limit: CapabilityLimit, *, field_name: str) -> float | None:
+    value = limit.hard_max
+    if value is None:
+        return None
+    parsed = _finite_policy_number(value, field_name=field_name)
+    if parsed <= 0:
+        raise ValueError(f"asr capability {field_name} must be positive")
+    return parsed
+
+
+def _integer_capability_value(limit: CapabilityLimit, *, field_name: str) -> int | None:
+    value = limit.hard_max
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or not float(value).is_integer()
+        or int(value) < 1
+    ):
+        raise ValueError(f"asr capability {field_name} must be a positive integer")
+    return int(value)
+
+
 def _validate_asr_policy(policy: AsrPolicy) -> None:
     chunking = policy.chunking
+    _finite_policy_number(chunking.window_target_seconds, field_name="chunking.window_target_seconds")
+    _finite_policy_number(chunking.window_floor_seconds, field_name="chunking.window_floor_seconds")
+    _finite_policy_number(chunking.overlap_seconds, field_name="chunking.overlap_seconds")
     if chunking.window_target_seconds <= 0:
         raise ValueError("asr policy chunking.window_target_seconds must be positive")
     if chunking.window_floor_seconds <= 0 or chunking.window_floor_seconds > chunking.window_target_seconds:
         raise ValueError("asr policy chunking.window_floor_seconds must be within the target window")
     if chunking.overlap_seconds < 0 or chunking.overlap_seconds >= chunking.window_target_seconds:
         raise ValueError("asr policy chunking.overlap_seconds must be smaller than the target window")
-    if chunking.upload_soft_limit_bytes is not None and chunking.upload_soft_limit_bytes <= 0:
-        raise ValueError("asr policy chunking.upload_soft_limit_bytes must be positive")
+    if chunking.upload_soft_limit_bytes is not None:
+        _policy_integer(
+            chunking.upload_soft_limit_bytes,
+            field_name="chunking.upload_soft_limit_bytes",
+            minimum=1,
+        )
+    _finite_policy_number(chunking.silence.noise_db, field_name="chunking.silence.noise_db")
+    _finite_policy_number(
+        chunking.silence.minimum_seconds,
+        field_name="chunking.silence.minimum_seconds",
+    )
+    _finite_policy_number(
+        chunking.silence.cut_padding_seconds,
+        field_name="chunking.silence.cut_padding_seconds",
+    )
     if chunking.silence.minimum_seconds < 0:
         raise ValueError("asr policy chunking.silence.minimum_seconds cannot be negative")
+    if chunking.silence.cut_padding_seconds < 0:
+        raise ValueError("asr policy chunking.silence.cut_padding_seconds cannot be negative")
+    preprocessing = policy.preprocessing
+    for field_name in (
+        "noise_db",
+        "minimum_seconds",
+        "preroll_seconds",
+        "postroll_seconds",
+        "minimum_upload_seconds",
+    ):
+        _finite_policy_number(
+            getattr(preprocessing, field_name),
+            field_name=f"preprocessing.{field_name}",
+        )
+    if min(
+        preprocessing.minimum_seconds,
+        preprocessing.preroll_seconds,
+        preprocessing.postroll_seconds,
+    ) < 0:
+        raise ValueError("asr policy preprocessing durations cannot be negative")
+    if preprocessing.minimum_upload_seconds <= 0:
+        raise ValueError("asr policy preprocessing.minimum_upload_seconds must be positive")
     execution = policy.execution
-    if execution.minimum_concurrency < 1:
-        raise ValueError("asr policy execution.minimum_concurrency must be positive")
+    _policy_integer(execution.target_concurrency, field_name="execution.target_concurrency", minimum=1)
+    _policy_integer(execution.minimum_concurrency, field_name="execution.minimum_concurrency", minimum=1)
+    _policy_integer(execution.maximum_concurrency, field_name="execution.maximum_concurrency", minimum=1)
+    _policy_integer(
+        execution.max_inflight_audio_bytes,
+        field_name="execution.max_inflight_audio_bytes",
+        minimum=1,
+    )
+    _finite_policy_number(
+        execution.request_deadline_seconds,
+        field_name="execution.request_deadline_seconds",
+    )
+    _policy_integer(execution.max_attempts, field_name="execution.max_attempts", minimum=1)
     if execution.maximum_concurrency < execution.minimum_concurrency:
         raise ValueError("asr policy execution.maximum_concurrency must not be smaller than minimum_concurrency")
     if not execution.minimum_concurrency <= execution.target_concurrency <= execution.maximum_concurrency:
         raise ValueError("asr policy execution.target_concurrency must be within the configured range")
-    if execution.max_inflight_audio_bytes <= 0:
-        raise ValueError("asr policy execution.max_inflight_audio_bytes must be positive")
     if execution.request_deadline_seconds <= 0:
         raise ValueError("asr policy execution.request_deadline_seconds must be positive")
-    if execution.max_attempts < 1:
-        raise ValueError("asr policy execution.max_attempts must be positive")
-    if policy.decoding.beam_size < 1:
-        raise ValueError("asr policy decoding.beam_size must be positive")
+    _policy_integer(policy.decoding.beam_size, field_name="decoding.beam_size", minimum=1)
+    _finite_policy_number(policy.decoding.temperature, field_name="decoding.temperature")
     if policy.decoding.temperature < 0:
         raise ValueError("asr policy decoding.temperature cannot be negative")
 
@@ -469,6 +551,28 @@ def resolve_asr_policy(
     capabilities: AsrCapabilities,
 ) -> AsrPolicyResolution:
     sources: dict[str, str] = {}
+    adjustments: list[AsrPolicyAdjustment] = []
+
+    def record_adjustment(
+        field_name: str,
+        requested: Any,
+        resolved: Any,
+        reason: str,
+        *,
+        source: str = "capability",
+    ) -> None:
+        if requested == resolved:
+            return
+        adjustments.append(
+            AsrPolicyAdjustment(
+                field=field_name,
+                requested=requested,
+                effective=resolved,
+                reason=reason,
+            )
+        )
+        sources[field_name] = source
+
     effective = base
     if overrides is not None:
         effective = replace(
@@ -483,16 +587,156 @@ def resolve_asr_policy(
             execution=_replace_present(effective.execution, overrides.execution, "execution", sources),
             decoding=_replace_present(effective.decoding, overrides.decoding, "decoding", sources),
         )
+
+    chunking_overrides = overrides.chunking if overrides is not None else None
+    if chunking_overrides is not None:
+        target = effective.chunking.window_target_seconds
+        floor = effective.chunking.window_floor_seconds
+        overlap = effective.chunking.overlap_seconds
+        target_is_explicit = chunking_overrides.window_target_seconds is not None
+        floor_is_explicit = chunking_overrides.window_floor_seconds is not None
+        overlap_is_explicit = chunking_overrides.overlap_seconds is not None
+        if target_is_explicit:
+            if floor_is_explicit and floor > target:
+                raise ValueError(
+                    "asr overrides chunking.window_floor_seconds and "
+                    "chunking.window_target_seconds conflict"
+                )
+            if overlap_is_explicit and overlap >= target:
+                raise ValueError(
+                    "asr overrides chunking.overlap_seconds and "
+                    "chunking.window_target_seconds conflict"
+                )
+            resolved_floor = min(floor, target)
+            resolved_overlap = min(overlap, max(target - 0.001, 0.0))
+            effective = replace(
+                effective,
+                chunking=replace(
+                    effective.chunking,
+                    window_floor_seconds=resolved_floor,
+                    overlap_seconds=resolved_overlap,
+                ),
+            )
+            record_adjustment(
+                "chunking.window_floor_seconds",
+                floor,
+                resolved_floor,
+                "override_window_range",
+                source="derived",
+            )
+            record_adjustment(
+                "chunking.overlap_seconds",
+                overlap,
+                resolved_overlap,
+                "override_window_range",
+                source="derived",
+            )
+        else:
+            resolved_target = max(
+                target,
+                floor if floor_is_explicit else target,
+                overlap + 0.001 if overlap_is_explicit else target,
+            )
+            effective = replace(
+                effective,
+                chunking=replace(
+                    effective.chunking,
+                    window_target_seconds=resolved_target,
+                ),
+            )
+            record_adjustment(
+                "chunking.window_target_seconds",
+                target,
+                resolved_target,
+                "override_window_range",
+                source="derived",
+            )
+
+    execution_overrides = overrides.execution if overrides is not None else None
+    if execution_overrides is not None:
+        minimum = effective.execution.minimum_concurrency
+        target = effective.execution.target_concurrency
+        maximum = effective.execution.maximum_concurrency
+        requested_minimum = minimum
+        requested_target = target
+        requested_maximum = maximum
+        minimum_is_explicit = execution_overrides.minimum_concurrency is not None
+        target_is_explicit = execution_overrides.target_concurrency is not None
+        maximum_is_explicit = execution_overrides.maximum_concurrency is not None
+        if minimum_is_explicit and maximum_is_explicit and minimum > maximum:
+            raise ValueError(
+                "asr overrides execution.minimum_concurrency and "
+                "execution.maximum_concurrency conflict"
+            )
+        if minimum > maximum:
+            if minimum_is_explicit:
+                maximum = minimum
+            elif maximum_is_explicit:
+                minimum = maximum
+        if target_is_explicit:
+            if minimum_is_explicit and target < minimum:
+                raise ValueError(
+                    "asr overrides execution.target_concurrency and "
+                    "execution.minimum_concurrency conflict"
+                )
+            if maximum_is_explicit and target > maximum:
+                raise ValueError(
+                    "asr overrides execution.target_concurrency and "
+                    "execution.maximum_concurrency conflict"
+                )
+            resolved_minimum = min(minimum, target)
+            resolved_maximum = max(maximum, target)
+            resolved_target = target
+        else:
+            resolved_minimum = minimum
+            resolved_maximum = maximum
+            resolved_target = min(max(target, resolved_minimum), resolved_maximum)
+        effective = replace(
+            effective,
+            execution=replace(
+                effective.execution,
+                minimum_concurrency=resolved_minimum,
+                target_concurrency=resolved_target,
+                maximum_concurrency=resolved_maximum,
+            ),
+        )
+        for field_name, requested, resolved in (
+            ("minimum_concurrency", requested_minimum, resolved_minimum),
+            ("target_concurrency", requested_target, resolved_target),
+            ("maximum_concurrency", requested_maximum, resolved_maximum),
+        ):
+            record_adjustment(
+                f"execution.{field_name}",
+                requested,
+                resolved,
+                "override_concurrency_range",
+                source="derived",
+            )
+
     _validate_asr_policy(effective)
 
-    adjustments: list[AsrPolicyAdjustment] = []
-    duration_cap = capabilities.audio_input.max_duration_seconds.hard_max
+    duration_cap = _duration_capability_value(
+        capabilities.audio_input.max_duration_seconds,
+        field_name="audio_input.max_duration_seconds.hard_max",
+    )
+    if duration_cap is not None:
+        explicit_duration_fields = (
+            ("window_target_seconds", lambda value: value > duration_cap),
+            ("window_floor_seconds", lambda value: value > duration_cap),
+            ("overlap_seconds", lambda value: value >= duration_cap),
+        )
+        for field_name, denied in explicit_duration_fields:
+            value = getattr(chunking_overrides, field_name, None)
+            if value is not None and denied(value):
+                raise ValueError(
+                    f"asr override chunking.{field_name} exceeds the engine duration capability"
+                )
     if duration_cap is not None and effective.chunking.window_target_seconds > duration_cap:
-        if overrides and overrides.chunking and overrides.chunking.window_target_seconds is not None:
-            raise ValueError("asr override chunking.window_target_seconds exceeds the engine capability")
-        requested = effective.chunking.window_target_seconds
-        floor = min(effective.chunking.window_floor_seconds, duration_cap)
-        overlap = min(effective.chunking.overlap_seconds, max(duration_cap - 0.1, 0.0))
+        requested_target = effective.chunking.window_target_seconds
+        requested_floor = effective.chunking.window_floor_seconds
+        requested_overlap = effective.chunking.overlap_seconds
+        floor = min(requested_floor, duration_cap)
+        overlap = min(requested_overlap, max(duration_cap - 0.001, 0.0))
         effective = replace(
             effective,
             chunking=replace(
@@ -502,65 +746,119 @@ def resolve_asr_policy(
                 overlap_seconds=overlap,
             ),
         )
-        adjustments.append(
-            AsrPolicyAdjustment(
-                field="chunking.window_target_seconds",
-                requested=requested,
-                effective=duration_cap,
-                reason="engine_duration_limit",
-            )
+        record_adjustment(
+            "chunking.window_target_seconds",
+            requested_target,
+            duration_cap,
+            "engine_duration_limit",
         )
-        sources["chunking.window_target_seconds"] = "capability"
+        record_adjustment(
+            "chunking.window_floor_seconds",
+            requested_floor,
+            floor,
+            "engine_duration_limit",
+        )
+        record_adjustment(
+            "chunking.overlap_seconds",
+            requested_overlap,
+            overlap,
+            "engine_duration_limit",
+        )
 
-    upload_cap = capabilities.audio_input.max_upload_bytes.hard_max
+    upload_cap = _integer_capability_value(
+        capabilities.audio_input.max_upload_bytes,
+        field_name="audio_input.max_upload_bytes.hard_max",
+    )
     upload_soft_limit = effective.chunking.upload_soft_limit_bytes
+    explicit_upload_limit = getattr(chunking_overrides, "upload_soft_limit_bytes", None)
+    if upload_cap is not None and explicit_upload_limit is not None and explicit_upload_limit > upload_cap:
+        raise ValueError("asr override chunking.upload_soft_limit_bytes exceeds the engine upload capability")
     if upload_cap is not None and (upload_soft_limit is None or upload_soft_limit > upload_cap):
-        if overrides and overrides.chunking and overrides.chunking.upload_soft_limit_bytes is not None:
-            raise ValueError("asr override chunking.upload_soft_limit_bytes exceeds the engine capability")
-        effective_upload_cap = int(upload_cap)
         effective = replace(
             effective,
-            chunking=replace(effective.chunking, upload_soft_limit_bytes=effective_upload_cap),
+            chunking=replace(effective.chunking, upload_soft_limit_bytes=upload_cap),
         )
-        adjustments.append(
-            AsrPolicyAdjustment(
-                field="chunking.upload_soft_limit_bytes",
-                requested=upload_soft_limit,
-                effective=effective_upload_cap,
-                reason="engine_upload_limit",
-            )
+        record_adjustment(
+            "chunking.upload_soft_limit_bytes",
+            upload_soft_limit,
+            upload_cap,
+            "engine_upload_limit",
         )
-        sources["chunking.upload_soft_limit_bytes"] = "capability"
 
-    parallelism_cap = capabilities.runtime.max_parallelism.hard_max
-    if parallelism_cap is not None and effective.execution.maximum_concurrency > parallelism_cap:
-        if overrides and overrides.execution and (
-            overrides.execution.maximum_concurrency is not None
-            or overrides.execution.target_concurrency is not None
+    parallelism_cap = _integer_capability_value(
+        capabilities.runtime.max_parallelism,
+        field_name="runtime.max_parallelism.hard_max",
+    )
+    if parallelism_cap is not None:
+        for field_name in (
+            "minimum_concurrency",
+            "target_concurrency",
+            "maximum_concurrency",
         ):
-            raise ValueError("asr execution override exceeds the runtime parallelism capability")
-        requested = effective.execution.maximum_concurrency
-        maximum = max(int(parallelism_cap), 1)
-        minimum = min(effective.execution.minimum_concurrency, maximum)
-        target = min(effective.execution.target_concurrency, maximum)
+            value = getattr(execution_overrides, field_name, None)
+            if value is not None and value > parallelism_cap:
+                raise ValueError(
+                    f"asr override execution.{field_name} exceeds the runtime parallelism capability"
+                )
+    if parallelism_cap is not None and effective.execution.maximum_concurrency > parallelism_cap:
+        requested_minimum = effective.execution.minimum_concurrency
+        requested_target = effective.execution.target_concurrency
+        requested_maximum = effective.execution.maximum_concurrency
+        maximum = parallelism_cap
+        minimum = min(requested_minimum, maximum)
+        target = max(min(requested_target, maximum), minimum)
         effective = replace(
             effective,
             execution=replace(
                 effective.execution,
                 minimum_concurrency=minimum,
-                target_concurrency=max(target, minimum),
+                target_concurrency=target,
                 maximum_concurrency=maximum,
             ),
         )
-        adjustments.append(
-            AsrPolicyAdjustment(
-                field="execution.maximum_concurrency",
-                requested=requested,
-                effective=maximum,
-                reason="runtime_parallelism_limit",
-            )
+        record_adjustment(
+            "execution.minimum_concurrency",
+            requested_minimum,
+            minimum,
+            "runtime_parallelism_limit",
         )
-        sources["execution.maximum_concurrency"] = "capability"
+        record_adjustment(
+            "execution.target_concurrency",
+            requested_target,
+            target,
+            "runtime_parallelism_limit",
+        )
+        record_adjustment(
+            "execution.maximum_concurrency",
+            requested_maximum,
+            maximum,
+            "runtime_parallelism_limit",
+        )
+
+    decoding_overrides = overrides.decoding if overrides is not None else None
+    if (
+        decoding_overrides is not None
+        and decoding_overrides.condition_on_previous_text is True
+        and not capabilities.hints.previous_text
+    ):
+        raise ValueError(
+            "asr override decoding.condition_on_previous_text is not supported by the engine"
+        )
+    if effective.decoding.condition_on_previous_text and not capabilities.hints.previous_text:
+        requested_previous_text = effective.decoding.condition_on_previous_text
+        effective = replace(
+            effective,
+            decoding=replace(
+                effective.decoding,
+                condition_on_previous_text=False,
+            ),
+        )
+        record_adjustment(
+            "decoding.condition_on_previous_text",
+            requested_previous_text,
+            False,
+            "engine_previous_text_unsupported",
+        )
 
     _validate_asr_policy(effective)
     return AsrPolicyResolution(

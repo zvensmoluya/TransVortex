@@ -719,7 +719,7 @@ routing:
     assert provider.chunking.max_window_seconds == 120
     assert provider.chunking.min_window_seconds == 1
     assert provider.chunking.overlap_seconds == 0
-    assert provider.chunking.short_audio_seconds == 120
+    assert provider.chunking.short_audio_seconds == 0.0
     assert provider.chunking.max_upload_mb == 64
     assert provider.chunking.fuzzy_dedupe is False
 
@@ -791,7 +791,7 @@ routing:
     assert provider.execution.concurrency == 4
     assert provider.chunking.window_seconds == 300
     assert provider.chunking.max_window_seconds == 300
-    assert provider.chunking.short_audio_seconds == 300
+    assert provider.chunking.short_audio_seconds == 0.0
     assert provider.chunking.overlap_seconds == 3
     assert provider.request.response_format == "verbose_json"
     assert provider.request.timestamp_granularities == ["segment"]
@@ -2375,10 +2375,8 @@ routing:
     assert provider.chunking.max_window_seconds == 120
     assert provider.chunking.min_window_seconds == 12
     assert provider.chunking.overlap_seconds == 5
-    assert provider.chunking.short_audio_seconds == 300
-    # Local worker has no upload transport; the legacy adapter receives a
-    # non-limiting numeric sentinel for the domain policy's explicit None.
-    assert provider.chunking.max_upload_mb == 2048.0
+    assert provider.chunking.short_audio_seconds == 0.0
+    assert provider.chunking.max_upload_mb is None
     assert provider.chunking.silence.noise_db == -35.0
     assert provider.execution.concurrency == 1
     assert provider.execution.adaptive_concurrency is False
@@ -2386,3 +2384,57 @@ routing:
     assert provider.chunking.fuzzy_dedupe is True
     assert cfg.pipeline.source_mode == "auto"
     assert cfg.pipeline.subtitle_track == "auto"
+
+
+def test_legacy_asr_projection_preserves_fractional_seconds_and_rejects_fractional_counts(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "providers.yaml").write_text(
+        "providers: []\n",
+        encoding="utf-8",
+    )
+    pipeline_file = tmp_path / "pipeline.yaml"
+    pipeline_file.write_text(
+        """
+asr:
+  provider: local_test
+asr_providers:
+  - name: local_test
+    kind: local_worker
+    protocol: faster_whisper
+    model: tiny
+    chunking:
+      mode: fixed
+      window_seconds: 12.75
+      max_window_seconds: 12.75
+      min_window_seconds: 1.25
+      overlap_seconds: 0.5
+      short_audio_seconds: 3.75
+    execution:
+      concurrency: 1
+      min_concurrency: 1
+      max_concurrency: 1
+      timeout_seconds: 10.75
+      retry: 2
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_app_config(root_dir=tmp_path)
+    provider = config.asr_providers["local_test"]
+
+    assert provider.chunking.window_seconds == 12.75
+    assert provider.chunking.min_window_seconds == 1.25
+    assert provider.chunking.overlap_seconds == 0.5
+    assert provider.execution.timeout_seconds == 10.75
+
+    pipeline_file.write_text(
+        pipeline_file.read_text(encoding="utf-8").replace(
+            "concurrency: 1\n",
+            "concurrency: 1.5\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="ASR execution.concurrency must be an integer"):
+        load_app_config(root_dir=tmp_path)

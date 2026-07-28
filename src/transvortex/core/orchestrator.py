@@ -395,6 +395,32 @@ def _asr_allows_split_retry(config: AppConfig) -> bool:
     return resolution is None or resolution.policy.execution.split_retry
 
 
+def _asr_duration_hard_limit(config: AppConfig) -> float | None:
+    capabilities = config.asr_capabilities.get(config.pipeline.asr_provider)
+    if capabilities is None:
+        return None
+    raw = capabilities.audio_input.max_duration_seconds.hard_max
+    if raw is None:
+        return None
+    parsed = _finite_number(raw, error="asr_duration_capability_invalid")
+    if parsed <= 0:
+        raise RuntimeError("asr_duration_capability_invalid")
+    return parsed
+
+
+def _asr_upload_hard_limit(config: AppConfig) -> int | None:
+    capabilities = config.asr_capabilities.get(config.pipeline.asr_provider)
+    if capabilities is None:
+        return None
+    raw = capabilities.audio_input.max_upload_bytes.hard_max
+    if raw is None:
+        return None
+    parsed = _finite_number(raw, error="asr_upload_capability_invalid")
+    if parsed <= 0 or not parsed.is_integer():
+        raise RuntimeError("asr_upload_capability_invalid")
+    return int(parsed)
+
+
 def _asr_runs_concurrently(config: AppConfig) -> bool:
     provider = _active_asr_provider(config)
     return (
@@ -507,15 +533,22 @@ def _build_asr_retry_decision(
         float(chunking.min_window_seconds),
         min(float(chunking.max_window_seconds), duration / 2.0),
     )
-    window_seconds = max(1, int(max_child_window))
+    window_seconds = max(0.1, float(max_child_window))
     strategy = AsrSplitRetryStrategy(
         strategy_id="fixed_window_subdivision",
         strategy_version=1,
         mode="fixed",
         window_seconds=window_seconds,
-        minimum_window_seconds=max(1, int(chunking.min_window_seconds)),
-        overlap_seconds=max(0, min(int(chunking.overlap_seconds), window_seconds - 1)),
-        max_upload_mb=float(chunking.max_upload_mb),
+        minimum_window_seconds=max(0.1, float(chunking.min_window_seconds)),
+        overlap_seconds=max(
+            0.0,
+            min(float(chunking.overlap_seconds), window_seconds - 0.001),
+        ),
+        max_upload_mb=(
+            float(chunking.max_upload_mb)
+            if chunking.max_upload_mb is not None
+            else None
+        ),
     )
     identity = {
         "base_plan_id": _asr_retry_base_plan_id(task),
@@ -538,7 +571,14 @@ def _validate_asr_retry_decision(
     item: dict[str, Any],
     task: TaskRecord | Any,
 ) -> dict[str, Any]:
-    if not isinstance(payload, dict) or int(payload.get("retry_schema_version") or 0) != ASR_RETRY_SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or _strict_nonnegative_int(
+            payload.get("retry_schema_version"),
+            error="unsupported_asr_retry_schema",
+        )
+        != ASR_RETRY_SCHEMA_VERSION
+    ):
         raise RuntimeError("unsupported_asr_retry_schema")
     identity = _asr_retry_decision_identity(payload)
     expected_id = _prefixed_plan_id("asr-retry-decision-", identity)
@@ -553,28 +593,39 @@ def _validate_asr_retry_decision(
     strategy = payload.get("strategy") if isinstance(payload.get("strategy"), dict) else {}
     if (
         str(strategy.get("strategy_id") or "") != "fixed_window_subdivision"
-        or int(strategy.get("strategy_version") or 0) != 1
-        or str(strategy.get("mode") or "") != "fixed"
         or _strict_nonnegative_int(
+            strategy.get("strategy_version"),
+            error="asr_retry_strategy_invalid",
+        )
+        != 1
+        or str(strategy.get("mode") or "") != "fixed"
+        or _finite_number(
             strategy.get("window_seconds"),
             error="asr_retry_strategy_invalid",
         )
         <= 0
-        or _strict_nonnegative_int(
+        or _finite_number(
             strategy.get("minimum_window_seconds"),
             error="asr_retry_strategy_invalid",
         )
         <= 0
-        or _strict_nonnegative_int(
+        or float(strategy.get("minimum_window_seconds") or 0)
+        > float(strategy.get("window_seconds") or 0)
+        or _finite_number(
             strategy.get("overlap_seconds"),
             error="asr_retry_strategy_invalid",
         )
-        >= int(strategy.get("window_seconds") or 0)
-        or _finite_number(
-            strategy.get("max_upload_mb"),
-            error="asr_retry_strategy_invalid",
+        < 0
+        or float(strategy.get("overlap_seconds") or 0)
+        >= float(strategy.get("window_seconds") or 0)
+        or (
+            strategy.get("max_upload_mb") is not None
+            and _finite_number(
+                strategy.get("max_upload_mb"),
+                error="asr_retry_strategy_invalid",
+            )
+            <= 0
         )
-        <= 0
     ):
         raise RuntimeError("asr_retry_strategy_invalid")
     return payload
@@ -633,11 +684,19 @@ def _load_asr_retry_plan(
     *,
     item: dict[str, Any],
     paths: dict[str, Path],
+    config: AppConfig,
     decision: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     retry_paths = _asr_retry_artifact_paths(paths, item)
     payload = read_json(retry_paths["plan"])
-    if not isinstance(payload, dict) or int(payload.get("retry_schema_version") or 0) != ASR_RETRY_SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or _strict_nonnegative_int(
+            payload.get("retry_schema_version"),
+            error="unsupported_asr_retry_schema",
+        )
+        != ASR_RETRY_SCHEMA_VERSION
+    ):
         raise RuntimeError("unsupported_asr_retry_schema")
     identity = _asr_retry_plan_identity(payload)
     expected_id = _prefixed_plan_id("asr-retry-plan-", identity)
@@ -659,6 +718,7 @@ def _load_asr_retry_plan(
     if persisted_manifest != portable_manifest:
         raise RuntimeError("asr_retry_manifest_mismatch")
     _validate_asr_retry_windows(runtime_windows, parent=dict(decision["parent"]))
+    _validate_asr_plan_policy_limits(config, runtime_windows)
     return payload, runtime_windows
 
 
@@ -679,12 +739,17 @@ def _create_asr_retry_plan(
         Path(str(item["path"])),
         retry_paths["windows"],
         mode="fixed",
-        window_seconds=int(strategy["window_seconds"]),
-        max_window_seconds=int(strategy["window_seconds"]),
-        min_window_seconds=int(strategy["minimum_window_seconds"]),
-        overlap_seconds=int(strategy["overlap_seconds"]),
-        short_audio_seconds=0,
-        max_upload_mb=float(strategy["max_upload_mb"]),
+        window_seconds=float(strategy["window_seconds"]),
+        max_window_seconds=float(strategy["window_seconds"]),
+        min_window_seconds=float(strategy["minimum_window_seconds"]),
+        overlap_seconds=float(strategy["overlap_seconds"]),
+        short_audio_seconds=0.0,
+        max_upload_mb=(
+            float(strategy["max_upload_mb"])
+            if strategy.get("max_upload_mb") is not None
+            else None
+        ),
+        max_duration_seconds=_asr_duration_hard_limit(config),
         silence_noise_db=_active_asr_provider(config).chunking.silence.noise_db,
         silence_min_seconds=_active_asr_provider(config).chunking.silence.min_silence_seconds,
         silence_cut_padding_seconds=_active_asr_provider(config).chunking.silence.cut_padding_seconds,
@@ -736,6 +801,7 @@ def _create_asr_retry_plan(
     return _load_asr_retry_plan(
         item=item,
         paths=paths,
+        config=config,
         decision=decision,
     )
 
@@ -953,6 +1019,7 @@ def _retry_asr_manifest_item_with_subsegments(
         retry_plan, child_manifest = _load_asr_retry_plan(
             item=item,
             paths=paths,
+            config=config,
             decision=decision,
         )
     else:
@@ -1755,7 +1822,7 @@ def _asr_plan_window_from_manifest(
             error="asr_plan_upload_size_invalid",
         )
         if estimated_upload_raw is not None
-        else int(duration * CanonicalAudioFacts().bytes_per_second + 44)
+        else math.ceil(duration * CanonicalAudioFacts().bytes_per_second + 44)
     )
     if estimated_upload_bytes <= 0:
         raise RuntimeError("asr_plan_upload_size_invalid")
@@ -2007,20 +2074,20 @@ def _resolved_asr_concurrency(
 ) -> int:
     policy_resolution = config.asr_policy_resolutions.get(config.pipeline.asr_provider)
     if policy_resolution is None:
-        return max(1, int(_active_asr_provider(config).execution.concurrency))
+        return max(1, _active_asr_provider(config).execution.concurrency)
     execution = policy_resolution.policy.execution
     largest_upload = max(estimated_upload_bytes, default=1)
     inflight_parallelism = max(
         1,
-        int(execution.max_inflight_audio_bytes) // max(largest_upload, 1),
+        execution.max_inflight_audio_bytes // max(largest_upload, 1),
     )
     if _asr_uses_previous_text(config):
         return 1
     return max(
         1,
         min(
-            int(execution.target_concurrency),
-            int(execution.maximum_concurrency),
+            execution.target_concurrency,
+            execution.maximum_concurrency,
             max(len(estimated_upload_bytes), 1),
             inflight_parallelism,
         ),
@@ -2070,20 +2137,32 @@ def _resolved_asr_plan(
         duration_seconds=float(media_meta.get("duration_seconds") or 0.0),
         encoded_size_bytes=audio_full.stat().st_size,
         selected_stream=AudioStreamFacts(
-            index=int(media_meta.get("audio_stream_index") or 0),
+            index=_strict_nonnegative_int(
+                media_meta.get("audio_stream_index", 0),
+                error="asr_plan_audio_stream_invalid",
+            ),
             codec=str(media_meta.get("audio_codec") or ""),
             sample_rate_hz=(
-                int(media_meta["audio_stream_sample_rate_hz"])
+                _strict_nonnegative_int(
+                    media_meta["audio_stream_sample_rate_hz"],
+                    error="asr_plan_audio_stream_invalid",
+                )
                 if media_meta.get("audio_stream_sample_rate_hz") is not None
                 else None
             ),
             channels=(
-                int(media_meta["audio_stream_channels"])
+                _strict_nonnegative_int(
+                    media_meta["audio_stream_channels"],
+                    error="asr_plan_audio_stream_invalid",
+                )
                 if media_meta.get("audio_stream_channels") is not None
                 else None
             ),
             bitrate=(
-                int(media_meta["audio_stream_bitrate"])
+                _strict_nonnegative_int(
+                    media_meta["audio_stream_bitrate"],
+                    error="asr_plan_audio_stream_invalid",
+                )
                 if media_meta.get("audio_stream_bitrate") is not None
                 else None
             ),
@@ -2109,6 +2188,7 @@ def _resolved_asr_plan(
     )
     if len({item.segment_id for item in windows}) != len(windows):
         raise RuntimeError("asr_plan_segment_id_duplicate")
+    _validate_asr_plan_policy_limits(config, windows)
     execution_policy = policy_resolution.policy.execution
     actual_concurrency = _resolved_asr_concurrency(
         config,
@@ -2163,6 +2243,73 @@ def _resolved_asr_plan(
     )
 
 
+def _validate_asr_plan_policy_limits(
+    config: AppConfig,
+    windows: tuple[AsrPlanWindow, ...] | list[dict[str, Any]],
+) -> None:
+    resolution = config.asr_policy_resolutions.get(config.pipeline.asr_provider)
+    if resolution is None:
+        return
+    policy = resolution.policy
+    duration_limit = _asr_duration_hard_limit(config)
+    upload_hard_limit = _asr_upload_hard_limit(config)
+    upload_soft_limit = policy.chunking.upload_soft_limit_bytes
+
+    def value(window: AsrPlanWindow | dict[str, Any], name: str) -> Any:
+        if isinstance(window, dict):
+            return window.get(name)
+        return getattr(window, name)
+
+    if policy.chunking.mode == "none":
+        if (
+            len(windows) != 1
+            or str(value(windows[0], "cut_reason")) != "whole_audio"
+        ):
+            raise RuntimeError("asr_plan_none_mode_not_whole_audio")
+
+    for window in windows:
+        source_start = _finite_number(
+            value(window, "source_start")
+            if not isinstance(window, dict)
+            else window.get("start"),
+            error="asr_plan_window_time_invalid",
+        )
+        source_end = _finite_number(
+            value(window, "source_end")
+            if not isinstance(window, dict)
+            else source_start + _finite_number(
+                window.get("duration"),
+                error="asr_plan_window_time_invalid",
+            ),
+            error="asr_plan_window_time_invalid",
+        )
+        window_duration = source_end - source_start
+        if (
+            duration_limit is not None
+            and window_duration > duration_limit + _ASR_PLAN_TIME_TOLERANCE
+        ):
+            raise RuntimeError("asr_plan_window_duration_capability_exceeded")
+
+        estimated_upload_bytes = _strict_nonnegative_int(
+            value(window, "estimated_upload_bytes"),
+            error="asr_plan_upload_size_invalid",
+        )
+        encoded_size_bytes = _strict_nonnegative_int(
+            value(window, "encoded_size_bytes"),
+            error="asr_plan_artifact_size_invalid",
+        )
+        if upload_hard_limit is not None and (
+            estimated_upload_bytes > upload_hard_limit
+            or encoded_size_bytes > upload_hard_limit
+        ):
+            raise RuntimeError("asr_plan_window_upload_capability_exceeded")
+        if upload_soft_limit is not None and (
+            estimated_upload_bytes > upload_soft_limit
+            or encoded_size_bytes > upload_soft_limit
+        ):
+            raise RuntimeError("asr_plan_window_upload_policy_exceeded")
+
+
 def _apply_resolved_asr_plan(
     config: AppConfig,
     plan: dict[str, Any],
@@ -2171,7 +2318,10 @@ def _apply_resolved_asr_plan(
     task_dir: Path,
     audio_full: Path | None = None,
 ) -> None:
-    if int(plan.get("plan_schema_version") or 0) != ASR_PLAN_SCHEMA_VERSION:
+    if _strict_nonnegative_int(
+        plan.get("plan_schema_version"),
+        error="unsupported_asr_plan_schema",
+    ) != ASR_PLAN_SCHEMA_VERSION:
         raise RuntimeError("unsupported_asr_plan_schema")
     identity_fields = (
         "engine",
@@ -2209,7 +2359,10 @@ def _apply_resolved_asr_plan(
         audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
         if str(audio_facts.get("content_fingerprint") or "") != _sha256_file(audio_full):
             raise RuntimeError("asr_plan_audio_mismatch")
-        if int(audio_facts.get("encoded_size_bytes") or -1) != audio_full.stat().st_size:
+        if _strict_nonnegative_int(
+            audio_facts.get("encoded_size_bytes"),
+            error="asr_plan_audio_mismatch",
+        ) != audio_full.stat().st_size:
             raise RuntimeError("asr_plan_audio_mismatch")
         canonical_audio = (
             audio_facts.get("canonical_audio")
@@ -2248,6 +2401,7 @@ def _apply_resolved_asr_plan(
         audio_end=planned_duration,
         error="asr_plan_audio_duration_mismatch",
     )
+    _validate_asr_plan_policy_limits(config, runtime_windows)
     timeline = plan.get("timeline") if isinstance(plan.get("timeline"), dict) else {}
     supported_timelines = {
         ("word_timeline_boundary_alignment", 1),
@@ -2256,7 +2410,10 @@ def _apply_resolved_asr_plan(
     }
     timeline_key = (
         str(timeline.get("strategy_id") or ""),
-        int(timeline.get("strategy_version") or 0),
+        _strict_nonnegative_int(
+            timeline.get("strategy_version"),
+            error="unsupported_asr_timeline_strategy",
+        ),
     )
     if timeline_key not in supported_timelines:
         raise RuntimeError("unsupported_asr_timeline_strategy")
@@ -2266,29 +2423,51 @@ def _apply_resolved_asr_plan(
     if bool(execution.get("split_retry")) != _asr_allows_split_retry(config):
         raise RuntimeError("asr_plan_execution_mismatch")
     planned_uploads = [
-        int(item.get("estimated_upload_bytes") or 0)
+        _strict_nonnegative_int(
+            item.get("estimated_upload_bytes"),
+            error="asr_plan_execution_mismatch",
+        )
         for item in windows
         if isinstance(item, dict)
     ]
-    if int(execution.get("actual_concurrency") or 0) != _resolved_asr_concurrency(
+    actual_concurrency = _strict_nonnegative_int(
+        execution.get("actual_concurrency"),
+        error="asr_plan_execution_mismatch",
+    )
+    if actual_concurrency != _resolved_asr_concurrency(
         config,
         planned_uploads,
     ):
         raise RuntimeError("asr_plan_execution_mismatch")
     if active_policy is not None and (
-        float(execution.get("request_deadline_seconds") or 0.0)
+        _finite_number(
+            execution.get("request_deadline_seconds"),
+            error="asr_plan_execution_mismatch",
+        )
         != float(active_policy.policy.execution.request_deadline_seconds)
-        or int(execution.get("max_attempts") or 0)
-        != int(active_policy.policy.execution.max_attempts)
+        or _strict_nonnegative_int(
+            execution.get("max_attempts"),
+            error="asr_plan_execution_mismatch",
+        )
+        != active_policy.policy.execution.max_attempts
     ):
         raise RuntimeError("asr_plan_execution_mismatch")
     provider = _active_asr_provider(config)
-    provider.execution.concurrency = max(1, int(execution.get("actual_concurrency") or 1))
+    provider.execution.concurrency = max(1, actual_concurrency)
     provider.execution.timeout_seconds = max(
-        1,
-        int(float(execution.get("request_deadline_seconds") or provider.execution.timeout_seconds)),
+        0.001,
+        _finite_number(
+            execution.get("request_deadline_seconds"),
+            error="asr_plan_execution_mismatch",
+        ),
     )
-    provider.execution.retry = max(1, int(execution.get("max_attempts") or provider.execution.retry))
+    provider.execution.retry = max(
+        1,
+        _strict_nonnegative_int(
+            execution.get("max_attempts"),
+            error="asr_plan_execution_mismatch",
+        ),
+    )
     for actual, runtime_window in zip(manifest, runtime_windows, strict=True):
         actual.clear()
         actual.update(runtime_window)
@@ -3448,6 +3627,7 @@ def _execute_task(
                         overlap_seconds=chunking.overlap_seconds,
                         short_audio_seconds=chunking.short_audio_seconds,
                         max_upload_mb=chunking.max_upload_mb,
+                        max_duration_seconds=_asr_duration_hard_limit(config),
                         silence_noise_db=chunking.silence.noise_db,
                         silence_min_seconds=chunking.silence.min_silence_seconds,
                         silence_cut_padding_seconds=chunking.silence.cut_padding_seconds,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,10 +8,12 @@ import pytest
 from transvortex.app.models import TaskRecord
 from transvortex.app.asr_resolution import (
     build_active_asr_intent_snapshot,
+    recommended_asr_policy,
     restore_asr_intent_snapshot,
 )
 from transvortex.app.config import load_app_config
 from transvortex.artifacts.task_store import TaskStore
+from transvortex.asr_domain import CapabilityLimit, resolve_asr_policy
 from transvortex.core.orchestrator import (
     _apply_resolved_asr_plan,
     _asr_allows_split_retry,
@@ -38,7 +41,6 @@ asr_engines:
         window_target_seconds: {window_seconds}
         window_floor_seconds: 8
         overlap_seconds: 3
-        short_audio_bypass_seconds: {window_seconds}
         """.strip(),
         encoding="utf-8",
     )
@@ -101,7 +103,7 @@ def test_task_asr_intent_freezes_the_effective_policy(
     restored = restore_asr_intent_snapshot(changed, snapshot, root_dir=tmp_path)
     assert restored is not None
     assert restored.policy.policy.chunking.upload_soft_limit_bytes is None
-    assert restored.runtime.chunking.max_upload_mb == 2048.0
+    assert restored.runtime.chunking.max_upload_mb is None
 
 
 def test_resolved_asr_plan_records_actual_windows_and_drives_execution(tmp_path: Path) -> None:
@@ -135,7 +137,7 @@ def test_resolved_asr_plan_records_actual_windows_and_drives_execution(tmp_path:
     )
 
     assert plan is not None
-    assert plan.plan_schema_version == 3
+    assert plan.plan_schema_version == 4
     assert plan.windows[0].segment_id == "segment-00000"
     assert plan.windows[0].segment_index == 0
     assert plan.windows[0].artifact_path == "asr/windows/part_00000.wav"
@@ -163,6 +165,15 @@ def test_resolved_asr_plan_records_actual_windows_and_drives_execution(tmp_path:
     )
     assert config.asr_providers["openrouter_asr"].execution.concurrency == 2
     assert Path(runtime_manifest[0]["path"]).is_absolute()
+
+    incompatible = dict(payload, plan_schema_version=4.5)
+    with pytest.raises(RuntimeError, match="unsupported_asr_plan_schema"):
+        _apply_resolved_asr_plan(
+            config,
+            incompatible,
+            [dict(item) for item in portable_manifest],
+            task_dir=task_dir,
+        )
 
     audio.write_bytes(b"different-audio")
     with pytest.raises(RuntimeError, match="asr_plan_audio_mismatch"):
@@ -401,3 +412,47 @@ def test_resolved_asr_plan_persists_portable_manifest_and_rehydrates_execution_p
     assert recovered == created
     assert Path(recovered_manifest[0]["path"]).is_absolute()
     assert recovered_manifest[0]["content_sha256"] == created["windows"][0]["content_sha256"]
+
+
+def test_resolved_asr_plan_checks_actual_windows_against_hard_capabilities(
+    tmp_path: Path,
+) -> None:
+    _write_config(tmp_path, window_seconds=180)
+    config = load_app_config(root_dir=tmp_path)
+    engine_id = config.pipeline.asr_provider
+    capabilities = config.asr_capabilities[engine_id]
+    capabilities = replace(
+        capabilities,
+        audio_input=replace(
+            capabilities.audio_input,
+            max_duration_seconds=CapabilityLimit(
+                hard_max=180.0,
+                knowledge="verified",
+                source="test_probe",
+            ),
+        ),
+    )
+    config.asr_capabilities[engine_id] = capabilities
+    config.asr_policy_resolutions[engine_id] = resolve_asr_policy(
+        recommended_asr_policy(config.asr_engine_specs[engine_id]),
+        config.asr_user_overrides[engine_id],
+        capabilities,
+    )
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"audio-content")
+    task_dir = tmp_path / "task"
+    asr_dir = task_dir / "asr"
+    asr_dir.mkdir(parents=True)
+
+    with pytest.raises(
+        RuntimeError,
+        match="asr_plan_window_duration_capability_exceeded",
+    ):
+        _resolved_asr_plan(
+            config,
+            audio_full=audio,
+            media_meta={"duration_seconds": 590.0, "audio_codec": "aac"},
+            manifest=_manifest(task_dir),
+            planning_metadata={},
+            paths={"asr": asr_dir},
+        )

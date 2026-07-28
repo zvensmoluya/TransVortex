@@ -17,6 +17,20 @@ SILENCE_END_RE = re.compile(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\
 ASR_UPLOAD_WAV_BYTES_PER_SECOND = 16000 * 2
 
 
+def _optional_exact_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer() and value >= 0:
+            return int(value)
+        return None
+    if isinstance(value, str) and re.fullmatch(r"\+?\d+", value.strip()):
+        return int(value.strip())
+    return None
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     resolved = resolve_media_executable(cmd[0])
     if resolved is not None:
@@ -223,7 +237,9 @@ def extract_audio_for_asr(
     streams = probe.get("streams", [])
     audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
     selected = _select_audio_stream(audio_streams, source_lang=source_lang, audio_track=audio_track)
-    stream_index = int(selected.get("index", -1))
+    stream_index = _optional_exact_nonnegative_int(selected.get("index"))
+    if stream_index is None:
+        raise RuntimeError("selected audio stream has an invalid index")
     codec = str(selected.get("codec_name") or "")
     copy_ok = _can_copy_audio(codec, output_audio)
     tags = _stream_tags(selected)
@@ -241,13 +257,6 @@ def extract_audio_for_asr(
     except (TypeError, ValueError):
         pass
 
-    def optional_int(value: Any) -> int | None:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed >= 0 else None
-
     return {
         "audio_codec": codec,
         "copy_mode": copy_ok,
@@ -255,9 +264,15 @@ def extract_audio_for_asr(
         "audio_stream_index": stream_index,
         "audio_stream_language": tags.get("language", ""),
         "audio_stream_title": tags.get("title", ""),
-        "audio_stream_sample_rate_hz": optional_int(selected.get("sample_rate")),
-        "audio_stream_channels": optional_int(selected.get("channels")),
-        "audio_stream_bitrate": optional_int(selected.get("bit_rate")),
+        "audio_stream_sample_rate_hz": _optional_exact_nonnegative_int(
+            selected.get("sample_rate")
+        ),
+        "audio_stream_channels": _optional_exact_nonnegative_int(
+            selected.get("channels")
+        ),
+        "audio_stream_bitrate": _optional_exact_nonnegative_int(
+            selected.get("bit_rate")
+        ),
         "audio_track": audio_track,
     }
 
@@ -276,8 +291,8 @@ def split_audio_with_overlap(
     audio_path: Path,
     segments_dir: Path,
     *,
-    chunk_seconds: int,
-    overlap_seconds: int,
+    chunk_seconds: float,
+    overlap_seconds: float,
     duration_seconds: float,
 ) -> list[dict]:
     if chunk_seconds <= overlap_seconds:
@@ -327,7 +342,7 @@ def _trusted_region_for_window(
     start: float,
     duration: float,
     duration_seconds: float,
-    overlap_seconds: int,
+    overlap_seconds: float,
     has_previous: bool,
     has_next: bool,
 ) -> tuple[float, float]:
@@ -339,7 +354,7 @@ def _trusted_region_for_window(
     return trusted_start, trusted_end
 
 
-def _effective_window_seconds(*, mode: str, window_seconds: int, max_window_seconds: int) -> float:
+def _effective_window_seconds(*, mode: str, window_seconds: float, max_window_seconds: float) -> float:
     if mode == "silence":
         return max(float(max_window_seconds), 0.1)
     return max(float(window_seconds), 0.1)
@@ -375,9 +390,9 @@ def _build_silence_windows(
     *,
     duration_seconds: float,
     silence_ranges: list[dict[str, float]],
-    max_window_seconds: int,
-    min_window_seconds: int,
-    overlap_seconds: int,
+    max_window_seconds: float,
+    min_window_seconds: float,
+    overlap_seconds: float,
     cut_padding_seconds: float,
 ) -> list[tuple[float, float]]:
     windows: list[tuple[float, float]] = []
@@ -408,10 +423,13 @@ def _build_fixed_windows(
     *,
     duration_seconds: float,
     window_seconds: float,
-    overlap_seconds: int,
+    overlap_seconds: float,
 ) -> list[tuple[float, float]]:
     effective_window = max(float(window_seconds), 0.1)
-    effective_overlap = max(0, min(int(overlap_seconds), int(effective_window) - 1))
+    effective_overlap = _bounded_asr_overlap(
+        overlap_seconds=float(overlap_seconds),
+        window_seconds=effective_window,
+    )
     step = effective_window - effective_overlap
     windows = []
     count = max(1, int(math.ceil(max(duration_seconds, 0.1) / step)))
@@ -423,17 +441,22 @@ def _build_fixed_windows(
     return windows
 
 
+def _bounded_asr_overlap(*, overlap_seconds: float, window_seconds: float) -> float:
+    return max(0.0, min(float(overlap_seconds), max(float(window_seconds) - 0.001, 0.0)))
+
+
 def split_audio_for_asr(
     audio_path: Path,
     segments_dir: Path,
     *,
     mode: str,
-    window_seconds: int,
-    max_window_seconds: int = 60,
-    min_window_seconds: int = 12,
-    overlap_seconds: int,
-    short_audio_seconds: int,
-    max_upload_mb: float = 24.0,
+    window_seconds: float,
+    max_window_seconds: float = 60.0,
+    min_window_seconds: float = 12.0,
+    overlap_seconds: float,
+    short_audio_seconds: float,
+    max_upload_mb: float | None = 24.0,
+    max_duration_seconds: float | None = None,
     duration_seconds: float,
     silence_noise_db: float = -35.0,
     silence_min_seconds: float = 0.25,
@@ -444,16 +467,45 @@ def split_audio_for_asr(
 ) -> list[dict]:
     normalized_mode = mode.strip().lower()
     if normalized_mode not in {"auto", "fixed", "none", "silence"}:
-        normalized_mode = "silence"
+        raise ValueError(f"unsupported ASR chunking mode: {mode}")
+    if max_upload_mb is not None and (
+        not math.isfinite(float(max_upload_mb)) or float(max_upload_mb) <= 0
+    ):
+        raise ValueError("ASR max_upload_mb must be positive or null")
+    if max_duration_seconds is not None and (
+        not math.isfinite(float(max_duration_seconds))
+        or float(max_duration_seconds) <= 0
+    ):
+        raise ValueError("ASR max_duration_seconds must be positive or null")
     max_upload_seconds = _estimated_asr_upload_seconds(max_upload_mb)
     hard_window_seconds = min(
         _effective_window_seconds(mode=normalized_mode, window_seconds=window_seconds, max_window_seconds=max_window_seconds),
         max_upload_seconds,
+        (
+            float(max_duration_seconds)
+            if max_duration_seconds is not None
+            else math.inf
+        ),
     )
     silence_ranges: list[dict[str, float]] = []
     if normalized_mode == "none":
+        if (
+            max_duration_seconds is not None
+            and float(duration_seconds) > float(max_duration_seconds) + 0.001
+        ):
+            raise RuntimeError("asr_chunking_none_duration_limit_exceeded")
+        estimated_whole_upload_bytes = math.ceil(
+            max(float(duration_seconds), 0.1) * ASR_UPLOAD_WAV_BYTES_PER_SECOND + 44
+        )
+        upload_limit_bytes = (
+            None
+            if max_upload_mb is None
+            else int(float(max_upload_mb) * 1024 * 1024)
+        )
+        if upload_limit_bytes is not None and estimated_whole_upload_bytes > upload_limit_bytes:
+            raise RuntimeError("asr_chunking_none_upload_limit_exceeded")
         windows = [(0.0, max(duration_seconds, 0.1))]
-        effective_overlap = 0
+        effective_overlap = 0.0
     elif normalized_mode == "silence":
         silence_ranges = detect_audio_silence(
             audio_path,
@@ -482,29 +534,47 @@ def split_audio_for_asr(
         windows = _build_silence_windows(
             duration_seconds=float(duration_seconds),
             silence_ranges=silence_ranges,
-            max_window_seconds=int(hard_window_seconds),
+            max_window_seconds=hard_window_seconds,
             min_window_seconds=min_window_seconds,
-            overlap_seconds=overlap_seconds,
+            overlap_seconds=_bounded_asr_overlap(
+                overlap_seconds=overlap_seconds,
+                window_seconds=hard_window_seconds,
+            ),
             cut_padding_seconds=silence_cut_padding_seconds,
         )
-        effective_overlap = max(0, int(overlap_seconds))
-    elif normalized_mode == "auto" and duration_seconds <= max(short_audio_seconds, 0):
+        effective_overlap = _bounded_asr_overlap(
+            overlap_seconds=overlap_seconds,
+            window_seconds=hard_window_seconds,
+        )
+    elif normalized_mode == "auto" and duration_seconds <= min(
+        max(float(short_audio_seconds), 0.0),
+        max_upload_seconds,
+    ):
         windows = [(0.0, max(duration_seconds, 0.1))]
-        effective_overlap = 0
+        effective_overlap = 0.0
     else:
+        effective_window_seconds = min(float(window_seconds), max_upload_seconds)
         windows = _build_fixed_windows(
             duration_seconds=float(duration_seconds),
-            window_seconds=min(float(window_seconds), max_upload_seconds),
+            window_seconds=effective_window_seconds,
             overlap_seconds=overlap_seconds,
         )
-        effective_overlap = max(0, min(int(overlap_seconds), int(max(float(window_seconds), 0.1)) - 1))
+        effective_overlap = _bounded_asr_overlap(
+            overlap_seconds=overlap_seconds,
+            window_seconds=effective_window_seconds,
+        )
     if planning_metadata is not None:
         planning_metadata.clear()
         planning_metadata.update(
             {
                 "mode": normalized_mode,
                 "hard_window_seconds": float(hard_window_seconds),
-                "effective_overlap_seconds": int(effective_overlap),
+                "effective_overlap_seconds": float(effective_overlap),
+                "upload_limit_bytes": (
+                    None
+                    if max_upload_mb is None
+                    else int(float(max_upload_mb) * 1024 * 1024)
+                ),
                 "silence_ranges": silence_ranges,
             }
         )
@@ -546,12 +616,14 @@ def split_audio_for_asr(
             has_previous=idx > 0,
             has_next=idx < len(windows) - 1,
         )
-        if end >= duration_seconds - 0.05:
+        if normalized_mode == "none":
+            cut_reason = "whole_audio"
+        elif end >= duration_seconds - 0.05:
             cut_reason = "end_of_audio"
         elif normalized_mode == "silence":
             hard_end = min(start + float(hard_window_seconds), duration_seconds)
             cut_reason = "silence_boundary" if end < hard_end - 0.05 else "hard_limit"
-        elif normalized_mode == "none" or len(windows) == 1:
+        elif len(windows) == 1:
             cut_reason = "whole_audio"
         else:
             cut_reason = "fixed_window"
@@ -562,7 +634,9 @@ def split_audio_for_asr(
                 "duration": float(length),
                 "trusted_start": trusted_start,
                 "trusted_end": trusted_end,
-                "estimated_upload_bytes": int(length * ASR_UPLOAD_WAV_BYTES_PER_SECOND + 44),
+                "estimated_upload_bytes": math.ceil(
+                    length * ASR_UPLOAD_WAV_BYTES_PER_SECOND + 44
+                ),
                 "cut_reason": cut_reason,
                 "path": str(out_file),
                 "source_audio_path": str(audio_path),
@@ -572,7 +646,9 @@ def split_audio_for_asr(
     return manifest
 
 
-def _estimated_asr_upload_seconds(max_upload_mb: float) -> float:
+def _estimated_asr_upload_seconds(max_upload_mb: float | None) -> float:
+    if max_upload_mb is None:
+        return math.inf
     limit_bytes = max(float(max_upload_mb), 0.1) * 1024 * 1024
     # We upload ASR windows as 16 kHz mono pcm_s16le WAV; keep a small header margin.
     return max((limit_bytes - 4096) / ASR_UPLOAD_WAV_BYTES_PER_SECOND, 0.1)

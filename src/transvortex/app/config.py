@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import replace
@@ -123,6 +124,20 @@ def _to_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _to_exact_int(value: Any, default: int, *, context: str) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{context} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
+        return int(value.strip())
+    raise ValueError(f"{context} must be an integer")
 
 
 def _to_bool(value: Any, default: bool) -> bool:
@@ -675,7 +690,7 @@ def _default_asr_execution(
             min_concurrency=int(raw["min_concurrency"]),
             max_concurrency=int(raw["max_concurrency"]),
             max_inflight_upload_mb=float(raw["max_inflight_upload_mb"]),
-            timeout_seconds=int(raw["timeout_seconds"]),
+            timeout_seconds=float(raw["timeout_seconds"]),
             retry=int(raw["retry"]),
         )
     if kind == "remote":
@@ -747,7 +762,7 @@ def _parse_asr_local(raw: Any, *, model: str) -> AsrLocalConfig:
         device=_to_str(local_raw.get("device"), "auto"),
         compute_type=_to_str(local_raw.get("compute_type"), "auto"),
         max_initial_timestamp=_to_float(local_raw.get("max_initial_timestamp"), 30.0),
-        beam_size=_to_int(local_raw.get("beam_size"), 5),
+        beam_size=_to_exact_int(local_raw.get("beam_size"), 5, context="ASR local.beam_size"),
         temperature=_to_float(local_raw.get("temperature"), 0.0),
         condition_on_previous_text=_to_bool(local_raw.get("condition_on_previous_text"), False),
         hotwords=_to_str(local_raw.get("hotwords"), ""),
@@ -787,13 +802,16 @@ def _parse_asr_accelerator(raw: Any, *, kind: str) -> AsrAcceleratorConfig:
 def _parse_asr_chunking(raw: Any, *, default: AsrChunkingConfig) -> AsrChunkingConfig:
     chunking_raw = raw if isinstance(raw, dict) else {}
     silence_raw = chunking_raw.get("silence") if isinstance(chunking_raw.get("silence"), dict) else {}
+    mode = _to_str(chunking_raw.get("mode"), default.mode).strip().lower()
+    if mode not in {"auto", "fixed", "none", "silence"}:
+        raise ValueError(f"Unsupported ASR chunking.mode: {mode}")
     return AsrChunkingConfig(
-        mode=_to_str(chunking_raw.get("mode"), default.mode),
-        window_seconds=_to_int(chunking_raw.get("window_seconds"), default.window_seconds),
-        max_window_seconds=_to_int(chunking_raw.get("max_window_seconds"), default.max_window_seconds),
-        min_window_seconds=_to_int(chunking_raw.get("min_window_seconds"), default.min_window_seconds),
-        overlap_seconds=_to_int(chunking_raw.get("overlap_seconds"), default.overlap_seconds),
-        short_audio_seconds=_to_int(chunking_raw.get("short_audio_seconds"), default.short_audio_seconds),
+        mode=mode,
+        window_seconds=_to_float(chunking_raw.get("window_seconds"), default.window_seconds),
+        max_window_seconds=_to_float(chunking_raw.get("max_window_seconds"), default.max_window_seconds),
+        min_window_seconds=_to_float(chunking_raw.get("min_window_seconds"), default.min_window_seconds),
+        overlap_seconds=_to_float(chunking_raw.get("overlap_seconds"), default.overlap_seconds),
+        short_audio_seconds=_to_float(chunking_raw.get("short_audio_seconds"), default.short_audio_seconds),
         max_upload_mb=_to_float(chunking_raw.get("max_upload_mb"), default.max_upload_mb),
         silence=AsrSilenceChunkingConfig(
             noise_db=_to_float(silence_raw.get("noise_db"), default.silence.noise_db),
@@ -813,18 +831,34 @@ def _parse_asr_chunking(raw: Any, *, default: AsrChunkingConfig) -> AsrChunkingC
 
 def _parse_asr_execution(raw: Any, *, default: AsrExecutionConfig) -> AsrExecutionConfig:
     execution_raw = raw if isinstance(raw, dict) else {}
-    concurrency = _to_int(execution_raw.get("concurrency"), default.concurrency)
+    concurrency = _to_exact_int(
+        execution_raw.get("concurrency"),
+        default.concurrency,
+        context="ASR execution.concurrency",
+    )
     return AsrExecutionConfig(
         concurrency=concurrency,
         adaptive_concurrency=_to_bool(execution_raw.get("adaptive_concurrency"), default.adaptive_concurrency),
-        min_concurrency=_to_int(execution_raw.get("min_concurrency"), min(default.min_concurrency, concurrency)),
-        max_concurrency=_to_int(execution_raw.get("max_concurrency"), max(default.max_concurrency, concurrency)),
+        min_concurrency=_to_exact_int(
+            execution_raw.get("min_concurrency"),
+            min(default.min_concurrency, concurrency),
+            context="ASR execution.min_concurrency",
+        ),
+        max_concurrency=_to_exact_int(
+            execution_raw.get("max_concurrency"),
+            max(default.max_concurrency, concurrency),
+            context="ASR execution.max_concurrency",
+        ),
         max_inflight_upload_mb=_to_float(
             execution_raw.get("max_inflight_upload_mb"),
             default.max_inflight_upload_mb,
         ),
-        timeout_seconds=_to_int(execution_raw.get("timeout_seconds"), default.timeout_seconds),
-        retry=_to_int(execution_raw.get("retry"), default.retry),
+        timeout_seconds=_to_float(execution_raw.get("timeout_seconds"), default.timeout_seconds),
+        retry=_to_exact_int(
+            execution_raw.get("retry"),
+            default.retry,
+            context="ASR execution.retry",
+        ),
     )
 
 
