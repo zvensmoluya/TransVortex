@@ -329,12 +329,17 @@ def _provider_payload(provider: Any, *, root_dir: Path | None = None) -> dict[st
         "auth_type": str(auth.type),
         "env_key": _safe_env_key(auth.env_key),
         "credential_id": _safe_credential_id(auth.credential_id),
+        "binding_id": _safe_credential_id(auth.binding_id),
         "credential_required": auth.type != "none",
         "credential_configured": credential_present if auth.type != "none" else False,
         "credential_source": credential_source,
         "credential_metadata_valid": (
             auth.type == "none"
-            or (bool(_safe_env_key(auth.env_key)) and bool(_safe_credential_id(auth.credential_id)))
+            or (
+                bool(_safe_credential_id(auth.credential_id))
+                and bool(_safe_credential_id(auth.binding_id))
+                and (not auth.env_key or bool(_safe_env_key(auth.env_key)))
+            )
         ),
     }
     # Endpoint metadata is useful when an Agent discovers an existing local
@@ -885,11 +890,11 @@ def _plan_actions(
         provider_mode in {"local_service", "remote_provider"}
         and not _provider_test_success(current.get("provider_test"))
     ):
-        probe_args = ["provider-test", "--confirm-network"]
-        probe_command = "transvortex --root <config-root> asr provider-test --confirm-network --providers-file <providers-file> --json"
+        probe_args = ["engine-test", "--confirm-network"]
+        probe_command = "transvortex --root <config-root> asr engine-test --confirm-network --providers-file <providers-file> --json"
         if provider_mode == "remote_provider":
             probe_args.extend(["--confirm-media", "--confirm-cost"])
-            probe_command = "transvortex --root <config-root> asr provider-test --confirm-network --confirm-media --confirm-cost --providers-file <providers-file> --json"
+            probe_command = "transvortex --root <config-root> asr engine-test --confirm-network --confirm-media --confirm-cost --providers-file <providers-file> --json"
         actions.append(
             {
                 "id": "route_probe",
@@ -1911,7 +1916,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             blockers.append(
                 _blocking_item(
                     "credential_metadata_invalid",
-                    "Credential metadata must use a non-secret env_key and credential_id reference",
+                    "Credential metadata must use non-secret binding_id and credential_id references",
                     action="repair_config",
                 )
             )

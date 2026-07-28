@@ -80,22 +80,30 @@ def test_network_config_rejects_invalid_values(tmp_path: Path, network_yaml: str
 
 
 def test_external_whisper_draft_does_not_inherit_managed_runtime_id() -> None:
-    provider = draft_to_asr_provider_config(
-        {
-            "name": "external_whisper",
-            "kind": "local_worker",
-            "protocol": "faster_whisper",
-            "model": "small",
-            "runtime": {"source": "external"},
-            "local": {"device": "cpu", "compute_type": "auto"},
-        }
+    with pytest.raises(ValueError, match="id is required"):
+        draft_to_asr_provider_config(
+            {
+                "name": "external_whisper",
+                "kind": "local_worker",
+                "protocol": "faster_whisper",
+                "model": "small",
+                "runtime": {"source": "external"},
+                "local": {"device": "cpu", "compute_type": "auto"},
+            }
+        )
+
+
+def test_local_whisper_model_source_is_independent_from_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.registered_external_model",
+        lambda **_kwargs: {
+            "model_id": "large-v3",
+            "model_path": r"D:\Models\faster-whisper-large-v3",
+        },
     )
-
-    assert provider.runtime.source == "external"
-    assert provider.runtime.id == ""
-
-
-def test_local_whisper_model_source_is_independent_from_runtime() -> None:
     provider = draft_to_asr_provider_config(
         {
             "name": "local_whisper",
@@ -104,12 +112,14 @@ def test_local_whisper_model_source_is_independent_from_runtime() -> None:
             "model": "large-v3",
             "runtime": {"source": "managed", "id": "managed:faster-whisper"},
             "accelerator": {"source": "external", "id": "external:nvidia-test"},
+            "_model_registration_id": "external:model-test",
             "local": {
                 "model_source": "external",
                 "model_path": r"D:\Models\faster-whisper-large-v3",
                 "device": "auto",
             },
-        }
+        },
+        root_dir=tmp_path,
     )
 
     assert provider.runtime.source == "managed"
@@ -172,7 +182,7 @@ def test_openrouter_admin_switches_to_whisper_profile_with_five_minute_window() 
     assert provider.request.timestamp_granularities == ["segment"]
     assert provider.chunking.window_seconds == 300
     assert provider.chunking.max_window_seconds == 300
-    assert provider.chunking.short_audio_seconds == 300
+    assert provider.chunking.short_audio_seconds == 0.0
     assert provider.chunking.overlap_seconds == 3
 
 
@@ -813,12 +823,11 @@ routing:
     )
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: openrouter_asr
-asr_providers:
-  - name: openrouter_asr
-    kind: remote
-    protocol: openrouter_stt
+config_schema_version: 2
+asr: {engine: openrouter_asr}
+asr_engines:
+  - id: openrouter_asr
+    type: openrouter_asr
     model: deepgram/nova-3
         """.strip(),
         encoding="utf-8",
@@ -1255,21 +1264,22 @@ routing:
     )
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: openai_asr
-asr_providers:
-  - name: openai_asr
-    kind: remote
-    protocol: openai_transcriptions
-    base_url: https://api.openai.com
-    endpoint: /v1/audio/transcriptions
+config_schema_version: 2
+asr: {engine: openai_asr}
+asr_engines:
+  - id: openai_asr
+    type: openai_transcription
     model: whisper-1
-    auth:
-      type: bearer
-      env_key: OPENAI_API_KEY
-      credential_id: openai_asr
-    execution:
-        timeout_seconds: 180
+    endpoint:
+      base_url: https://api.openai.com/v1
+      path: /v1/audio/transcriptions
+      credential:
+        binding_id: openai_asr
+        secret_ref: openai_asr
+        env_fallback: OPENAI_API_KEY
+    policy_overrides:
+      execution:
+        request_deadline_seconds: 180
         """.strip(),
         encoding="utf-8",
     )
@@ -1278,16 +1288,16 @@ asr_providers:
     provider = cfg.asr_providers["openai_asr"]
     assert provider.kind == "remote"
     assert provider.protocol == "openai_transcriptions"
-    assert provider.base_url == "https://api.openai.com"
+    assert provider.base_url == "https://api.openai.com/v1"
     assert provider.endpoint == "/v1/audio/transcriptions"
     assert provider.model == "whisper-1"
     assert provider.auth.type == "bearer"
     assert provider.env_key == "OPENAI_API_KEY"
     assert provider.credential_id == "openai_asr"
-    assert provider.execution.timeout_seconds == 180
+    assert provider.execution.timeout_seconds == 180.0
 
 
-def test_asr_providers_parse_new_schema(tmp_path: Path) -> None:
+def test_asr_engine_schema_maps_policy_to_runtime_projection(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text(
         """
 providers:
@@ -1306,8 +1316,9 @@ routing:
     (prompt_dir / "show.v1.md").write_text("Use known character names.", encoding="utf-8")
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 asr:
-  provider: openai_whisper
+  engine: openai_whisper
   audio_track: "2"
   prompt:
     enabled: true
@@ -1319,44 +1330,36 @@ asr:
         max_chars: 120
     include_previous_text: false
     max_chars: 120
-asr_providers:
-  - name: openai_whisper
-    kind: remote
-    protocol: openai_transcriptions
-    base_url: https://api.openai.com/v1
-    endpoint: /v1/audio/transcriptions
+asr_engines:
+  - id: openai_whisper
+    type: openai_transcription
     model: whisper-1
-    auth:
-      type: bearer
-      env_key: OPENAI_API_KEY
-      credential_id: openai_asr
-    execution:
-      concurrency: 12
-      adaptive_concurrency: true
-      min_concurrency: 2
-      max_concurrency: 12
-      max_inflight_upload_mb: 256
-      timeout_seconds: 180
-    chunking:
-      mode: silence
-      max_window_seconds: 45
-      min_window_seconds: 10
-      overlap_seconds: 3
-      max_upload_mb: 20
-      silence:
-        noise_db: -38
-        min_silence_seconds: 0.3
-        cut_padding_seconds: 0.2
-    http2: false
-    request:
-      response_format: verbose_json
-      temperature: 0.25
-      timestamp_granularities: [segment, word]
-      include: [logprobs]
-      array_format: brackets
-      extra_form_fields:
-        custom_flag: yes
-        custom_list: [a, b]
+    endpoint:
+      credential:
+        binding_id: openai_whisper
+        secret_ref: openai_asr
+        env_fallback: OPENAI_API_KEY
+      http2: false
+    policy_overrides:
+      execution:
+        concurrency_mode: adaptive
+        target_concurrency: 12
+        minimum_concurrency: 2
+        maximum_concurrency: 12
+        max_inflight_audio_bytes: 268435456
+        request_deadline_seconds: 180
+      chunking:
+        mode: silence
+        window_target_seconds: 45
+        window_floor_seconds: 10
+        overlap_seconds: 3
+        upload_soft_limit_bytes: 20971520
+        silence:
+          noise_db: -38
+          minimum_seconds: 0.3
+          cut_padding_seconds: 0.2
+      decoding:
+        temperature: 0.25
         """.strip(),
         encoding="utf-8",
     )
@@ -1389,10 +1392,10 @@ asr_providers:
     assert provider.http2 is False
     assert provider.request.response_format == "verbose_json"
     assert provider.request.temperature == 0.25
-    assert provider.request.timestamp_granularities == ["segment", "word"]
-    assert provider.request.include == ["logprobs"]
+    assert provider.request.timestamp_granularities == ["segment"]
+    assert provider.request.include == []
     assert provider.request.array_format == "brackets"
-    assert provider.request.extra_form_fields == {"custom_flag": True, "custom_list": ["a", "b"]}
+    assert provider.request.extra_form_fields == {}
     assert cfg.pipeline.asr_prompt.enabled is True
     assert cfg.pipeline.asr_prompt.active_profile == "show"
     assert cfg.pipeline.asr_prompt.text == "Use known character names."
@@ -1416,17 +1419,12 @@ routing:
     )
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: funasr_sensevoice_local
-asr_providers:
-  - name: funasr_sensevoice_local
-    kind: local_server
-    protocol: funasr_openai
-    base_url: http://127.0.0.1:8899
-    endpoint: /v1/audio/transcriptions
+config_schema_version: 2
+asr: {engine: funasr_sensevoice_local}
+asr_engines:
+  - id: funasr_sensevoice_local
+    type: funasr_service
     model: sensevoice
-    auth:
-      type: none
         """.strip(),
         encoding="utf-8",
     )
@@ -1444,13 +1442,13 @@ asr_providers:
     assert provider.request.send_timestamp_granularities is False
     assert provider.request.send_prompt is False
     assert provider.request.array_format == "repeat"
-    assert provider.chunking.mode == "none"
-    assert provider.chunking.window_seconds == 3600
-    assert provider.chunking.max_window_seconds == 3600
+    assert provider.chunking.mode == "fixed"
+    assert provider.chunking.window_seconds == 120
+    assert provider.chunking.max_window_seconds == 120
     assert provider.chunking.min_window_seconds == 1
     assert provider.chunking.overlap_seconds == 0
-    assert provider.chunking.short_audio_seconds == 3600
-    assert provider.chunking.max_upload_mb == 2048
+    assert provider.chunking.short_audio_seconds == 0.0
+    assert provider.chunking.max_upload_mb == 64
     assert provider.chunking.fuzzy_dedupe is False
 
 
@@ -1590,22 +1588,21 @@ routing:
     )
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: remote_asr
-asr_providers:
-  - name: remote_asr
-    kind: remote
-    protocol: openai_transcriptions
-    preprocessing:
-      trim_silence:
-        enabled: false
-        backend: ffmpeg_silencedetect
+config_schema_version: 2
+asr: {engine: remote_asr}
+asr_engines:
+  - id: remote_asr
+    type: openai_transcription
+    model: whisper-1
+    policy_overrides:
+      preprocessing:
+        trim_silence: false
         noise_db: -42
-        min_silence_seconds: 0.4
-        keep_preroll_seconds: 0.5
+        minimum_seconds: 0.4
+        preroll_seconds: 0.5
         trim_trailing: false
-        keep_postroll_seconds: 0.2
-        min_upload_seconds: 1.2
+        postroll_seconds: 0.2
+        minimum_upload_seconds: 1.2
         """.strip(),
         encoding="utf-8",
     )
@@ -2301,22 +2298,22 @@ routing:
     )
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: remote_asr
-asr_providers:
-  - name: remote_asr
-    kind: remote
-    protocol: openai_transcriptions
+config_schema_version: 2
+asr: {engine: remote_asr}
+asr_engines:
+  - id: remote_asr
+    type: openai_transcription
     model: whisper-1
-    base_url: https://asr.example.com
-    auth:
-      type: bearer
-      env_key: ASR_API_KEY
-      credential_id: asr
-    execution:
-      concurrency: 2
-      max_concurrency: 2
-      timeout_seconds: 120
+    endpoint:
+      base_url: https://asr.example.com
+      credential:
+        binding_id: remote_asr
+        secret_ref: asr
+    policy_overrides:
+      execution:
+        target_concurrency: 2
+        maximum_concurrency: 2
+        request_deadline_seconds: 120
         """.strip(),
         encoding="utf-8",
     )
@@ -2334,6 +2331,7 @@ asr_providers:
     assert cfg.asr_providers[cfg.pipeline.asr_provider].model == "whisper-large"
     assert cfg.asr_providers[cfg.pipeline.asr_provider].base_url == "https://asr.example.com"
     assert cfg.asr_providers[cfg.pipeline.asr_provider].credential_id == "asr"
+    assert cfg.asr_providers[cfg.pipeline.asr_provider].env_key == ""
     assert cfg.pipeline.source_mode == "embedded_subtitle"
     assert cfg.pipeline.subtitle_track == "3"
 
@@ -2386,7 +2384,7 @@ routing:
     assert cfg.pipeline.subtitle_track == "auto"
 
 
-def test_legacy_asr_projection_preserves_fractional_seconds_and_rejects_fractional_counts(
+def test_asr_runtime_projection_preserves_fractional_seconds_and_rejects_fractional_counts(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "providers.yaml").write_text(
@@ -2396,26 +2394,25 @@ def test_legacy_asr_projection_preserves_fractional_seconds_and_rejects_fraction
     pipeline_file = tmp_path / "pipeline.yaml"
     pipeline_file.write_text(
         """
-asr:
-  provider: local_test
-asr_providers:
-  - name: local_test
-    kind: local_worker
-    protocol: faster_whisper
-    model: tiny
-    chunking:
-      mode: fixed
-      window_seconds: 12.75
-      max_window_seconds: 12.75
-      min_window_seconds: 1.25
-      overlap_seconds: 0.5
-      short_audio_seconds: 3.75
-    execution:
-      concurrency: 1
-      min_concurrency: 1
-      max_concurrency: 1
-      timeout_seconds: 10.75
-      retry: 2
+config_schema_version: 2
+asr: {engine: local_test}
+asr_engines:
+  - id: local_test
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: tiny}
+    policy_overrides:
+      chunking:
+        mode: fixed
+        window_target_seconds: 12.75
+        window_floor_seconds: 1.25
+        overlap_seconds: 0.5
+      execution:
+        target_concurrency: 1
+        minimum_concurrency: 1
+        maximum_concurrency: 1
+        request_deadline_seconds: 10.75
+        max_attempts: 2
 """.strip(),
         encoding="utf-8",
     )
@@ -2430,11 +2427,11 @@ asr_providers:
 
     pipeline_file.write_text(
         pipeline_file.read_text(encoding="utf-8").replace(
-            "concurrency: 1\n",
-            "concurrency: 1.5\n",
+            "target_concurrency: 1\n",
+            "target_concurrency: 1.5\n",
             1,
         ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="ASR execution.concurrency must be an integer"):
+    with pytest.raises(ValueError, match="expected an integer"):
         load_app_config(root_dir=tmp_path)

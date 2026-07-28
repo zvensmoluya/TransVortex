@@ -383,28 +383,30 @@ def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpoi
 
 
 def parse_asr_engine_spec(raw: dict[str, Any]) -> AsrEngineSpec:
-    _known_fields(
-        raw,
-        {
-            "id",
-            "type",
+    engine_type = _text(raw.get("type"))
+    common_fields = {"id", "type", "adapter_version", "policy_overrides"}
+    type_fields = {
+        "faster_whisper_worker": {
             "runtime",
             "model",
             "accelerator",
             "device",
             "compute_type",
-            "endpoint",
-            "adapter_version",
-            "policy_overrides",
         },
+        "funasr_service": {"model", "endpoint"},
+        "openai_transcription": {"model", "endpoint"},
+        "openrouter_asr": {"model", "endpoint"},
+    }
+    if engine_type not in ASR_ENGINE_TYPES:
+        raise ValueError(f"unsupported ASR engine type: {engine_type}")
+    _known_fields(
+        raw,
+        common_fields | type_fields[engine_type],
         context="asr_engines[]",
     )
     engine_id = _text(raw.get("id"))
-    engine_type = _text(raw.get("type"))
     if not engine_id:
         raise ValueError("asr_engines[].id is required")
-    if engine_type not in ASR_ENGINE_TYPES:
-        raise ValueError(f"unsupported ASR engine type: {engine_type}")
     adapter_version = _integer(raw.get("adapter_version"), default=1)
     if adapter_version != 1:
         raise ValueError(f"unsupported ASR adapter version: {adapter_version}")

@@ -10,16 +10,12 @@ import yaml
 
 from ..asr_domain import ASR_CONFIG_SCHEMA_VERSION
 from ..openrouter_asr import (
-    OPENROUTER_ASR_BASE_URL,
     OPENROUTER_ASR_CREDENTIAL_ID,
     OPENROUTER_ASR_DEFAULT_MODEL,
-    OPENROUTER_ASR_ENDPOINT,
-    OPENROUTER_ASR_ENV_KEY,
-    openrouter_asr_admin_defaults,
 )
 from ..utils import to_plain
 from .asr_resolution import asr_engine_to_yaml_row, resolve_asr_engine
-from .config import _parse_asr_provider, load_app_config
+from .config import load_app_config
 from .credentials import auth_file_path, resolve_provider_credential, write_auth_credential
 from .models import AsrProviderConfig, NetworkConfig
 from .asr_runtime import (
@@ -33,11 +29,6 @@ from .asr_runtime import (
 
 
 ASR_PROVIDER_DEFAULTS = {
-    "local_inprocess": {
-        "name": "faster_whisper_large_v3",
-        "protocol": "faster_whisper",
-        "model": "large-v3",
-    },
     "local_worker": {
         "name": "faster_whisper_local",
         "protocol": "faster_whisper",
@@ -89,10 +80,6 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
 def _text(source: dict[str, Any], *keys: str, default: str = "") -> str:
     for key in keys:
         value = source.get(key)
@@ -142,154 +129,26 @@ def _kind_from_draft(draft: dict[str, Any]) -> str:
     kind = _text(draft, "kind", default="remote").lower()
     if kind in ASR_PROVIDER_DEFAULTS:
         return kind
-    return "remote"
-
-
-def _draft_to_asr_row(draft: dict[str, Any]) -> dict[str, Any]:
-    draft = dict(draft)
-    kind = _kind_from_draft(draft)
-    defaults = ASR_PROVIDER_DEFAULTS[kind]
-    protocol = _text(draft, "protocol", default=str(defaults["protocol"])).lower()
-    name = _text(draft, "name", default=str(defaults["name"]))
-    model = _text(
-        draft,
-        "model",
-        default=(
-            OPENROUTER_ASR_DEFAULT_MODEL
-            if protocol == "openrouter_stt"
-            else str(defaults["model"])
-        ),
-    )
-
-    row: dict[str, Any] = {
-        "name": name,
-        "kind": kind,
-        "protocol": protocol,
-        "model": model,
-    }
-
-    if kind in {"local_server", "remote"}:
-        row["base_url"] = _text(
-            draft,
-            "base_url",
-            "baseUrl",
-            default=str(defaults.get("base_url", "https://api.openai.com/v1")),
-        ).rstrip("/")
-        row["endpoint"] = _text(draft, "endpoint", default="/v1/audio/transcriptions")
-
-    auth = _as_dict(draft.get("auth"))
-    if kind == "remote":
-        row["auth"] = {
-            "type": "bearer",
-            "env_key": _text(auth, "env_key", "envKey", default=_text(draft, "env_key", "envKey", default="OPENAI_API_KEY")),
-            "credential_id": _text(
-                auth,
-                "credential_id",
-                "credentialId",
-                default=_text(draft, "credential_id", "credentialId", default=name),
-            ),
-        }
-    else:
-        row["auth"] = {"type": "none"}
-
-    if kind in {"local_inprocess", "local_worker"}:
-        local = dict(_as_dict(draft.get("local")))
-        local["model_size"] = _text(local, "model_size", "modelSize", default=model)
-        device = _text(draft, "device", default=_text(local, "device"))
-        if device:
-            local["device"] = device
-        compute_type = _text(draft, "compute_type", "computeType", default=_text(local, "compute_type", "computeType"))
-        if compute_type:
-            local["compute_type"] = compute_type
-        row["local"] = local
-    if kind == "local_worker":
-        runtime = dict(_as_dict(draft.get("runtime")))
-        runtime_source = _text(runtime, "source", default="managed")
-        runtime["source"] = runtime_source
-        runtime_id = _text(
-            runtime,
-            "id",
-            default="managed:faster-whisper" if runtime_source == "managed" else "",
-        )
-        if runtime_id:
-            runtime["id"] = runtime_id
-        else:
-            runtime.pop("id", None)
-        row["runtime"] = runtime
-        accelerator = dict(_as_dict(draft.get("accelerator")))
-        accelerator_source = _text(accelerator, "source", default="managed")
-        accelerator["source"] = accelerator_source
-        accelerator_id = _text(
-            accelerator,
-            "id",
-            default="nvidia-cuda12" if accelerator_source == "managed" else "",
-        )
-        if accelerator_id:
-            accelerator["id"] = accelerator_id
-        else:
-            accelerator.pop("id", None)
-        row["accelerator"] = accelerator
-
-    for key in ("execution", "chunking", "preprocessing", "request"):
-        value = draft.get(key)
-        if isinstance(value, dict):
-            row[key] = value
-    if "http2" in draft:
-        row["http2"] = bool(draft["http2"])
-
-    if protocol == "openrouter_stt":
-        row["name"] = name or "openrouter_asr"
-        row["base_url"] = _text(
-            draft,
-            "base_url",
-            "baseUrl",
-            default=OPENROUTER_ASR_BASE_URL,
-        ).rstrip("/")
-        row["endpoint"] = _text(
-            draft,
-            "endpoint",
-            default=OPENROUTER_ASR_ENDPOINT,
-        )
-        row["auth"] = {
-            "type": "bearer",
-            "env_key": _text(
-                auth,
-                "env_key",
-                "envKey",
-                default=OPENROUTER_ASR_ENV_KEY,
-            ),
-            "credential_id": _text(
-                auth,
-                "credential_id",
-                "credentialId",
-                default=OPENROUTER_ASR_CREDENTIAL_ID,
-            ),
-        }
-        # OpenRouter models are deliberately curated. Saving through the admin
-        # surface reapplies the selected model profile so settings from one
-        # model cannot leak into another model with a different response shape.
-        row.update(openrouter_asr_admin_defaults(model))
-
-    return row
+    raise ValueError(f"Unsupported ASR engine draft kind: {kind}")
 
 
 def draft_to_asr_provider_config(
     draft: dict[str, Any],
     *,
     network: NetworkConfig | None = None,
+    root_dir: Path | None = None,
 ) -> AsrProviderConfig:
-    provider = _parse_asr_provider(_draft_to_asr_row(draft))
+    resolution = resolve_asr_engine(
+        _draft_to_engine_row(
+            draft,
+            current_row={},
+            root_dir=root_dir or Path.cwd(),
+        ),
+        root_dir=root_dir or Path.cwd(),
+    )
+    provider = resolution.runtime
     provider.network = network or NetworkConfig()
     return provider
-
-
-def asr_provider_to_yaml_row(config: AsrProviderConfig) -> dict[str, Any]:
-    row = to_plain(config)
-    row.pop("network", None)
-    if config.kind in {"local_inprocess", "local_worker"}:
-        row.pop("base_url", None)
-        row.pop("endpoint", None)
-    return row
 
 
 def _engine_type_from_provider_draft(draft: dict[str, Any]) -> str:
@@ -348,7 +207,15 @@ def _draft_to_engine_row(
         runtime = _as_dict(draft.get("runtime"))
         current_runtime = _as_dict(current_row.get("runtime"))
         runtime_source = _text(runtime, "source", default=_text(current_runtime, "source", default="managed"))
-        runtime_id = _text(runtime, "id", default=_text(current_runtime, "id", default="managed:faster-whisper"))
+        runtime_id = _text(
+            runtime,
+            "id",
+            default=_text(
+                current_runtime,
+                "id",
+                default="managed:faster-whisper" if runtime_source == "managed" else "",
+            ),
+        )
         row["runtime"] = {
             "source": "registered" if runtime_source in {"external", "registered"} else "managed",
             "id": runtime_id,
@@ -455,32 +322,31 @@ def _draft_to_engine_row(
     return row
 
 
-def save_asr_provider_config(
-    *,
-    root_dir: Path,
-    provider_draft: dict[str, Any],
-    api_key: str | None = None,
-    expected_version: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    pipeline_file = root_dir / "pipeline.yaml"
-    _check_expected_version(pipeline_file, expected_version)
-    existing = _read_yaml(pipeline_file)
-    if int(existing.get("config_schema_version") or 0) != ASR_CONFIG_SCHEMA_VERSION:
+def _schema_v2_engine_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    version = payload.get("config_schema_version")
+    if isinstance(version, bool) or version != ASR_CONFIG_SCHEMA_VERSION:
         raise ValueError(
             f"ASR settings require config_schema_version={ASR_CONFIG_SCHEMA_VERSION}"
         )
-    current_rows = [row for row in _as_list(existing.get("asr_engines")) if isinstance(row, dict)]
-    engine_id = _text(provider_draft, "name", "id")
-    current_row = next((row for row in current_rows if str(row.get("id") or "") == engine_id), {})
-    draft_row = _draft_to_engine_row(
-        provider_draft,
-        current_row=current_row,
-        root_dir=root_dir,
-    )
-    resolution = resolve_asr_engine(draft_row, root_dir=root_dir)
+    rows = payload.get("asr_engines")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("ASR settings require a non-empty asr_engines list")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"asr_engines[{index}] must be an object")
+    return rows
+
+
+def _persist_asr_engine_resolution(
+    *,
+    pipeline_file: Path,
+    existing: dict[str, Any],
+    current_rows: list[dict[str, Any]],
+    resolution: Any,
+    api_key: str | None = None,
+) -> dict[str, Any]:
     provider = resolution.runtime
     engine_row = asr_engine_to_yaml_row(resolution.spec, resolution.overrides)
-
     next_rows = [row for row in current_rows if str(row.get("id") or "") != provider.name]
     next_rows.append(engine_row)
 
@@ -503,7 +369,7 @@ def save_asr_provider_config(
     else:
         credential = resolve_provider_credential(
             provider,
-            root_dir=root_dir,
+            root_dir=pipeline_file.parent,
         )
         has_key = credential.found
         credential_source = credential.source
@@ -524,6 +390,34 @@ def save_asr_provider_config(
         "has_key": has_key,
         "credential_source": credential_source,
     }
+
+
+def save_asr_provider_config(
+    *,
+    root_dir: Path,
+    provider_draft: dict[str, Any],
+    api_key: str | None = None,
+    expected_version: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pipeline_file = root_dir / "pipeline.yaml"
+    _check_expected_version(pipeline_file, expected_version)
+    existing = _read_yaml(pipeline_file)
+    current_rows = _schema_v2_engine_rows(existing)
+    engine_id = _text(provider_draft, "name", "id")
+    current_row = next((row for row in current_rows if str(row.get("id") or "") == engine_id), {})
+    draft_row = _draft_to_engine_row(
+        provider_draft,
+        current_row=current_row,
+        root_dir=root_dir,
+    )
+    resolution = resolve_asr_engine(draft_row, root_dir=root_dir)
+    return _persist_asr_engine_resolution(
+        pipeline_file=pipeline_file,
+        existing=existing,
+        current_rows=current_rows,
+        resolution=resolution,
+        api_key=api_key,
+    )
 
 
 def activate_asr_resources(
@@ -572,40 +466,32 @@ def activate_asr_resources(
         )
     ):
         raise ValueError("At least one resource or local worker setting is required")
-    config = load_app_config(root_dir=root_dir, providers_file=providers_file)
-    selected_name = provider_name.strip() or config.pipeline.asr_provider
-    provider = config.asr_providers.get(selected_name)
-    if provider is None:
+    pipeline_file = root_dir / "pipeline.yaml"
+    _check_expected_version(pipeline_file, expected_version)
+    existing = _read_yaml(pipeline_file)
+    current_rows = _schema_v2_engine_rows(existing)
+    asr = _as_dict(existing.get("asr"))
+    selected_name = provider_name.strip() or _text(asr, "engine")
+    current_row = next(
+        (row for row in current_rows if str(row.get("id") or "") == selected_name),
+        None,
+    )
+    if current_row is None:
         if not create_if_missing or not selected_name:
-            raise ValueError(f"ASR provider not found: {selected_name}")
-        provider = draft_to_asr_provider_config(
-            {
-                "name": selected_name,
-                "kind": "local_worker",
-                "protocol": "faster_whisper",
-                "model": managed_model_id or "small",
-                "auth": {"type": "none"},
-                "runtime": {
-                    "source": "managed",
-                    "id": "managed:faster-whisper",
-                },
-                "local": {
-                    "model_source": "managed",
-                    "model_size": managed_model_id or "small",
-                    "managed_model_size": managed_model_id or "small",
-                    "device": normalized_device or "auto",
-                    "compute_type": normalized_compute_type or "auto",
-                },
-            },
-            network=config.network,
-        )
-    if provider.kind != "local_worker":
-        raise ValueError("ASR resources can only be attached to a local worker provider")
+            raise ValueError(f"ASR engine not found: {selected_name}")
+        current_row = {
+            "id": selected_name,
+            "type": "faster_whisper_worker",
+            "runtime": {"source": "managed", "id": "managed:faster-whisper"},
+            "model": {"source": "managed", "id": managed_model_id or "small"},
+            "device": normalized_device or "auto",
+            "compute_type": normalized_compute_type or "auto",
+        }
+    if str(current_row.get("type") or "") != "faster_whisper_worker":
+        raise ValueError("ASR resources can only be attached to a faster_whisper_worker engine")
     catalog = load_asr_catalog()
-    draft = to_plain(provider)
-    draft.pop("network", None)
-    draft["runtime"] = {"source": "managed", "id": "managed:faster-whisper"}
-    local = dict(draft.get("local") or {})
+    engine_row = dict(current_row)
+    engine_row["runtime"] = {"source": "managed", "id": "managed:faster-whisper"}
 
     if managed_model_id:
         if model_catalog_entry(catalog, managed_model_id) is None:
@@ -620,37 +506,16 @@ def activate_asr_resources(
         )
         if not isinstance(model_row, dict) or model_row.get("installed") is not True:
             raise ValueError(f"Managed ASR model is not installed: {managed_model_id}")
-        draft["model"] = managed_model_id
-        local.update(
-            {
-                "model_size": managed_model_id,
-                "model_source": "managed",
-                "managed_model_size": managed_model_id,
-                "model_path": "",
-            }
-        )
+        engine_row["model"] = {"source": "managed", "id": managed_model_id}
     elif model_registration_id:
         model = registered_external_model(root_dir=root_dir, registration_id=model_registration_id)
         if model is None:
             raise ValueError(f"External ASR model registration is missing or stale: {model_registration_id}")
-        model_id = str(model.get("model_id") or "")
-        model_path = str(model.get("model_path") or "")
-        draft["model"] = model_id
-        draft["_model_registration_id"] = model_registration_id
-        local.update(
-            {
-                "model_size": model_id,
-                "model_source": "external",
-                "external_model_id": model_id,
-                "external_model_path": model_path,
-                "model_path": model_path,
-            }
-        )
+        engine_row["model"] = {"source": "registered", "id": model_registration_id}
     if normalized_device:
-        local["device"] = normalized_device
+        engine_row["device"] = normalized_device
     if normalized_compute_type:
-        local["compute_type"] = normalized_compute_type
-    draft["local"] = local
+        engine_row["compute_type"] = normalized_compute_type
 
     if managed_accelerator_id:
         accelerator = next(
@@ -663,7 +528,7 @@ def activate_asr_resources(
         )
         if accelerator is None:
             raise ValueError(f"Managed ASR accelerator not found: {managed_accelerator_id}")
-        draft["accelerator"] = {"source": "managed", "id": managed_accelerator_id}
+        engine_row["accelerator"] = {"source": "managed", "id": managed_accelerator_id}
     elif accelerator_registration_id:
         accelerator = registered_external_accelerator(
             root_dir=root_dir,
@@ -673,13 +538,17 @@ def activate_asr_resources(
             raise ValueError(
                 f"External ASR accelerator registration is missing or stale: {accelerator_registration_id}"
             )
-        draft["accelerator"] = {"source": "external", "id": accelerator_registration_id}
-        draft["_accelerator_registration_id"] = accelerator_registration_id
+        engine_row["accelerator"] = {
+            "source": "registered",
+            "id": accelerator_registration_id,
+        }
 
-    saved = save_asr_provider_config(
-        root_dir=root_dir,
-        provider_draft=draft,
-        expected_version=expected_version,
+    resolution = resolve_asr_engine(engine_row, root_dir=root_dir)
+    saved = _persist_asr_engine_resolution(
+        pipeline_file=pipeline_file,
+        existing=existing,
+        current_rows=current_rows,
+        resolution=resolution,
     )
     refreshed = load_app_config(root_dir=root_dir, providers_file=providers_file)
     active = refreshed.asr_providers[selected_name]

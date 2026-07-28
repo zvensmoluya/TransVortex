@@ -539,6 +539,10 @@ def _validate_asr_policy(policy: AsrPolicy) -> None:
         raise ValueError("asr policy execution.target_concurrency must be within the configured range")
     if execution.request_deadline_seconds <= 0:
         raise ValueError("asr policy execution.request_deadline_seconds must be positive")
+    if execution.split_retry and chunking.mode == "none":
+        raise ValueError(
+            "asr policy execution.split_retry requires fixed or silence chunking"
+        )
     _policy_integer(policy.decoding.beam_size, field_name="decoding.beam_size", minimum=1)
     _finite_policy_number(policy.decoding.temperature, field_name="decoding.temperature")
     if policy.decoding.temperature < 0:

@@ -9,14 +9,16 @@ from transvortex.app.doctor import doctor_report, format_doctor_report
 def _write_config(root: Path) -> None:
     (root / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: faster_whisper_large_v3
-asr_providers:
-  - name: faster_whisper_large_v3
-    kind: local_inprocess
-    protocol: faster_whisper
-    model: large-v3
+asr: {engine: faster_whisper_large_v3}
+asr_engines:
+  - id: faster_whisper_large_v3
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
+    device: cpu
+    compute_type: int8
         """.strip(),
         encoding="utf-8",
     )
@@ -43,10 +45,9 @@ def test_doctor_report_passes_with_runtime_config_and_key(tmp_path: Path, monkey
     _write_config(tmp_path)
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
     monkeypatch.setattr(
-        "transvortex.app.doctor.importlib.metadata.version",
-        lambda name: "1.0.2" if name == "faster-whisper" else "0.1.0",
+        "transvortex.app.doctor.asr_provider_readiness",
+        lambda *_args, **_kwargs: {"state": "ready", "code": "ready"},
     )
 
     report = doctor_report(root_dir=tmp_path)
@@ -62,23 +63,23 @@ def test_doctor_report_passes_with_runtime_config_and_key(tmp_path: Path, monkey
     assert "TransVortex Doctor: PASS" in format_doctor_report(report)
 
 
-def test_doctor_reports_old_faster_whisper_version(tmp_path: Path, monkeypatch) -> None:
+def test_doctor_reports_unavailable_faster_whisper_worker(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
     monkeypatch.setattr(
-        "transvortex.app.doctor.importlib.metadata.version",
-        lambda name: "1.0.1" if name == "faster-whisper" else "0.1.0",
+        "transvortex.app.doctor.asr_provider_readiness",
+        lambda *_args, **_kwargs: {
+            "state": "unavailable",
+            "code": "runtime_incompatible",
+        },
     )
 
     report = doctor_report(root_dir=tmp_path)
     wh_check = next(item for item in report["checks"] if item["name"] == "faster_whisper")
 
     assert report["status"] == "FAIL"
-    assert wh_check["code"] == "faster_whisper_version_too_old"
-    assert wh_check["details"]["installed_version"] == "1.0.1"
-    assert wh_check["details"]["required_version"] == "1.0.2"
+    assert wh_check["code"] == "runtime_incompatible"
 
 
 def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch) -> None:
@@ -86,10 +87,9 @@ def test_doctor_reports_missing_key_with_legacy_hint(tmp_path: Path, monkeypatch
     (tmp_path / ".env").write_text("OPENAI_API_KEY=old\n", encoding="utf-8")
     monkeypatch.delenv("TVX_MODEL_API_KEY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
-    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: object())
     monkeypatch.setattr(
-        "transvortex.app.doctor.importlib.metadata.version",
-        lambda name: "1.0.2" if name == "faster-whisper" else "0.1.0",
+        "transvortex.app.doctor.asr_provider_readiness",
+        lambda *_args, **_kwargs: {"state": "ready", "code": "ready"},
     )
 
     report = doctor_report(root_dir=tmp_path)
@@ -106,10 +106,9 @@ def test_doctor_reports_missing_binary_and_asr_dependency(tmp_path: Path, monkey
     _write_config(tmp_path)
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
     monkeypatch.setattr(shutil, "which", lambda name: None)
-    monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: None)
     monkeypatch.setattr(
-        "transvortex.app.doctor.importlib.metadata.version",
-        lambda name: None if name == "faster-whisper" else "0.1.0",
+        "transvortex.app.doctor.asr_provider_readiness",
+        lambda *_args, **_kwargs: {"state": "unavailable", "code": "runtime_missing"},
     )
 
     report = doctor_report(root_dir=tmp_path)
@@ -125,25 +124,23 @@ def test_doctor_reports_remote_asr_provider_and_key(tmp_path: Path, monkeypatch)
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: openai_asr
-asr_providers:
-  - name: openai_asr
-    kind: remote
-    protocol: openai_transcriptions
-    base_url: https://api.openai.com
-    endpoint: /v1/audio/transcriptions
+asr: {engine: openai_asr}
+asr_engines:
+  - id: openai_asr
+    type: openai_transcription
     model: whisper-1
-    auth:
-      type: bearer
-      env_key: ASR_KEY
-      credential_id: openai_asr
+    endpoint:
+      credential:
+        binding_id: openai_asr
+        secret_ref: openai_asr
+        env_fallback: OPENAI_API_KEY
         """.strip(),
         encoding="utf-8",
     )
     monkeypatch.setenv("TVX_MODEL_API_KEY", "key")
-    monkeypatch.setenv("ASR_KEY", "asr-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "asr-key")
     monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
     monkeypatch.setattr("transvortex.app.doctor.importlib.util.find_spec", lambda name: None)
 
@@ -159,16 +156,16 @@ def test_doctor_reports_managed_whisper_readiness(tmp_path: Path, monkeypatch) -
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: managed_whisper
-asr_providers:
-  - name: managed_whisper
-    kind: local_worker
-    protocol: faster_whisper
-    model: large-v3
+asr: {engine: managed_whisper}
+asr_engines:
+  - id: managed_whisper
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
-    local: {device: auto, compute_type: auto}
+    model: {source: managed, id: large-v3}
+    device: auto
+    compute_type: auto
         """.strip(),
         encoding="utf-8",
     )

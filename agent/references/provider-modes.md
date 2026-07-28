@@ -33,11 +33,11 @@ TransVortex 管理自己下载的资源。外部资源只保存路径、指纹�
 
 ## Local Service
 
-`local_service` 用于 loopback 地址上的 FunASR 或兼容服务。模型、Python、CUDA 和服务生命周期都属于该服务，不混入 TransVortex local worker 的资源契约。使用服务自己的协议和模型标识，并用广告的 ASR `provider-test` 验证。
+`local_service` 用于 loopback 地址上的 FunASR 或兼容服务。模型、Python、CUDA 和服务生命周期都属于该服务，不混入 TransVortex local worker 的资源契约。使用服务自己的协议和模型标识，并用广告的 ASR `engine-test` 验证。
 
 ## Remote Provider
 
-`remote_provider` 用于用户选择的托管转录端点。Provider YAML 只保存 endpoint、model、`env_key` 和 `credential_id` 等非敏感配置，凭据由统一 resolver 取得。当前 provider probe 会发送生成的短音频，并可能产生服务费用。
+`remote_provider` 用于用户选择的托管转录端点。Engine YAML 只保存 endpoint、model、`binding_id` 和 `secret_ref` 等非敏感配置，凭据由统一 resolver 取得；`env_fallback` 只允许 canonical 官方 Endpoint 显式声明。当前 Engine probe 会发送生成的短音频，并可能产生服务费用。
 
 ## External Python Compatibility
 

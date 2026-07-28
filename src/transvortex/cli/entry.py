@@ -235,8 +235,13 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--chunk-overlap-seconds", type=int, default=None)
     subparser.add_argument("--translation-batch-size", type=int, default=None)
     subparser.add_argument("--concurrency", type=int, default=None)
-    subparser.add_argument("--asr-provider", default=None)
-    subparser.add_argument("--asr-model", default=None, help="ASR model override for the selected ASR provider")
+    subparser.add_argument(
+        "--asr-engine",
+        dest="asr_provider",
+        default=None,
+        help="Selected ASR engine override",
+    )
+    subparser.add_argument("--asr-model", default=None, help="ASR model override for the selected ASR engine")
     subparser.add_argument("--asr-audio-track", default=None)
     subparser.add_argument("--asr-prompt-profile", default=None)
     subparser.add_argument("--asr-prompt-text", default=None)
@@ -384,7 +389,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--chunk-overlap-seconds", getattr(ns, "chunk_overlap_seconds", None)),
         ("--translation-batch-size", getattr(ns, "translation_batch_size", None)),
         ("--concurrency", getattr(ns, "concurrency", None)),
-        ("--asr-provider", getattr(ns, "asr_provider", None)),
+        ("--asr-engine", getattr(ns, "asr_provider", None)),
         ("--asr-model", getattr(ns, "asr_model", None)),
         ("--asr-audio-track", getattr(ns, "asr_audio_track", None)),
         ("--asr-prompt-profile", getattr(ns, "asr_prompt_profile", None)),
@@ -441,7 +446,7 @@ def _append_request_overrides_to_args(args: list[str], overrides: dict[str, Any]
         ("--chunk-overlap-seconds", overrides.get("chunk_overlap_seconds")),
         ("--translation-batch-size", overrides.get("translation_batch_size")),
         ("--concurrency", overrides.get("default_concurrency")),
-        ("--asr-provider", overrides.get("asr_provider")),
+        ("--asr-engine", overrides.get("asr_provider")),
         ("--asr-model", overrides.get("asr_model")),
         ("--asr-audio-track", overrides.get("asr_audio_track")),
         ("--asr-prompt-profile", overrides.get("asr_prompt_profile")),
@@ -515,7 +520,7 @@ def _request_mode_business_flags(ns: argparse.Namespace, command: str) -> list[s
         "chunk_overlap_seconds": "--chunk-overlap-seconds",
         "translation_batch_size": "--translation-batch-size",
         "concurrency": "--concurrency",
-        "asr_provider": "--asr-provider",
+        "asr_provider": "--asr-engine",
         "asr_model": "--asr-model",
         "asr_audio_track": "--asr-audio-track",
         "asr_prompt_profile": "--asr-prompt-profile",
@@ -1007,7 +1012,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "resources-activate",
         help="Attach registered or managed ASR resources to a local worker configuration",
     )
-    asr_resources_activate_p.add_argument("--provider", default="")
+    asr_resources_activate_p.add_argument(
+        "--engine",
+        default="",
+        help="ASR engine id; defaults to the active engine",
+    )
     asr_resources_activate_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
     asr_resources_activate_p.add_argument("--managed-model-id", default="")
     asr_resources_activate_p.add_argument("--model-registration-id", default="")
@@ -1017,11 +1026,15 @@ def _build_parser() -> argparse.ArgumentParser:
     asr_resources_activate_p.add_argument("--compute-type", default="")
     asr_resources_activate_p.add_argument("--json", action="store_true")
     asr_provider_test_p = asr_sub.add_parser(
-        "provider-test",
+        "engine-test",
         help="Run an authorized ASR route probe and record its non-secret status",
     )
     asr_provider_test_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
-    asr_provider_test_p.add_argument("--provider", default=None, help="ASR provider name; defaults to the active provider")
+    asr_provider_test_p.add_argument(
+        "--engine",
+        default=None,
+        help="ASR engine id; defaults to the active engine",
+    )
     asr_provider_test_p.add_argument("--source-lang", default="en")
     asr_provider_test_p.add_argument(
         "--confirm-network",
@@ -1234,7 +1247,7 @@ def main() -> None:
             payload = activate_asr_resources(
                 root_dir=root,
                 providers_file=providers_file,
-                provider_name=args.provider,
+                provider_name=args.engine,
                 managed_model_id=args.managed_model_id,
                 model_registration_id=args.model_registration_id,
                 managed_accelerator_id=args.managed_accelerator_id,
@@ -1266,13 +1279,13 @@ def main() -> None:
             raise SystemExit(1)
         return
 
-    if args.command == "asr" and getattr(args, "asr_command", None) == "provider-test":
+    if args.command == "asr" and getattr(args, "asr_command", None) == "engine-test":
         try:
             config = load_app_config(root_dir=root, providers_file=providers_file)
         except Exception:  # noqa: BLE001 - keep the Agent probe contract structured
-            _print_json(provider_test_error_payload("config_load_failed", provider_name=args.provider or ""))
+            _print_json(provider_test_error_payload("config_load_failed", provider_name=args.engine or ""))
             raise SystemExit(1)
-        provider_name = args.provider or config.pipeline.asr_provider
+        provider_name = args.engine or config.pipeline.asr_provider
         provider = config.asr_providers.get(provider_name)
         if provider is None:
             _print_json(provider_test_error_payload("asr_provider_missing", provider_name=provider_name))

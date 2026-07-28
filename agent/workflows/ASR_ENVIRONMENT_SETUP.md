@@ -57,7 +57,7 @@ GPU 加速也有两种独立来源：
 
 ## 4. 其他执行模式
 
-`local_service` 和 `remote_provider` 不需要本地 runtime、模型或 CUDA 资源。按能力响应运行对应的 `provider-test`，不要把翻译服务的 `probe-provider` 当成 ASR provider 验证。具体边界见 [`../references/provider-modes.md`](../references/provider-modes.md)。
+`local_service` 和 `remote_provider` 不需要本地 runtime、模型或 CUDA 资源。按能力响应运行对应的 `engine-test`，不要把翻译服务的 `probe-provider` 当成 ASR Engine 验证。具体边界见 [`../references/provider-modes.md`](../references/provider-modes.md)。
 
 ## 5. 由 TransVortex 收口验证
 

@@ -1,6 +1,6 @@
 # TransVortex 当前待办
 
-更新时间：2026-07-27
+更新时间：2026-07-28
 
 本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
 
@@ -46,7 +46,7 @@
 | 已有 ASR 资源跨盘迁移 | 待实现 | 在不重新下载的前提下复制运行组件、模型和安全断点，提供真实进度、逐文件校验、取消、原位置保留与失败回滚；完成前只允许首次下载前选择资源位置 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | Agent 准备环境与资源接入契约 | 待验收 | v2 已拆分 provider mode 与 runtime / 模型 / GPU 加速来源，提供托管 apply、Agent 本机侦查与准备、外部资源 probe/register、activate 和 strict verify；Flutter 交接按侦查、模型、GPU 加速、已有资源接入和完整准备区分范围，并已支持复制或通过隔离工作区直接发送给用户环境中的 Codex CLI。剩余工作是随公开组件发布完成真实下载、NVIDIA 环境准备与干净机器验收 | [`../agent/README.md`](../agent/README.md)、[`../agent/workflows/ASR_ENVIRONMENT_SETUP.md`](../agent/workflows/ASR_ENVIRONMENT_SETUP.md) |
 | 术语能力归位 | 待决策 | 区分生成术语建议、使用术语和维护术语，并明确回流与优先级语义 | [`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
-| 高级翻译与识别设置 | 进行中 | ASR 已切换到 Engine + Capabilities + Policy + ResolvedPlan：种子配置只保存引擎意图，任务冻结有效策略并记录实际分窗计划，Flutter 显示自动运行策略且不会在后台刷新时重置当前选择。剩余工作是翻译 fallback/mapping 和更多诊断修复联动 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)、[`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
+| 高级翻译与识别设置 | 进行中 | ASR 已完成 Engine + Capabilities + Policy + ResolvedPlan 的 schema v2 收口：配置拒绝未知/旧字段，凭据按 Endpoint binding 隔离，任务冻结并校验实际分窗与持久化细分重试；旧 `AsrProviderConfig` 只保留为执行链单向投影。剩余工作是逐步删除该适配层、翻译 fallback/mapping 和更多诊断修复联动 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)、[`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
 | OpenRouter 云 ASR 真实服务验收 | 待验收 | 2026-07-28 已确认 Whisper segment 与 Grok `verbose_json + word` 时间戳链路；两个 profile 现均使用 300 秒窗口和 3 秒 overlap，Whisper 复用 segment 去重，Grok 先合并词时间轴再生成字幕段，正常窗口与细分重试均有诊断。平台错误/重试、中断不丢失的任务级 usage 汇总、普通 key 用量/限额查询和 Flutter 完整/部分用量区分已具备，剩余真实长音频、多语言、切句质量与窗口阈值人工验收 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) |
 
 ## P2：体验深化

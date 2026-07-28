@@ -174,6 +174,18 @@ def test_custom_endpoint_cannot_inherit_official_environment_credential(
         )
 
 
+def test_engine_parser_rejects_fields_from_another_engine_type() -> None:
+    with pytest.raises(ValueError, match=r"unsupported asr_engines\[\] fields: device"):
+        parse_asr_engine_spec(
+            {
+                "id": "remote",
+                "type": "openai_transcription",
+                "model": "whisper-1",
+                "device": "cpu",
+            }
+        )
+
+
 def test_canonical_endpoint_uses_explicit_bound_environment_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -522,6 +534,57 @@ def test_engine_schema_requires_an_explicit_non_empty_engine_list(tmp_path: Path
 
     with pytest.raises(ValueError, match="non-empty asr_engines list"):
         load_app_config(root_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("extra_yaml", "message"),
+    [
+        ("unexpected_root: true\n", "pipeline schema v2"),
+        ("asr:\n  engine: local_whisper\n  unexpected_asr: true\n", "asr schema v2"),
+    ],
+)
+def test_engine_schema_rejects_unknown_pipeline_and_asr_fields(
+    tmp_path: Path,
+    extra_yaml: str,
+    message: str,
+) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    asr = "" if extra_yaml.startswith("asr:") else "asr: {engine: local_whisper}\n"
+    (tmp_path / "pipeline.yaml").write_text(
+        "config_schema_version: 2\n"
+        + asr
+        + extra_yaml
+        + "asr_engines:\n"
+        + "  - id: local_whisper\n"
+        + "    type: faster_whisper_worker\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_legacy_asr_provider_persistence_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        "asr: {provider: legacy}\nasr_providers: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no longer supported"):
+        load_app_config(root_dir=tmp_path)
+
+
+def test_none_chunking_requires_split_retry_to_be_disabled(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="split_retry requires fixed or silence"):
+        resolve_asr_engine(
+            {
+                "id": "remote",
+                "type": "openai_transcription",
+                "policy_overrides": {"chunking": {"mode": "none"}},
+            },
+            root_dir=tmp_path,
+        )
 
 
 def test_remote_engine_is_not_activated_when_credential_write_fails(

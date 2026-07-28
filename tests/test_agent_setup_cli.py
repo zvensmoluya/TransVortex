@@ -9,6 +9,7 @@ import pytest
 
 from transvortex.cli import main
 from transvortex.app.config import load_app_config
+from transvortex.app.credentials import write_auth_credential
 from transvortex.app.asr_runtime import provider_credential_fingerprint, provider_test_fingerprint
 from transvortex.utils import write_json
 from transvortex.protocol.agent_protocol import agent_info_payload
@@ -23,21 +24,16 @@ from transvortex.protocol.agent_setup import (
 def _write_setup_config(root: Path) -> Path:
     (root / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: managed_test
-asr_providers:
-  - name: managed_test
-    kind: local_worker
-    protocol: faster_whisper
-    model: large-v3
-    runtime:
-      source: managed
-      id: managed:faster-whisper
-    local:
-      model_source: managed
-      device: cpu
-      compute_type: int8
+asr: {engine: managed_test}
+asr_engines:
+  - id: managed_test
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
+    device: cpu
+    compute_type: int8
 """.strip(),
         encoding="utf-8",
     )
@@ -60,24 +56,22 @@ routing:
 
 def _write_route_config(root: Path, *, kind: str, base_url: str) -> Path:
     providers_file = _write_setup_config(root)
-    auth = "type: none" if kind == "local_server" else "type: bearer\n      env_key: ASR_TEST_KEY\n      credential_id: asr_test"
+    engine_type = "funasr_service" if kind == "local_server" else "openai_transcription"
+    credential = "" if kind == "local_server" else "\n      credential: {binding_id: route_test, secret_ref: asr_test}"
+    scope = "loopback" if kind == "local_server" else "remote"
     (root / "pipeline.yaml").write_text(
         f"""
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: route_test
-asr_providers:
-  - name: route_test
-    kind: {kind}
-    protocol: openai_transcriptions
-    base_url: {base_url}
-    endpoint: /audio/transcriptions
+asr: {{engine: route_test}}
+asr_engines:
+  - id: route_test
+    type: {engine_type}
     model: whisper-1
-    auth:
-      {auth}
-    runtime:
-      source: external
-      id: route:asr
+    endpoint:
+      scope: {scope}
+      base_url: {base_url}
+      path: /audio/transcriptions{credential}
 """.strip(),
         encoding="utf-8",
     )
@@ -424,16 +418,17 @@ def test_hardware_incompatibility_is_an_agent_action_not_a_blocked_plan(
     providers_file = _write_setup_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr: {provider: local_whisper}
-asr_providers:
-  - name: local_whisper
-    kind: local_worker
-    protocol: faster_whisper
-    model: small
+asr: {engine: local_whisper}
+asr_engines:
+  - id: local_whisper
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: small}
     accelerator: {source: managed, id: nvidia-cuda12}
-    local: {model_source: managed, device: cuda, compute_type: float16}
+    device: cuda
+    compute_type: float16
 """.strip(),
         encoding="utf-8",
     )
@@ -491,23 +486,17 @@ def test_setup_verify_requires_a_remote_route_probe(tmp_path: Path, monkeypatch)
     providers_file = _write_setup_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: remote_test
-asr_providers:
-  - name: remote_test
-    kind: remote
-    protocol: openai_transcriptions
-    base_url: https://asr.example.invalid/v1
-    endpoint: /audio/transcriptions
+asr: {engine: remote_test}
+asr_engines:
+  - id: remote_test
+    type: openai_transcription
     model: whisper-1
-    auth:
-      type: bearer
-      env_key: ASR_TEST_KEY
-      credential_id: asr_test
-    runtime:
-      source: external
-      id: remote:asr
+    endpoint:
+      base_url: https://asr.example.invalid/v1
+      path: /audio/transcriptions
+      credential: {binding_id: remote_test, secret_ref: asr_test}
 """.strip(),
         encoding="utf-8",
     )
@@ -521,24 +510,30 @@ asr_providers:
     assert "placeholder-secret" not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_managed_runtime_with_external_model_skips_managed_model_checks(tmp_path: Path) -> None:
+def test_managed_runtime_with_external_model_skips_managed_model_checks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     providers_file = _write_setup_config(tmp_path)
+    monkeypatch.setattr(
+        "transvortex.app.asr_runtime.registered_external_model",
+        lambda **_kwargs: {
+            "model_id": "large-v3",
+            "model_path": "C:/Models/large-v3",
+        },
+    )
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: external_model
-asr_providers:
-  - name: external_model
-    kind: local_worker
-    protocol: faster_whisper
-    model: large-v3
+asr: {engine: external_model}
+asr_engines:
+  - id: external_model
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
-    local:
-      model_source: external
-      model_path: C:/Models/large-v3
-      device: cpu
-      compute_type: int8
+    model: {source: registered, id: external:model-test}
+    device: cpu
+    compute_type: int8
 """.strip(),
         encoding="utf-8",
     )
@@ -561,19 +556,16 @@ def test_external_runtime_with_managed_model_keeps_model_checks(tmp_path: Path) 
     providers_file = _write_setup_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: external_runtime
-asr_providers:
-  - name: external_runtime
-    kind: local_worker
-    protocol: faster_whisper
-    model: large-v3
-    runtime: {source: external, id: external:missing}
-    local:
-      model_source: managed
-      device: cpu
-      compute_type: int8
+asr: {engine: external_runtime}
+asr_engines:
+  - id: external_runtime
+    type: faster_whisper_worker
+    runtime: {source: registered, id: external:missing}
+    model: {source: managed, id: large-v3}
+    device: cpu
+    compute_type: int8
 """.strip(),
         encoding="utf-8",
     )
@@ -630,7 +622,7 @@ def test_provider_test_requires_structured_remote_confirmations(tmp_path: Path, 
             "--root",
             str(tmp_path),
             "asr",
-            "provider-test",
+            "engine-test",
             "--providers-file",
             str(providers_file),
             "--json",
@@ -661,7 +653,7 @@ def test_local_service_probe_rejects_non_loopback_endpoint(tmp_path: Path, monke
             "--root",
             str(tmp_path),
             "asr",
-            "provider-test",
+            "engine-test",
             "--providers-file",
             str(providers_file),
             "--confirm-network",
@@ -679,7 +671,8 @@ def test_local_service_probe_rejects_non_loopback_endpoint(tmp_path: Path, monke
 
 def test_remote_probe_freshness_controls_strict_verification(tmp_path: Path, monkeypatch) -> None:
     providers_file = _write_route_config(tmp_path, kind="remote", base_url="https://asr.example.invalid/v1")
-    monkeypatch.setenv("ASR_TEST_KEY", "placeholder-secret")
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "user-data"))
+    write_auth_credential("asr_test", "placeholder-secret")
     config = load_app_config(root_dir=tmp_path, providers_file=providers_file)
     provider = config.asr_providers["route_test"]
     fingerprint = provider_test_fingerprint(provider)
@@ -713,12 +706,19 @@ def test_remote_probe_freshness_controls_strict_verification(tmp_path: Path, mon
     fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     monkeypatch.setattr("transvortex.protocol.agent_setup.load_asr_runtime_state", lambda _paths: state_at(fresh))
     fresh_plan = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file)
-    assert fresh_plan["ready"] is True
+    assert fresh_plan["ready"] is True, json.dumps(
+        {
+            "plan_status": fresh_plan["plan_status"],
+            "blocking_items": fresh_plan["blocking_items"],
+            "provider_test": fresh_plan["current"]["provider_test"],
+        },
+        ensure_ascii=False,
+    )
     fresh_verify = setup_verify_payload(root_dir=tmp_path, providers_file=providers_file)
     assert fresh_verify["ok"] is True
     assert next(item for item in fresh_verify["checks"] if item["id"] == "route_probe")["status"] == "pass"
 
-    monkeypatch.setenv("ASR_TEST_KEY", "replacement-secret")
+    write_auth_credential("asr_test", "replacement-secret")
     changed_plan = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file)
     assert changed_plan["current"]["provider_test"]["code"] == "route_probe_credential_changed"
 
@@ -766,15 +766,16 @@ def test_strict_verify_rejects_marker_only_fake_runtime(tmp_path: Path, monkeypa
     write_json(model_root / "model.json", {"id": "small", "revision": "pinned"})
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr: {provider: managed_test}
-asr_providers:
-  - name: managed_test
-    kind: local_worker
-    protocol: faster_whisper
-    model: small
+asr: {engine: managed_test}
+asr_engines:
+  - id: managed_test
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
-    local: {model_source: managed, device: cpu, compute_type: int8}
+    model: {source: managed, id: small}
+    device: cpu
+    compute_type: int8
 """.strip(),
         encoding="utf-8",
     )

@@ -522,7 +522,11 @@ class DesktopApi:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         draft = _optional_dict(params, "provider_draft", "providerDraft")
         if draft is not None:
-            provider = draft_to_asr_provider_config(draft, network=config.network)
+            provider = draft_to_asr_provider_config(
+                draft,
+                network=config.network,
+                root_dir=self.root_dir,
+            )
         else:
             provider_name = _optional_text(params, "provider", "provider_name", "providerName")
             provider_name = provider_name or config.pipeline.asr_provider
@@ -540,7 +544,11 @@ class DesktopApi:
         draft = _optional_dict(params, "provider_draft", "providerDraft")
         explicit_key = _optional_text(params, "api_key", "apiKey")
         if draft is not None:
-            provider = draft_to_asr_provider_config(draft, network=config.network)
+            provider = draft_to_asr_provider_config(
+                draft,
+                network=config.network,
+                root_dir=self.root_dir,
+            )
         else:
             provider_name = _optional_text(params, "provider", "provider_name", "providerName")
             provider_name = provider_name or config.pipeline.asr_provider

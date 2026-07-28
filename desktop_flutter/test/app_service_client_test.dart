@@ -1341,33 +1341,27 @@ routing:
       File(
         '${serviceRoot.path}${Platform.pathSeparator}pipeline.yaml',
       ).writeAsStringSync('''
+config_schema_version: 2
 artifacts_dir: artifacts
 source_mode: asr
-asr:
-  provider: slow_asr
-asr_providers:
-  - name: slow_asr
-    kind: local_server
-    protocol: openai_transcriptions
-    base_url: http://127.0.0.1:${slowAsr.port}
-    endpoint: /v1/audio/transcriptions
+asr: {engine: slow_asr}
+asr_engines:
+  - id: slow_asr
+    type: funasr_service
     model: whisper-test
-    auth:
-      type: none
-    execution:
-      concurrency: 1
-      timeout_seconds: 10
-      retry: 1
-    chunking:
-      mode: none
-      window_seconds: 30
-      max_window_seconds: 30
-      min_window_seconds: 1
-      overlap_seconds: 0
-      short_audio_seconds: 30
-    preprocessing:
-      trim_silence:
-        enabled: false
+    endpoint:
+      scope: loopback
+      base_url: http://127.0.0.1:${slowAsr.port}
+      path: /v1/audio/transcriptions
+    policy_overrides:
+      execution:
+        request_deadline_seconds: 10
+        max_attempts: 1
+        split_retry: false
+      chunking:
+        mode: none
+      preprocessing:
+        trim_silence: false
 ''', encoding: utf8);
       File(
         '${serviceRoot.path}${Platform.pathSeparator}providers.yaml',

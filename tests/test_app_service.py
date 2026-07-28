@@ -656,15 +656,12 @@ def test_app_service_runs_asr_provider_test_for_saved_provider(tmp_path: Path, m
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
-asr:
-  provider: funasr
-asr_providers:
-  - name: funasr
-    kind: local_server
-    protocol: funasr_openai
+config_schema_version: 2
+asr: {engine: funasr}
+asr_engines:
+  - id: funasr
+    type: funasr_service
     model: sensevoice
-    base_url: http://127.0.0.1:8899
-    auth: {type: none}
         """.strip(),
         encoding="utf-8",
     )
@@ -694,20 +691,18 @@ def test_app_service_reads_openrouter_asr_usage_with_saved_credential(tmp_path: 
     monkeypatch.delenv("OPENROUTER_TEST_KEY", raising=False)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: openrouter_asr
-asr_providers:
-  - name: openrouter_asr
-    kind: remote
-    protocol: openrouter_stt
+asr: {engine: openrouter_asr}
+asr_engines:
+  - id: openrouter_asr
+    type: openrouter_asr
     model: openai/whisper-large-v3
-    base_url: https://openrouter.ai/api/v1
-    endpoint: /audio/transcriptions
-    auth:
-      type: bearer
-      env_key: OPENROUTER_TEST_KEY
-      credential_id: openrouter_asr
+    endpoint:
+      credential:
+        binding_id: openrouter_asr
+        secret_ref: openrouter_asr
+        env_fallback: OPENROUTER_API_KEY
         """.strip(),
         encoding="utf-8",
     )
@@ -833,18 +828,18 @@ def test_app_service_rejects_changed_credential_metadata_for_saved_openrouter_dr
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: openrouter_asr
-asr_providers:
-  - name: openrouter_asr
-    kind: remote
-    protocol: openrouter_stt
+asr: {engine: openrouter_asr}
+asr_engines:
+  - id: openrouter_asr
+    type: openrouter_asr
     model: openai/whisper-large-v3
-    auth:
-      type: bearer
-      env_key: OPENROUTER_API_KEY
-      credential_id: openrouter_asr
+    endpoint:
+      credential:
+        binding_id: openrouter_asr
+        secret_ref: openrouter_asr
+        env_fallback: OPENROUTER_API_KEY
         """.strip(),
         encoding="utf-8",
     )
@@ -864,7 +859,7 @@ asr_providers:
                     "auth": {
                         "type": "bearer",
                         "env_key": "SENSITIVE_UNRELATED_VALUE",
-                        "credential_id": "openrouter_asr",
+                        "credential_id": "unrelated_credential",
                     },
                 }
             },

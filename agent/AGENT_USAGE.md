@@ -112,7 +112,7 @@ For a route-specific ASR probe, use the explicitly authorized command below
 only after confirming network, privacy, and possible media/cost implications:
 
 ```powershell
-transvortex asr provider-test --confirm-network --json
+transvortex asr engine-test --confirm-network --json
 ```
 
 For a remote provider, also pass `--confirm-media --confirm-cost`. The command

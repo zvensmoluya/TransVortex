@@ -71,17 +71,17 @@ New-Item -ItemType Directory -Force -Path $serviceRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $fixtureRoot | Out-Null
 
 $pipeline = @"
+config_schema_version: 2
 artifacts_dir: artifacts
 asr:
-  provider: __SMOKE_ASR_PROVIDER__
-asr_providers:
-  - name: local
-    kind: local_inprocess
-    protocol: faster_whisper
-    model: large-v3
-    local:
-      device: cpu
-      compute_type: int8
+  engine: __SMOKE_ASR_ENGINE__
+asr_engines:
+  - id: local
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
+    device: cpu
+    compute_type: int8
 "@
 $providerModels = @("demo-model")
 if ($TranslationScenario -eq "longModels") {
@@ -122,8 +122,8 @@ routing:
 "@
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$smokeAsrProvider = if ($MainPhase -eq "blockedAsr") { "missing_local" } else { "local" }
-$pipeline = $pipeline.Replace("__SMOKE_ASR_PROVIDER__", $smokeAsrProvider)
+$smokeAsrEngine = if ($MainPhase -eq "blockedAsr") { "missing_local" } else { "local" }
+$pipeline = $pipeline.Replace("__SMOKE_ASR_ENGINE__", $smokeAsrEngine)
 [System.IO.File]::WriteAllText((Join-Path $serviceRoot "pipeline.yaml"), $pipeline, $utf8NoBom)
 if ($MainPhase -ne "blockedTranslation") {
     [System.IO.File]::WriteAllText((Join-Path $serviceRoot ".env"), "SMOKE_PROVIDER_KEY=example-token`n", $utf8NoBom)

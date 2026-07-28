@@ -898,7 +898,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pipeline-template", default="")
     parser.add_argument("--base-providers-file", default="")
     parser.add_argument("--providers-file", default="")
-    parser.add_argument("--asr-provider", default=DEFAULT_ASR_PROVIDER)
+    parser.add_argument(
+        "--asr-engine",
+        dest="asr_provider",
+        default=DEFAULT_ASR_PROVIDER,
+    )
     parser.add_argument("--probe-timeout-seconds", type=float, default=180.0)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--plan-only", action="store_true")

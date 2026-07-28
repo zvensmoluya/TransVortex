@@ -180,7 +180,7 @@ $helperArgs = @(
     "--compute-type", $ComputeType,
     "--pipeline-template", $resolvedPipelineTemplate,
     "--base-providers-file", $resolvedBaseProviders,
-    "--asr-provider", $AsrProvider,
+    "--asr-engine", $AsrProvider,
     "--probe-timeout-seconds", [string]$ProbeTimeoutSeconds
 )
 if (-not [string]::IsNullOrWhiteSpace($ModelPath)) {
@@ -365,7 +365,7 @@ $verificationArgs = @(
     "--exe-path", $resolvedExe,
     "--repo-root", $repoRoot,
     "--session-report", $sessionReportPath,
-    "--asr-provider", $AsrProvider
+    "--asr-engine", $AsrProvider
 )
 
 $previousPythonPath = $env:PYTHONPATH

@@ -2355,8 +2355,14 @@ def _apply_resolved_asr_plan(
         planned_capabilities
     ) != _stable_plan_identity(to_plain(active_capabilities)):
         raise RuntimeError("asr_plan_capabilities_mismatch")
+    audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
+    planned_duration = _finite_number(
+        audio_facts.get("duration_seconds"),
+        error="asr_plan_audio_duration_invalid",
+    )
+    if planned_duration <= 0:
+        raise RuntimeError("asr_plan_audio_duration_mismatch")
     if audio_full is not None:
-        audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
         if str(audio_facts.get("content_fingerprint") or "") != _sha256_file(audio_full):
             raise RuntimeError("asr_plan_audio_mismatch")
         if _strict_nonnegative_int(
@@ -2385,16 +2391,28 @@ def _apply_resolved_asr_plan(
         if validated["segment_id"] in segment_ids:
             raise RuntimeError("asr_plan_segment_id_duplicate")
         segment_ids.add(validated["segment_id"])
-        if not _manifest_matches_planned_window(actual, validated):
+        try:
+            actual_window = _asr_plan_window_from_manifest(
+                actual,
+                ordinal=ordinal,
+                task_dir=task_dir,
+                audio_end=planned_duration,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("asr_plan_manifest_mismatch") from exc
+        normalized_actual = _portable_asr_manifest([to_plain(actual_window)])[0]
+        for field in (
+            "segment_id",
+            "estimated_upload_bytes",
+            "encoded_size_bytes",
+            "content_sha256",
+            "cut_reason",
+        ):
+            if field in actual:
+                normalized_actual[field] = actual[field]
+        if not _manifest_matches_planned_window(normalized_actual, validated):
             raise RuntimeError("asr_plan_manifest_mismatch")
         runtime_windows.append(validated)
-    audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
-    planned_duration = _finite_number(
-        audio_facts.get("duration_seconds"),
-        error="asr_plan_audio_duration_invalid",
-    )
-    if planned_duration <= 0:
-        raise RuntimeError("asr_plan_audio_duration_mismatch")
     _validate_asr_window_sequence(
         runtime_windows,
         audio_start=0.0,

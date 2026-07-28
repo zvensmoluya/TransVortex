@@ -10,30 +10,11 @@ from typing import Any
 import yaml
 
 from ..asr_domain import ASR_CONFIG_SCHEMA_VERSION
-from ..openrouter_asr import (
-    OPENROUTER_ASR_BASE_URL,
-    OPENROUTER_ASR_CREDENTIAL_ID,
-    OPENROUTER_ASR_DEFAULT_MODEL,
-    OPENROUTER_ASR_ENDPOINT,
-    OPENROUTER_ASR_ENV_KEY,
-    openrouter_asr_admin_defaults,
-    require_openrouter_asr_model_profile,
-)
 from .models import (
     AppConfig,
-    AsrAcceleratorConfig,
-    AsrAuthConfig,
-    AsrChunkingConfig,
-    AsrExecutionConfig,
-    AsrLocalConfig,
-    AsrPreprocessingConfig,
     AsrPromptConfig,
     AsrPromptProfile,
     AsrProviderConfig,
-    AsrProviderRequestConfig,
-    AsrRuntimeConfig,
-    AsrSilenceChunkingConfig,
-    AsrTrimSilenceConfig,
     AsrUncertaintyHintsConfig,
     AssStyleConfig,
     AuthConfig,
@@ -93,6 +74,29 @@ ASR_PROMPT_ALLOWED_FIELDS = {
     "include_previous_text",
     "max_chars",
 }
+ASR_SCHEMA_V2_FIELDS = {"engine", "audio_track", "prompt"}
+PIPELINE_SCHEMA_V2_FIELDS = {
+    "config_schema_version",
+    "artifacts_dir",
+    "network",
+    "prompts",
+    "asr",
+    "asr_engines",
+    "translation_batch_size",
+    "translation",
+    "subtitle",
+    "max_cps",
+    "memory",
+    "subtitle_ass_style",
+    "chunk_seconds",
+    "chunk_overlap_seconds",
+    "output_format",
+    "default_concurrency",
+    "timeout_seconds",
+    "retry",
+    "source_mode",
+    "subtitle_track",
+}
 
 ENV_MAP = {
     "chunk_seconds": "TVX_CHUNK_SECONDS",
@@ -138,6 +142,17 @@ def _to_exact_int(value: Any, default: int, *, context: str) -> int:
     if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()):
         return int(value.strip())
     raise ValueError(f"{context} must be an integer")
+
+
+def _reject_unknown_fields(
+    raw: dict[str, Any],
+    allowed: set[str],
+    *,
+    context: str,
+) -> None:
+    unknown = sorted(str(key) for key in raw if key not in allowed)
+    if unknown:
+        raise ValueError(f"Unsupported {context} field(s): {', '.join(unknown)}")
 
 
 def _to_bool(value: Any, default: bool) -> bool:
@@ -597,17 +612,6 @@ def _resolve_routing_profiles(p_yaml: dict[str, Any]) -> tuple[RoutingConfig, li
     return RoutingConfig(primary=active.primary, fallback=list(active.fallback)), profiles, active_profile, next_profile_seq
 
 
-ASR_PROVIDER_KINDS = {"local_inprocess", "local_worker", "local_server", "remote"}
-ASR_PROVIDER_PROTOCOLS = {
-    "faster_whisper",
-    "openai_transcriptions",
-    "funasr_openai",
-    "openrouter_stt",
-}
-ASR_AUTH_TYPES = {"none", "bearer"}
-ASR_RUNTIME_SOURCES = {"inprocess", "managed", "external"}
-ASR_MODEL_SOURCES = {"managed", "external"}
-ASR_ACCELERATOR_SOURCES = {"managed", "external"}
 LEGACY_ASR_FIELDS = {
     "mode",
     "local",
@@ -626,423 +630,6 @@ def _reject_legacy_asr_fields(asr_raw: dict[str, Any]) -> None:
             + ", ".join(legacy)
             + "; use asr.engine plus asr_engines[].type and policy_overrides"
         )
-
-
-def _default_asr_chunking(
-    kind: str,
-    protocol: str = "",
-    model: str = "",
-) -> AsrChunkingConfig:
-    if protocol == "openrouter_stt":
-        raw = openrouter_asr_admin_defaults(model)["chunking"]
-        silence = raw["silence"]
-        return AsrChunkingConfig(
-            mode=str(raw["mode"]),
-            window_seconds=float(raw["window_seconds"]),
-            max_window_seconds=float(raw["max_window_seconds"]),
-            min_window_seconds=float(raw["min_window_seconds"]),
-            overlap_seconds=float(raw["overlap_seconds"]),
-            short_audio_seconds=float(raw["short_audio_seconds"]),
-            max_upload_mb=float(raw["max_upload_mb"]),
-            silence=AsrSilenceChunkingConfig(
-                noise_db=float(silence["noise_db"]),
-                min_silence_seconds=float(silence["min_silence_seconds"]),
-                cut_padding_seconds=float(silence["cut_padding_seconds"]),
-                fallback_mode=str(silence["fallback_mode"]),
-            ),
-            fuzzy_dedupe=bool(raw["fuzzy_dedupe"]),
-        )
-    if protocol == "funasr_openai":
-        return AsrChunkingConfig(
-            mode="none",
-            window_seconds=3600,
-            max_window_seconds=3600,
-            min_window_seconds=1,
-            overlap_seconds=0,
-            short_audio_seconds=3600,
-            max_upload_mb=2048.0,
-            fuzzy_dedupe=False,
-        )
-    if kind == "local_server":
-        return AsrChunkingConfig(
-            mode="silence",
-            window_seconds=600,
-            max_window_seconds=600,
-            min_window_seconds=12,
-            overlap_seconds=0,
-            short_audio_seconds=600,
-            max_upload_mb=256.0,
-            fuzzy_dedupe=False,
-        )
-    return AsrChunkingConfig()
-
-
-def _default_asr_execution(
-    kind: str,
-    protocol: str = "",
-    model: str = "",
-) -> AsrExecutionConfig:
-    if protocol == "openrouter_stt":
-        raw = openrouter_asr_admin_defaults(model)["execution"]
-        return AsrExecutionConfig(
-            concurrency=int(raw["concurrency"]),
-            adaptive_concurrency=bool(raw["adaptive_concurrency"]),
-            min_concurrency=int(raw["min_concurrency"]),
-            max_concurrency=int(raw["max_concurrency"]),
-            max_inflight_upload_mb=float(raw["max_inflight_upload_mb"]),
-            timeout_seconds=float(raw["timeout_seconds"]),
-            retry=int(raw["retry"]),
-        )
-    if kind == "remote":
-        return AsrExecutionConfig(
-            concurrency=8,
-            adaptive_concurrency=True,
-            min_concurrency=1,
-            max_concurrency=8,
-            max_inflight_upload_mb=128.0,
-            timeout_seconds=300,
-            retry=2,
-        )
-    if kind == "local_server":
-        return AsrExecutionConfig(concurrency=1, retry=1, timeout_seconds=300)
-    return AsrExecutionConfig(concurrency=1, retry=1, timeout_seconds=300)
-
-
-def _default_asr_preprocessing(kind: str) -> AsrPreprocessingConfig:
-    return AsrPreprocessingConfig(
-        trim_silence=AsrTrimSilenceConfig(enabled=(kind == "remote"))
-    )
-
-
-def _parse_asr_auth(
-    raw: Any,
-    *,
-    kind: str,
-    default_env_key: str = "TVX_MODEL_API_KEY",
-    default_credential_id: str = "",
-) -> AsrAuthConfig:
-    auth_raw = raw if isinstance(raw, dict) else {}
-    default_type = "bearer" if kind == "remote" else "none"
-    auth_type = _to_str(auth_raw.get("type"), default_type).strip().lower()
-    if auth_type not in ASR_AUTH_TYPES:
-        raise ValueError(f"Unsupported ASR auth.type: {auth_type}")
-    env_key = _to_str(auth_raw.get("env_key"), default_env_key)
-    credential_id = _to_str(
-        auth_raw.get("credential_id"),
-        default_credential_id or env_key,
-    )
-    if auth_type == "none":
-        env_key = ""
-        credential_id = ""
-    return AsrAuthConfig(type=auth_type, env_key=env_key, credential_id=credential_id)
-
-
-def _parse_asr_local(raw: Any, *, model: str) -> AsrLocalConfig:
-    local_raw = raw if isinstance(raw, dict) else {}
-    model_source = _to_str(local_raw.get("model_source"), "managed").strip().lower()
-    if model_source not in ASR_MODEL_SOURCES:
-        raise ValueError(f"Unsupported ASR local.model_source: {model_source}")
-    model_path = _to_str(local_raw.get("model_path"), "")
-    return AsrLocalConfig(
-        model_size=_to_str(local_raw.get("model_size"), model),
-        model_source=model_source,
-        model_path=model_path,
-        managed_model_size=_to_str(
-            local_raw.get("managed_model_size"),
-            model if model_source == "managed" else "",
-        ),
-        external_model_id=_to_str(
-            local_raw.get("external_model_id"),
-            model if model_source == "external" else "",
-        ),
-        external_model_path=_to_str(
-            local_raw.get("external_model_path"),
-            model_path if model_source == "external" else "",
-        ),
-        device=_to_str(local_raw.get("device"), "auto"),
-        compute_type=_to_str(local_raw.get("compute_type"), "auto"),
-        max_initial_timestamp=_to_float(local_raw.get("max_initial_timestamp"), 30.0),
-        beam_size=_to_exact_int(local_raw.get("beam_size"), 5, context="ASR local.beam_size"),
-        temperature=_to_float(local_raw.get("temperature"), 0.0),
-        condition_on_previous_text=_to_bool(local_raw.get("condition_on_previous_text"), False),
-        hotwords=_to_str(local_raw.get("hotwords"), ""),
-    )
-
-
-def _parse_asr_runtime(raw: Any, *, kind: str) -> AsrRuntimeConfig:
-    runtime_raw = raw if isinstance(raw, dict) else {}
-    default_source = "managed" if kind == "local_worker" else "inprocess"
-    source = _to_str(runtime_raw.get("source"), default_source).strip().lower()
-    if source not in ASR_RUNTIME_SOURCES:
-        raise ValueError(f"Unsupported ASR runtime.source: {source}")
-    if kind == "local_inprocess" and source != "inprocess":
-        raise ValueError("ASR provider kind local_inprocess requires runtime.source inprocess")
-    if kind == "local_worker" and source not in {"managed", "external"}:
-        raise ValueError("ASR provider kind local_worker requires runtime.source managed or external")
-    runtime_id = _to_str(runtime_raw.get("id"), "managed:faster-whisper" if source == "managed" else "")
-    return AsrRuntimeConfig(source=source, id=runtime_id)
-
-
-def _parse_asr_accelerator(raw: Any, *, kind: str) -> AsrAcceleratorConfig:
-    accelerator_raw = raw if isinstance(raw, dict) else {}
-    if kind != "local_worker":
-        return AsrAcceleratorConfig()
-    source = _to_str(accelerator_raw.get("source"), "managed").strip().lower()
-    if source not in ASR_ACCELERATOR_SOURCES:
-        raise ValueError(f"Unsupported ASR accelerator.source: {source}")
-    accelerator_id = _to_str(
-        accelerator_raw.get("id"),
-        "nvidia-cuda12" if source == "managed" else "",
-    ).strip()
-    if source == "external" and not accelerator_id:
-        raise ValueError("ASR external accelerator requires accelerator.id")
-    return AsrAcceleratorConfig(source=source, id=accelerator_id)
-
-
-def _parse_asr_chunking(raw: Any, *, default: AsrChunkingConfig) -> AsrChunkingConfig:
-    chunking_raw = raw if isinstance(raw, dict) else {}
-    silence_raw = chunking_raw.get("silence") if isinstance(chunking_raw.get("silence"), dict) else {}
-    mode = _to_str(chunking_raw.get("mode"), default.mode).strip().lower()
-    if mode not in {"auto", "fixed", "none", "silence"}:
-        raise ValueError(f"Unsupported ASR chunking.mode: {mode}")
-    return AsrChunkingConfig(
-        mode=mode,
-        window_seconds=_to_float(chunking_raw.get("window_seconds"), default.window_seconds),
-        max_window_seconds=_to_float(chunking_raw.get("max_window_seconds"), default.max_window_seconds),
-        min_window_seconds=_to_float(chunking_raw.get("min_window_seconds"), default.min_window_seconds),
-        overlap_seconds=_to_float(chunking_raw.get("overlap_seconds"), default.overlap_seconds),
-        short_audio_seconds=_to_float(chunking_raw.get("short_audio_seconds"), default.short_audio_seconds),
-        max_upload_mb=_to_float(chunking_raw.get("max_upload_mb"), default.max_upload_mb),
-        silence=AsrSilenceChunkingConfig(
-            noise_db=_to_float(silence_raw.get("noise_db"), default.silence.noise_db),
-            min_silence_seconds=_to_float(
-                silence_raw.get("min_silence_seconds"),
-                default.silence.min_silence_seconds,
-            ),
-            cut_padding_seconds=_to_float(
-                silence_raw.get("cut_padding_seconds"),
-                default.silence.cut_padding_seconds,
-            ),
-            fallback_mode=_to_str(silence_raw.get("fallback_mode"), default.silence.fallback_mode),
-        ),
-        fuzzy_dedupe=_to_bool(chunking_raw.get("fuzzy_dedupe"), default.fuzzy_dedupe),
-    )
-
-
-def _parse_asr_execution(raw: Any, *, default: AsrExecutionConfig) -> AsrExecutionConfig:
-    execution_raw = raw if isinstance(raw, dict) else {}
-    concurrency = _to_exact_int(
-        execution_raw.get("concurrency"),
-        default.concurrency,
-        context="ASR execution.concurrency",
-    )
-    return AsrExecutionConfig(
-        concurrency=concurrency,
-        adaptive_concurrency=_to_bool(execution_raw.get("adaptive_concurrency"), default.adaptive_concurrency),
-        min_concurrency=_to_exact_int(
-            execution_raw.get("min_concurrency"),
-            min(default.min_concurrency, concurrency),
-            context="ASR execution.min_concurrency",
-        ),
-        max_concurrency=_to_exact_int(
-            execution_raw.get("max_concurrency"),
-            max(default.max_concurrency, concurrency),
-            context="ASR execution.max_concurrency",
-        ),
-        max_inflight_upload_mb=_to_float(
-            execution_raw.get("max_inflight_upload_mb"),
-            default.max_inflight_upload_mb,
-        ),
-        timeout_seconds=_to_float(execution_raw.get("timeout_seconds"), default.timeout_seconds),
-        retry=_to_exact_int(
-            execution_raw.get("retry"),
-            default.retry,
-            context="ASR execution.retry",
-        ),
-    )
-
-
-def _parse_asr_preprocessing(raw: Any, *, default: AsrPreprocessingConfig) -> AsrPreprocessingConfig:
-    preprocessing_raw = raw if isinstance(raw, dict) else {}
-    trim_raw = preprocessing_raw.get("trim_silence") if isinstance(preprocessing_raw.get("trim_silence"), dict) else {}
-    return AsrPreprocessingConfig(
-        trim_silence=AsrTrimSilenceConfig(
-            enabled=_to_bool(trim_raw.get("enabled"), default.trim_silence.enabled),
-            backend=_to_str(trim_raw.get("backend"), default.trim_silence.backend),
-            noise_db=_to_float(trim_raw.get("noise_db"), default.trim_silence.noise_db),
-            min_silence_seconds=_to_float(
-                trim_raw.get("min_silence_seconds"),
-                default.trim_silence.min_silence_seconds,
-            ),
-            keep_preroll_seconds=_to_float(
-                trim_raw.get("keep_preroll_seconds"),
-                default.trim_silence.keep_preroll_seconds,
-            ),
-            trim_trailing=_to_bool(trim_raw.get("trim_trailing"), default.trim_silence.trim_trailing),
-            keep_postroll_seconds=_to_float(
-                trim_raw.get("keep_postroll_seconds"),
-                default.trim_silence.keep_postroll_seconds,
-            ),
-            min_upload_seconds=_to_float(
-                trim_raw.get("min_upload_seconds"),
-                default.trim_silence.min_upload_seconds,
-            ),
-        )
-    )
-
-
-def _default_asr_request_for_protocol(
-    protocol: str,
-    model: str = "",
-) -> AsrProviderRequestConfig:
-    if protocol == "openrouter_stt":
-        raw = openrouter_asr_admin_defaults(model)["request"]
-        return AsrProviderRequestConfig(
-            response_format=str(raw["response_format"]),
-            temperature=float(raw["temperature"]),
-            timestamp_granularities=list(raw["timestamp_granularities"]),
-            include=[],
-            extra_form_fields={},
-            extra_json_fields={},
-            provider_options={},
-            array_format=str(raw["array_format"]),
-            send_response_format=bool(raw["send_response_format"]),
-            send_temperature=bool(raw["send_temperature"]),
-            send_timestamp_granularities=bool(raw["send_timestamp_granularities"]),
-            send_language=bool(raw["send_language"]),
-            send_prompt=bool(raw["send_prompt"]),
-            language_field=str(raw["language_field"]),
-            prompt_field=str(raw["prompt_field"]),
-        )
-    if protocol == "funasr_openai":
-        return AsrProviderRequestConfig(
-            timestamp_granularities=[],
-            array_format="repeat",
-            send_response_format=True,
-            send_temperature=False,
-            send_timestamp_granularities=False,
-            send_language=True,
-            send_prompt=False,
-        )
-    return AsrProviderRequestConfig()
-
-
-def _parse_asr_provider(row: dict[str, Any]) -> AsrProviderConfig:
-    name = str(row.get("name") or "").strip()
-    if not name:
-        raise ValueError("asr_providers[].name is required")
-    kind = _to_str(row.get("kind"), "remote").strip().lower()
-    if kind not in ASR_PROVIDER_KINDS:
-        raise ValueError(f"Unsupported ASR provider kind: {kind}")
-    protocol = _to_str(
-        row.get("protocol"),
-        "faster_whisper" if kind in {"local_inprocess", "local_worker"} else "openai_transcriptions",
-    ).strip().lower()
-    if protocol not in ASR_PROVIDER_PROTOCOLS:
-        raise ValueError(f"Unsupported ASR protocol: {protocol}")
-    if kind in {"local_inprocess", "local_worker"} and protocol != "faster_whisper":
-        raise ValueError(f"ASR provider kind {kind} requires protocol faster_whisper")
-    if kind in {"local_server", "remote"} and protocol not in {
-        "openai_transcriptions",
-        "funasr_openai",
-        "openrouter_stt",
-    }:
-        raise ValueError(
-            f"ASR provider kind {kind} requires protocol "
-            "openai_transcriptions, funasr_openai, or openrouter_stt"
-        )
-    if protocol == "funasr_openai" and kind != "local_server":
-        raise ValueError("ASR protocol funasr_openai requires kind local_server")
-    if protocol == "openrouter_stt" and kind != "remote":
-        raise ValueError("ASR protocol openrouter_stt requires kind remote")
-    default_model = (
-        "large-v3"
-        if protocol == "faster_whisper"
-        else OPENROUTER_ASR_DEFAULT_MODEL
-        if protocol == "openrouter_stt"
-        else "whisper-1"
-    )
-    model = _to_str(row.get("model"), default_model)
-    if protocol == "openrouter_stt":
-        require_openrouter_asr_model_profile(model)
-    request_raw = row.get("request") if isinstance(row.get("request"), dict) else {}
-    default_execution = _default_asr_execution(kind, protocol, model)
-    default_chunking = _default_asr_chunking(kind, protocol, model)
-    default_preprocessing = _default_asr_preprocessing(kind)
-    default_request = _default_asr_request_for_protocol(protocol, model)
-    default_base_url = (
-        OPENROUTER_ASR_BASE_URL
-        if protocol == "openrouter_stt"
-        else "https://api.openai.com/v1"
-    )
-    default_endpoint = (
-        OPENROUTER_ASR_ENDPOINT
-        if protocol == "openrouter_stt"
-        else "/v1/audio/transcriptions"
-    )
-    default_env_key = (
-        OPENROUTER_ASR_ENV_KEY
-        if protocol == "openrouter_stt"
-        else "TVX_MODEL_API_KEY"
-    )
-    default_credential_id = (
-        OPENROUTER_ASR_CREDENTIAL_ID
-        if protocol == "openrouter_stt"
-        else ""
-    )
-    return AsrProviderConfig(
-        name=name,
-        kind=kind,
-        protocol=protocol,
-        base_url=_to_str(row.get("base_url"), default_base_url).rstrip("/"),
-        endpoint=_to_str(row.get("endpoint"), default_endpoint),
-        model=model,
-        auth=_parse_asr_auth(
-            row.get("auth"),
-            kind=kind,
-            default_env_key=default_env_key,
-            default_credential_id=default_credential_id,
-        ),
-        local=_parse_asr_local(row.get("local"), model=model),
-        runtime=_parse_asr_runtime(row.get("runtime"), kind=kind),
-        accelerator=_parse_asr_accelerator(row.get("accelerator"), kind=kind),
-        execution=_parse_asr_execution(row.get("execution"), default=default_execution),
-        chunking=_parse_asr_chunking(row.get("chunking"), default=default_chunking),
-        preprocessing=_parse_asr_preprocessing(row.get("preprocessing"), default=default_preprocessing),
-        http2=_to_bool(row.get("http2"), kind == "remote"),
-        request=AsrProviderRequestConfig(
-            response_format=_to_str(request_raw.get("response_format"), default_request.response_format),
-            temperature=_to_float(request_raw.get("temperature"), default_request.temperature),
-            timestamp_granularities=_to_str_list(
-                request_raw.get("timestamp_granularities"),
-                default_request.timestamp_granularities,
-            ),
-            include=_to_str_list(request_raw.get("include"), default_request.include),
-            extra_form_fields=dict(request_raw.get("extra_form_fields") or {})
-            if isinstance(request_raw.get("extra_form_fields"), dict)
-            else {},
-            extra_json_fields=dict(request_raw.get("extra_json_fields") or {})
-            if isinstance(request_raw.get("extra_json_fields"), dict)
-            else {},
-            provider_options=dict(request_raw.get("provider_options") or {})
-            if isinstance(request_raw.get("provider_options"), dict)
-            else {},
-            array_format=_to_str(request_raw.get("array_format"), default_request.array_format),
-            send_response_format=_to_bool(
-                request_raw.get("send_response_format"),
-                default_request.send_response_format,
-            ),
-            send_temperature=_to_bool(request_raw.get("send_temperature"), default_request.send_temperature),
-            send_timestamp_granularities=_to_bool(
-                request_raw.get("send_timestamp_granularities"),
-                default_request.send_timestamp_granularities,
-            ),
-            send_language=_to_bool(request_raw.get("send_language"), default_request.send_language),
-            send_prompt=_to_bool(request_raw.get("send_prompt"), default_request.send_prompt),
-            language_field=_to_str(request_raw.get("language_field"), default_request.language_field),
-            prompt_field=_to_str(request_raw.get("prompt_field"), default_request.prompt_field),
-        ),
-    )
 
 
 def resolve_providers_file(root_dir: Path, providers_file: Path | None = None) -> Path:
@@ -1072,6 +659,21 @@ def load_app_config(
 
     p_yaml = _read_yaml(providers_file)
     pip_yaml = _read_yaml(pipeline_file)
+    if not isinstance(pip_yaml, dict):
+        raise ValueError("pipeline config must be an object")
+    schema_version = _to_exact_int(
+        pip_yaml.get("config_schema_version"),
+        0,
+        context="config_schema_version",
+    )
+    if "config_schema_version" in pip_yaml and schema_version != ASR_CONFIG_SCHEMA_VERSION:
+        raise ValueError(f"Unsupported config_schema_version: {schema_version}")
+    if schema_version == ASR_CONFIG_SCHEMA_VERSION:
+        _reject_unknown_fields(
+            pip_yaml,
+            PIPELINE_SCHEMA_V2_FIELDS,
+            context="pipeline schema v2",
+        )
     network = _parse_network_config(pip_yaml.get("network"))
     dotenv_values = read_dotenv_values(root_dir)
     prompts_raw = pip_yaml.get("prompts") or {}
@@ -1087,12 +689,12 @@ def load_app_config(
         if cache_value
         else resolved_artifacts_dir / ".cache"
     )
-    asr_raw = pip_yaml.get("asr") or {}
-    if not isinstance(asr_raw, dict):
-        asr_raw = {}
+    asr_value = pip_yaml.get("asr")
+    if asr_value is not None and not isinstance(asr_value, dict):
+        raise ValueError("asr must be an object")
+    asr_raw = asr_value or {}
     _reject_legacy_asr_fields(asr_raw)
     asr_prompt_raw = asr_raw.get("prompt") if isinstance(asr_raw.get("prompt"), dict) else {}
-    schema_version = _to_int(pip_yaml.get("config_schema_version"), 0)
     asr_engine_rows = pip_yaml.get("asr_engines")
     uses_asr_engine_schema = (
         schema_version == ASR_CONFIG_SCHEMA_VERSION
@@ -1106,12 +708,16 @@ def load_app_config(
             )
         if not isinstance(asr_engine_rows, list) or not asr_engine_rows:
             raise ValueError("ASR engine config requires a non-empty asr_engines list")
-        if "provider" in asr_raw or "asr_providers" in pip_yaml:
-            raise ValueError("ASR engine config cannot mix asr.engine with legacy ASR providers")
+        _reject_unknown_fields(asr_raw, ASR_SCHEMA_V2_FIELDS, context="asr schema v2")
         if not _to_str(asr_raw.get("engine"), ""):
             raise ValueError("ASR engine config requires asr.engine")
+    if "provider" in asr_raw or "asr_providers" in pip_yaml:
+        raise ValueError(
+            "Legacy asr.provider and asr_providers are no longer supported; "
+            "use config_schema_version=2, asr.engine, and asr_engines"
+        )
     asr_provider_name = _to_str(
-        asr_raw.get("engine") if uses_asr_engine_schema else asr_raw.get("provider"),
+        asr_raw.get("engine"),
         "faster_whisper_large_v3",
     )
     asr_providers: dict[str, AsrProviderConfig] = {}
@@ -1121,24 +727,18 @@ def load_app_config(
     asr_policy_resolutions = {}
     if uses_asr_engine_schema:
         rows = asr_engine_rows
-        for row in rows:
-            if isinstance(row, dict):
-                resolution = resolve_asr_engine(row, root_dir=root_dir)
-                engine_id = resolution.spec.id
-                if engine_id in asr_engine_specs:
-                    raise ValueError(f"duplicate ASR engine id: {engine_id}")
-                asr_engine_specs[engine_id] = resolution.spec
-                asr_user_overrides[engine_id] = resolution.overrides
-                asr_capabilities[engine_id] = resolution.capabilities
-                asr_policy_resolutions[engine_id] = resolution.policy
-                asr_providers[engine_id] = resolution.runtime
-    else:
-        asr_provider_rows = pip_yaml.get("asr_providers")
-        if isinstance(asr_provider_rows, list):
-            for row in asr_provider_rows:
-                if isinstance(row, dict):
-                    provider_cfg = replace(_parse_asr_provider(row), network=network)
-                    asr_providers[provider_cfg.name] = provider_cfg
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError(f"asr_engines[{index}] must be an object")
+            resolution = resolve_asr_engine(row, root_dir=root_dir)
+            engine_id = resolution.spec.id
+            if engine_id in asr_engine_specs:
+                raise ValueError(f"duplicate ASR engine id: {engine_id}")
+            asr_engine_specs[engine_id] = resolution.spec
+            asr_user_overrides[engine_id] = resolution.overrides
+            asr_capabilities[engine_id] = resolution.capabilities
+            asr_policy_resolutions[engine_id] = resolution.policy
+            asr_providers[engine_id] = resolution.runtime
     if not asr_providers:
         resolution = resolve_asr_engine(default_asr_engine_rows()[0], root_dir=root_dir)
         engine_id = resolution.spec.id
@@ -1465,7 +1065,7 @@ def load_app_config(
         elif key == "asr_provider":
             provider_name = _to_str(value, pipeline.asr_provider)
             if provider_name not in asr_providers:
-                raise ValueError(f"ASR provider not found: {provider_name}")
+                raise ValueError(f"ASR engine not found: {provider_name}")
             pipeline.asr_provider = provider_name
         elif key == "asr_model":
             engine_id = pipeline.asr_provider

@@ -63,7 +63,7 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
             "inspect the local environment and execute only the user-selected preparation scope",
             "use advertised setup-apply for managed resources, or prepare external resources with Agent tools",
             "register and activate external resources with the advertised TransVortex commands",
-            "if provider_mode is local_service or remote_provider: run the advertised asr provider-test command",
+            "if provider_mode is local_service or remote_provider: run the advertised asr engine-test command",
             "transvortex asr setup-verify --json --strict",
             "transvortex probe-provider --strict",
             "transvortex run --input <video> --src <lang> --tgt <lang> --detach --json",
@@ -173,7 +173,7 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "purpose": "Verify readiness, component integrity, and the local worker/model protocol without network access",
                 "command": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
             },
-            "asr provider-test": {
+            "asr engine-test": {
                 "long_running": False,
                 "supports_json": True,
                 "read_only": False,
@@ -181,8 +181,8 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "requires_user_authorization": True,
                 "writes_only_probe_status": True,
                 "may_upload_media": True,
-                "command_local_service": "transvortex --root <config-root> asr provider-test --confirm-network --providers-file <providers-file> --json",
-                "command_remote": "transvortex --root <config-root> asr provider-test --confirm-network --confirm-media --confirm-cost --providers-file <providers-file> --json",
+                "command_local_service": "transvortex --root <config-root> asr engine-test --confirm-network --providers-file <providers-file> --json",
+                "command_remote": "transvortex --root <config-root> asr engine-test --confirm-network --confirm-media --confirm-cost --providers-file <providers-file> --json",
             },
             "translate": {
                 "long_running": True,

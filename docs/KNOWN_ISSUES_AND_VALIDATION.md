@@ -107,12 +107,12 @@
 背景：
 - 当前本地 ASR 默认走 `faster-whisper` / `large-v3`。这条路径准确率基线较稳，但在长视频、本机 GPU 不强或 CPU 环境下速度成本较高。
 - FunASR 不是单一模型，而是 ASR 推理框架和工具链；`SenseVoice-Small` 是其中适合优先评估的具体模型。
-- FunASR 可以通过本地服务提供 OpenAI-compatible transcription 接口。产品语义上它仍是本地 ASR，因为音频不离开本机；代码接入上更像一个 localhost ASR provider。
+- FunASR 可以通过本地服务提供 OpenAI-compatible transcription 接口。产品语义上它仍是本地 ASR，因为音频不离开本机；代码接入上是一个 localhost ASR Engine。
 
 当前判断：
 - FunASR 的潜在收益主要在速度、低配机器可用性、VAD/标点/热词等 ASR 侧能力，而不是确定性替代 `large-v3` 的准确率。
 - 第一版不应把 FunASR Python 依赖直接塞进当前 worker。更稳的实验路线是先支持 `funasr-server` 这种本地 HTTP 服务，避免 `torch`/CUDA 依赖和现有 `faster-whisper`/CTranslate2 环境互相影响。
-- 配置和 UI 不应把 localhost FunASR 称为“云端 ASR”。它应被表达为“本地 ASR 服务”或“自托管 ASR provider”。
+- 配置和 UI 不应把 localhost FunASR 称为“云端 ASR”。它应被表达为“本地 ASR 服务”或“自托管 ASR Engine”。
 
 待验证方向：
 - 用同一批代表性素材对比 `large-v3`、`large-v3-turbo`、FunASR + `SenseVoice-Small`，优先包含已知慢例、漏听例、多人重叠、强背景声、专名密集和长视频片段。
@@ -123,5 +123,5 @@
 
 暂不做：
 - 不在没有对照结果前替换默认 `faster-whisper` / `large-v3` 路线。
-- 不把 FunASR 作为“云端 ASR provider”宣传或展示。
+- 不把 FunASR 作为“云端 ASR Engine”宣传或展示。
 - 不在第一阶段引入 FunASR in-process backend；除非本地服务方案已经验证有明显收益且部署体验可控。

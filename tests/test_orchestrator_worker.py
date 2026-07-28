@@ -9,9 +9,9 @@ from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from transvortex.core.orchestrator import (
-    _asr_runs_concurrently,
     _checkpoint_status_payload,
     _preflight,
     _process_asr_manifest_item,
@@ -33,6 +33,16 @@ from transvortex.http import HttpTransportError
 from transvortex.protocol.errors import PipelineTaskError
 
 
+@pytest.fixture(autouse=True)
+def _official_asr_test_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "example-token")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "example-token")
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.asr_provider_readiness",
+        lambda *_args, **_kwargs: {"state": "ready", "code": "ready", "can_run": True},
+    )
+
+
 def _record_openrouter_usage_in_child(args: tuple[str, int]) -> None:
     source_dir, index = args
     from transvortex.core.openrouter_asr_usage import record_openrouter_asr_usage_receipt
@@ -51,27 +61,26 @@ def _record_openrouter_usage_in_child(args: tuple[str, int]) -> None:
 def _write_config(root: Path) -> None:
     (root / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
 chunk_seconds: 60
 chunk_overlap_seconds: 1
 translation_batch_size: 2
 default_concurrency: 1
 max_cps: 8
-asr:
-  provider: faster_whisper_test
-asr_providers:
-  - name: faster_whisper_test
-    kind: local_inprocess
-    protocol: faster_whisper
-    model: tiny
-    local:
-      device: cpu
-      compute_type: int8
-    chunking:
-      mode: auto
-      window_seconds: 300
-      overlap_seconds: 30
-      short_audio_seconds: 300
+asr: {engine: faster_whisper_test}
+asr_engines:
+  - id: faster_whisper_test
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: tiny}
+    device: cpu
+    compute_type: int8
+    policy_overrides:
+      chunking:
+        mode: fixed
+        window_target_seconds: 300
+        overlap_seconds: 30
         """.strip(),
         encoding="utf-8",
     )
@@ -361,21 +370,18 @@ def test_openrouter_asr_usage_serializes_concurrent_process_writers(tmp_path: Pa
     assert len(list((source_dir / "asr" / "usage_receipts").glob("*.json"))) == 8
 
 
-def test_local_worker_keeps_one_shared_asr_process_when_concurrency_is_higher(tmp_path: Path) -> None:
+def test_local_worker_rejects_explicit_concurrency_above_worker_capability(tmp_path: Path) -> None:
     _write_config(tmp_path)
     pipeline_path = tmp_path / "pipeline.yaml"
     text = pipeline_path.read_text(encoding="utf-8")
-    text = text.replace("kind: local_inprocess", "kind: local_worker")
     text = text.replace(
-        "    local:\n      device: cpu",
-        "    execution:\n      concurrency: 4\n    local:\n      device: cpu",
+        "    policy_overrides:\n      chunking:",
+        "    policy_overrides:\n      execution:\n        target_concurrency: 4\n        maximum_concurrency: 4\n      chunking:",
     )
     pipeline_path.write_text(text, encoding="utf-8")
 
-    config = load_app_config(root_dir=tmp_path)
-
-    assert config.asr_providers["faster_whisper_test"].execution.concurrency == 4
-    assert _asr_runs_concurrently(config) is False
+    with pytest.raises(ValueError, match="exceeds the runtime parallelism capability"):
+        load_app_config(root_dir=tmp_path)
 
 
 def test_memory_provider_progress_keeps_memory_checkpoint_stage(tmp_path: Path) -> None:
@@ -458,19 +464,12 @@ def test_provider_progress_counts_request_start_once_and_separates_response(tmp_
     assert events[0]["details"]["request_number"] == 1
 
 
-def _indent_yaml_block(block: str, prefix: str) -> str:
-    text = dedent(block).strip()
-    if not text:
-        return ""
-    return "\n" + "\n".join(prefix + line if line else line for line in text.splitlines())
-
-
 def _write_remote_asr_config(
     root: Path,
     *,
     provider_name: str = "cloud1",
     protocol: str = "openai_transcriptions",
-    base_url: str = "https://api.example.com/v1",
+    base_url: str = "https://api.openai.com/v1",
     endpoint: str = "/v1/audio/transcriptions",
     model: str = "whisper-1",
     prompt: str = "",
@@ -478,28 +477,118 @@ def _write_remote_asr_config(
     preprocessing: str = "",
     chunking: str = "",
 ) -> None:
+    def values(block: str, key: str) -> dict:
+        parsed = yaml.safe_load(dedent(block)) if block.strip() else {}
+        raw = parsed.get(key) if isinstance(parsed, dict) else None
+        return raw if isinstance(raw, dict) else {}
+
+    execution_values = values(execution, "execution")
+    preprocessing_values = values(preprocessing, "preprocessing")
+    chunking_values = values(chunking, "chunking")
+    execution_policy: dict = {}
+    if "adaptive_concurrency" in execution_values:
+        execution_policy["concurrency_mode"] = (
+            "adaptive" if execution_values["adaptive_concurrency"] else "fixed"
+        )
+    for source, target in (
+        ("concurrency", "target_concurrency"),
+        ("min_concurrency", "minimum_concurrency"),
+        ("max_concurrency", "maximum_concurrency"),
+        ("timeout_seconds", "request_deadline_seconds"),
+        ("retry", "max_attempts"),
+    ):
+        if source in execution_values:
+            execution_policy[target] = execution_values[source]
+    if "max_inflight_upload_mb" in execution_values:
+        execution_policy["max_inflight_audio_bytes"] = int(
+            float(execution_values["max_inflight_upload_mb"]) * 1024 * 1024
+        )
+
+    chunking_policy: dict = {}
+    for source, target in (
+        ("mode", "mode"),
+        ("window_seconds", "window_target_seconds"),
+        ("max_window_seconds", "window_target_seconds"),
+        ("min_window_seconds", "window_floor_seconds"),
+        ("overlap_seconds", "overlap_seconds"),
+    ):
+        if source in chunking_values:
+            chunking_policy[target] = chunking_values[source]
+    if "max_upload_mb" in chunking_values:
+        chunking_policy["upload_soft_limit_bytes"] = int(
+            float(chunking_values["max_upload_mb"]) * 1024 * 1024
+        )
+    silence = chunking_values.get("silence")
+    if isinstance(silence, dict):
+        chunking_policy["silence"] = {
+            target: silence[source]
+            for source, target in (
+                ("noise_db", "noise_db"),
+                ("min_silence_seconds", "minimum_seconds"),
+                ("cut_padding_seconds", "cut_padding_seconds"),
+            )
+            if source in silence
+        }
+    if chunking_policy.get("mode") == "none":
+        execution_policy["split_retry"] = False
+
+    preprocessing_policy: dict = {}
+    trim = preprocessing_values.get("trim_silence")
+    if isinstance(trim, dict):
+        if "enabled" in trim:
+            preprocessing_policy["trim_silence"] = trim["enabled"]
+        for source, target in (
+            ("noise_db", "noise_db"),
+            ("min_silence_seconds", "minimum_seconds"),
+            ("keep_preroll_seconds", "preroll_seconds"),
+            ("trim_trailing", "trim_trailing"),
+            ("keep_postroll_seconds", "postroll_seconds"),
+            ("min_upload_seconds", "minimum_upload_seconds"),
+        ):
+            if source in trim:
+                preprocessing_policy[target] = trim[source]
+
+    engine_type = "openrouter_asr" if protocol == "openrouter_stt" else "openai_transcription"
+    env_fallback = "OPENROUTER_API_KEY" if engine_type == "openrouter_asr" else "OPENAI_API_KEY"
+    policy_overrides = {
+        key: value
+        for key, value in (
+            ("execution", execution_policy),
+            ("preprocessing", preprocessing_policy),
+            ("chunking", chunking_policy),
+        )
+        if value
+    }
+    engine: dict = {
+        "id": provider_name,
+        "type": engine_type,
+        "model": model,
+        "endpoint": {
+            "base_url": base_url,
+            "path": endpoint,
+            "credential": {
+                "binding_id": provider_name,
+                "secret_ref": provider_name,
+                "env_fallback": env_fallback,
+            },
+        },
+    }
+    if policy_overrides:
+        engine["policy_overrides"] = policy_overrides
+    asr = {"engine": provider_name}
+    prompt_values = values(prompt, "prompt")
+    if prompt_values:
+        asr["prompt"] = prompt_values
+    payload = {
+        "config_schema_version": 2,
+        "artifacts_dir": "artifacts",
+        "translation_batch_size": 2,
+        "default_concurrency": 1,
+        "asr": asr,
+        "asr_engines": [engine],
+    }
     (root / "pipeline.yaml").write_text(
-        (
-            f"""
-artifacts_dir: artifacts
-translation_batch_size: 2
-default_concurrency: 1
-asr:
-  provider: {provider_name}{_indent_yaml_block(prompt, "  ")}
-asr_providers:
-  - name: {provider_name}
-    kind: remote
-    protocol: {protocol}
-    base_url: {base_url}
-    endpoint: {endpoint}
-    model: {model}
-    auth:
-      type: bearer
-      env_key: PROVIDER_KEY
-      credential_id: {provider_name}{_indent_yaml_block(execution, "    ")}{_indent_yaml_block(preprocessing, "    ")}{_indent_yaml_block(chunking, "    ")}
-providers:
-            """
-        ).strip(),
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -529,20 +618,18 @@ def test_openrouter_asr_protocol_passes_full_task_preflight(
     _write_config(tmp_path)
     (tmp_path / "pipeline.yaml").write_text(
         """
+config_schema_version: 2
 artifacts_dir: artifacts
-asr:
-  provider: openrouter_asr
-asr_providers:
-  - name: openrouter_asr
-    kind: remote
-    protocol: openrouter_stt
-    base_url: https://openrouter.ai/api/v1
-    endpoint: /audio/transcriptions
+asr: {engine: openrouter_asr}
+asr_engines:
+  - id: openrouter_asr
+    type: openrouter_asr
     model: openai/whisper-large-v3
-    auth:
-      type: bearer
-      env_key: OPENROUTER_API_KEY
-      credential_id: openrouter_asr
+    endpoint:
+      credential:
+        binding_id: openrouter_asr
+        secret_ref: openrouter_asr
+        env_fallback: OPENROUTER_API_KEY
         """.strip(),
         encoding="utf-8",
     )
@@ -621,12 +708,12 @@ def test_worker_pipeline_artifacts_events_and_resume(tmp_path: Path, monkeypatch
         duration_seconds: float,
         **_kwargs,
     ) -> list[dict]:
-        assert mode == "auto"
+        assert mode == "fixed"
         assert window_seconds == 300
         assert overlap_seconds == 30
-        assert short_audio_seconds == 300
-        assert max_upload_mb == 24
-        assert max_window_seconds == 120
+        assert short_audio_seconds == 0.0
+        assert max_upload_mb is None
+        assert max_window_seconds == 300
         assert min_window_seconds == 12
         assert duration_seconds == 61.0
         segments_dir.mkdir(parents=True, exist_ok=True)
@@ -936,9 +1023,9 @@ def test_resume_uses_saved_one_off_asr_prompt(tmp_path: Path, monkeypatch) -> No
     raw = pipeline.read_text(encoding="utf-8")
     pipeline.write_text(
         raw.replace(
-            "asr:\n  provider: faster_whisper_test",
+            "asr: {engine: faster_whisper_test}",
             """asr:
-  provider: faster_whisper_test
+  engine: faster_whisper_test
   prompt:
     active_profile: anime
     profiles:
@@ -1040,7 +1127,17 @@ chunking:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 20.0, "duration": 10.0, "trusted_start": 20.0, "trusted_end": 30.0, "path": str(first)}]
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 10.0,
+                "trusted_start": 0.0,
+                "trusted_end": 10.0,
+                "cut_reason": "whole_audio",
+                "path": str(first),
+            }
+        ]
 
     def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
         upload_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1109,13 +1206,13 @@ chunking:
     assert seen["provider"] == "cloud1"
     assert seen["prompt"] == "Names: Subaru"
     assert seen["audio_path"] == root / "artifacts" / ".cache" / task_id / "asr" / "upload" / "segment_00000.wav"
-    assert seen["offset"] == 22.75
+    assert seen["offset"] == 2.75
     preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
     assert preprocess["reason"] == "trimmed"
     rows = json.loads((task_dir / "source" / "asr" / "rows" / "segment_00000.json").read_text(encoding="utf-8"))
     assert rows[0]["meta"]["audio_preprocess"]["trim_start_seconds"] == 2.75
     source_lines = (task_dir / "source" / "segments.normalized.jsonl").read_text(encoding="utf-8").splitlines()
-    assert json.loads(source_lines[0])["start"] == 22.75
+    assert json.loads(source_lines[0])["start"] == 2.75
 
 
 def test_cloud_asr_previous_text_is_added_to_next_segment_prompt(tmp_path: Path, monkeypatch) -> None:
@@ -1252,7 +1349,17 @@ chunking:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 10.0, "trusted_start": 0.0, "trusted_end": 10.0, "path": str(first)}]
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 10.0,
+                "trusted_start": 0.0,
+                "trusted_end": 10.0,
+                "cut_reason": "whole_audio",
+                "path": str(first),
+            }
+        ]
 
     def fake_prepare(audio_path: Path, upload_path: Path, **_kwargs) -> dict:
         upload_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1368,6 +1475,7 @@ chunking:
                 "duration": 10.0,
                 "trusted_start": 0.0,
                 "trusted_end": 10.0,
+                "cut_reason": "whole_audio",
                 "path": str(part),
             }
         ]
@@ -1769,7 +1877,17 @@ chunking:
         segments_dir.mkdir(parents=True, exist_ok=True)
         first = segments_dir / "part_00000.wav"
         first.write_bytes(b"one")
-        return [{"segment_index": 0, "start": 0.0, "duration": 10.0, "trusted_start": 0.0, "trusted_end": 10.0, "path": str(first)}]
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 10.0,
+                "trusted_start": 0.0,
+                "trusted_end": 10.0,
+                "cut_reason": "whole_audio",
+                "path": str(first),
+            }
+        ]
 
     class FakeCloudAsrEngine:
         def __init__(self, **_kwargs) -> None:

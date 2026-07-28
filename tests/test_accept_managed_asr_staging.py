@@ -134,7 +134,17 @@ def acceptance_fixture(tmp_path: Path) -> dict[str, Any]:
         },
     )
     pipeline_seed.parent.mkdir(parents=True, exist_ok=True)
-    pipeline_seed.write_text("asr:\n  provider: faster_whisper_large_v3\n", encoding="utf-8")
+    pipeline_seed.write_text(
+        """config_schema_version: 2
+asr: {engine: faster_whisper_large_v3}
+asr_engines:
+  - id: faster_whisper_large_v3
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
+""",
+        encoding="utf-8",
+    )
     providers_seed.write_text("providers: []\n", encoding="utf-8")
     _write_json(
         stage_report,

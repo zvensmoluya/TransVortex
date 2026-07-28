@@ -93,6 +93,14 @@ providers:
 
 `.env` 仍可用于开发兼容，但不再是桌面端默认保存位置。
 
+远程 ASR 的凭据引用保存在 `pipeline.yaml` 的
+`asr_engines[].endpoint.credential`。`binding_id` 是解析身份的一部分，
+`secret_ref` 指向 `auth.json` 中的凭据记录；只有 canonical OpenAI / OpenRouter
+官方 Endpoint 且 binding 明确声明对应 `env_fallback` 时，才会读取
+`OPENAI_API_KEY` / `OPENROUTER_API_KEY`。自定义 Endpoint 不会自动读取这些官方
+环境变量，必须显式绑定自己的 `secret_ref`。Endpoint 的 YAML Header 不能包含
+authorization、cookie、token、key、secret、credential 等敏感语义。
+
 ## 3. Anthropic Messages 兼容配置示例
 
 下面使用不可路由的保留域名展示配置结构。实际接入时可在应用中选择官方厂商预设，或把地址、模型和凭据引用替换为目标兼容服务的真实值：
@@ -314,13 +322,16 @@ asr_engines:
 
 说明：
 - `asr_engines` 只保存引擎意图和稀疏的 `policy_overrides`。分窗、并发、预处理、解码和请求格式的推荐值由引擎适配器统一物化，不再复制到每个种子配置中。
-- 当前 ASR schema 版本固定为 `2`；未知字段和不支持的版本会直接报错。设置保存先完成解析校验，再使用同目录临时文件原子替换，不建设通用 migration framework。
+- 当前 pipeline / ASR schema 版本固定为 `2`；未知顶层字段、未知 ASR 字段、放错 Engine 类型的字段和不支持的版本都会直接报错。旧 `asr.provider` / `asr_providers` 已不再作为持久化输入；设置保存先完成解析校验，再使用同目录临时文件原子替换，不建设通用 migration framework。
 - `faster_whisper_worker` 的 runtime、model 与 accelerator 是三个独立资源绑定；`managed` 表示产品管理的资源，`registered` 表示经过验证的外部资源记录。模型路径和 Python 路径不直接写入 YAML。
-- 远程引擎在自己的 `endpoint` 中声明地址、credential binding、代理和非敏感 Header。`secret_ref` 只引用用户级凭据记录；API key 不进入 YAML。`Authorization`、`X-Api-Key` 等敏感 Header 会被配置校验拒绝。
+- 远程引擎在自己的 `endpoint` 中声明地址、credential binding、代理和非敏感 Header。`binding_id` 与 `secret_ref` 共同确定解析身份；API key 不进入 YAML。官方环境变量 fallback 只允许 canonical 官方 Endpoint 显式声明，自定义 Endpoint 不能继承。`Authorization`、`X-Api-Key` 等敏感 Header 会被配置校验拒绝。
 - Capabilities 同时包含适配器声明与运行时观测，例如可用性、实际设备、支持的 compute type、服务探测结果和已知上传上限。它不是用户配置，也不持久化回种子 YAML。
 - 推荐 Policy 是产品策略，不是模型能力声明。当前本地 Whisper 与 OpenAI transcription 推荐约 120 秒窗口，OpenRouter Whisper 与实验性 Grok 推荐 300 秒；FunASR 当前保守使用 120 秒无 overlap。用户只在确有需要时写 `policy_overrides`。
+- Policy 中窗口、静音、预处理和请求期限等秒数字段接受有限浮点数；并发、尝试次数、beam size、字节预算和版本字段只接受整数，不会通过 `int()` 静默截断。显式 override 若超过 Engine capability 会返回配置错误；只有未显式指定的推荐值才可按 capability 派生收紧。
+- `chunking.mode: none` 表示整段媒体作为唯一窗口，仍必须满足 Engine 的硬时长与上传限制；它不能与 `execution.split_retry: true` 组合。需要细分重试时使用 `fixed` 或 `silence`。
 - `silence` 分窗会用 ffmpeg `silencedetect` 寻找静音边界；没有合适静音点时按有效窗口 hard cut。上传体积限制只作为保护，不是“尽量单片上传”的目标。
-- 创建任务时会把 Engine、运行时 Capabilities 和有效 Policy 冻结到 `settings.asr_intent`。媒体探测后，实际切点、trusted region、并发、请求期限和时间轴算法版本写入任务目录 `asr/asr_plan.json`；恢复任务使用该快照，不受后来主页配置或默认值变化影响。
+- 创建任务时会把 Engine、运行时 Capabilities 和有效 Policy 冻结到 `settings.asr_intent`。媒体探测后，稳定 segment id/index、任务目录内规范化相对路径、分片内容哈希、source/trusted 时间范围、cut reason、媒体信息、并发、请求期限和时间轴策略版本写入任务目录 `asr/asr_plan.json`；恢复任务逐项校验并使用该快照，不依赖机器绝对路径，也不受后来主页配置或默认值变化影响。
+- 细分重试会先持久化失败窗口的 retry decision 和替代子窗口，再执行子窗口；崩溃恢复后读取该决定，不会重新提交原失败窗口。当前 intent schema 为 `2`、plan schema 为 `4`、retry schema 为 `2`、时间轴 strategy version 为 `1`。版本或执行语义不兼容时明确拒绝恢复并要求新建任务，不长期分发旧算法实现。
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
 - 本地 Whisper 的有效解码 Policy 默认使用 `beam_size: 5`、`temperature: 0` 并关闭 `condition_on_previous_text`；`vad_filter` 固定为 `false`，避免 worker 内部再次丢弃无人声区间。设备与 compute type 由 Engine 偏好和运行时探测共同解析。
 - ASR Engine 不复用翻译 routing。共享部分只限凭据解析和 HTTP 传输等薄基础设施；OpenAI transcription、OpenRouter STT、FunASR 与本地 worker 保留各自的请求和时间轴适配。
@@ -343,11 +354,21 @@ asr_engines:
 - 请求字段由 Engine 适配器和模型 profile 管理。OpenAI transcription 使用 multipart；OpenRouter 使用 JSON base64，并只发送 profile 白名单允许的参数；FunASR 只发送其兼容接口支持的字段。UI 不把 `response_format` 或时间戳粒度伪装成所有引擎都可自由选择的通用选项。
 - 远程 Endpoint 默认优先 HTTP/2，实际不可用时按传输层能力降级并记录协议；短重试次数来自有效 Execution Policy。OpenRouter 返回 `Retry-After` 时会在有界范围内采用该等待时间。
 - ASR 云端 URL 会自动规整重复路径，例如 `base_url=https://api.example.com/v1` + `endpoint=/v1/audio/transcriptions` 会请求 `/v1/audio/transcriptions`，不会变成 `/v1/v1/audio/transcriptions`。
-- `asr.engine` 选择识别引擎；`--asr-model` 只对本次加载的 ASR Engine 做临时模型覆盖，不影响翻译模型，也不写回 YAML。
+- `asr.engine` 选择识别引擎；CLI 的 `--asr-engine` 可做本次选择覆盖，`--asr-model` 只对本次加载的 ASR Engine 做临时模型覆盖，不影响翻译模型，也不写回 YAML。
 - ASR、SRT、内嵌字幕和外部 segments 都会归一化为 `source/segments.normalized.jsonl`，翻译层只读取统一 `Segment`。
 - `source/segments.normalized.jsonl` 随任务保留，可直接交给 `transvortex translate --segments ...`。桌面端“重新翻译”会在提交时复制该文件到新任务并记录 `settings.provenance.derived_from_task_id` 与 `source_sha256`；它不依赖数据库，也不重新运行 ASR。`resume` 仍只用于继续原任务。
 - 支持自动提取的内置字幕轨格式包括 `subrip`、`ass`、`ssa`、`webvtt`、`mov_text`；图形字幕轨不会替代 ASR。
-- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-mode`、`--asr-model`、`--asr-max-initial-timestamp`、`--asr-beam-size`、`--asr-temperature`、`--asr-condition-on-previous-text`、`--asr-hotwords`、`--asr-prompt-profile`、`--asr-prompt-text`、`--asr-cloud-base-url`、`--asr-cloud-endpoint`、`--asr-cloud-env-key`、`--asr-cloud-credential-id`、`--asr-chunking-mode`、`--asr-window-seconds`、`--asr-overlap-seconds`、`--asr-max-upload-mb`、`--asr-audio-track`、`--asr-cloud-concurrency` 覆盖。
+- CLI 可用 `--source-mode`、`--subtitle-track`、`--asr-engine`、`--asr-model`、`--asr-audio-track`、`--asr-prompt-profile`、`--asr-prompt-text`、`--asr-prompt-enabled`、`--asr-prompt-include-previous-text` 和 `--asr-prompt-max-chars` 做任务级覆盖。Engine Policy 通过 schema v2 配置和解析器校验，不再暴露旧 cloud/chunking 散装参数。
+
+### 临时运行时投影
+
+`AsrProviderConfig` 现在只由 Engine + 有效 Policy 单向生成，用于尚未迁移的 Client / Worker
+执行接口和桌面协议快照；它不会从 YAML 读取，也不会持久化或回写。删除该临时类型前还需完成：
+
+- 将 `core/asr.py` 的本地 worker、OpenAI、OpenRouter 与 FunASR client 构造参数改为 Engine/Endpoint/Policy 类型；
+- 将 `app/asr_runtime.py` 与 `app/asr_testing.py` 的 readiness、fingerprint、credential 和连接测试改为 Engine resolution；
+- 将 orchestrator 的活动 ASR 查找与 `AppConfig.asr_providers` 改为 Engine resolution，并同步 doctor、Agent setup 与 desktop snapshot 消费方；
+- 最后删除 `app/models.py` 中的 `AsrProviderConfig`、`PipelineConfig.asr_provider` 等兼容命名，以及桌面 RPC 中仍保留的 `asr.provider.*` / `asr_providers` 字段。
 
 ## 6. 零 Token 协议预检
 
@@ -384,7 +405,7 @@ transvortex probe-provider --provider example_anthropic_gateway --model example-
   - `PowerShell: $env:TVX_MODEL_API_KEY = "your_key"`
 
 - `response mapping did not extract text from sample`
-  - 这是翻译 provider 的协议检查错误，表示 `response_mapping.text_paths` 与目标协议不匹配；ASR provider 不使用这个翻译层 response mapping。
+  - 这是翻译 provider 的协议检查错误，表示 `response_mapping.text_paths` 与目标协议不匹配；ASR Engine 不使用这个翻译层 response mapping。
 
 - URL 多了重复 `/v1`
   - 现在已自动去重，若仍异常请检查 `base_url` 是否含非法路径
