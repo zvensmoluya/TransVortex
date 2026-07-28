@@ -17,6 +17,7 @@ class CredentialLookup:
     source: str
     credential_id: str
     env_key: str
+    binding_id: str = ""
 
     @property
     def found(self) -> bool:
@@ -157,14 +158,50 @@ def resolve_credential(
     env_key: str,
     credential_id: str,
     provider_name: str = "",
+    binding_id: str = "",
     root_dir: Path | None = None,
     explicit_key: str | None = None,
 ) -> CredentialLookup:
     env_key = env_key.strip()
     credential_id = credential_id.strip()
     provider_name = provider_name.strip()
+    binding_id = binding_id.strip()
     if explicit_key:
-        return CredentialLookup(explicit_key, "explicit", credential_id, env_key)
+        return CredentialLookup(explicit_key, "explicit", credential_id, env_key, binding_id)
+
+    # A domain credential binding is intentionally narrower than the legacy
+    # provider lookup. Its secret_ref is the only auth.json key, and an
+    # environment variable is an explicit fallback rather than an override.
+    if binding_id:
+        credentials = read_auth_credentials()
+        if credential_id and credentials.get(credential_id):
+            return CredentialLookup(
+                credentials[credential_id],
+                "auth_json",
+                credential_id,
+                env_key,
+                binding_id,
+            )
+        if env_key and os.getenv(env_key):
+            return CredentialLookup(
+                os.environ[env_key],
+                "env",
+                credential_id,
+                env_key,
+                binding_id,
+            )
+        if root_dir is not None and env_key:
+            dotenv_values = read_dotenv_values(root_dir)
+            if dotenv_values.get(env_key):
+                return CredentialLookup(
+                    dotenv_values[env_key],
+                    "dotenv",
+                    credential_id,
+                    env_key,
+                    binding_id,
+                )
+        return CredentialLookup("", "missing", credential_id, env_key, binding_id)
+
     if env_key and os.getenv(env_key):
         return CredentialLookup(os.environ[env_key], "env", credential_id, env_key)
     credentials = read_auth_credentials()
@@ -181,10 +218,12 @@ def resolve_credential(
 
 def resolve_provider_credential(provider: Any, *, root_dir: Path | None = None, explicit_key: str | None = None) -> CredentialLookup:
     credential_id = provider_credential_id(provider)
+    auth = getattr(provider, "auth", None)
     return resolve_credential(
         env_key=str(getattr(provider, "env_key", "") or ""),
         credential_id=credential_id,
         provider_name=str(getattr(provider, "name", "") or ""),
+        binding_id=str(getattr(auth, "binding_id", "") or ""),
         root_dir=root_dir,
         explicit_key=explicit_key,
     )

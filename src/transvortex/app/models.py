@@ -330,6 +330,7 @@ class AsrAuthConfig:
     type: str = "bearer"  # none | bearer
     env_key: str = "TVX_MODEL_API_KEY"
     credential_id: str = "TVX_MODEL_API_KEY"
+    binding_id: str = ""
 
 
 @dataclass

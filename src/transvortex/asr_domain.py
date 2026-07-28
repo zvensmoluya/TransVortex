@@ -26,6 +26,7 @@ AsrEngineKind = Literal[
 class CredentialBinding:
     binding_id: str
     secret_ref: str
+    env_fallback: str = ""
 
 
 @dataclass(frozen=True)

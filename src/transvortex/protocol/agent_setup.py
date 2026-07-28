@@ -36,7 +36,7 @@ from ..app.asr_runtime import (
     provider_test_fingerprint,
 )
 from ..app.config import load_app_config, resolve_providers_file
-from ..app.credentials import resolve_credential
+from ..app.credentials import resolve_provider_credential
 from ..app.agent_entry import cli_argv_prefix
 from ..utils import read_json
 from ..utils import utc_now_iso
@@ -304,10 +304,8 @@ def _provider_payload(provider: Any, *, root_dir: Path | None = None) -> dict[st
     credential_source = "not_required"
     if auth.type != "none":
         try:
-            lookup = resolve_credential(
-                env_key=str(auth.env_key or ""),
-                credential_id=str(auth.credential_id or ""),
-                provider_name=str(provider.name or ""),
+            lookup = resolve_provider_credential(
+                provider,
                 root_dir=root_dir,
             )
             credential_present = bool(lookup.found)

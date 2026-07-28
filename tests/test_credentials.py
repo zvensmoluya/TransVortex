@@ -36,6 +36,44 @@ def test_credential_resolution_priority(tmp_path: Path, monkeypatch) -> None:
     assert resolved.source == "dotenv"
 
 
+def test_bound_credential_uses_only_secret_ref_before_explicit_environment_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "project"
+    root.mkdir()
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(home))
+    monkeypatch.setenv("OFFICIAL_KEY", "from-env")
+    write_auth_credential("bound-secret", "from-auth")
+    write_auth_credential("engine-name", "legacy-provider-secret")
+
+    resolved = resolve_credential(
+        env_key="OFFICIAL_KEY",
+        credential_id="bound-secret",
+        provider_name="engine-name",
+        binding_id="binding:engine-name",
+        root_dir=root,
+    )
+
+    assert resolved.key == "from-auth"
+    assert resolved.source == "auth_json"
+    assert resolved.credential_id == "bound-secret"
+    assert resolved.binding_id == "binding:engine-name"
+
+    delete_auth_credential("bound-secret")
+    resolved = resolve_credential(
+        env_key="OFFICIAL_KEY",
+        credential_id="bound-secret",
+        provider_name="engine-name",
+        binding_id="binding:engine-name",
+        root_dir=root,
+    )
+
+    assert resolved.key == "from-env"
+    assert resolved.source == "env"
+
+
 def test_auth_json_write_delete_and_permissions(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
     path = write_auth_credential("p1", "secret")

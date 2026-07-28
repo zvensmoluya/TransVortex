@@ -20,7 +20,7 @@ from ..app.asr_resolution import (
     restore_asr_intent_snapshot,
 )
 from ..app.asr_runtime import asr_provider_readiness
-from ..app.credentials import resolve_credential
+from ..app.credentials import resolve_provider_credential
 from ..openrouter_asr import openrouter_asr_model_profile
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from .media import (
@@ -1653,10 +1653,8 @@ def _preflight(
             }:
                 raise RuntimeError(f"unsupported_asr_protocol: {asr_provider.protocol}")
             if asr_provider.auth.type == "bearer":
-                credential = resolve_credential(
-                    env_key=asr_provider.env_key,
-                    credential_id=asr_provider.credential_id,
-                    provider_name=asr_provider.name,
+                credential = resolve_provider_credential(
+                    asr_provider,
                     root_dir=root_dir,
                 )
                 if not credential.found:

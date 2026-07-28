@@ -14,6 +14,7 @@ from transvortex.app.asr_resolution import (
     resolve_asr_engine,
 )
 from transvortex.app.config import load_app_config
+from transvortex.app.credentials import resolve_provider_credential
 from transvortex.asr_domain import (
     AsrAudioInputCapabilities,
     AsrCapabilities,
@@ -76,6 +77,7 @@ def test_remote_endpoint_uses_a_secret_reference_and_rejects_secret_headers() ->
     assert spec.endpoint.credential is not None
     assert spec.endpoint.credential.binding_id == "openrouter_asr"
     assert spec.endpoint.credential.secret_ref == "openrouter_account"
+    assert spec.endpoint.credential.env_fallback == "OPENROUTER_API_KEY"
 
     with pytest.raises(ValueError, match="cannot contain credentials"):
         parse_asr_engine_spec(
@@ -96,6 +98,96 @@ def test_remote_endpoint_uses_a_secret_reference_and_rejects_secret_headers() ->
                 "endpoint": {"headers": {"Cookie": "session=example-token"}},
             }
         )
+
+    for header in ("X-Token", "X-Auth", "X-Credential", "X-Custom-Key"):
+        with pytest.raises(ValueError, match="cannot contain credentials"):
+            parse_asr_engine_spec(
+                {
+                    "id": f"bad_{header.lower()}",
+                    "type": "openai_transcription",
+                    "model": "whisper-1",
+                    "endpoint": {"headers": {header: "example-token"}},
+                }
+            )
+
+    idempotent = parse_asr_engine_spec(
+        {
+            "id": "safe_header",
+            "type": "openai_transcription",
+            "endpoint": {"headers": {"Idempotency-Key": "request-123"}},
+        }
+    )
+    assert idempotent.endpoint.headers == {"Idempotency-Key": "request-123"}
+
+
+@pytest.mark.parametrize(
+    ("engine_type", "env_key", "model"),
+    [
+        ("openai_transcription", "OPENAI_API_KEY", "whisper-1"),
+        ("openrouter_asr", "OPENROUTER_API_KEY", "openai/whisper-large-v3"),
+    ],
+)
+def test_custom_endpoint_cannot_inherit_official_environment_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engine_type: str,
+    env_key: str,
+    model: str,
+) -> None:
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv(env_key, "official-endpoint-secret")
+    resolution = resolve_asr_engine(
+        {
+            "id": "custom_remote",
+            "type": engine_type,
+            "model": model,
+            "endpoint": {"base_url": "https://asr.example.invalid/v1"},
+        },
+        root_dir=tmp_path,
+    )
+
+    assert resolution.spec.endpoint.credential is not None
+    assert resolution.spec.endpoint.credential.env_fallback == ""
+    assert resolution.runtime.auth.binding_id == "custom_remote"
+    assert resolution.runtime.auth.env_key == ""
+    assert resolve_provider_credential(resolution.runtime, root_dir=tmp_path).found is False
+
+    with pytest.raises(ValueError, match="only allowed for its canonical official endpoint"):
+        resolve_asr_engine(
+            {
+                "id": "unsafe_custom_remote",
+                "type": engine_type,
+                "model": model,
+                "endpoint": {
+                    "base_url": "https://asr.example.invalid/v1",
+                    "credential": {
+                        "binding_id": "unsafe_custom_remote",
+                        "secret_ref": "unsafe_custom_remote",
+                        "env_fallback": env_key,
+                    },
+                },
+            },
+            root_dir=tmp_path,
+        )
+
+
+def test_canonical_endpoint_uses_explicit_bound_environment_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("OPENAI_API_KEY", "official-openai-secret")
+    resolution = resolve_asr_engine(
+        {"id": "official_openai", "type": "openai_transcription"},
+        root_dir=tmp_path,
+    )
+
+    lookup = resolve_provider_credential(resolution.runtime, root_dir=tmp_path)
+
+    assert resolution.runtime.auth.binding_id == "official_openai"
+    assert resolution.runtime.auth.env_key == "OPENAI_API_KEY"
+    assert lookup.key == "official-openai-secret"
+    assert lookup.source == "env"
 
 
 def test_policy_defaults_are_constrained_by_capabilities_but_explicit_invalid_override_fails() -> None:

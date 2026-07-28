@@ -315,8 +315,8 @@ def test_cloud_asr_rejects_unsupported_response_format_and_reserved_extra_field(
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     monkeypatch.setattr(
-        "transvortex.core.asr.resolve_credential",
-        lambda **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
+        "transvortex.core.asr.resolve_provider_credential",
+        lambda *_args, **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
     )
     client = OpenAITranscriptionsAsrClient(
         AsrProviderConfig(
@@ -379,8 +379,8 @@ def test_openai_transcriptions_maps_segments_and_fallback_with_transport_meta(tm
         ),
     )
     monkeypatch.setattr(
-        "transvortex.core.asr.resolve_credential",
-        lambda **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
+        "transvortex.core.asr.resolve_provider_credential",
+        lambda *_args, **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
     )
     result = client.transcribe_segment(audio, 10.0, source_lang="en")
     rows = result.rows
@@ -442,8 +442,8 @@ def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, m
         fake_request_json_with_retry,
     )
     monkeypatch.setattr(
-        "transvortex.core.asr.resolve_credential",
-        lambda **_kwargs: SimpleNamespace(
+        "transvortex.core.asr.resolve_provider_credential",
+        lambda *_args, **_kwargs: SimpleNamespace(
             found=True,
             key="secret",
             credential_id="openrouter_asr",
@@ -547,8 +547,8 @@ def test_openrouter_grok_requires_words_and_normalizes_timeline_rows(tmp_path, m
         fake_request_json_with_retry,
     )
     monkeypatch.setattr(
-        "transvortex.core.asr.resolve_credential",
-        lambda **_kwargs: SimpleNamespace(
+        "transvortex.core.asr.resolve_provider_credential",
+        lambda *_args, **_kwargs: SimpleNamespace(
             found=True,
             key="secret",
             credential_id="openrouter_asr",
@@ -844,8 +844,8 @@ def test_cloud_asr_transcribe_propagates_transport_error(tmp_path, monkeypatch) 
     client = OpenAITranscriptionsAsrClient(AsrProviderConfig(name="openai"))
 
     monkeypatch.setattr(
-        "transvortex.core.asr.resolve_credential",
-        lambda **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
+        "transvortex.core.asr.resolve_provider_credential",
+        lambda *_args, **_kwargs: SimpleNamespace(found=True, key="secret", credential_id="openai", env_key="KEY"),
     )
     monkeypatch.setattr(
         client,

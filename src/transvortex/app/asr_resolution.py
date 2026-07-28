@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,8 @@ ASR_ENGINE_TYPES = {
     "openrouter_asr",
 }
 _SENSITIVE_HEADER_NAMES = {
+    "auth",
+    "authentication",
     "authorization",
     "cookie",
     "proxy-authorization",
@@ -76,7 +79,18 @@ _SENSITIVE_HEADER_NAMES = {
     "x-api-key",
     "api-key",
 }
-_SENSITIVE_HEADER_MARKERS = ("api-key", "apikey", "auth-token", "access-token", "secret", "password")
+_SENSITIVE_HEADER_WORDS = {
+    "auth",
+    "authentication",
+    "authorization",
+    "cookie",
+    "credential",
+    "key",
+    "password",
+    "secret",
+    "token",
+}
+_NON_SECRET_KEY_HEADERS = {"idempotency-key"}
 
 
 @dataclass(frozen=True)
@@ -205,14 +219,48 @@ def _default_endpoint(engine_type: str, engine_id: str) -> HttpEndpointSpec:
             credential=CredentialBinding(
                 binding_id=engine_id,
                 secret_ref=OPENROUTER_ASR_CREDENTIAL_ID,
+                env_fallback=OPENROUTER_ASR_ENV_KEY,
             ),
         )
     return HttpEndpointSpec(
         scope="remote",
         base_url="https://api.openai.com/v1",
         path="/v1/audio/transcriptions",
-        credential=CredentialBinding(binding_id=engine_id, secret_ref=engine_id),
+        credential=CredentialBinding(
+            binding_id=engine_id,
+            secret_ref=engine_id,
+            env_fallback="OPENAI_API_KEY",
+        ),
     )
+
+
+def _canonical_endpoint_env_fallback(
+    *,
+    engine_type: str,
+    base_url: str,
+    path: str,
+) -> str:
+    if engine_type == "openrouter_asr":
+        expected = (OPENROUTER_ASR_BASE_URL.rstrip("/"), OPENROUTER_ASR_ENDPOINT)
+        return OPENROUTER_ASR_ENV_KEY if (base_url.rstrip("/"), path) == expected else ""
+    if engine_type == "openai_transcription":
+        expected = ("https://api.openai.com/v1", "/v1/audio/transcriptions")
+        return "OPENAI_API_KEY" if (base_url.rstrip("/"), path) == expected else ""
+    return ""
+
+
+def _sensitive_header_name(name: str) -> bool:
+    normalized = name.strip().lower()
+    if normalized in _NON_SECRET_KEY_HEADERS:
+        return False
+    if normalized in _SENSITIVE_HEADER_NAMES or "apikey" in normalized:
+        return True
+    words = {
+        item
+        for item in re.split(r"[^a-z0-9]+", normalized)
+        if item
+    }
+    return bool(words & _SENSITIVE_HEADER_WORDS)
 
 
 def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpointSpec:
@@ -232,13 +280,22 @@ def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpoi
         },
         context="asr_engines[].endpoint",
     )
+    base_url = _text(values.get("base_url"), default=default.base_url).rstrip("/")
+    path = _text(values.get("path"), default=default.path)
+    allowed_env_fallback = _canonical_endpoint_env_fallback(
+        engine_type=engine_type,
+        base_url=base_url,
+        path=path,
+    )
     credential_raw = values.get("credential")
     credential = default.credential
+    if credential is not None and credential.env_fallback != allowed_env_fallback:
+        credential = replace(credential, env_fallback=allowed_env_fallback)
     if credential_raw is not None:
         credential_values = _mapping(credential_raw, context="asr_engines[].endpoint.credential")
         _known_fields(
             credential_values,
-            {"binding_id", "secret_ref"},
+            {"binding_id", "secret_ref", "env_fallback"},
             context="asr_engines[].endpoint.credential",
         )
         binding_id = _text(
@@ -251,7 +308,19 @@ def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpoi
         )
         if not binding_id or not secret_ref:
             raise ValueError("ASR endpoint credential binding_id and secret_ref are required")
-        credential = CredentialBinding(binding_id=binding_id, secret_ref=secret_ref)
+        env_fallback = _text(
+            credential_values.get("env_fallback"),
+            default=credential.env_fallback if credential else "",
+        )
+        if env_fallback and env_fallback != allowed_env_fallback:
+            raise ValueError(
+                "ASR endpoint credential env_fallback is only allowed for its canonical official endpoint"
+            )
+        credential = CredentialBinding(
+            binding_id=binding_id,
+            secret_ref=secret_ref,
+            env_fallback=env_fallback,
+        )
 
     headers_raw = _mapping(values.get("headers"), context="asr_engines[].endpoint.headers")
     headers = {str(key).strip(): str(value) for key, value in headers_raw.items()}
@@ -260,8 +329,7 @@ def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpoi
     sensitive = sorted(
         name
         for name in headers
-        if name.lower() in _SENSITIVE_HEADER_NAMES
-        or any(marker in name.lower() for marker in _SENSITIVE_HEADER_MARKERS)
+        if _sensitive_header_name(name)
     )
     if sensitive:
         raise ValueError(
@@ -282,8 +350,8 @@ def _parse_endpoint(raw: Any, *, engine_type: str, engine_id: str) -> HttpEndpoi
     )
     endpoint = HttpEndpointSpec(
         scope=scope,  # type: ignore[arg-type]
-        base_url=_text(values.get("base_url"), default=default.base_url).rstrip("/"),
-        path=_text(values.get("path"), default=default.path),
+        base_url=base_url,
+        path=path,
         credential=credential,
         proxy=proxy,  # type: ignore[arg-type]
         proxy_port=_integer(values.get("proxy_port"), default=default.proxy_port),
@@ -1109,14 +1177,9 @@ def _runtime_provider_from_resolution(
     credential = endpoint.credential
     auth = AsrAuthConfig(
         type="none" if credential is None else "bearer",
-        env_key=(
-            OPENROUTER_ASR_ENV_KEY
-            if isinstance(spec, OpenRouterAsrEngineSpec)
-            else "OPENAI_API_KEY"
-            if isinstance(spec, OpenAiTranscriptionEngineSpec)
-            else ""
-        ),
+        env_key=credential.env_fallback if credential else "",
         credential_id=credential.secret_ref if credential else "",
+        binding_id=credential.binding_id if credential else "",
     )
     request = AsrProviderRequestConfig(
         response_format="verbose_json",

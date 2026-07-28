@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import read_json, utc_now_iso, write_json
-from .credentials import resolve_credential
+from .credentials import resolve_provider_credential
 from .models import AsrProviderConfig
 
 
@@ -733,10 +733,8 @@ def _remote_readiness(provider: AsrProviderConfig, *, root_dir: Path) -> dict[st
         return _readiness("unavailable", policy_code, False, "choose_provider")
     if provider.auth.type != "bearer":
         return _readiness("unavailable", "unsupported_auth", False, "set_credential")
-    credential = resolve_credential(
-        env_key=provider.env_key,
-        credential_id=provider.credential_id,
-        provider_name=provider.name,
+    credential = resolve_provider_credential(
+        provider,
         root_dir=root_dir,
     )
     if not credential.found:
@@ -777,6 +775,7 @@ def provider_test_fingerprint(provider: AsrProviderConfig) -> str:
                 "type": provider.auth.type,
                 "env_key": provider.auth.env_key,
                 "credential_id": provider.auth.credential_id,
+                "binding_id": provider.auth.binding_id,
             },
             "runtime": {
                 "source": provider.runtime.source,
@@ -825,15 +824,16 @@ def provider_test_fingerprint(provider: AsrProviderConfig) -> str:
 def provider_credential_fingerprint(provider: AsrProviderConfig, *, root_dir: Path) -> str:
     if provider.auth.type == "none":
         return "none"
-    credential = resolve_credential(
-        env_key=provider.env_key,
-        credential_id=provider.credential_id,
-        provider_name=provider.name,
+    credential = resolve_provider_credential(
+        provider,
         root_dir=root_dir,
     )
     if not credential.found:
         return ""
-    raw = f"{provider.name}\0{credential.key}".encode("utf-8")
+    binding_identity = provider.auth.binding_id or provider.name
+    raw = (
+        f"{binding_identity}\0{credential.credential_id}\0{credential.source}\0{credential.key}"
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 

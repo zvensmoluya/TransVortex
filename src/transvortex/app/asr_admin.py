@@ -20,7 +20,7 @@ from ..openrouter_asr import (
 from ..utils import to_plain
 from .asr_resolution import asr_engine_to_yaml_row, resolve_asr_engine
 from .config import _parse_asr_provider, load_app_config
-from .credentials import auth_file_path, resolve_credential, write_auth_credential
+from .credentials import auth_file_path, resolve_provider_credential, write_auth_credential
 from .models import AsrProviderConfig, NetworkConfig
 from .asr_runtime import (
     asr_provider_readiness,
@@ -443,6 +443,11 @@ def _draft_to_engine_row(
                     default=OPENROUTER_ASR_CREDENTIAL_ID if engine_type == "openrouter_asr" else engine_id,
                 ),
             ),
+            **(
+                {"env_fallback": _text(current_credential, "env_fallback")}
+                if "env_fallback" in current_credential
+                else {}
+            ),
         }
         endpoint.setdefault("scope", "remote")
     if endpoint:
@@ -496,10 +501,8 @@ def save_asr_provider_config(
         credential_source = "not_required"
         credential_id = ""
     else:
-        credential = resolve_credential(
-            env_key=provider.env_key,
-            credential_id=provider.credential_id,
-            provider_name=provider.name,
+        credential = resolve_provider_credential(
+            provider,
             root_dir=root_dir,
         )
         has_key = credential.found

@@ -157,11 +157,13 @@ def _env_key_check(
     message_subject: str,
     credential_id: str | None = None,
     provider_name: str = "",
+    binding_id: str = "",
 ) -> dict[str, Any]:
     credential = resolve_credential(
         env_key=env_key,
         credential_id=credential_id or env_key,
         provider_name=provider_name,
+        binding_id=binding_id,
         root_dir=root_dir,
     )
     if credential.found:
@@ -430,6 +432,7 @@ def doctor_report(*, root_dir: Path, providers_file: Path | None = None) -> dict
                     env_key=asr_provider.env_key,
                     credential_id=asr_provider.credential_id,
                     provider_name="",
+                    binding_id=asr_provider.auth.binding_id,
                     name="asr_env_key",
                     message_subject="ASR",
                 )

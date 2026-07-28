@@ -912,10 +912,8 @@ def config_payload(
             credential_source = "not_required"
             has_key = True
         else:
-            credential = resolve_credential(
-                env_key=provider.env_key,
-                credential_id=provider.credential_id,
-                provider_name=provider.name,
+            credential = resolve_provider_credential(
+                provider,
                 root_dir=root,
             )
             credential_source = credential.source
@@ -1089,12 +1087,18 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
             credential_source = "not_required"
             has_key = True
         else:
-            credential = resolve_credential(
-                env_key=env_key,
-                credential_id=credential_id,
-                provider_name=name,
-                root_dir=root,
-            )
+            if resolution is not None:
+                credential = resolve_provider_credential(
+                    resolution.runtime,
+                    root_dir=root,
+                )
+            else:
+                credential = resolve_credential(
+                    env_key=env_key,
+                    credential_id=credential_id,
+                    provider_name=name,
+                    root_dir=root,
+                )
             credential_source = credential.source
             has_key = credential.found
         asr_providers[name] = {

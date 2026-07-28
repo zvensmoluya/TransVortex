@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..app.credentials import resolve_credential
+from ..app.credentials import resolve_provider_credential
 from ..app.asr_runtime import (
     WHISPER_HOST_PROTOCOL_VERSION,
     asr_provider_endpoint_policy_code,
@@ -497,10 +497,8 @@ def _resolve_asr_api_key(
         return ""
     if config.auth.type != "bearer":
         raise RuntimeError(f"unsupported_asr_auth_type: {config.auth.type}")
-    credential = resolve_credential(
-        env_key=config.env_key,
-        credential_id=config.credential_id,
-        provider_name=config.name,
+    credential = resolve_provider_credential(
+        config,
         root_dir=root_dir,
     )
     if not credential.found:
