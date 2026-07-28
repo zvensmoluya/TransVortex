@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import importlib.util
+import math
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields, is_dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .aligner import apply_translations, merge_asr_window_segments, normalize_timeline, validate_segments
@@ -50,13 +52,18 @@ from ..memory.plan import (
 from ..app.models import AppConfig, Segment, TaskRecord
 from ..asr_domain import (
     ASR_PLAN_SCHEMA_VERSION,
+    ASR_RETRY_SCHEMA_VERSION,
     AsrExecutionPlan,
     AsrPlanWindow,
+    AsrRetryDecision,
+    AsrRetryParent,
+    AsrSplitRetryStrategy,
     AsrTimelinePlan,
     AudioFacts,
     AudioStreamFacts,
     CanonicalAudioFacts,
     ResolvedAsrPlan,
+    ResolvedAsrRetryPlan,
     SilenceAnalysisFacts,
 )
 from ..providers.probe import probe_provider
@@ -397,6 +404,347 @@ def _asr_runs_concurrently(config: AppConfig) -> bool:
     )
 
 
+def _asr_retry_artifact_paths(paths: dict[str, Path], item: dict[str, Any]) -> dict[str, Path]:
+    task_dir = _task_dir_from_paths(paths)
+    segment_index = _strict_nonnegative_int(
+        item.get("segment_index"),
+        error="asr_plan_segment_index_invalid",
+    )
+    segment_id = _validated_asr_segment_id(
+        item.get("segment_id") or f"segment-{segment_index:05d}"
+    )
+    asr_dir = paths.get("asr", task_dir / "asr")
+    return {
+        "decision": asr_dir / "retry_decisions" / f"{segment_id}.json",
+        "plan": asr_dir / "retry_plans" / f"{segment_id}.json",
+        "windows": asr_dir / "segments_retry" / segment_id,
+        "manifest": asr_dir / "segments_retry" / segment_id / "manifest.json",
+        "result_source": task_dir / "source" / "retry" / segment_id,
+    }
+
+
+def _asr_retry_parent(item: dict[str, Any]) -> AsrRetryParent:
+    segment_index = _strict_nonnegative_int(
+        item.get("segment_index"),
+        error="asr_plan_segment_index_invalid",
+    )
+    segment_id = _validated_asr_segment_id(
+        item.get("segment_id") or f"segment-{segment_index:05d}"
+    )
+    source_start = _finite_number(item.get("start"), error="asr_plan_window_time_invalid")
+    duration = _finite_number(item.get("duration"), error="asr_plan_window_time_invalid")
+    source_end = source_start + duration
+    trusted_start = _finite_number(
+        item.get("trusted_start"),
+        error="asr_plan_window_time_invalid",
+    )
+    trusted_end = _finite_number(
+        item.get("trusted_end"),
+        error="asr_plan_window_time_invalid",
+    )
+    audio_path = Path(str(item.get("path") or ""))
+    if not _is_nonempty_file(audio_path):
+        raise RuntimeError("asr_retry_parent_artifact_missing")
+    content_sha256 = str(item.get("content_sha256") or "").strip().lower()
+    actual_sha256 = _sha256_file(audio_path)
+    if content_sha256 and content_sha256 != actual_sha256:
+        raise RuntimeError("asr_retry_parent_content_mismatch")
+    if (
+        duration <= 0
+        or trusted_start < source_start - _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end > source_end + _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end <= trusted_start
+    ):
+        raise RuntimeError("asr_plan_window_time_invalid")
+    return AsrRetryParent(
+        segment_id=segment_id,
+        segment_index=segment_index,
+        content_sha256=actual_sha256,
+        source_start=source_start,
+        source_end=source_end,
+        trusted_start=trusted_start,
+        trusted_end=trusted_end,
+    )
+
+
+def _asr_retry_base_plan_id(task: TaskRecord | Any) -> str:
+    settings = getattr(task, "settings", None)
+    if not isinstance(settings, dict):
+        return ""
+    plan = settings.get("asr_plan")
+    return str(plan.get("plan_id") or "") if isinstance(plan, dict) else ""
+
+
+def _asr_retry_decision_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "base_plan_id": payload.get("base_plan_id"),
+        "parent": payload.get("parent"),
+        "strategy": payload.get("strategy"),
+    }
+
+
+def _asr_retry_plan_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "decision_id": payload.get("decision_id"),
+        "windows": payload.get("windows"),
+    }
+
+
+def _prefixed_plan_id(prefix: str, identity: dict[str, Any]) -> str:
+    return prefix + _asr_plan_id(identity).removeprefix("asr-")
+
+
+def _build_asr_retry_decision(
+    *,
+    item: dict[str, Any],
+    config: AppConfig,
+    task: TaskRecord | Any,
+) -> dict[str, Any]:
+    parent = _asr_retry_parent(item)
+    duration = parent.source_end - parent.source_start
+    chunking = _active_asr_provider(config).chunking
+    max_child_window = max(
+        float(chunking.min_window_seconds),
+        min(float(chunking.max_window_seconds), duration / 2.0),
+    )
+    window_seconds = max(1, int(max_child_window))
+    strategy = AsrSplitRetryStrategy(
+        strategy_id="fixed_window_subdivision",
+        strategy_version=1,
+        mode="fixed",
+        window_seconds=window_seconds,
+        minimum_window_seconds=max(1, int(chunking.min_window_seconds)),
+        overlap_seconds=max(0, min(int(chunking.overlap_seconds), window_seconds - 1)),
+        max_upload_mb=float(chunking.max_upload_mb),
+    )
+    identity = {
+        "base_plan_id": _asr_retry_base_plan_id(task),
+        "parent": to_plain(parent),
+        "strategy": to_plain(strategy),
+    }
+    decision = AsrRetryDecision(
+        decision_id=_prefixed_plan_id("asr-retry-decision-", identity),
+        created_at=utc_now_iso(),
+        base_plan_id=str(identity["base_plan_id"]),
+        parent=parent,
+        strategy=strategy,
+    )
+    return to_plain(decision)
+
+
+def _validate_asr_retry_decision(
+    payload: Any,
+    *,
+    item: dict[str, Any],
+    task: TaskRecord | Any,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict) or int(payload.get("retry_schema_version") or 0) != ASR_RETRY_SCHEMA_VERSION:
+        raise RuntimeError("unsupported_asr_retry_schema")
+    identity = _asr_retry_decision_identity(payload)
+    expected_id = _prefixed_plan_id("asr-retry-decision-", identity)
+    if str(payload.get("decision_id") or "") != expected_id:
+        raise RuntimeError("asr_retry_decision_integrity_mismatch")
+    if str(payload.get("base_plan_id") or "") != _asr_retry_base_plan_id(task):
+        raise RuntimeError("asr_retry_base_plan_mismatch")
+    if _stable_plan_identity(payload.get("parent")) != _stable_plan_identity(
+        to_plain(_asr_retry_parent(item))
+    ):
+        raise RuntimeError("asr_retry_parent_mismatch")
+    strategy = payload.get("strategy") if isinstance(payload.get("strategy"), dict) else {}
+    if (
+        str(strategy.get("strategy_id") or "") != "fixed_window_subdivision"
+        or int(strategy.get("strategy_version") or 0) != 1
+        or str(strategy.get("mode") or "") != "fixed"
+        or _strict_nonnegative_int(
+            strategy.get("window_seconds"),
+            error="asr_retry_strategy_invalid",
+        )
+        <= 0
+        or _strict_nonnegative_int(
+            strategy.get("minimum_window_seconds"),
+            error="asr_retry_strategy_invalid",
+        )
+        <= 0
+        or _strict_nonnegative_int(
+            strategy.get("overlap_seconds"),
+            error="asr_retry_strategy_invalid",
+        )
+        >= int(strategy.get("window_seconds") or 0)
+        or _finite_number(
+            strategy.get("max_upload_mb"),
+            error="asr_retry_strategy_invalid",
+        )
+        <= 0
+    ):
+        raise RuntimeError("asr_retry_strategy_invalid")
+    return payload
+
+
+def _load_or_create_asr_retry_decision(
+    *,
+    item: dict[str, Any],
+    paths: dict[str, Path],
+    config: AppConfig,
+    task: TaskRecord | Any,
+    create: bool,
+) -> dict[str, Any]:
+    retry_paths = _asr_retry_artifact_paths(paths, item)
+    if retry_paths["decision"].is_file():
+        return _validate_asr_retry_decision(
+            read_json(retry_paths["decision"]),
+            item=item,
+            task=task,
+        )
+    if not create:
+        raise RuntimeError("asr_retry_decision_missing")
+    payload = _build_asr_retry_decision(item=item, config=config, task=task)
+    write_json(retry_paths["decision"], payload)
+    return _validate_asr_retry_decision(payload, item=item, task=task)
+
+
+def _validate_asr_retry_windows(
+    windows: list[dict[str, Any]],
+    *,
+    parent: dict[str, Any],
+) -> None:
+    if len(windows) < 2:
+        raise RuntimeError("asr_retry_plan_not_subdivided")
+    parent_start = float(parent["source_start"])
+    parent_end = float(parent["source_end"])
+    parent_duration = parent_end - parent_start
+    _validate_asr_window_sequence(
+        windows,
+        audio_start=parent_start,
+        audio_end=parent_end,
+        error="asr_retry_plan_parent_range_mismatch",
+    )
+    for window in windows:
+        source_start = float(window["start"])
+        source_end = source_start + float(window["duration"])
+        if (
+            source_start < parent_start - _ASR_PLAN_TIME_TOLERANCE
+            or source_end > parent_end + _ASR_PLAN_TIME_TOLERANCE
+            or source_end - source_start >= parent_duration - _ASR_PLAN_TIME_TOLERANCE
+        ):
+            raise RuntimeError("asr_retry_plan_parent_range_mismatch")
+
+
+def _load_asr_retry_plan(
+    *,
+    item: dict[str, Any],
+    paths: dict[str, Path],
+    decision: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    retry_paths = _asr_retry_artifact_paths(paths, item)
+    payload = read_json(retry_paths["plan"])
+    if not isinstance(payload, dict) or int(payload.get("retry_schema_version") or 0) != ASR_RETRY_SCHEMA_VERSION:
+        raise RuntimeError("unsupported_asr_retry_schema")
+    identity = _asr_retry_plan_identity(payload)
+    expected_id = _prefixed_plan_id("asr-retry-plan-", identity)
+    if str(payload.get("retry_plan_id") or "") != expected_id:
+        raise RuntimeError("asr_retry_plan_integrity_mismatch")
+    if str(payload.get("decision_id") or "") != str(decision["decision_id"]):
+        raise RuntimeError("asr_retry_decision_mismatch")
+    planned_windows = payload.get("windows") if isinstance(payload.get("windows"), list) else []
+    task_dir = _task_dir_from_paths(paths)
+    runtime_windows = [
+        _validated_plan_window(planned, ordinal=ordinal, task_dir=task_dir)
+        for ordinal, planned in enumerate(planned_windows)
+    ]
+    portable_manifest = _portable_asr_manifest(planned_windows)
+    try:
+        persisted_manifest = read_json(retry_paths["manifest"])
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("asr_retry_manifest_missing") from exc
+    if persisted_manifest != portable_manifest:
+        raise RuntimeError("asr_retry_manifest_mismatch")
+    _validate_asr_retry_windows(runtime_windows, parent=dict(decision["parent"]))
+    return payload, runtime_windows
+
+
+def _create_asr_retry_plan(
+    *,
+    item: dict[str, Any],
+    paths: dict[str, Path],
+    config: AppConfig,
+    decision: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    retry_paths = _asr_retry_artifact_paths(paths, item)
+    strategy = dict(decision["strategy"])
+    parent = dict(decision["parent"])
+    parent_start = float(parent["source_start"])
+    parent_end = float(parent["source_end"])
+    parent_duration = parent_end - parent_start
+    child_manifest = split_audio_for_asr(
+        Path(str(item["path"])),
+        retry_paths["windows"],
+        mode="fixed",
+        window_seconds=int(strategy["window_seconds"]),
+        max_window_seconds=int(strategy["window_seconds"]),
+        min_window_seconds=int(strategy["minimum_window_seconds"]),
+        overlap_seconds=int(strategy["overlap_seconds"]),
+        short_audio_seconds=0,
+        max_upload_mb=float(strategy["max_upload_mb"]),
+        silence_noise_db=_active_asr_provider(config).chunking.silence.noise_db,
+        silence_min_seconds=_active_asr_provider(config).chunking.silence.min_silence_seconds,
+        silence_cut_padding_seconds=_active_asr_provider(config).chunking.silence.cut_padding_seconds,
+        duration_seconds=parent_duration,
+        source_start_seconds=0.0,
+    )
+    for child in child_manifest:
+        child["start"] = parent_start + float(child.get("start", 0.0))
+        child["trusted_start"] = parent_start + float(child.get("trusted_start", 0.0))
+        child["trusted_end"] = parent_start + float(child.get("trusted_end", 0.0))
+        child.pop("source_audio_path", None)
+    task_dir = _task_dir_from_paths(paths)
+    windows = tuple(
+        _asr_plan_window_from_manifest(
+            child,
+            ordinal=ordinal,
+            task_dir=task_dir,
+            audio_end=parent_end,
+            segment_id_prefix=f"{parent['segment_id']}.retry",
+        )
+        for ordinal, child in enumerate(child_manifest)
+    )
+    windows_payload = list(to_plain(windows))
+    portable_manifest = _portable_asr_manifest(windows_payload)
+    _validate_asr_retry_windows(
+        [
+            {
+                **row,
+                "artifact_path": row["path"],
+                "path": str(_resolve_task_artifact_ref(row["path"], task_dir=task_dir)),
+            }
+            for row in portable_manifest
+        ],
+        parent=parent,
+    )
+    identity = {
+        "decision_id": str(decision["decision_id"]),
+        "windows": windows_payload,
+    }
+    resolved = ResolvedAsrRetryPlan(
+        retry_plan_id=_prefixed_plan_id("asr-retry-plan-", identity),
+        resolved_at=utc_now_iso(),
+        decision_id=str(decision["decision_id"]),
+        windows=windows,
+    )
+    payload = to_plain(resolved)
+    write_json(retry_paths["manifest"], portable_manifest)
+    write_json(retry_paths["plan"], payload)
+    return _load_asr_retry_plan(
+        item=item,
+        paths=paths,
+        decision=decision,
+    )
+
+
+def _persisted_asr_retry_exists(paths: dict[str, Path], item: dict[str, Any]) -> bool:
+    retry_paths = _asr_retry_artifact_paths(paths, item)
+    return retry_paths["decision"].is_file() or retry_paths["plan"].is_file()
+
+
 def _previous_asr_text_from_completed(items: list[dict], paths: dict[str, Path]) -> str:
     if not items:
         return ""
@@ -430,6 +778,26 @@ def _process_asr_manifest_item(
     transcribe_offset = float(item["start"])
     preprocess_meta: dict[str, Any] | None = None
     provider = _active_asr_provider(config)
+    if (
+        allow_split_retry
+        and _asr_allows_split_retry(config)
+        and provider.protocol in {
+            "openai_transcriptions",
+            "funasr_openai",
+            "openrouter_stt",
+        }
+        and task is not None
+        and root_dir is not None
+        and _persisted_asr_retry_exists(paths, item)
+    ):
+        return _retry_asr_manifest_item_with_subsegments(
+            item=item,
+            paths=paths,
+            config=config,
+            task=task,
+            root_dir=root_dir,
+            failure=None,
+        )
     trim_config = provider.preprocessing.trim_silence
     if trim_config.enabled:
         preprocess_meta = prepare_cloud_asr_audio_upload(
@@ -568,45 +936,34 @@ def _retry_asr_manifest_item_with_subsegments(
     config: AppConfig,
     task: TaskRecord,
     root_dir: Path,
-    failure: Exception,
+    failure: Exception | None,
 ) -> dict[str, Any]:
     idx = int(item["segment_index"])
     artifact_paths = _asr_artifact_paths(paths, idx)
     duration = float(item.get("duration", 0.0))
-    retry_dir = paths["media"] / "segments_retry" / f"segment_{idx:05d}"
-    chunking = _active_asr_provider(config).chunking
-    max_child_window = max(
-        float(chunking.min_window_seconds),
-        min(float(chunking.max_window_seconds), duration / 2.0),
+    retry_paths = _asr_retry_artifact_paths(paths, item)
+    decision = _load_or_create_asr_retry_decision(
+        item=item,
+        paths=paths,
+        config=config,
+        task=task,
+        create=failure is not None,
     )
-    source_audio_path_raw = item.get("source_audio_path")
-    source_audio_path = Path(str(source_audio_path_raw or item.get("path")))
-    source_start_seconds = float(item.get("start", 0.0)) if source_audio_path_raw else 0.0
-    child_manifest = split_audio_for_asr(
-        source_audio_path,
-        retry_dir,
-        mode=chunking.mode,
-        window_seconds=int(max_child_window),
-        max_window_seconds=int(max_child_window),
-        min_window_seconds=chunking.min_window_seconds,
-        overlap_seconds=chunking.overlap_seconds,
-        short_audio_seconds=0,
-        max_upload_mb=chunking.max_upload_mb,
-        silence_noise_db=chunking.silence.noise_db,
-        silence_min_seconds=chunking.silence.min_silence_seconds,
-        silence_cut_padding_seconds=chunking.silence.cut_padding_seconds,
-        duration_seconds=duration,
-        source_start_seconds=source_start_seconds,
-    )
-    if not source_audio_path_raw:
-        parent_start = float(item.get("start", 0.0))
-        for child in child_manifest:
-            child["start"] = parent_start + float(child.get("start", 0.0))
-            child["trusted_start"] = parent_start + float(child.get("trusted_start", 0.0))
-            child["trusted_end"] = parent_start + float(child.get("trusted_end", 0.0))
-            child["source_audio_path"] = str(source_audio_path)
+    if retry_paths["plan"].is_file():
+        retry_plan, child_manifest = _load_asr_retry_plan(
+            item=item,
+            paths=paths,
+            decision=decision,
+        )
+    else:
+        retry_plan, child_manifest = _create_asr_retry_plan(
+            item=item,
+            paths=paths,
+            config=config,
+            decision=decision,
+        )
     retry_artifact_paths = dict(paths)
-    retry_artifact_paths["source"] = paths["cache"] / "asr" / "retry" / f"segment_{idx:05d}"
+    retry_artifact_paths["source"] = retry_paths["result_source"]
     rows: list[dict] = []
     child_window_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     raw_children: list[dict] = []
@@ -615,32 +972,50 @@ def _retry_asr_manifest_item_with_subsegments(
     for child_idx, child in enumerate(child_manifest):
         child_item = dict(child)
         child_item["segment_index"] = child_idx
-        child_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
-        try:
-            child_result = _process_asr_manifest_item(
-                item=child_item,
-                asr=child_asr,
-                paths=retry_artifact_paths,
-                config=config,
-                task=task,
-                root_dir=root_dir,
-                allow_split_retry=False,
-                previous_text=child_previous_text,
-                usage_source_dir=paths["source"],
+        child_artifacts = _asr_artifact_paths(
+            retry_artifact_paths,
+            int(child_item["segment_index"]),
+        )
+        if _is_valid_json_list(child_artifacts["rows"]):
+            child_rows = read_json(child_artifacts["rows"])
+            raw_response = read_json(child_artifacts["raw"]) if child_artifacts["raw"].is_file() else None
+            preprocess_meta = (
+                read_json(child_artifacts["preprocess"])
+                if child_artifacts["preprocess"].is_file()
+                else None
             )
-        finally:
-            close_child_asr = getattr(child_asr, "close", None)
-            if callable(close_child_asr):
-                close_child_asr()
-        child_rows_path = _asr_artifact_paths(retry_artifact_paths, int(child_item["segment_index"]))["rows"]
-        if child_rows_path.exists():
-            child_rows = read_json(child_rows_path)
-            rows.extend(child_rows)
-            child_window_rows.append((dict(child_item), child_rows))
-            if _asr_uses_previous_text(config):
-                text = _asr_previous_text(child_rows)
-                if text:
-                    child_previous_text = text
+            child_result = {
+                "idx": child_idx,
+                "rows": child_rows,
+                "raw_response": raw_response if isinstance(raw_response, dict) else None,
+                "preprocess_meta": preprocess_meta if isinstance(preprocess_meta, dict) else None,
+                "skipped": False,
+            }
+        else:
+            child_asr = _build_asr_engine(config, task=task, root_dir=root_dir)
+            try:
+                child_result = _process_asr_manifest_item(
+                    item=child_item,
+                    asr=child_asr,
+                    paths=retry_artifact_paths,
+                    config=config,
+                    task=task,
+                    root_dir=root_dir,
+                    allow_split_retry=False,
+                    previous_text=child_previous_text,
+                    usage_source_dir=paths["source"],
+                )
+            finally:
+                close_child_asr = getattr(child_asr, "close", None)
+                if callable(close_child_asr):
+                    close_child_asr()
+            child_rows = list(child_result.get("rows") or [])
+        rows.extend(child_rows)
+        child_window_rows.append((dict(child_item), child_rows))
+        if _asr_uses_previous_text(config):
+            text = _asr_previous_text(child_rows)
+            if text:
+                child_previous_text = text
         if child_result.get("raw_response") is not None:
             raw_children.append(child_result["raw_response"])
         if child_result.get("preprocess_meta") is not None:
@@ -650,14 +1025,22 @@ def _retry_asr_manifest_item_with_subsegments(
         rows, word_overlap_report = merge_word_timeline_windows(child_window_rows)
     else:
         rows.sort(key=lambda row: (float(row.get("start", 0.0)), float(row.get("end", 0.0)), str(row.get("text", ""))))
+    portable_children = _portable_asr_manifest(list(retry_plan["windows"]))
+    task_dir = _task_dir_from_paths(paths)
+    child_artifact_ref, _child_artifact_path = _task_artifact_ref_from_path(
+        retry_paths["result_source"],
+        task_dir=task_dir,
+    )
     parent_preprocess = {
         "enabled": True,
         "reason": "split_retry",
-        "source_path": str(item.get("path", "")),
+        "source_segment_id": str(decision["parent"]["segment_id"]),
         "duration_seconds": duration,
-        "initial_error": str(failure),
-        "children": child_manifest,
-        "child_artifact_dir": str(retry_artifact_paths["source"]),
+        "initial_error": failure.__class__.__name__ if failure is not None else "persisted_retry",
+        "retry_decision_id": str(decision["decision_id"]),
+        "retry_plan_id": str(retry_plan["retry_plan_id"]),
+        "children": portable_children,
+        "child_artifact_dir": child_artifact_ref,
         "child_preprocess": preprocess_children,
     }
     if word_overlap_report is not None:
@@ -1234,7 +1617,338 @@ def _is_valid_json_list(path: Path) -> bool:
         return False
 
 
-def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path) -> bool:
+_ASR_PLAN_TIME_TOLERANCE = 0.001
+_ASR_CUT_REASONS = {
+    "end_of_audio",
+    "fixed_window",
+    "hard_limit",
+    "silence_boundary",
+    "whole_audio",
+}
+_ASR_SEGMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _task_dir_from_paths(paths: dict[str, Path]) -> Path:
+    if "base" in paths:
+        return paths["base"]
+    if "asr" in paths:
+        return paths["asr"].parent
+    if "source" in paths:
+        return paths["source"].parent
+    raise RuntimeError("asr_task_directory_missing")
+
+
+def _validated_asr_segment_id(value: Any) -> str:
+    segment_id = str(value or "").strip()
+    if not _ASR_SEGMENT_ID_PATTERN.fullmatch(segment_id):
+        raise RuntimeError("asr_plan_segment_id_invalid")
+    return segment_id
+
+
+def _strict_nonnegative_int(value: Any, *, error: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(error)
+    return value
+
+
+def _finite_number(value: Any, *, error: str) -> float:
+    if isinstance(value, bool):
+        raise RuntimeError(error)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(error) from exc
+    if not math.isfinite(parsed):
+        raise RuntimeError(error)
+    return parsed
+
+
+def _task_artifact_ref_from_path(path_value: Any, *, task_dir: Path) -> tuple[str, Path]:
+    raw = str(path_value or "").strip()
+    if not raw or raw.startswith("~"):
+        raise RuntimeError("asr_plan_artifact_path_invalid")
+    root = task_dir.resolve()
+    candidate = Path(raw)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("asr_plan_artifact_path_escape") from exc
+    artifact_ref = PurePosixPath(*relative.parts).as_posix()
+    if not artifact_ref or artifact_ref == ".":
+        raise RuntimeError("asr_plan_artifact_path_invalid")
+    return artifact_ref, resolved
+
+
+def _resolve_task_artifact_ref(reference: Any, *, task_dir: Path) -> Path:
+    raw = str(reference or "").strip()
+    pure = PurePosixPath(raw)
+    if (
+        not raw
+        or raw != pure.as_posix()
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} or ":" in part for part in pure.parts)
+    ):
+        raise RuntimeError("asr_plan_artifact_path_invalid")
+    root = task_dir.resolve()
+    resolved = root.joinpath(*pure.parts).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("asr_plan_artifact_path_escape") from exc
+    return resolved
+
+
+def _derived_asr_cut_reason(*, source_end: float, audio_end: float) -> str:
+    return "end_of_audio" if source_end >= audio_end - 0.05 else "fixed_window"
+
+
+def _asr_plan_window_from_manifest(
+    item: dict[str, Any],
+    *,
+    ordinal: int,
+    task_dir: Path,
+    audio_end: float,
+    segment_id_prefix: str = "segment",
+) -> AsrPlanWindow:
+    segment_index = _strict_nonnegative_int(
+        item.get("segment_index"),
+        error="asr_plan_segment_index_invalid",
+    )
+    if segment_index != ordinal:
+        raise RuntimeError("asr_plan_segment_index_invalid")
+    segment_id = _validated_asr_segment_id(
+        item.get("segment_id") or f"{segment_id_prefix}-{segment_index:05d}"
+    )
+    source_start = _finite_number(item.get("start"), error="asr_plan_window_time_invalid")
+    duration = _finite_number(item.get("duration"), error="asr_plan_window_time_invalid")
+    source_end = source_start + duration
+    trusted_start = _finite_number(
+        item.get("trusted_start"),
+        error="asr_plan_window_time_invalid",
+    )
+    trusted_end = _finite_number(
+        item.get("trusted_end"),
+        error="asr_plan_window_time_invalid",
+    )
+    if (
+        audio_end <= 0
+        or source_start < 0
+        or duration <= 0
+        or source_end > audio_end + 0.1
+        or trusted_start < source_start - _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end > source_end + _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end <= trusted_start
+    ):
+        raise RuntimeError("asr_plan_window_time_invalid")
+    artifact_path, resolved_path = _task_artifact_ref_from_path(
+        item.get("path"),
+        task_dir=task_dir,
+    )
+    if not _is_nonempty_file(resolved_path):
+        raise RuntimeError("asr_plan_artifact_missing")
+    encoded_size_bytes = resolved_path.stat().st_size
+    estimated_upload_raw = item.get("estimated_upload_bytes")
+    estimated_upload_bytes = (
+        _strict_nonnegative_int(
+            estimated_upload_raw,
+            error="asr_plan_upload_size_invalid",
+        )
+        if estimated_upload_raw is not None
+        else int(duration * CanonicalAudioFacts().bytes_per_second + 44)
+    )
+    if estimated_upload_bytes <= 0:
+        raise RuntimeError("asr_plan_upload_size_invalid")
+    cut_reason = str(item.get("cut_reason") or "").strip() or _derived_asr_cut_reason(
+        source_end=source_end,
+        audio_end=audio_end,
+    )
+    if cut_reason not in _ASR_CUT_REASONS:
+        raise RuntimeError("asr_plan_cut_reason_invalid")
+    return AsrPlanWindow(
+        segment_id=segment_id,
+        segment_index=segment_index,
+        artifact_path=artifact_path,
+        content_sha256=_sha256_file(resolved_path),
+        encoded_size_bytes=encoded_size_bytes,
+        source_start=source_start,
+        source_end=source_end,
+        trusted_start=trusted_start,
+        trusted_end=trusted_end,
+        estimated_upload_bytes=estimated_upload_bytes,
+        cut_reason=cut_reason,
+    )
+
+
+def _portable_asr_manifest(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "segment_id": str(item["segment_id"]),
+            "segment_index": int(item["segment_index"]),
+            "start": float(item["source_start"]),
+            "duration": float(item["source_end"]) - float(item["source_start"]),
+            "trusted_start": float(item["trusted_start"]),
+            "trusted_end": float(item["trusted_end"]),
+            "estimated_upload_bytes": int(item["estimated_upload_bytes"]),
+            "encoded_size_bytes": int(item["encoded_size_bytes"]),
+            "content_sha256": str(item["content_sha256"]),
+            "cut_reason": str(item["cut_reason"]),
+            "path": str(item["artifact_path"]),
+        }
+        for item in windows
+    ]
+
+
+def _validated_plan_window(
+    planned: dict[str, Any],
+    *,
+    ordinal: int,
+    task_dir: Path,
+) -> dict[str, Any]:
+    if not isinstance(planned, dict):
+        raise RuntimeError("asr_plan_manifest_mismatch")
+    segment_index = _strict_nonnegative_int(
+        planned.get("segment_index"),
+        error="asr_plan_segment_index_invalid",
+    )
+    if segment_index != ordinal:
+        raise RuntimeError("asr_plan_segment_index_invalid")
+    segment_id = _validated_asr_segment_id(planned.get("segment_id"))
+    source_start = _finite_number(
+        planned.get("source_start"),
+        error="asr_plan_window_time_invalid",
+    )
+    source_end = _finite_number(
+        planned.get("source_end"),
+        error="asr_plan_window_time_invalid",
+    )
+    trusted_start = _finite_number(
+        planned.get("trusted_start"),
+        error="asr_plan_window_time_invalid",
+    )
+    trusted_end = _finite_number(
+        planned.get("trusted_end"),
+        error="asr_plan_window_time_invalid",
+    )
+    if (
+        source_start < 0
+        or source_end <= source_start
+        or trusted_start < source_start - _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end > source_end + _ASR_PLAN_TIME_TOLERANCE
+        or trusted_end <= trusted_start
+    ):
+        raise RuntimeError("asr_plan_window_time_invalid")
+    estimated_upload_bytes = _strict_nonnegative_int(
+        planned.get("estimated_upload_bytes"),
+        error="asr_plan_upload_size_invalid",
+    )
+    encoded_size_bytes = _strict_nonnegative_int(
+        planned.get("encoded_size_bytes"),
+        error="asr_plan_artifact_size_invalid",
+    )
+    if estimated_upload_bytes <= 0 or encoded_size_bytes <= 0:
+        raise RuntimeError("asr_plan_artifact_size_invalid")
+    cut_reason = str(planned.get("cut_reason") or "").strip()
+    if cut_reason not in _ASR_CUT_REASONS:
+        raise RuntimeError("asr_plan_cut_reason_invalid")
+    content_sha256 = str(planned.get("content_sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+        raise RuntimeError("asr_plan_content_hash_invalid")
+    artifact_path = str(planned.get("artifact_path") or "")
+    resolved_path = _resolve_task_artifact_ref(artifact_path, task_dir=task_dir)
+    if not _is_nonempty_file(resolved_path):
+        raise RuntimeError("asr_plan_artifact_missing")
+    if resolved_path.stat().st_size != encoded_size_bytes:
+        raise RuntimeError("asr_plan_artifact_size_mismatch")
+    if _sha256_file(resolved_path) != content_sha256:
+        raise RuntimeError("asr_plan_content_hash_mismatch")
+    return {
+        "segment_id": segment_id,
+        "segment_index": segment_index,
+        "start": source_start,
+        "duration": source_end - source_start,
+        "trusted_start": trusted_start,
+        "trusted_end": trusted_end,
+        "estimated_upload_bytes": estimated_upload_bytes,
+        "encoded_size_bytes": encoded_size_bytes,
+        "content_sha256": content_sha256,
+        "cut_reason": cut_reason,
+        "artifact_path": artifact_path,
+        "path": str(resolved_path),
+    }
+
+
+def _validate_asr_window_sequence(
+    windows: list[dict[str, Any]],
+    *,
+    audio_start: float,
+    audio_end: float,
+    error: str,
+) -> None:
+    if not windows or audio_end <= audio_start:
+        raise RuntimeError(error)
+    first = windows[0]
+    last = windows[-1]
+    if (
+        abs(float(first["start"]) - audio_start) > 0.1
+        or abs(float(first["trusted_start"]) - audio_start) > 0.1
+        or abs(float(last["start"]) + float(last["duration"]) - audio_end) > 0.1
+        or abs(float(last["trusted_end"]) - audio_end) > 0.1
+    ):
+        raise RuntimeError(error)
+    for ordinal, window in enumerate(windows):
+        is_last = ordinal == len(windows) - 1
+        cut_reason = str(window["cut_reason"])
+        valid_terminal_cut = cut_reason == "end_of_audio" or (
+            len(windows) == 1 and cut_reason == "whole_audio"
+        )
+        if valid_terminal_cut != is_last:
+            raise RuntimeError(error)
+        if ordinal == 0:
+            continue
+        previous = windows[ordinal - 1]
+        previous_start = float(previous["start"])
+        previous_end = previous_start + float(previous["duration"])
+        current_start = float(window["start"])
+        if (
+            current_start <= previous_start
+            or current_start > previous_end + 0.1
+            or abs(float(window["trusted_start"]) - float(previous["trusted_end"])) > 0.1
+        ):
+            raise RuntimeError(error)
+
+
+def _manifest_matches_planned_window(actual: Any, planned: dict[str, Any]) -> bool:
+    if not isinstance(actual, dict):
+        return False
+    exact_fields = (
+        "segment_id",
+        "segment_index",
+        "estimated_upload_bytes",
+        "encoded_size_bytes",
+        "content_sha256",
+        "cut_reason",
+    )
+    if any(actual.get(field) != planned.get(field) for field in exact_fields):
+        return False
+    if str(actual.get("path") or "") != str(planned.get("artifact_path") or ""):
+        return False
+    return not any(
+        abs(
+            _finite_number(actual.get(actual_field), error="asr_plan_manifest_mismatch")
+            - float(planned[planned_field])
+        )
+        > _ASR_PLAN_TIME_TOLERANCE
+        for actual_field, planned_field in (
+            ("start", "start"),
+            ("duration", "duration"),
+            ("trusted_start", "trusted_start"),
+            ("trusted_end", "trusted_end"),
+        )
+    )
+
+
+def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path, *, task_dir: Path) -> bool:
     if not _is_nonempty_file(audio_full) or not _is_valid_json_list(manifest_file):
         return False
     try:
@@ -1242,7 +1956,16 @@ def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path) -> bool:
     except Exception:
         return False
     for item in manifest:
-        if not isinstance(item, dict) or not _is_nonempty_file(Path(str(item.get("path", "")))):
+        if not isinstance(item, dict):
+            return False
+        try:
+            _artifact_ref, artifact_path = _task_artifact_ref_from_path(
+                item.get("path"),
+                task_dir=task_dir,
+            )
+        except RuntimeError:
+            return False
+        if not _is_nonempty_file(artifact_path):
             return False
     return True
 
@@ -1373,21 +2096,19 @@ def _resolved_asr_plan(
             range_count=len(silence_ranges),
         ),
     )
+    task_dir = _task_dir_from_paths(paths)
+    audio_end = float(media_meta.get("duration_seconds") or 0.0)
     windows = tuple(
-        AsrPlanWindow(
-            id=int(item["segment_index"]),
-            source_start=float(item["start"]),
-            source_end=float(item["start"]) + float(item["duration"]),
-            trusted_start=float(item["trusted_start"]),
-            trusted_end=float(item["trusted_end"]),
-            estimated_upload_bytes=int(
-                item.get("estimated_upload_bytes")
-                or float(item["duration"]) * CanonicalAudioFacts().bytes_per_second + 44
-            ),
-            cut_reason=str(item.get("cut_reason") or "unknown"),
+        _asr_plan_window_from_manifest(
+            item,
+            ordinal=ordinal,
+            task_dir=task_dir,
+            audio_end=audio_end,
         )
-        for item in manifest
+        for ordinal, item in enumerate(manifest)
     )
+    if len({item.segment_id for item in windows}) != len(windows):
+        raise RuntimeError("asr_plan_segment_id_duplicate")
     execution_policy = policy_resolution.policy.execution
     actual_concurrency = _resolved_asr_concurrency(
         config,
@@ -1447,6 +2168,7 @@ def _apply_resolved_asr_plan(
     plan: dict[str, Any],
     manifest: list[dict],
     *,
+    task_dir: Path,
     audio_full: Path | None = None,
 ) -> None:
     if int(plan.get("plan_schema_version") or 0) != ASR_PLAN_SCHEMA_VERSION:
@@ -1487,23 +2209,45 @@ def _apply_resolved_asr_plan(
         audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
         if str(audio_facts.get("content_fingerprint") or "") != _sha256_file(audio_full):
             raise RuntimeError("asr_plan_audio_mismatch")
+        if int(audio_facts.get("encoded_size_bytes") or -1) != audio_full.stat().st_size:
+            raise RuntimeError("asr_plan_audio_mismatch")
+        canonical_audio = (
+            audio_facts.get("canonical_audio")
+            if isinstance(audio_facts.get("canonical_audio"), dict)
+            else {}
+        )
+        if canonical_audio != to_plain(CanonicalAudioFacts()):
+            raise RuntimeError("asr_plan_audio_format_mismatch")
     windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
     if len(windows) != len(manifest):
         raise RuntimeError("asr_plan_manifest_mismatch")
-    for planned, actual in zip(windows, manifest, strict=True):
-        if not isinstance(planned, dict) or any(
-            abs(float(left) - float(right)) > 0.001
-            for left, right in (
-                (planned.get("source_start", -1), actual.get("start", -2)),
-                (
-                    planned.get("source_end", -1),
-                    float(actual.get("start", 0)) + float(actual.get("duration", 0)),
-                ),
-                (planned.get("trusted_start", -1), actual.get("trusted_start", -2)),
-                (planned.get("trusted_end", -1), actual.get("trusted_end", -2)),
-            )
-        ):
+    segment_ids: set[str] = set()
+    runtime_windows: list[dict[str, Any]] = []
+    for ordinal, (planned, actual) in enumerate(zip(windows, manifest, strict=True)):
+        validated = _validated_plan_window(
+            planned,
+            ordinal=ordinal,
+            task_dir=task_dir,
+        )
+        if validated["segment_id"] in segment_ids:
+            raise RuntimeError("asr_plan_segment_id_duplicate")
+        segment_ids.add(validated["segment_id"])
+        if not _manifest_matches_planned_window(actual, validated):
             raise RuntimeError("asr_plan_manifest_mismatch")
+        runtime_windows.append(validated)
+    audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
+    planned_duration = _finite_number(
+        audio_facts.get("duration_seconds"),
+        error="asr_plan_audio_duration_invalid",
+    )
+    if planned_duration <= 0:
+        raise RuntimeError("asr_plan_audio_duration_mismatch")
+    _validate_asr_window_sequence(
+        runtime_windows,
+        audio_start=0.0,
+        audio_end=planned_duration,
+        error="asr_plan_audio_duration_mismatch",
+    )
     timeline = plan.get("timeline") if isinstance(plan.get("timeline"), dict) else {}
     supported_timelines = {
         ("word_timeline_boundary_alignment", 1),
@@ -1545,6 +2289,9 @@ def _apply_resolved_asr_plan(
         int(float(execution.get("request_deadline_seconds") or provider.execution.timeout_seconds)),
     )
     provider.execution.retry = max(1, int(execution.get("max_attempts") or provider.execution.retry))
+    for actual, runtime_window in zip(manifest, runtime_windows, strict=True):
+        actual.clear()
+        actual.update(runtime_window)
 
 
 def _ensure_resolved_asr_plan(
@@ -1558,15 +2305,25 @@ def _ensure_resolved_asr_plan(
     planning_metadata: dict[str, Any],
     paths: dict[str, Path],
 ) -> dict[str, Any] | None:
+    task_dir = _task_dir_from_paths(paths)
+    plan_file = paths["asr"] / "asr_plan.json"
+    manifest_file = paths["asr"] / "segments_manifest.json"
     saved = task.settings.get("asr_plan")
     if isinstance(saved, dict):
-        _apply_resolved_asr_plan(config, saved, manifest, audio_full=audio_full)
-        plan_file = paths["asr"] / "asr_plan.json"
+        _apply_resolved_asr_plan(
+            config,
+            saved,
+            manifest,
+            task_dir=task_dir,
+            audio_full=audio_full,
+        )
         try:
             plan_file_matches = plan_file.is_file() and read_json(plan_file) == saved
         except (OSError, ValueError, json.JSONDecodeError):
             plan_file_matches = False
-        if not plan_file_matches:
+        if plan_file.exists() and not plan_file_matches:
+            raise RuntimeError("asr_plan_artifact_mismatch")
+        if not plan_file.exists():
             write_json(plan_file, saved)
         return saved
     resolved = _resolved_asr_plan(
@@ -1580,10 +2337,19 @@ def _ensure_resolved_asr_plan(
     if resolved is None:
         return None
     payload = to_plain(resolved)
-    write_json(paths["asr"] / "asr_plan.json", payload)
+    portable_manifest = _portable_asr_manifest(list(payload["windows"]))
+    manifest[:] = [dict(item) for item in portable_manifest]
+    _apply_resolved_asr_plan(
+        config,
+        payload,
+        manifest,
+        task_dir=task_dir,
+        audio_full=audio_full,
+    )
+    write_json(plan_file, payload)
+    write_json(manifest_file, portable_manifest)
     task.settings["asr_plan"] = payload
     store.save_task(task)
-    _apply_resolved_asr_plan(config, payload, manifest, audio_full=audio_full)
     return payload
 
 
@@ -2657,8 +3423,12 @@ def _execute_task(
             else:
                 _emit_stage(store, task_id, "INGEST", "Extracting and splitting audio")
                 audio_full = paths["media"] / "audio_full.m4a"
-                manifest_file = paths["media"] / "segments_manifest.json"
-                if not checkpoint.get("ingest_done") or not _ingest_artifacts_valid(audio_full, manifest_file):
+                manifest_file = paths["asr"] / "segments_manifest.json"
+                if not _ingest_artifacts_valid(
+                    audio_full,
+                    manifest_file,
+                    task_dir=paths["base"],
+                ):
                     media_meta = extract_audio_for_asr(
                         Path(task.input_file),
                         audio_full,
@@ -2670,7 +3440,7 @@ def _execute_task(
                     planning_metadata: dict[str, Any] = {}
                     segments_manifest = split_audio_for_asr(
                         audio_full,
-                        paths["media"] / "segments",
+                        paths["asr"] / "windows",
                         mode=chunking.mode,
                         window_seconds=chunking.window_seconds,
                         max_window_seconds=chunking.max_window_seconds,
@@ -2685,7 +3455,6 @@ def _execute_task(
                         planning_metadata=planning_metadata,
                     )
                     write_json(paths["media"] / "media_meta.json", media_meta)
-                    write_json(manifest_file, segments_manifest)
                     _require_file(audio_full, "media/audio_full.m4a")
                     asr_plan = _ensure_resolved_asr_plan(
                         config,
@@ -2697,6 +3466,8 @@ def _execute_task(
                         planning_metadata=planning_metadata,
                         paths=paths,
                     )
+                    if asr_plan is None:
+                        write_json(manifest_file, segments_manifest)
                     checkpoint["ingest_done"] = True
                     checkpoint["status"] = "INGEST"
                     if asr_plan is not None:

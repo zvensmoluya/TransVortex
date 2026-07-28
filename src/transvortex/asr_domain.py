@@ -5,7 +5,8 @@ from typing import Any, Literal
 
 
 ASR_CONFIG_SCHEMA_VERSION = 2
-ASR_PLAN_SCHEMA_VERSION = 2
+ASR_PLAN_SCHEMA_VERSION = 3
+ASR_RETRY_SCHEMA_VERSION = 1
 
 CapabilityKnowledge = Literal[
     "verified",
@@ -329,13 +330,58 @@ class AudioFacts:
 
 @dataclass(frozen=True)
 class AsrPlanWindow:
-    id: int
+    segment_id: str
+    segment_index: int
+    artifact_path: str
+    content_sha256: str
+    encoded_size_bytes: int
     source_start: float
     source_end: float
     trusted_start: float
     trusted_end: float
     estimated_upload_bytes: int
     cut_reason: str
+
+
+@dataclass(frozen=True)
+class AsrRetryParent:
+    segment_id: str
+    segment_index: int
+    content_sha256: str
+    source_start: float
+    source_end: float
+    trusted_start: float
+    trusted_end: float
+
+
+@dataclass(frozen=True)
+class AsrSplitRetryStrategy:
+    strategy_id: str
+    strategy_version: int
+    mode: Literal["fixed"]
+    window_seconds: int
+    minimum_window_seconds: int
+    overlap_seconds: int
+    max_upload_mb: float
+
+
+@dataclass(frozen=True)
+class AsrRetryDecision:
+    decision_id: str
+    created_at: str
+    base_plan_id: str
+    parent: AsrRetryParent
+    strategy: AsrSplitRetryStrategy
+    retry_schema_version: int = ASR_RETRY_SCHEMA_VERSION
+
+
+@dataclass(frozen=True)
+class ResolvedAsrRetryPlan:
+    retry_plan_id: str
+    resolved_at: str
+    decision_id: str
+    windows: tuple[AsrPlanWindow, ...]
+    retry_schema_version: int = ASR_RETRY_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)

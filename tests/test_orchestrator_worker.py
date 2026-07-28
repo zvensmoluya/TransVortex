@@ -1509,6 +1509,8 @@ chunking:
             )
         return children
 
+    parent_calls = {"count": 0}
+
     class ParentAsr:
         def transcribe_segment_result(
             self,
@@ -1518,7 +1520,11 @@ chunking:
             prompt: str | None = None,
         ):
             del prompt
+            parent_calls["count"] += 1
             raise RuntimeError("provider_timeout: split parent")
+
+    child_calls: list[str] = []
+    fail_second_child = {"value": True}
 
     class ChildAsr:
         def transcribe_segment_result(
@@ -1529,22 +1535,26 @@ chunking:
             prompt: str | None = None,
         ):
             del prompt
-            if audio_path.name == "part_00001.wav":
+            child_calls.append(audio_path.name)
+            if audio_path.name == "part_00001.wav" and fail_second_child["value"]:
                 raise RuntimeError("second split child failed")
+            generation_id = f"gen_{audio_path.stem}"
             return SimpleNamespace(
-                rows=[
-                    {
-                        "start": segment_start_offset,
-                        "end": segment_start_offset + 1.0,
-                        "text": "first child",
-                        "meta": {"source": "asr"},
-                    }
-                ],
+                rows=_fake_grok_word_rows(
+                    [
+                        {
+                            "text": "first child",
+                            "start": segment_start_offset,
+                            "end": segment_start_offset + 1.0,
+                        }
+                    ],
+                    generation_id=generation_id,
+                ),
                 raw_response={
                     "text": "first child",
                     "usage": {"cost": 0.002, "seconds": 30.0},
                 },
-                transport_meta={"generation_id": "gen_child_0"},
+                transport_meta={"generation_id": generation_id},
             )
 
         def close(self) -> None:
@@ -1556,21 +1566,24 @@ chunking:
         lambda *_args, **_kwargs: ChildAsr(),
     )
 
+    parent_item = {
+        "segment_index": 0,
+        "start": 0.0,
+        "duration": 60.0,
+        "trusted_start": 0.0,
+        "trusted_end": 60.0,
+        "path": str(parent_audio),
+        "source_audio_path": str(source_audio),
+    }
+    task = SimpleNamespace(source_lang="en")
+
     with pytest.raises(RuntimeError, match="second split child failed"):
         _process_asr_manifest_item(
-            item={
-                "segment_index": 0,
-                "start": 0.0,
-                "duration": 60.0,
-                "trusted_start": 0.0,
-                "trusted_end": 60.0,
-                "path": str(parent_audio),
-                "source_audio_path": str(source_audio),
-            },
+            item=parent_item,
             asr=ParentAsr(),
             paths=paths,
             config=config,
-            task=SimpleNamespace(source_lang="en"),
+            task=task,
             root_dir=tmp_path,
         )
 
@@ -1581,6 +1594,28 @@ chunking:
     assert usage["cost_usd"] == pytest.approx(0.002)
     assert usage["audio_seconds"] == 30.0
     assert len(list((paths["source"] / "asr" / "usage_receipts").glob("*.json"))) == 1
+
+    decision_path = tmp_path / "task" / "asr" / "retry_decisions" / "segment-00000.json"
+    plan_path = tmp_path / "task" / "asr" / "retry_plans" / "segment-00000.json"
+    decision_before = decision_path.read_bytes()
+    plan_before = plan_path.read_bytes()
+    fail_second_child["value"] = False
+
+    recovered = _process_asr_manifest_item(
+        item=parent_item,
+        asr=ParentAsr(),
+        paths=paths,
+        config=config,
+        task=task,
+        root_dir=tmp_path,
+    )
+
+    assert parent_calls["count"] == 1
+    assert child_calls.count("part_00000.wav") == 1
+    assert child_calls.count("part_00001.wav") == 2
+    assert [row["text"] for row in recovered["rows"]] == ["first child", "first child"]
+    assert decision_path.read_bytes() == decision_before
+    assert plan_path.read_bytes() == plan_before
 
 
 def test_openrouter_usage_is_kept_when_task_is_cancelled_after_a_response(
@@ -2024,11 +2059,12 @@ chunking:
     assert [row["text_src"] for row in source_rows] == ["child part_00000", "child part_00001"]
     retry_call = next(call for call in split_calls if "segments_retry" in str(call["segments_dir"]))
     assert retry_call["kwargs"]["source_start_seconds"] == 0.0
-    assert retry_call["audio_path"] == root / "artifacts" / "placeholder_full_audio.m4a"
+    assert retry_call["audio_path"] == task_dir / "asr" / "windows" / "part_00000.wav"
     preprocess = json.loads((task_dir / "source" / "asr" / "preprocess" / "segment_00000.json").read_text(encoding="utf-8"))
     assert preprocess["reason"] == "split_retry"
-    assert "/.cache/" in preprocess["child_artifact_dir"].replace("\\", "/")
-    assert "/asr/retry/segment_00000" in preprocess["child_artifact_dir"].replace("\\", "/")
+    assert preprocess["child_artifact_dir"] == "source/retry/segment-00000"
+    assert (task_dir / "asr" / "retry_decisions" / "segment-00000.json").is_file()
+    assert (task_dir / "asr" / "retry_plans" / "segment-00000.json").is_file()
     assert not (task_dir / "source" / "asr" / "rows" / "segment_00001.json").exists()
     assert not (root / "artifacts" / ".cache" / task_id).exists()
 
