@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..prompts import FALLBACK_TRANSLATION_STYLE_PROMPT
+
+if TYPE_CHECKING:
+    from ..asr_domain import (
+        AsrCapabilities,
+        AsrEngineSpec,
+        AsrPolicyResolution,
+        AsrUserOverrides,
+    )
 
 
 @dataclass
@@ -381,6 +389,7 @@ class AsrProviderConfig:
     chunking: AsrChunkingConfig = field(default_factory=AsrChunkingConfig)
     preprocessing: "AsrPreprocessingConfig" = field(default_factory=lambda: AsrPreprocessingConfig())
     http2: bool = True
+    extra_headers: dict[str, str] = field(default_factory=dict)
     request: AsrProviderRequestConfig = field(default_factory=AsrProviderRequestConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
 
@@ -657,6 +666,10 @@ class AppConfig:
     active_routing_profile: str = ""
     routing_profile_next_seq: int = 1
     asr_providers: dict[str, AsrProviderConfig] = field(default_factory=dict)
+    asr_engine_specs: dict[str, AsrEngineSpec] = field(default_factory=dict)
+    asr_user_overrides: dict[str, AsrUserOverrides] = field(default_factory=dict)
+    asr_capabilities: dict[str, AsrCapabilities] = field(default_factory=dict)
+    asr_policy_resolutions: dict[str, AsrPolicyResolution] = field(default_factory=dict)
 
 
 @dataclass

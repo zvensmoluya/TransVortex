@@ -21,7 +21,19 @@ from transvortex.utils import write_json
 
 
 def _write_config(root: Path) -> None:
-    (root / "pipeline.yaml").write_text("artifacts_dir: artifacts\n", encoding="utf-8")
+    (root / "pipeline.yaml").write_text(
+        """
+config_schema_version: 2
+artifacts_dir: artifacts
+asr: {engine: faster_whisper_large_v3}
+asr_engines:
+  - id: faster_whisper_large_v3
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
+        """.strip(),
+        encoding="utf-8",
+    )
     (root / "providers.yaml").write_text(
         """
 providers:
@@ -931,13 +943,14 @@ def test_app_service_desktop_snapshot_preserves_translation_when_asr_config_inva
     (tmp_path / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
+config_schema_version: 2
 asr:
-  provider: missing_local
-asr_providers:
-  - name: local
-    kind: local_inprocess
-    protocol: faster_whisper
-    model: large-v3
+  engine: missing_local
+asr_engines:
+  - id: local
+    type: faster_whisper_worker
+    runtime: {source: managed, id: managed:faster-whisper}
+    model: {source: managed, id: large-v3}
         """.strip(),
         encoding="utf-8",
     )
@@ -947,7 +960,7 @@ asr_providers:
 
     result = response["result"]
     config = result["config"]
-    assert "ASR provider not found: missing_local" in result["config_error"]
+    assert "ASR engine not found: missing_local" in result["config_error"]
     assert config["routing"]["primary"] == {"provider": "p1", "model": "m1"}
     assert config["providers"][0]["name"] == "p1"
     assert config["providers"][0]["has_key"] is True
@@ -1092,6 +1105,7 @@ def test_app_service_asr_provider_save_updates_pipeline_and_redacts_key(tmp_path
 def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     service = DesktopApi(root_dir=tmp_path)
 
     handle_line(
@@ -1112,6 +1126,7 @@ def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, mon
     snapshot = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
     provider = snapshot["result"]["config"]["asr_providers"]["openrouter_asr"]
 
+    assert snapshot["result"]["config"]["pipeline"]["asr_provider"] == "openrouter_asr"
     assert provider["model_profile"]["status"] == "experimental"
     assert provider["model_profile"]["timeline_mode"] == "words_required"
     assert [item["model"] for item in provider["available_models"]] == [
@@ -1121,9 +1136,11 @@ def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, mon
     assert provider["request"]["response_format"] == "verbose_json"
     assert provider["request"]["timestamp_granularities"] == ["word"]
     assert provider["chunking"]["max_window_seconds"] == 300
+    assert provider["capabilities"]["availability"]["state"] == "needs_action"
+    assert provider["policy_resolution"]["policy"]["chunking"]["window_target_seconds"] == 300
 
 
-def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypatch) -> None:
+def test_app_service_persists_only_the_selected_local_model_binding(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
     service = DesktopApi(root_dir=tmp_path)
@@ -1164,8 +1181,8 @@ def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypat
     assert config.pipeline.asr_provider == "local"
     assert local.model_source == "managed"
     assert local.managed_model_size == "small"
-    assert local.external_model_id == "large-v3"
-    assert local.external_model_path == r"D:\Models\large-v3"
+    assert local.external_model_id == ""
+    assert local.external_model_path == ""
     assert local.model_path == ""
 
 

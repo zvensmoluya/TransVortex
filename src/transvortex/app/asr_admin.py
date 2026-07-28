@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from ..asr_domain import ASR_CONFIG_SCHEMA_VERSION
 from ..openrouter_asr import (
     OPENROUTER_ASR_BASE_URL,
     OPENROUTER_ASR_CREDENTIAL_ID,
@@ -15,6 +18,7 @@ from ..openrouter_asr import (
     openrouter_asr_admin_defaults,
 )
 from ..utils import to_plain
+from .asr_resolution import asr_engine_to_yaml_row, resolve_asr_engine
 from .config import _parse_asr_provider, load_app_config
 from .credentials import auth_file_path, resolve_credential, write_auth_credential
 from .models import AsrProviderConfig, NetworkConfig
@@ -63,10 +67,22 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+    text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
     )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -120,16 +136,6 @@ def _check_expected_version(path: Path, expected_version: Any) -> None:
                 ensure_ascii=False,
             )
         )
-
-
-def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_dict(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _kind_from_draft(draft: dict[str, Any]) -> str:
@@ -286,6 +292,164 @@ def asr_provider_to_yaml_row(config: AsrProviderConfig) -> dict[str, Any]:
     return row
 
 
+def _engine_type_from_provider_draft(draft: dict[str, Any]) -> str:
+    kind = _kind_from_draft(draft)
+    protocol = _text(draft, "protocol").lower()
+    if kind == "local_worker" and protocol == "faster_whisper":
+        return "faster_whisper_worker"
+    if kind == "local_server" and protocol == "funasr_openai":
+        return "funasr_service"
+    if kind == "remote" and protocol == "openrouter_stt":
+        return "openrouter_asr"
+    if kind == "remote" and protocol == "openai_transcriptions":
+        return "openai_transcription"
+    raise ValueError(f"Unsupported ASR engine draft: {kind}/{protocol}")
+
+
+def _registered_model_id_for_draft(
+    *,
+    root_dir: Path,
+    model: str,
+    model_path: str,
+) -> str:
+    normalized_path = str(Path(model_path).expanduser().resolve()) if model_path else ""
+    for row in asr_runtime_snapshot(root_dir).get("registered_models") or []:
+        if not isinstance(row, dict):
+            continue
+        candidate_path = str(row.get("model_path") or "")
+        try:
+            candidate_path = str(Path(candidate_path).expanduser().resolve())
+        except OSError:
+            continue
+        if candidate_path == normalized_path and str(row.get("model_id") or "") == model:
+            return str(row.get("id") or "")
+    return ""
+
+
+def _draft_to_engine_row(
+    draft: dict[str, Any],
+    *,
+    current_row: dict[str, Any],
+    root_dir: Path,
+) -> dict[str, Any]:
+    engine_id = _text(draft, "name", "id")
+    if not engine_id:
+        raise ValueError("ASR engine id is required")
+    engine_type = _engine_type_from_provider_draft(draft)
+    model = _text(draft, "model")
+    row: dict[str, Any] = {
+        "id": engine_id,
+        "type": engine_type,
+    }
+    if current_row.get("policy_overrides") is not None:
+        row["policy_overrides"] = current_row["policy_overrides"]
+
+    if engine_type == "faster_whisper_worker":
+        runtime = _as_dict(draft.get("runtime"))
+        current_runtime = _as_dict(current_row.get("runtime"))
+        runtime_source = _text(runtime, "source", default=_text(current_runtime, "source", default="managed"))
+        runtime_id = _text(runtime, "id", default=_text(current_runtime, "id", default="managed:faster-whisper"))
+        row["runtime"] = {
+            "source": "registered" if runtime_source in {"external", "registered"} else "managed",
+            "id": runtime_id,
+        }
+
+        local = _as_dict(draft.get("local"))
+        current_model = _as_dict(current_row.get("model"))
+        model_source = _text(local, "model_source", "modelSource", default=_text(current_model, "source", default="managed"))
+        if model_source in {"external", "registered"}:
+            registration_id = _text(
+                draft,
+                "_model_registration_id",
+                default=(
+                    _text(current_model, "id")
+                    if _text(current_model, "source") == "registered"
+                    else ""
+                ),
+            )
+            if not registration_id:
+                registration_id = _registered_model_id_for_draft(
+                    root_dir=root_dir,
+                    model=model,
+                    model_path=_text(local, "model_path", "modelPath"),
+                )
+            if not registration_id:
+                raise ValueError("Registered ASR model binding is required")
+            row["model"] = {"source": "registered", "id": registration_id}
+        else:
+            row["model"] = {"source": "managed", "id": model or "large-v3"}
+
+        accelerator = _as_dict(draft.get("accelerator"))
+        current_accelerator = _as_dict(current_row.get("accelerator"))
+        accelerator_source = _text(
+            accelerator,
+            "source",
+            default=_text(current_accelerator, "source", default="managed"),
+        )
+        accelerator_id = _text(
+            draft,
+            "_accelerator_registration_id",
+            default=_text(
+                accelerator,
+                "id",
+                default=_text(current_accelerator, "id", default="nvidia-cuda12"),
+            ),
+        )
+        if accelerator_id:
+            row["accelerator"] = {
+                "source": "registered" if accelerator_source in {"external", "registered"} else "managed",
+                "id": accelerator_id,
+            }
+        row["device"] = _text(draft, "device", default=_text(local, "device", default="auto"))
+        row["compute_type"] = _text(
+            draft,
+            "compute_type",
+            "computeType",
+            default=_text(local, "compute_type", "computeType", default="auto"),
+        )
+        return row
+
+    row["model"] = model or (
+        OPENROUTER_ASR_DEFAULT_MODEL if engine_type == "openrouter_asr" else "sensevoice" if engine_type == "funasr_service" else "whisper-1"
+    )
+    current_endpoint = dict(_as_dict(current_row.get("endpoint")))
+    endpoint: dict[str, Any] = dict(current_endpoint)
+    base_url = _text(draft, "base_url", "baseUrl")
+    path = _text(draft, "endpoint")
+    if base_url:
+        endpoint["base_url"] = base_url.rstrip("/")
+    if path:
+        endpoint["path"] = path
+    auth = _as_dict(draft.get("auth"))
+    if engine_type == "funasr_service":
+        endpoint.pop("credential", None)
+        endpoint.setdefault("scope", "loopback")
+        endpoint.setdefault("proxy", "direct")
+    else:
+        current_credential = _as_dict(current_endpoint.get("credential"))
+        endpoint["credential"] = {
+            "binding_id": _text(
+                current_credential,
+                "binding_id",
+                default=engine_id,
+            ),
+            "secret_ref": _text(
+                auth,
+                "credential_id",
+                "credentialId",
+                default=_text(
+                    current_credential,
+                    "secret_ref",
+                    default=OPENROUTER_ASR_CREDENTIAL_ID if engine_type == "openrouter_asr" else engine_id,
+                ),
+            ),
+        }
+        endpoint.setdefault("scope", "remote")
+    if endpoint:
+        row["endpoint"] = endpoint
+    return row
+
+
 def save_asr_provider_config(
     *,
     root_dir: Path,
@@ -296,24 +460,36 @@ def save_asr_provider_config(
     pipeline_file = root_dir / "pipeline.yaml"
     _check_expected_version(pipeline_file, expected_version)
     existing = _read_yaml(pipeline_file)
-    current_rows = [row for row in _as_list(existing.get("asr_providers")) if isinstance(row, dict)]
-    draft_row = _draft_to_asr_row(provider_draft)
-    current_row = next((row for row in current_rows if str(row.get("name") or "") == draft_row["name"]), {})
-    provider = _parse_asr_provider(_merge_dict(current_row, draft_row))
-    provider_row = asr_provider_to_yaml_row(provider)
+    if int(existing.get("config_schema_version") or 0) != ASR_CONFIG_SCHEMA_VERSION:
+        raise ValueError(
+            f"ASR settings require config_schema_version={ASR_CONFIG_SCHEMA_VERSION}"
+        )
+    current_rows = [row for row in _as_list(existing.get("asr_engines")) if isinstance(row, dict)]
+    engine_id = _text(provider_draft, "name", "id")
+    current_row = next((row for row in current_rows if str(row.get("id") or "") == engine_id), {})
+    draft_row = _draft_to_engine_row(
+        provider_draft,
+        current_row=current_row,
+        root_dir=root_dir,
+    )
+    resolution = resolve_asr_engine(draft_row, root_dir=root_dir)
+    provider = resolution.runtime
+    engine_row = asr_engine_to_yaml_row(resolution.spec, resolution.overrides)
 
-    next_rows = [row for row in current_rows if str(row.get("name") or "") != provider.name]
-    next_rows.append(provider_row)
+    next_rows = [row for row in current_rows if str(row.get("id") or "") != provider.name]
+    next_rows.append(engine_row)
 
     payload = dict(existing)
     asr = _as_dict(payload.get("asr"))
-    asr["provider"] = provider.name
+    asr.pop("provider", None)
+    asr["engine"] = provider.name
     payload["asr"] = asr
-    payload["asr_providers"] = next_rows
-    _write_yaml(pipeline_file, payload)
+    payload.pop("asr_providers", None)
+    payload["asr_engines"] = next_rows
 
     if api_key and provider.auth.type != "none":
         write_auth_credential(provider.credential_id or provider.env_key or provider.name, api_key)
+    _write_yaml(pipeline_file, payload)
 
     if provider.auth.type == "none":
         has_key = True
@@ -335,6 +511,8 @@ def save_asr_provider_config(
     return {
         "ok": True,
         "provider": provider.name,
+        "engine": to_plain(resolution.spec),
+        "policy": to_plain(resolution.policy),
         "asr_provider": provider_payload,
         "pipeline_file": str(pipeline_file),
         "pipeline_file_version": pipeline_file_version(pipeline_file),
@@ -455,6 +633,7 @@ def activate_asr_resources(
         model_id = str(model.get("model_id") or "")
         model_path = str(model.get("model_path") or "")
         draft["model"] = model_id
+        draft["_model_registration_id"] = model_registration_id
         local.update(
             {
                 "model_size": model_id,
@@ -492,6 +671,7 @@ def activate_asr_resources(
                 f"External ASR accelerator registration is missing or stale: {accelerator_registration_id}"
             )
         draft["accelerator"] = {"source": "external", "id": accelerator_registration_id}
+        draft["_accelerator_registration_id"] = accelerator_registration_id
 
     saved = save_asr_provider_config(
         root_dir=root_dir,

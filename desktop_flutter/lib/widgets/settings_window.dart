@@ -266,6 +266,19 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     try {
       final snapshot = await _client.desktopSnapshot();
       if (!mounted || revision != _configLoadRevision) return;
+      final previousSnapshot = _snapshot;
+      final previousProviderName = previousSnapshot == null
+          ? ''
+          : _asrProviderNameForSelection(_selectedAsrProvider);
+      final canRetainSelection =
+          previousSnapshot != null &&
+          previousProviderName.isNotEmpty &&
+          snapshot.asrProviders.any(
+            (provider) => provider.name == previousProviderName,
+          );
+      final retainedSelection = canRetainSelection
+          ? _asrSelectionIdForProvider(snapshot, previousProviderName)
+          : '';
       setState(() {
         _snapshot = snapshot;
         if (widget.type == AppWindowType.diagnostics) {
@@ -275,10 +288,12 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         }
         if (_isAsr) {
           if (!preserveAsrDraft) {
-            _selectedAsrProvider = _asrSelectionIdForProvider(
-              snapshot,
-              snapshot.asrProviderName,
-            );
+            _selectedAsrProvider = canRetainSelection
+                ? retainedSelection
+                : _asrSelectionIdForProvider(
+                    snapshot,
+                    snapshot.asrProviderName,
+                  );
             _loadAsrDraftFields();
           }
           _activeAsrOperation = snapshot.asrOperations
@@ -627,6 +642,11 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           readiness: provider?.readiness,
           draftDirty: _asrDraftDirty,
         ),
+        if (!_asrDraftDirty &&
+            provider?.policyResolution.isNotEmpty == true) ...[
+          const SizedBox(height: T.s8),
+          _AsrExecutionSummary(provider: provider!),
+        ],
         if (isOpenRouter &&
             (_checkingOpenRouterUsage ||
                 _openRouterUsageMessage != null ||
@@ -2517,7 +2537,6 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       runtime['id'] = 'managed:faster-whisper';
     }
     return {
-      if (hasExisting) ...existing.raw,
       'name': providerName,
       'kind': kind,
       'protocol': protocol,
@@ -3578,6 +3597,56 @@ class _AsrOverview extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _AsrExecutionSummary extends StatelessWidget {
+  const _AsrExecutionSummary({required this.provider});
+
+  final AsrProviderOption provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final policy = _stringMap(provider.policyResolution['policy']);
+    final chunking = _stringMap(policy['chunking']);
+    final execution = _stringMap(policy['execution']);
+    final timeline = _stringMap(provider.capabilities['timeline']);
+    final granularities = (timeline['granularities'] as List? ?? const [])
+        .map((item) => '$item')
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    final parts = <String>[
+      if (chunking['window_target_seconds'] case final num seconds)
+        '分窗 ${_compactNumber(seconds)} 秒',
+      if (chunking['overlap_seconds'] case final num seconds)
+        '重叠 ${_compactNumber(seconds)} 秒',
+      if (execution['target_concurrency'] case final num concurrency)
+        '并发目标 ${concurrency.toInt()} 路',
+      if (granularities.contains('word'))
+        '逐词时间戳'
+      else if (granularities.contains('segment'))
+        '分段时间戳',
+    ];
+    if (parts.isEmpty) return const SizedBox.shrink();
+    return Row(
+      children: [
+        const Icon(Icons.tune_rounded, size: 16, color: T.muted),
+        const SizedBox(width: T.s8),
+        Expanded(
+          child: Text(
+            '自动运行策略 · ${parts.join(' · ')}',
+            style: T.tCaption.copyWith(color: T.muted),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _compactNumber(num value) {
+    final number = value.toDouble();
+    return number == number.roundToDouble()
+        ? number.toInt().toString()
+        : number.toStringAsFixed(1);
   }
 }
 

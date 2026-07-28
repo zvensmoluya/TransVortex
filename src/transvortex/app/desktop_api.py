@@ -13,6 +13,7 @@ from ..artifacts.result_workspace import (
 from ..artifacts.catalog import TaskCatalog
 from ..artifacts.runtime import TaskRuntime
 from ..artifacts.task_store import TaskStore
+from ..asr_domain import resolve_asr_policy
 from ..core.orchestrator import task_status_json
 from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
 from ..openrouter import fetch_openrouter_current_key_usage
@@ -49,6 +50,11 @@ from .asr_admin import (
     draft_to_asr_provider_config,
     pipeline_file_version,
     save_asr_provider_config,
+)
+from .asr_resolution import (
+    observe_asr_capabilities,
+    recommended_asr_policy,
+    resolve_asr_engine,
 )
 from .asr_operations import AsrOperationError, AsrOperationManager
 from .asr_runtime import (
@@ -916,6 +922,31 @@ def config_payload(
             has_key = credential.found
         provider_payload = to_plain(provider)
         provider_payload.pop("network", None)
+        engine_spec = config.asr_engine_specs.get(name)
+        user_overrides = config.asr_user_overrides.get(name)
+        capabilities = config.asr_capabilities.get(name)
+        policy_resolution = config.asr_policy_resolutions.get(name)
+        if engine_spec is not None and capabilities is not None:
+            capabilities = observe_asr_capabilities(
+                engine_spec,
+                capabilities,
+                provider,
+                root_dir=root,
+            )
+            if user_overrides is not None:
+                policy_resolution = resolve_asr_policy(
+                    recommended_asr_policy(engine_spec),
+                    user_overrides,
+                    capabilities,
+                )
+        if engine_spec is not None:
+            provider_payload["engine_spec"] = to_plain(engine_spec)
+        if user_overrides is not None:
+            provider_payload["policy_overrides"] = to_plain(user_overrides)
+        if capabilities is not None:
+            provider_payload["capabilities"] = to_plain(capabilities)
+        if policy_resolution is not None:
+            provider_payload["policy_resolution"] = to_plain(policy_resolution)
         if provider.protocol == "openrouter_stt":
             profile = openrouter_asr_model_profile(provider.model)
             provider_payload["available_models"] = openrouter_asr_model_profiles_payload()
@@ -1005,18 +1036,55 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
         )
 
     asr_raw = pipeline_raw.get("asr") if isinstance(pipeline_raw.get("asr"), dict) else {}
-    asr_provider_name = str(asr_raw.get("provider") or "faster_whisper_large_v3")
+    uses_engine_schema = (
+        int(pipeline_raw.get("config_schema_version") or 0) == 2
+        or "asr_engines" in pipeline_raw
+        or "engine" in asr_raw
+    )
+    asr_provider_name = str(
+        asr_raw.get("engine" if uses_engine_schema else "provider")
+        or "faster_whisper_large_v3"
+    )
     asr_providers = {}
-    for row in pipeline_raw.get("asr_providers") or []:
+    candidate_rows = pipeline_raw.get(
+        "asr_engines" if uses_engine_schema else "asr_providers"
+    )
+    asr_rows = candidate_rows if isinstance(candidate_rows, list) else []
+    for row in asr_rows or []:
         if not isinstance(row, dict):
             continue
-        name = str(row.get("name") or "").strip()
+        resolution = None
+        if uses_engine_schema:
+            try:
+                resolution = resolve_asr_engine(row, root_dir=root)
+            except Exception:
+                resolution = None
+        name = str(
+            resolution.spec.id
+            if resolution is not None
+            else row.get("id" if uses_engine_schema else "name")
+            or ""
+        ).strip()
         if not name:
             continue
-        auth = row.get("auth") if isinstance(row.get("auth"), dict) else {}
+        provider_payload = to_plain(resolution.runtime) if resolution is not None else dict(row)
+        provider_payload.pop("network", None)
+        auth = (
+            provider_payload.get("auth")
+            if isinstance(provider_payload.get("auth"), dict)
+            else {}
+        )
         auth_type = str(auth.get("type") or "bearer")
-        env_key = str(auth.get("env_key") or row.get("env_key") or "TVX_MODEL_API_KEY")
-        credential_id = str(auth.get("credential_id") or row.get("credential_id") or name)
+        env_key = str(
+            auth.get("env_key")
+            or provider_payload.get("env_key")
+            or "TVX_MODEL_API_KEY"
+        )
+        credential_id = str(
+            auth.get("credential_id")
+            or provider_payload.get("credential_id")
+            or name
+        )
         if auth_type == "none":
             credential_source = "not_required"
             has_key = True
@@ -1030,7 +1098,17 @@ def _partial_config_payload(root: Path, providers_file: Path, error: str) -> dic
             credential_source = credential.source
             has_key = credential.found
         asr_providers[name] = {
-            **row,
+            **provider_payload,
+            **(
+                {
+                    "engine_spec": to_plain(resolution.spec),
+                    "policy_overrides": to_plain(resolution.overrides),
+                    "capabilities": to_plain(resolution.capabilities),
+                    "policy_resolution": to_plain(resolution.policy),
+                }
+                if resolution is not None
+                else {}
+            ),
             "credential_source": credential_source,
             "has_key": has_key,
             "readiness": {

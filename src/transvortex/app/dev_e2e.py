@@ -604,34 +604,32 @@ def _configure_external_worker(
     device: str,
     compute_type: str,
 ) -> None:
+    pipeline["config_schema_version"] = 2
     asr = pipeline.get("asr") if isinstance(pipeline.get("asr"), dict) else {}
     pipeline["asr"] = asr
-    asr["provider"] = provider_name
+    asr.pop("provider", None)
+    asr["engine"] = provider_name
 
-    rows = pipeline.get("asr_providers")
+    pipeline.pop("asr_providers", None)
+    rows = pipeline.get("asr_engines")
     if not isinstance(rows, list):
         rows = []
-        pipeline["asr_providers"] = rows
-    provider = next(
-        (item for item in rows if isinstance(item, dict) and item.get("name") == provider_name),
+        pipeline["asr_engines"] = rows
+    engine = next(
+        (item for item in rows if isinstance(item, dict) and item.get("id") == provider_name),
         None,
     )
-    if provider is None:
-        provider = {"name": provider_name}
-        rows.insert(0, provider)
-    provider["kind"] = "local_worker"
-    provider["protocol"] = "faster_whisper"
-    provider["model"] = model_id
-    provider["auth"] = {"type": "none"}
-    provider["runtime"] = {"source": "external", "id": environment_id}
-
-    local = provider.get("local") if isinstance(provider.get("local"), dict) else {}
-    provider["local"] = local
-    local.update(
+    if engine is None:
+        engine = {"id": provider_name}
+        rows.insert(0, engine)
+    engine.clear()
+    engine.update(
         {
-            "model_size": model_id,
-            "model_source": "external",
-            "model_path": str(model_path),
+            "id": provider_name,
+            "type": "faster_whisper_worker",
+            "runtime": {"source": "registered", "id": environment_id},
+            # The verified external environment carries the exact path for this model id.
+            "model": {"source": "managed", "id": model_id},
             "device": device,
             "compute_type": compute_type,
         }

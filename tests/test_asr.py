@@ -81,6 +81,7 @@ def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch)
             endpoint="/v1/audio/transcriptions",
             execution=AsrExecutionConfig(timeout_seconds=12, retry=2),
             http2=True,
+            extra_headers={"X-TransVortex-Route": "asr-test"},
         )
     )
 
@@ -94,6 +95,7 @@ def test_cloud_asr_request_uses_product_headers_and_http2(tmp_path, monkeypatch)
     assert captured["headers"]["User-Agent"] == "TransVortex/0.1.0"
     assert "Content-Type" not in captured["headers"]
     assert captured["headers"]["Authorization"] == "Bearer secret"
+    assert captured["headers"]["X-TransVortex-Route"] == "asr-test"
     assert captured["timeout"] == 12.0
     assert captured["http2"] is True
     assert captured["retry"] == 2

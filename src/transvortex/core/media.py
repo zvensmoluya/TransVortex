@@ -240,6 +240,14 @@ def extract_audio_for_asr(
         duration = float(selected.get("duration") or duration)
     except (TypeError, ValueError):
         pass
+
+    def optional_int(value: Any) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
     return {
         "audio_codec": codec,
         "copy_mode": copy_ok,
@@ -247,6 +255,9 @@ def extract_audio_for_asr(
         "audio_stream_index": stream_index,
         "audio_stream_language": tags.get("language", ""),
         "audio_stream_title": tags.get("title", ""),
+        "audio_stream_sample_rate_hz": optional_int(selected.get("sample_rate")),
+        "audio_stream_channels": optional_int(selected.get("channels")),
+        "audio_stream_bitrate": optional_int(selected.get("bit_rate")),
         "audio_track": audio_track,
     }
 
@@ -429,6 +440,7 @@ def split_audio_for_asr(
     silence_cut_padding_seconds: float = 0.15,
     validate_duration: bool = True,
     source_start_seconds: float = 0.0,
+    planning_metadata: dict[str, Any] | None = None,
 ) -> list[dict]:
     normalized_mode = mode.strip().lower()
     if normalized_mode not in {"auto", "fixed", "none", "silence"}:
@@ -438,6 +450,7 @@ def split_audio_for_asr(
         _effective_window_seconds(mode=normalized_mode, window_seconds=window_seconds, max_window_seconds=max_window_seconds),
         max_upload_seconds,
     )
+    silence_ranges: list[dict[str, float]] = []
     if normalized_mode == "none":
         windows = [(0.0, max(duration_seconds, 0.1))]
         effective_overlap = 0
@@ -447,24 +460,25 @@ def split_audio_for_asr(
             noise_db=silence_noise_db,
             min_silence_seconds=silence_min_seconds,
         )
-        if source_start_seconds:
-            source_end = source_start_seconds + float(duration_seconds)
-            adjusted_ranges = []
-            for item in silence_ranges:
-                silence_start = max(float(item.get("start", 0.0)), source_start_seconds)
-                silence_end = float(item.get("end", 0.0))
-                if math.isinf(silence_end):
-                    silence_end = source_end
-                silence_end = min(silence_end, source_end)
-                if silence_end > silence_start:
-                    adjusted_ranges.append(
-                        {
-                            "start": silence_start - source_start_seconds,
-                            "end": silence_end - source_start_seconds,
-                            "duration": silence_end - silence_start,
-                        }
-                    )
-            silence_ranges = adjusted_ranges
+        source_end = source_start_seconds + float(duration_seconds)
+        adjusted_ranges = []
+        for item in silence_ranges:
+            silence_start = max(float(item.get("start", 0.0)), source_start_seconds)
+            silence_end = float(item.get("end", 0.0))
+            if not math.isfinite(silence_start):
+                continue
+            if not math.isfinite(silence_end):
+                silence_end = source_end
+            silence_end = min(silence_end, source_end)
+            if silence_end > silence_start:
+                adjusted_ranges.append(
+                    {
+                        "start": silence_start - source_start_seconds,
+                        "end": silence_end - source_start_seconds,
+                        "duration": silence_end - silence_start,
+                    }
+                )
+        silence_ranges = adjusted_ranges
         windows = _build_silence_windows(
             duration_seconds=float(duration_seconds),
             silence_ranges=silence_ranges,
@@ -484,6 +498,16 @@ def split_audio_for_asr(
             overlap_seconds=overlap_seconds,
         )
         effective_overlap = max(0, min(int(overlap_seconds), int(max(float(window_seconds), 0.1)) - 1))
+    if planning_metadata is not None:
+        planning_metadata.clear()
+        planning_metadata.update(
+            {
+                "mode": normalized_mode,
+                "hard_window_seconds": float(hard_window_seconds),
+                "effective_overlap_seconds": int(effective_overlap),
+                "silence_ranges": silence_ranges,
+            }
+        )
     segments_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
     for idx, (start, end) in enumerate(windows):
@@ -522,6 +546,15 @@ def split_audio_for_asr(
             has_previous=idx > 0,
             has_next=idx < len(windows) - 1,
         )
+        if end >= duration_seconds - 0.05:
+            cut_reason = "end_of_audio"
+        elif normalized_mode == "silence":
+            hard_end = min(start + float(hard_window_seconds), duration_seconds)
+            cut_reason = "silence_boundary" if end < hard_end - 0.05 else "hard_limit"
+        elif normalized_mode == "none" or len(windows) == 1:
+            cut_reason = "whole_audio"
+        else:
+            cut_reason = "fixed_window"
         manifest.append(
             {
                 "segment_index": idx,
@@ -529,6 +562,8 @@ def split_audio_for_asr(
                 "duration": float(length),
                 "trusted_start": trusted_start,
                 "trusted_end": trusted_end,
+                "estimated_upload_bytes": int(length * ASR_UPLOAD_WAV_BYTES_PER_SECOND + 44),
+                "cut_reason": cut_reason,
                 "path": str(out_file),
                 "source_audio_path": str(audio_path),
             }

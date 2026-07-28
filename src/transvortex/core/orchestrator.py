@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import importlib.util
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +15,10 @@ from ..artifacts.task_cache import cleanup_task_cache, task_cache_dir
 from .asr import AsrEngine, write_segment_asr_output
 from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
+from ..app.asr_resolution import (
+    build_active_asr_intent_snapshot,
+    restore_asr_intent_snapshot,
+)
 from ..app.asr_runtime import asr_provider_readiness
 from ..app.credentials import resolve_credential
 from ..openrouter_asr import openrouter_asr_model_profile
@@ -42,6 +48,17 @@ from ..memory.plan import (
     uses_presets,
 )
 from ..app.models import AppConfig, Segment, TaskRecord
+from ..asr_domain import (
+    ASR_PLAN_SCHEMA_VERSION,
+    AsrExecutionPlan,
+    AsrPlanWindow,
+    AsrTimelinePlan,
+    AudioFacts,
+    AudioStreamFacts,
+    CanonicalAudioFacts,
+    ResolvedAsrPlan,
+    SilenceAnalysisFacts,
+)
 from ..providers.probe import probe_provider
 from ..protocol.errors import PipelineTaskError, classify_exception
 from ..formats.srt import parse_srt_file
@@ -360,7 +377,15 @@ def _asr_segment_prompt(config: AppConfig, previous_text: str = "") -> str:
 
 def _asr_uses_previous_text(config: AppConfig) -> bool:
     prompt = config.pipeline.asr_prompt
-    return bool(prompt.enabled and prompt.include_previous_text)
+    if not (prompt.enabled and prompt.include_previous_text):
+        return False
+    capabilities = config.asr_capabilities.get(config.pipeline.asr_provider)
+    return capabilities is None or capabilities.hints.prompt
+
+
+def _asr_allows_split_retry(config: AppConfig) -> bool:
+    resolution = config.asr_policy_resolutions.get(config.pipeline.asr_provider)
+    return resolution is None or resolution.policy.execution.split_retry
 
 
 def _asr_runs_concurrently(config: AppConfig) -> bool:
@@ -448,6 +473,7 @@ def _process_asr_manifest_item(
         )
         if (
             allow_split_retry
+            and _asr_allows_split_retry(config)
             and provider.protocol in {
                 "openai_transcriptions",
                 "funasr_openai",
@@ -1221,6 +1247,346 @@ def _ingest_artifacts_valid(audio_full: Path, manifest_file: Path) -> bool:
     return True
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stable_plan_identity(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _stable_plan_identity(item)
+            for key, item in value.items()
+            if key not in {"observed_at", "checked_at", "captured_at"}
+        }
+    if isinstance(value, list):
+        return [_stable_plan_identity(item) for item in value]
+    return value
+
+
+def _asr_plan_id(identity: dict[str, Any]) -> str:
+    return "asr-" + hashlib.sha256(
+        json.dumps(
+            _stable_plan_identity(identity),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+
+
+def _resolved_asr_concurrency(
+    config: AppConfig,
+    estimated_upload_bytes: list[int],
+) -> int:
+    policy_resolution = config.asr_policy_resolutions.get(config.pipeline.asr_provider)
+    if policy_resolution is None:
+        return max(1, int(_active_asr_provider(config).execution.concurrency))
+    execution = policy_resolution.policy.execution
+    largest_upload = max(estimated_upload_bytes, default=1)
+    inflight_parallelism = max(
+        1,
+        int(execution.max_inflight_audio_bytes) // max(largest_upload, 1),
+    )
+    if _asr_uses_previous_text(config):
+        return 1
+    return max(
+        1,
+        min(
+            int(execution.target_concurrency),
+            int(execution.maximum_concurrency),
+            max(len(estimated_upload_bytes), 1),
+            inflight_parallelism,
+        ),
+    )
+
+
+def _resolved_asr_plan(
+    config: AppConfig,
+    *,
+    audio_full: Path,
+    media_meta: dict[str, Any],
+    manifest: list[dict],
+    planning_metadata: dict[str, Any],
+    paths: dict[str, Path],
+) -> ResolvedAsrPlan | None:
+    engine_id = config.pipeline.asr_provider
+    engine = config.asr_engine_specs.get(engine_id)
+    capabilities = config.asr_capabilities.get(engine_id)
+    policy_resolution = config.asr_policy_resolutions.get(engine_id)
+    if engine is None or capabilities is None or policy_resolution is None:
+        return None
+
+    silence_ranges = [
+        item
+        for item in planning_metadata.get("silence_ranges") or []
+        if isinstance(item, dict)
+    ]
+    silence_payload = {
+        "schema_version": 1,
+        "mode": str(planning_metadata.get("mode") or policy_resolution.policy.chunking.mode),
+        "noise_db": policy_resolution.policy.chunking.silence.noise_db,
+        "minimum_seconds": policy_resolution.policy.chunking.silence.minimum_seconds,
+        "ranges": silence_ranges,
+    }
+    silence_text = json.dumps(
+        silence_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    silence_fingerprint = hashlib.sha256(silence_text.encode("utf-8")).hexdigest()
+    silence_path = paths["asr"] / "silence_analysis.json"
+    write_json(silence_path, silence_payload)
+
+    audio_facts = AudioFacts(
+        content_fingerprint=_sha256_file(audio_full),
+        duration_seconds=float(media_meta.get("duration_seconds") or 0.0),
+        encoded_size_bytes=audio_full.stat().st_size,
+        selected_stream=AudioStreamFacts(
+            index=int(media_meta.get("audio_stream_index") or 0),
+            codec=str(media_meta.get("audio_codec") or ""),
+            sample_rate_hz=(
+                int(media_meta["audio_stream_sample_rate_hz"])
+                if media_meta.get("audio_stream_sample_rate_hz") is not None
+                else None
+            ),
+            channels=(
+                int(media_meta["audio_stream_channels"])
+                if media_meta.get("audio_stream_channels") is not None
+                else None
+            ),
+            bitrate=(
+                int(media_meta["audio_stream_bitrate"])
+                if media_meta.get("audio_stream_bitrate") is not None
+                else None
+            ),
+            language_tag=str(media_meta.get("audio_stream_language") or ""),
+        ),
+        canonical_audio=CanonicalAudioFacts(),
+        silence_analysis=SilenceAnalysisFacts(
+            artifact_ref="asr/silence_analysis.json",
+            fingerprint=silence_fingerprint,
+            range_count=len(silence_ranges),
+        ),
+    )
+    windows = tuple(
+        AsrPlanWindow(
+            id=int(item["segment_index"]),
+            source_start=float(item["start"]),
+            source_end=float(item["start"]) + float(item["duration"]),
+            trusted_start=float(item["trusted_start"]),
+            trusted_end=float(item["trusted_end"]),
+            estimated_upload_bytes=int(
+                item.get("estimated_upload_bytes")
+                or float(item["duration"]) * CanonicalAudioFacts().bytes_per_second + 44
+            ),
+            cut_reason=str(item.get("cut_reason") or "unknown"),
+        )
+        for item in manifest
+    )
+    execution_policy = policy_resolution.policy.execution
+    actual_concurrency = _resolved_asr_concurrency(
+        config,
+        [item.estimated_upload_bytes for item in windows],
+    )
+    execution = AsrExecutionPlan(
+        actual_concurrency=actual_concurrency,
+        request_deadline_seconds=execution_policy.request_deadline_seconds,
+        max_attempts=execution_policy.max_attempts,
+        split_retry=execution_policy.split_retry,
+    )
+    if _asr_uses_word_timeline(config):
+        timeline = AsrTimelinePlan(
+            input_granularity="word",
+            strategy_id="word_timeline_boundary_alignment",
+            strategy_version=1,
+        )
+    elif any(item.trusted_start > item.source_start or item.trusted_end < item.source_end for item in windows):
+        timeline = AsrTimelinePlan(
+            input_granularity="segment",
+            strategy_id="trusted_midpoint_segment_merge",
+            strategy_version=1,
+        )
+    else:
+        timeline = AsrTimelinePlan(
+            input_granularity="segment",
+            strategy_id="ordered_segment_timeline",
+            strategy_version=1,
+        )
+    identity = {
+        "engine": to_plain(engine),
+        "capabilities": to_plain(capabilities),
+        "effective_policy": to_plain(policy_resolution.policy),
+        "audio_facts": to_plain(audio_facts),
+        "windows": to_plain(windows),
+        "execution": to_plain(execution),
+        "timeline": to_plain(timeline),
+    }
+    plan_id = _asr_plan_id(identity)
+    return ResolvedAsrPlan(
+        plan_id=plan_id,
+        resolved_at=utc_now_iso(),
+        engine=engine,
+        capabilities=capabilities,
+        effective_policy=policy_resolution.policy,
+        policy_sources=dict(policy_resolution.sources),
+        audio_facts=audio_facts,
+        windows=windows,
+        execution=execution,
+        timeline=timeline,
+        adjustments=policy_resolution.adjustments,
+    )
+
+
+def _apply_resolved_asr_plan(
+    config: AppConfig,
+    plan: dict[str, Any],
+    manifest: list[dict],
+    *,
+    audio_full: Path | None = None,
+) -> None:
+    if int(plan.get("plan_schema_version") or 0) != ASR_PLAN_SCHEMA_VERSION:
+        raise RuntimeError("unsupported_asr_plan_schema")
+    identity_fields = (
+        "engine",
+        "capabilities",
+        "effective_policy",
+        "audio_facts",
+        "windows",
+        "execution",
+        "timeline",
+    )
+    identity = {field: plan.get(field) for field in identity_fields}
+    if str(plan.get("plan_id") or "") != _asr_plan_id(identity):
+        raise RuntimeError("asr_plan_integrity_mismatch")
+    engine = plan.get("engine") if isinstance(plan.get("engine"), dict) else {}
+    if str(engine.get("id") or "") != config.pipeline.asr_provider:
+        raise RuntimeError("asr_plan_engine_mismatch")
+    active_engine = config.asr_engine_specs.get(config.pipeline.asr_provider)
+    if active_engine is not None and _stable_plan_identity(engine) != _stable_plan_identity(
+        to_plain(active_engine)
+    ):
+        raise RuntimeError("asr_plan_engine_mismatch")
+    active_policy = config.asr_policy_resolutions.get(config.pipeline.asr_provider)
+    planned_policy = plan.get("effective_policy")
+    if active_policy is not None and _stable_plan_identity(planned_policy) != _stable_plan_identity(
+        to_plain(active_policy.policy)
+    ):
+        raise RuntimeError("asr_plan_policy_mismatch")
+    active_capabilities = config.asr_capabilities.get(config.pipeline.asr_provider)
+    planned_capabilities = plan.get("capabilities")
+    if active_capabilities is not None and _stable_plan_identity(
+        planned_capabilities
+    ) != _stable_plan_identity(to_plain(active_capabilities)):
+        raise RuntimeError("asr_plan_capabilities_mismatch")
+    if audio_full is not None:
+        audio_facts = plan.get("audio_facts") if isinstance(plan.get("audio_facts"), dict) else {}
+        if str(audio_facts.get("content_fingerprint") or "") != _sha256_file(audio_full):
+            raise RuntimeError("asr_plan_audio_mismatch")
+    windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
+    if len(windows) != len(manifest):
+        raise RuntimeError("asr_plan_manifest_mismatch")
+    for planned, actual in zip(windows, manifest, strict=True):
+        if not isinstance(planned, dict) or any(
+            abs(float(left) - float(right)) > 0.001
+            for left, right in (
+                (planned.get("source_start", -1), actual.get("start", -2)),
+                (
+                    planned.get("source_end", -1),
+                    float(actual.get("start", 0)) + float(actual.get("duration", 0)),
+                ),
+                (planned.get("trusted_start", -1), actual.get("trusted_start", -2)),
+                (planned.get("trusted_end", -1), actual.get("trusted_end", -2)),
+            )
+        ):
+            raise RuntimeError("asr_plan_manifest_mismatch")
+    timeline = plan.get("timeline") if isinstance(plan.get("timeline"), dict) else {}
+    supported_timelines = {
+        ("word_timeline_boundary_alignment", 1),
+        ("trusted_midpoint_segment_merge", 1),
+        ("ordered_segment_timeline", 1),
+    }
+    timeline_key = (
+        str(timeline.get("strategy_id") or ""),
+        int(timeline.get("strategy_version") or 0),
+    )
+    if timeline_key not in supported_timelines:
+        raise RuntimeError("unsupported_asr_timeline_strategy")
+    if (str(timeline.get("input_granularity")) == "word") != _asr_uses_word_timeline(config):
+        raise RuntimeError("asr_plan_timeline_mismatch")
+    execution = plan.get("execution") if isinstance(plan.get("execution"), dict) else {}
+    if bool(execution.get("split_retry")) != _asr_allows_split_retry(config):
+        raise RuntimeError("asr_plan_execution_mismatch")
+    planned_uploads = [
+        int(item.get("estimated_upload_bytes") or 0)
+        for item in windows
+        if isinstance(item, dict)
+    ]
+    if int(execution.get("actual_concurrency") or 0) != _resolved_asr_concurrency(
+        config,
+        planned_uploads,
+    ):
+        raise RuntimeError("asr_plan_execution_mismatch")
+    if active_policy is not None and (
+        float(execution.get("request_deadline_seconds") or 0.0)
+        != float(active_policy.policy.execution.request_deadline_seconds)
+        or int(execution.get("max_attempts") or 0)
+        != int(active_policy.policy.execution.max_attempts)
+    ):
+        raise RuntimeError("asr_plan_execution_mismatch")
+    provider = _active_asr_provider(config)
+    provider.execution.concurrency = max(1, int(execution.get("actual_concurrency") or 1))
+    provider.execution.timeout_seconds = max(
+        1,
+        int(float(execution.get("request_deadline_seconds") or provider.execution.timeout_seconds)),
+    )
+    provider.execution.retry = max(1, int(execution.get("max_attempts") or provider.execution.retry))
+
+
+def _ensure_resolved_asr_plan(
+    config: AppConfig,
+    store: TaskStore,
+    task: TaskRecord,
+    *,
+    audio_full: Path,
+    media_meta: dict[str, Any],
+    manifest: list[dict],
+    planning_metadata: dict[str, Any],
+    paths: dict[str, Path],
+) -> dict[str, Any] | None:
+    saved = task.settings.get("asr_plan")
+    if isinstance(saved, dict):
+        _apply_resolved_asr_plan(config, saved, manifest, audio_full=audio_full)
+        plan_file = paths["asr"] / "asr_plan.json"
+        try:
+            plan_file_matches = plan_file.is_file() and read_json(plan_file) == saved
+        except (OSError, ValueError, json.JSONDecodeError):
+            plan_file_matches = False
+        if not plan_file_matches:
+            write_json(plan_file, saved)
+        return saved
+    resolved = _resolved_asr_plan(
+        config,
+        audio_full=audio_full,
+        media_meta=media_meta,
+        manifest=manifest,
+        planning_metadata=planning_metadata,
+        paths=paths,
+    )
+    if resolved is None:
+        return None
+    payload = to_plain(resolved)
+    write_json(paths["asr"] / "asr_plan.json", payload)
+    task.settings["asr_plan"] = payload
+    store.save_task(task)
+    _apply_resolved_asr_plan(config, payload, manifest, audio_full=audio_full)
+    return payload
+
+
 def _video_needs_asr(config: AppConfig, task: TaskRecord) -> bool:
     input_type = str(task.settings.get("input_type", "video_asr_translate"))
     if input_type not in {"video_asr_translate", "video_asr"}:
@@ -1403,7 +1769,7 @@ def create_pipeline_task(
         source_lang=source_lang,
         target_lang=target_lang,
         bilingual=bilingual,
-        settings=_task_settings(config, input_type=normalized_input_type),
+        settings=_task_settings(config, input_type=normalized_input_type, root_dir=root_dir),
     )
     if status != "INIT":
         store.update_task_status(task.task_id, status)
@@ -1412,14 +1778,29 @@ def create_pipeline_task(
     return task.task_id, config.pipeline.artifacts_dir
 
 
-def _task_settings(config: AppConfig, *, input_type: str) -> dict[str, Any]:
+def _task_settings(config: AppConfig, *, input_type: str, root_dir: Path) -> dict[str, Any]:
     settings = to_plain(config.pipeline)
     settings["input_type"] = input_type
     settings["source_mode"] = config.pipeline.source_mode
     settings["subtitle_track"] = config.pipeline.subtitle_track
     settings["routing"] = to_plain(config.routing)
+    if input_type in {"video_asr_translate", "video_asr"}:
+        asr_intent = build_active_asr_intent_snapshot(config, root_dir=root_dir)
+        if asr_intent:
+            settings["asr_intent"] = asr_intent
     settings.setdefault("edited", False)
     return settings
+
+
+def _apply_saved_asr_settings(
+    config: AppConfig,
+    settings: dict[str, Any],
+    *,
+    root_dir: Path,
+) -> None:
+    raw = settings.get("asr_intent")
+    if isinstance(raw, dict):
+        restore_asr_intent_snapshot(config, raw, root_dir=root_dir)
 
 
 def _apply_saved_pipeline_settings(config: AppConfig, settings: dict[str, Any]) -> None:
@@ -2042,6 +2423,7 @@ def resume_pipeline(
     )
     config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
     _apply_saved_pipeline_settings(config, task.settings)
+    _apply_saved_asr_settings(config, task.settings, root_dir=root_dir)
     _save_task_routing_settings(store, task, config)
     store.clear_cancel(task_id)
     store.update_task_status(task_id, "QUEUED", clear_error=True)
@@ -2129,6 +2511,7 @@ def _execute_task(
     providers_file: Path | None = None,
 ) -> None:
     task = store.load_task(task_id)
+    _apply_saved_asr_settings(config, task.settings, root_dir=root_dir)
     input_type = str(task.settings.get("input_type", "video_asr_translate"))
     cache_root = config.pipeline.cache_dir or config.pipeline.artifacts_dir / ".cache"
     paths = _task_paths(store, task_id, cache_root)
@@ -2286,6 +2669,7 @@ def _execute_task(
                     )
                     asr_provider = _active_asr_provider(config)
                     chunking = asr_provider.chunking
+                    planning_metadata: dict[str, Any] = {}
                     segments_manifest = split_audio_for_asr(
                         audio_full,
                         paths["media"] / "segments",
@@ -2300,12 +2684,25 @@ def _execute_task(
                         silence_min_seconds=chunking.silence.min_silence_seconds,
                         silence_cut_padding_seconds=chunking.silence.cut_padding_seconds,
                         duration_seconds=float(media_meta["duration_seconds"]),
+                        planning_metadata=planning_metadata,
                     )
                     write_json(paths["media"] / "media_meta.json", media_meta)
                     write_json(manifest_file, segments_manifest)
                     _require_file(audio_full, "media/audio_full.m4a")
+                    asr_plan = _ensure_resolved_asr_plan(
+                        config,
+                        store,
+                        task,
+                        audio_full=audio_full,
+                        media_meta=media_meta,
+                        manifest=segments_manifest,
+                        planning_metadata=planning_metadata,
+                        paths=paths,
+                    )
                     checkpoint["ingest_done"] = True
                     checkpoint["status"] = "INGEST"
+                    if asr_plan is not None:
+                        checkpoint["asr_plan_id"] = str(asr_plan.get("plan_id") or "")
                     store.save_checkpoint(task_id, checkpoint)
                     store.append_event(
                         task_id,
@@ -2313,10 +2710,38 @@ def _execute_task(
                         stage="INGEST",
                         message="Audio segments ready",
                         progress=0.18,
-                        details={"path": str(manifest_file), "segments": len(segments_manifest)},
+                        details={
+                            "path": str(manifest_file),
+                            "segments": len(segments_manifest),
+                            "asr_plan_id": str(asr_plan.get("plan_id") or "") if asr_plan else "",
+                        },
                     )
                 else:
                     segments_manifest = read_json(manifest_file)
+                    media_meta_file = paths["media"] / "media_meta.json"
+                    media_meta = read_json(media_meta_file) if media_meta_file.is_file() else {
+                        "duration_seconds": max(
+                            (
+                                float(item.get("start", 0.0))
+                                + float(item.get("duration", 0.0))
+                                for item in segments_manifest
+                                if isinstance(item, dict)
+                            ),
+                            default=0.0,
+                        )
+                    }
+                    asr_plan = _ensure_resolved_asr_plan(
+                        config,
+                        store,
+                        task,
+                        audio_full=audio_full,
+                        media_meta=media_meta,
+                        manifest=segments_manifest,
+                        planning_metadata={},
+                        paths=paths,
+                    )
+                    if asr_plan is not None:
+                        checkpoint["asr_plan_id"] = str(asr_plan.get("plan_id") or "")
 
                 _check_cancel(store, task_id)
                 _emit_stage(store, task_id, "ASR", "Transcribing audio segments")

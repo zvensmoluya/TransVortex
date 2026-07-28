@@ -59,7 +59,8 @@ def test_network_config_defaults_to_system_and_loads_local_proxy(tmp_path: Path)
     assert configured.network.mode == "local_proxy"
     assert configured.network.proxy_port == 7890
     assert all(provider.network == configured.network for provider in configured.providers.values())
-    assert all(provider.network == configured.network for provider in configured.asr_providers.values())
+    # A local worker has no HTTP transport; remote ASR engines own their endpoint policy.
+    assert configured.asr_providers["faster_whisper_large_v3"].network.mode == "direct"
 
 
 @pytest.mark.parametrize(
@@ -150,19 +151,45 @@ def test_openrouter_admin_switches_to_grok_profile_without_whisper_settings() ->
     assert provider.chunking.overlap_seconds == 3
 
 
+def test_openrouter_admin_switches_to_whisper_profile_with_five_minute_window() -> None:
+    provider = draft_to_asr_provider_config(
+        {
+            "name": "openrouter_asr",
+            "kind": "remote",
+            "protocol": "openrouter_stt",
+            "model": "openai/whisper-large-v3",
+            "request": {
+                "timestamp_granularities": ["word"],
+            },
+            "chunking": {
+                "window_seconds": 60,
+                "max_window_seconds": 60,
+                "short_audio_seconds": 60,
+            },
+        }
+    )
+
+    assert provider.request.timestamp_granularities == ["segment"]
+    assert provider.chunking.window_seconds == 300
+    assert provider.chunking.max_window_seconds == 300
+    assert provider.chunking.short_audio_seconds == 300
+    assert provider.chunking.overlap_seconds == 3
+
+
 def test_asr_resource_activation_can_apply_local_worker_device_settings(tmp_path: Path) -> None:
     (tmp_path / "providers.yaml").write_text("providers: []\n", encoding="utf-8")
     (tmp_path / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
-asr: {provider: local_whisper}
-asr_providers:
-  - name: local_whisper
-    kind: local_worker
-    protocol: faster_whisper
-    model: small
+config_schema_version: 2
+asr: {engine: local_whisper}
+asr_engines:
+  - id: local_whisper
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
-    local: {model_source: managed, device: auto, compute_type: auto}
+    model: {source: managed, id: small}
+    device: auto
+    compute_type: auto
 """.strip(),
         encoding="utf-8",
     )
@@ -187,14 +214,15 @@ def test_asr_resource_activation_rejects_gpu_compute_type_on_cpu(tmp_path: Path)
     (tmp_path / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
-asr: {provider: local_whisper}
-asr_providers:
-  - name: local_whisper
-    kind: local_worker
-    protocol: faster_whisper
-    model: small
+config_schema_version: 2
+asr: {engine: local_whisper}
+asr_engines:
+  - id: local_whisper
+    type: faster_whisper_worker
     runtime: {source: managed, id: managed:faster-whisper}
-    local: {model_source: managed, device: auto, compute_type: auto}
+    model: {source: managed, id: small}
+    device: auto
+    compute_type: auto
 """.strip(),
         encoding="utf-8",
     )
@@ -215,13 +243,12 @@ def test_asr_resource_activation_creates_local_worker_only_after_model_is_instal
     (tmp_path / "pipeline.yaml").write_text(
         """
 artifacts_dir: artifacts
-asr: {provider: cloud_asr}
-asr_providers:
-  - name: cloud_asr
-    kind: remote
-    protocol: openai_transcriptions
+config_schema_version: 2
+asr: {engine: cloud_asr}
+asr_engines:
+  - id: cloud_asr
+    type: openai_transcription
     model: whisper-1
-    base_url: https://api.openai.com/v1
 """.strip(),
         encoding="utf-8",
     )
@@ -762,7 +789,9 @@ routing:
     assert provider.env_key == "OPENROUTER_API_KEY"
     assert provider.credential_id == "openrouter_asr"
     assert provider.execution.concurrency == 4
-    assert provider.chunking.max_window_seconds == 60
+    assert provider.chunking.window_seconds == 300
+    assert provider.chunking.max_window_seconds == 300
+    assert provider.chunking.short_audio_seconds == 300
     assert provider.chunking.overlap_seconds == 3
     assert provider.request.response_format == "verbose_json"
     assert provider.request.timestamp_granularities == ["segment"]
@@ -2342,12 +2371,14 @@ routing:
     assert provider.local.condition_on_previous_text is False
     assert provider.local.hotwords == ""
     assert provider.chunking.mode == "silence"
-    assert provider.chunking.window_seconds == 300
+    assert provider.chunking.window_seconds == 120
     assert provider.chunking.max_window_seconds == 120
     assert provider.chunking.min_window_seconds == 12
     assert provider.chunking.overlap_seconds == 5
     assert provider.chunking.short_audio_seconds == 300
-    assert provider.chunking.max_upload_mb == 24.0
+    # Local worker has no upload transport; the legacy adapter receives a
+    # non-limiting numeric sentinel for the domain policy's explicit None.
+    assert provider.chunking.max_upload_mb == 2048.0
     assert provider.chunking.silence.noise_db == -35.0
     assert provider.execution.concurrency == 1
     assert provider.execution.adaptive_concurrency is False

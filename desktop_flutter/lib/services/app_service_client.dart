@@ -1923,6 +1923,9 @@ class AsrProviderOption {
     this.credentialId = '',
     this.credentialSource = '',
     this.readiness = const AsrReadiness(),
+    this.engineSpec = const <String, Object?>{},
+    this.capabilities = const <String, Object?>{},
+    this.policyResolution = const <String, Object?>{},
     this.raw = const <String, Object?>{},
   });
 
@@ -1937,6 +1940,9 @@ class AsrProviderOption {
   final String credentialId;
   final String credentialSource;
   final AsrReadiness readiness;
+  final Map<String, Object?> engineSpec;
+  final Map<String, Object?> capabilities;
+  final Map<String, Object?> policyResolution;
   final Map<String, Object?> raw;
 
   factory AsrProviderOption.fromJson(Object? value, {String? id}) {
@@ -1969,6 +1975,9 @@ class AsrProviderOption {
         map['readiness'],
         legacyCanRun: map['has_key'] == true || map['hasKey'] == true,
       ),
+      engineSpec: _stringMap(map['engine_spec']),
+      capabilities: _stringMap(map['capabilities']),
+      policyResolution: _stringMap(map['policy_resolution']),
       raw: map,
     );
   }

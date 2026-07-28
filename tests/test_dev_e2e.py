@@ -143,13 +143,13 @@ def test_prepare_external_worker_home_is_ready_and_isolated(
     pipeline = yaml.safe_load((config_root / "pipeline.yaml").read_text(encoding="utf-8"))
     row = next(
         item
-        for item in pipeline["asr_providers"]
-        if item["name"] == "faster_whisper_large_v3"
+        for item in pipeline["asr_engines"]
+        if item["id"] == "faster_whisper_large_v3"
     )
-    assert row["kind"] == "local_worker"
-    assert row["runtime"]["source"] == "external"
-    assert row["local"]["model_source"] == "external"
-    assert row["local"]["model_path"] == str(model.resolve())
+    assert row["type"] == "faster_whisper_worker"
+    assert row["runtime"]["source"] == "registered"
+    assert row["model"] == {"source": "managed", "id": "large-v3"}
+    assert row["device"] == "cuda"
 
     config = load_app_config(root_dir=config_root)
     provider = config.asr_providers["faster_whisper_large_v3"]

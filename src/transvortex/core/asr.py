@@ -581,7 +581,9 @@ class OpenAITranscriptionsAsrClient:
             prompt=prompt,
         )
         url = _build_cloud_asr_url(self.config.base_url, self.config.endpoint)
-        auth_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        auth_headers = dict(self.config.extra_headers)
+        if api_key:
+            auth_headers["Authorization"] = f"Bearer {api_key}"
         payload, transport_meta = request_json_with_retry(
             "POST",
             url,
@@ -854,7 +856,10 @@ class OpenRouterSttAsrClient:
             url,
             json_payload=payload,
             headers=merge_default_headers(
-                {"Authorization": f"Bearer {api_key}"},
+                {
+                    **self.config.extra_headers,
+                    "Authorization": f"Bearer {api_key}",
+                },
                 **DEFAULT_JSON_HEADERS,
             ),
             timeout=float(self.config.execution.timeout_seconds),

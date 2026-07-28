@@ -27,6 +27,7 @@ import 'package:transvortex_desktop_flutter/widgets/application_settings_panel.d
 import 'package:transvortex_desktop_flutter/widgets/asr_resource_management.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
+import 'package:transvortex_desktop_flutter/widgets/settings_window.dart';
 import 'package:transvortex_desktop_flutter/widgets/title_bar.dart';
 
 void main() {
@@ -4317,6 +4318,64 @@ void main() {
     },
   );
 
+  testWidgets(
+    'ASR settings keeps the selected engine across background refresh',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(820, 620));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      final openRouterProvider = <String, Object?>{
+        'name': 'openrouter_asr',
+        'kind': 'remote',
+        'protocol': 'openrouter_stt',
+        'base_url': 'https://openrouter.ai/api/v1',
+        'endpoint': '/audio/transcriptions',
+        'model': 'openai/whisper-large-v3',
+        'auth': {
+          'type': 'bearer',
+          'env_key': 'OPENROUTER_API_KEY',
+          'credential_id': 'openrouter_asr',
+        },
+        'has_key': false,
+        'readiness': {
+          'state': 'needs_action',
+          'code': 'credential_missing',
+          'can_run': false,
+        },
+      };
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') {
+          return _desktopSnapshot(
+            activeAsrProvider: 'local',
+            additionalAsrProviders: {'openrouter_asr': openRouterProvider},
+          ).raw;
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.asrSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OpenRouter'));
+      await tester.pumpAndSettle();
+      expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
+
+      final dynamic state = tester.state(find.byType(SettingsWindow));
+      state.onWindowFocus();
+      await tester.pumpAndSettle();
+
+      expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
+      expect(find.text('下载并启用'), findsNothing);
+      expectNoFlutterException();
+    },
+  );
+
   testWidgets('ASR settings exposes curated OpenRouter model profiles', (
     tester,
   ) async {
@@ -4343,6 +4402,18 @@ void main() {
       },
       'has_key': true,
       'readiness': {'state': 'ready', 'code': 'ready', 'can_run': true},
+      'engine_spec': {'id': 'openrouter_asr', 'kind': 'openrouter_asr'},
+      'policy_resolution': {
+        'policy': {
+          'chunking': {'window_target_seconds': 300.0, 'overlap_seconds': 3.0},
+          'execution': {'target_concurrency': 4},
+        },
+      },
+      'capabilities': {
+        'timeline': {
+          'granularities': ['segment'],
+        },
+      },
       'available_models': [
         {
           'model': 'openai/whisper-large-v3',
@@ -4403,6 +4474,10 @@ void main() {
     expect(find.text('Whisper / Grok'), findsOneWidget);
     expect(find.text('OpenRouter API key（留空则沿用已保存密钥）'), findsOneWidget);
     expect(find.textContaining('时间轴候选：要求分段时间戳'), findsOneWidget);
+    expect(
+      find.textContaining('自动运行策略 · 分窗 300 秒 · 重叠 3 秒 · 并发目标 4 路 · 分段时间戳'),
+      findsOneWidget,
+    );
     expect(find.textContaining('音频会上传到 OpenRouter'), findsOneWidget);
     expect(find.text('查询中'), findsOneWidget);
     expect(
@@ -4464,6 +4539,9 @@ void main() {
     expect(testedDraft?['base_url'], 'https://openrouter.ai/api/v1');
     expect(testedDraft?['endpoint'], '/audio/transcriptions');
     expect((testedDraft?['auth'] as Map?)?['env_key'], 'OPENROUTER_API_KEY');
+    expect(testedDraft?.containsKey('engine_spec'), isFalse);
+    expect(testedDraft?.containsKey('policy_resolution'), isFalse);
+    expect(testedDraft?.containsKey('capabilities'), isFalse);
 
     asrTestResult = {'ok': false, 'code': 'payment_required'};
     await tester.tap(find.text('测试连接'));

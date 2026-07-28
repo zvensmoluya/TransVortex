@@ -1,3 +1,4 @@
+config_schema_version: 2
 artifacts_dir: artifacts
 translation_batch_size: 120
 default_concurrency: 8
@@ -123,7 +124,7 @@ memory:
   consistency_check:
     enabled: true
 asr:
-  provider: faster_whisper_large_v3
+  engine: faster_whisper_large_v3
   audio_track: auto
   prompt:
     enabled: true
@@ -131,180 +132,26 @@ asr:
     profiles: []
     include_previous_text: false
     max_chars: 800
-asr_providers:
-  - name: faster_whisper_large_v3
-    kind: local_worker
-    protocol: faster_whisper
-    model: large-v3
+asr_engines:
+  - id: faster_whisper_large_v3
+    type: faster_whisper_worker
     runtime:
       source: managed
       id: managed:faster-whisper
-    local:
-      model_source: managed
-      model_path: ""
-      device: auto
-      compute_type: auto
-      max_initial_timestamp: 30.0
-      beam_size: 5
-      temperature: 0.0
-      condition_on_previous_text: false
-      hotwords: ""
-    execution:
-      concurrency: 1
-      timeout_seconds: 300
-      retry: 1
-    chunking:
-      mode: silence
-      window_seconds: 300
-      max_window_seconds: 120
-      min_window_seconds: 12
-      overlap_seconds: 5
-      short_audio_seconds: 300
-      max_upload_mb: 24
-      silence:
-        noise_db: -35
-        min_silence_seconds: 0.25
-        cut_padding_seconds: 0.15
-        fallback_mode: hard_cut
-      fuzzy_dedupe: true
-    preprocessing:
-      trim_silence:
-        enabled: false
-  - name: openrouter_asr
-    kind: remote
-    protocol: openrouter_stt
-    base_url: https://openrouter.ai/api/v1
-    endpoint: /audio/transcriptions
+    model:
+      source: managed
+      id: large-v3
+    accelerator:
+      source: managed
+      id: nvidia-cuda12
+    device: auto
+    compute_type: auto
+  - id: openrouter_asr
+    type: openrouter_asr
     model: openai/whisper-large-v3
-    auth:
-      type: bearer
-      env_key: OPENROUTER_API_KEY
-      credential_id: openrouter_asr
-    execution:
-      concurrency: 4
-      adaptive_concurrency: true
-      min_concurrency: 1
-      max_concurrency: 4
-      max_inflight_upload_mb: 64
-      timeout_seconds: 120
-      retry: 2
-    preprocessing:
-      trim_silence:
-        enabled: true
-        backend: ffmpeg_silencedetect
-        noise_db: -35
-        min_silence_seconds: 0.2
-        keep_preroll_seconds: 0.25
-        trim_trailing: true
-        keep_postroll_seconds: 0.1
-        min_upload_seconds: 0.5
-    chunking:
-      mode: silence
-      window_seconds: 60
-      max_window_seconds: 60
-      min_window_seconds: 8
-      overlap_seconds: 3
-      short_audio_seconds: 60
-      max_upload_mb: 24
-      silence:
-        noise_db: -35
-        min_silence_seconds: 0.25
-        cut_padding_seconds: 0.15
-        fallback_mode: hard_cut
-      fuzzy_dedupe: true
-    http2: true
-    request:
-      response_format: verbose_json
-      temperature: 0
-      timestamp_granularities: [segment]
-      include: []
-      array_format: repeat
-      extra_form_fields: {}
-      extra_json_fields: {}
-      provider_options: {}
-  - name: funasr_sensevoice_local
-    kind: local_server
-    protocol: funasr_openai
-    base_url: http://127.0.0.1:8899
-    endpoint: /v1/audio/transcriptions
+  - id: funasr_sensevoice_local
+    type: funasr_service
     model: sensevoice
-    auth:
-      type: none
-    http2: false
-    request:
-      response_format: verbose_json
-      send_temperature: false
-      send_timestamp_granularities: false
-      send_prompt: false
-      array_format: repeat
-    execution:
-      concurrency: 1
-      timeout_seconds: 300
-      retry: 1
-    chunking:
-      mode: fixed
-      window_seconds: 120
-      max_window_seconds: 120
-      min_window_seconds: 1
-      overlap_seconds: 0
-      short_audio_seconds: 120
-      max_upload_mb: 64
-      silence:
-        noise_db: -35
-        min_silence_seconds: 0.25
-        cut_padding_seconds: 0.15
-        fallback_mode: hard_cut
-      fuzzy_dedupe: false
-    preprocessing:
-      trim_silence:
-        enabled: false
-  - name: openai_whisper
-    kind: remote
-    protocol: openai_transcriptions
-    base_url: https://api.openai.com/v1
-    endpoint: /v1/audio/transcriptions
+  - id: openai_whisper
+    type: openai_transcription
     model: whisper-1
-    auth:
-      type: bearer
-      env_key: OPENAI_API_KEY
-      credential_id: openai_whisper
-    execution:
-      concurrency: 8
-      adaptive_concurrency: true
-      min_concurrency: 1
-      max_concurrency: 8
-      max_inflight_upload_mb: 128
-      timeout_seconds: 300
-      retry: 2
-    preprocessing:
-      trim_silence:
-        enabled: true
-        backend: ffmpeg_silencedetect
-        noise_db: -35
-        min_silence_seconds: 0.2
-        keep_preroll_seconds: 0.25
-        trim_trailing: true
-        keep_postroll_seconds: 0.1
-        min_upload_seconds: 0.5
-    chunking:
-      mode: silence
-      window_seconds: 300
-      max_window_seconds: 120
-      min_window_seconds: 12
-      overlap_seconds: 5
-      short_audio_seconds: 300
-      max_upload_mb: 24
-      silence:
-        noise_db: -35
-        min_silence_seconds: 0.25
-        cut_padding_seconds: 0.15
-        fallback_mode: hard_cut
-      fuzzy_dedupe: true
-    http2: true
-    request:
-      response_format: verbose_json
-      temperature: 0
-      timestamp_granularities: [segment]
-      include: []
-      array_format: brackets
-      extra_form_fields: {}

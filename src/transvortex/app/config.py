@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from ..asr_domain import ASR_CONFIG_SCHEMA_VERSION
 from ..openrouter_asr import (
     OPENROUTER_ASR_BASE_URL,
     OPENROUTER_ASR_CREDENTIAL_ID,
@@ -69,6 +70,7 @@ from .models import (
 )
 from ..prompts import load_prompt
 from ..providers.model_catalog import model_catalog_runtime_config
+from .asr_resolution import asr_engine_to_yaml_row, default_asr_engine_rows, resolve_asr_engine
 from .credentials import read_dotenv_values
 
 
@@ -607,7 +609,7 @@ def _reject_legacy_asr_fields(asr_raw: dict[str, Any]) -> None:
         raise ValueError(
             "Unsupported legacy ASR field(s): "
             + ", ".join(legacy)
-            + "; use asr.provider plus asr_providers[].kind/protocol/local/execution/chunking/preprocessing"
+            + "; use asr.engine plus asr_engines[].type and policy_overrides"
         )
 
 
@@ -1056,30 +1058,63 @@ def load_app_config(
         asr_raw = {}
     _reject_legacy_asr_fields(asr_raw)
     asr_prompt_raw = asr_raw.get("prompt") if isinstance(asr_raw.get("prompt"), dict) else {}
-    asr_provider_name = _to_str(asr_raw.get("provider"), "faster_whisper_large_v3")
-    asr_provider_rows = pip_yaml.get("asr_providers")
+    schema_version = _to_int(pip_yaml.get("config_schema_version"), 0)
+    asr_engine_rows = pip_yaml.get("asr_engines")
+    uses_asr_engine_schema = (
+        schema_version == ASR_CONFIG_SCHEMA_VERSION
+        or "asr_engines" in pip_yaml
+        or "engine" in asr_raw
+    )
+    if uses_asr_engine_schema:
+        if schema_version != ASR_CONFIG_SCHEMA_VERSION:
+            raise ValueError(
+                f"ASR engine config requires config_schema_version={ASR_CONFIG_SCHEMA_VERSION}"
+            )
+        if not isinstance(asr_engine_rows, list) or not asr_engine_rows:
+            raise ValueError("ASR engine config requires a non-empty asr_engines list")
+        if "provider" in asr_raw or "asr_providers" in pip_yaml:
+            raise ValueError("ASR engine config cannot mix asr.engine with legacy ASR providers")
+        if not _to_str(asr_raw.get("engine"), ""):
+            raise ValueError("ASR engine config requires asr.engine")
+    asr_provider_name = _to_str(
+        asr_raw.get("engine") if uses_asr_engine_schema else asr_raw.get("provider"),
+        "faster_whisper_large_v3",
+    )
     asr_providers: dict[str, AsrProviderConfig] = {}
-    if isinstance(asr_provider_rows, list):
-        for row in asr_provider_rows:
+    asr_engine_specs = {}
+    asr_user_overrides = {}
+    asr_capabilities = {}
+    asr_policy_resolutions = {}
+    if uses_asr_engine_schema:
+        rows = asr_engine_rows
+        for row in rows:
             if isinstance(row, dict):
-                provider_cfg = replace(_parse_asr_provider(row), network=network)
-                asr_providers[provider_cfg.name] = provider_cfg
+                resolution = resolve_asr_engine(row, root_dir=root_dir)
+                engine_id = resolution.spec.id
+                if engine_id in asr_engine_specs:
+                    raise ValueError(f"duplicate ASR engine id: {engine_id}")
+                asr_engine_specs[engine_id] = resolution.spec
+                asr_user_overrides[engine_id] = resolution.overrides
+                asr_capabilities[engine_id] = resolution.capabilities
+                asr_policy_resolutions[engine_id] = resolution.policy
+                asr_providers[engine_id] = resolution.runtime
+    else:
+        asr_provider_rows = pip_yaml.get("asr_providers")
+        if isinstance(asr_provider_rows, list):
+            for row in asr_provider_rows:
+                if isinstance(row, dict):
+                    provider_cfg = replace(_parse_asr_provider(row), network=network)
+                    asr_providers[provider_cfg.name] = provider_cfg
     if not asr_providers:
-        default_provider = replace(
-            _parse_asr_provider(
-                {
-                    "name": "faster_whisper_large_v3",
-                    "kind": "local_worker",
-                    "protocol": "faster_whisper",
-                    "model": "large-v3",
-                    "runtime": {"source": "managed", "id": "managed:faster-whisper"},
-                }
-            ),
-            network=network,
-        )
-        asr_providers[default_provider.name] = default_provider
+        resolution = resolve_asr_engine(default_asr_engine_rows()[0], root_dir=root_dir)
+        engine_id = resolution.spec.id
+        asr_engine_specs[engine_id] = resolution.spec
+        asr_user_overrides[engine_id] = resolution.overrides
+        asr_capabilities[engine_id] = resolution.capabilities
+        asr_policy_resolutions[engine_id] = resolution.policy
+        asr_providers[engine_id] = resolution.runtime
     if asr_provider_name not in asr_providers:
-        raise ValueError(f"ASR provider not found: {asr_provider_name}")
+        raise ValueError(f"ASR engine not found: {asr_provider_name}")
     translation_raw = pip_yaml.get("translation") or {}
     legacy_translation_batch_size = _to_int(pip_yaml.get("translation_batch_size"), 120)
     chunk_lines = _to_int(translation_raw.get("chunk_lines"), legacy_translation_batch_size)
@@ -1399,10 +1434,35 @@ def load_app_config(
                 raise ValueError(f"ASR provider not found: {provider_name}")
             pipeline.asr_provider = provider_name
         elif key == "asr_model":
-            provider = asr_providers[pipeline.asr_provider]
-            provider.model = _to_str(value, provider.model)
-            if provider.protocol == "faster_whisper":
-                provider.local.model_size = provider.model
+            engine_id = pipeline.asr_provider
+            model_name = _to_str(value, asr_providers[engine_id].model)
+            spec = asr_engine_specs.get(engine_id)
+            overrides = asr_user_overrides.get(engine_id)
+            if spec is None or overrides is None:
+                provider = asr_providers[engine_id]
+                provider.model = model_name
+                if provider.protocol == "faster_whisper":
+                    provider.local.model_size = provider.model
+            else:
+                row = asr_engine_to_yaml_row(spec, overrides)
+                if row.get("type") == "faster_whisper_worker":
+                    model_binding = row.get("model")
+                    if not isinstance(model_binding, dict):
+                        model_binding = {"source": "managed"}
+                    if not (
+                        model_binding.get("source") == "registered"
+                        and model_name == asr_providers[engine_id].model
+                    ):
+                        model_binding = {"source": "managed", "id": model_name}
+                    row["model"] = model_binding
+                else:
+                    row["model"] = model_name
+                resolution = resolve_asr_engine(row, root_dir=root_dir)
+                asr_engine_specs[engine_id] = resolution.spec
+                asr_user_overrides[engine_id] = resolution.overrides
+                asr_capabilities[engine_id] = resolution.capabilities
+                asr_policy_resolutions[engine_id] = resolution.policy
+                asr_providers[engine_id] = resolution.runtime
         elif key == "asr_audio_track":
             pipeline.asr_audio_track = _to_str(value, pipeline.asr_audio_track)
         elif key == "asr_prompt_profile":
@@ -1619,6 +1679,10 @@ def load_app_config(
         active_routing_profile=active_routing_profile,
         routing_profile_next_seq=routing_profile_next_seq,
         asr_providers=asr_providers,
+        asr_engine_specs=asr_engine_specs,
+        asr_user_overrides=asr_user_overrides,
+        asr_capabilities=asr_capabilities,
+        asr_policy_resolutions=asr_policy_resolutions,
     )
 
 
