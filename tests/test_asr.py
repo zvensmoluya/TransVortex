@@ -21,6 +21,7 @@ from transvortex.core.asr import (
     build_asr_client,
     _build_cloud_asr_url,
     _normalize_whisper_language,
+    _map_openrouter_word_timeline_rows,
     _prepare_local_cuda_runtime,
     _resolve_worker_device,
 )
@@ -530,7 +531,7 @@ def test_openrouter_whisper_uses_json_contract_and_requires_segments(tmp_path, m
     assert exc_info.value.transport_meta["service"] == "openrouter"
 
 
-def test_openrouter_grok_uses_chunk_fallback_and_normalizes_optional_words(tmp_path, monkeypatch) -> None:
+def test_openrouter_grok_requires_words_and_normalizes_timeline_rows(tmp_path, monkeypatch) -> None:
     audio = tmp_path / "sample.wav"
     audio.write_bytes(b"RIFF")
     captured = {}
@@ -565,29 +566,26 @@ def test_openrouter_grok_uses_chunk_fallback_and_normalizes_optional_words(tmp_p
             credential_id="openrouter_asr",
         ),
         request=AsrProviderRequestConfig(
-            response_format="json",
-            timestamp_granularities=[],
-            send_timestamp_granularities=False,
+            response_format="verbose_json",
+            timestamp_granularities=["word"],
+            send_timestamp_granularities=True,
             send_prompt=False,
         ),
     )
 
-    result = build_asr_client(provider).transcribe_segment(
-        audio,
-        5.0,
-        source_lang="en",
-        prompt="ignored",
-    )
+    with pytest.raises(RuntimeError, match="openrouter_asr_timestamps_missing"):
+        build_asr_client(provider).transcribe_segment(
+            audio,
+            5.0,
+            source_lang="en",
+            prompt="ignored",
+        )
 
     payload = captured["json_payload"]
     assert payload["model"] == "x-ai/grok-stt-1.0"
-    assert payload["response_format"] == "json"
-    assert "timestamp_granularities" not in payload
+    assert payload["response_format"] == "verbose_json"
+    assert payload["timestamp_granularities"] == ["word"]
     assert "provider" not in payload
-    assert result.rows[0]["start"] == 5.0
-    assert result.rows[0]["end"] == 5.1
-    assert result.rows[0]["meta"]["warning"] == "openrouter_text_only_timestamps"
-    assert result.rows[0]["meta"]["openrouter_model_status"] == "experimental"
 
     monkeypatch.setattr(
         "transvortex.core.asr.request_openrouter_json_with_retry",
@@ -614,17 +612,66 @@ def test_openrouter_grok_uses_chunk_fallback_and_normalizes_optional_words(tmp_p
 
     word_result = build_asr_client(provider).transcribe_segment(audio, 5.0, source_lang="en")
 
-    assert len(word_result.rows) == 1
+    assert len(word_result.rows) == 2
     assert word_result.rows[0]["start"] == 5.1
-    assert word_result.rows[0]["end"] == 6.8
-    assert word_result.rows[0]["confidence"] == pytest.approx(0.8)
+    assert word_result.rows[0]["end"] == 6.0
+    assert word_result.rows[0]["text"] == "hello from"
+    assert word_result.rows[0]["confidence"] == pytest.approx(0.9)
     assert "warning" not in word_result.rows[0]["meta"]
     assert word_result.rows[0]["meta"]["timeline_source"] == "response.words"
+    assert word_result.rows[0]["meta"]["speaker"] == 0
     assert word_result.rows[0]["meta"]["word_timestamps"] == [
         {"text": "hello", "start": 5.1, "end": 5.6, "confidence": 0.9, "speaker": 0},
         {"text": "from", "start": 5.7, "end": 6.0, "speaker": 0},
+    ]
+    assert word_result.rows[1]["start"] == 6.1
+    assert word_result.rows[1]["end"] == 6.8
+    assert word_result.rows[1]["text"] == "grok"
+    assert word_result.rows[1]["confidence"] == pytest.approx(0.7)
+    assert word_result.rows[1]["meta"]["speaker"] == 1
+    assert word_result.rows[1]["meta"]["word_timestamps"] == [
         {"text": "grok", "start": 6.1, "end": 6.8, "confidence": 0.7, "speaker": 1},
     ]
+
+
+def test_openrouter_grok_groups_words_by_punctuation_and_hard_limits() -> None:
+    raw_words = [
+        {"word": "你", "start": 0.0, "end": 0.25},
+        {"word": "好", "start": 0.25, "end": 0.5},
+        {"word": "。", "start": 0.5, "end": 0.7},
+    ]
+    cursor = 1.0
+    for index in range(18):
+        raw_words.append(
+            {
+                "word": f"word{index}",
+                "start": cursor,
+                "end": cursor + 0.32,
+            }
+        )
+        cursor += 0.36
+
+    rows = _map_openrouter_word_timeline_rows(
+        response={"words": raw_words},
+        config=AsrProviderConfig(name="openrouter_asr", protocol="openrouter_stt"),
+        segment_start_offset=10.0,
+        transport_meta={},
+    )
+
+    assert rows[0]["text"] == "你好。"
+    assert rows[0]["start"] == 10.0
+    assert rows[0]["end"] == 10.7
+    assert len(rows) >= 3
+    assert all(row["end"] - row["start"] <= 6.0 for row in rows)
+    assert all(
+        row["meta"]["word_segmentation"] == "punctuation_pause_duration_v1"
+        for row in rows
+    )
+    assert [
+        word["text"]
+        for row in rows
+        for word in row["meta"]["word_timestamps"]
+    ] == [str(word["word"]) for word in raw_words]
 
 
 def test_openrouter_rejects_models_without_an_explicit_profile() -> None:
@@ -645,8 +692,8 @@ def test_openrouter_rejects_provider_options_not_allowed_by_model_profile() -> N
         protocol="openrouter_stt",
         model="x-ai/grok-stt-1.0",
         request=AsrProviderRequestConfig(
-            response_format="json",
-            timestamp_granularities=[],
+            response_format="verbose_json",
+            timestamp_granularities=["word"],
             provider_options={"xai": {"diarize": True}},
         ),
     )

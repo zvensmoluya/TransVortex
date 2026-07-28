@@ -4354,7 +4354,7 @@ void main() {
           'model': 'x-ai/grok-stt-1.0',
           'display_name': 'Grok STT 1.0',
           'status': 'experimental',
-          'notes_zh': '当前按短音频窗口生成粗时间轴。',
+          'notes_zh': '使用词级时间戳生成字幕段，缺失时间戳时会停止任务。',
         },
       ],
     };
@@ -4441,7 +4441,7 @@ void main() {
     await tester.tap(find.text('Grok STT 1.0 · 实验性').last);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('实验性模型：当前按短音频窗口'), findsOneWidget);
+    expect(find.textContaining('实验性模型：使用词级时间戳生成字幕段'), findsOneWidget);
     await tester.tap(find.text('查询用量'));
     await tester.pumpAndSettle();
 

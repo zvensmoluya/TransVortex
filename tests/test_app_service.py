@@ -1113,13 +1113,14 @@ def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, mon
     provider = snapshot["result"]["config"]["asr_providers"]["openrouter_asr"]
 
     assert provider["model_profile"]["status"] == "experimental"
-    assert provider["model_profile"]["timeline_mode"] == "chunk"
+    assert provider["model_profile"]["timeline_mode"] == "words_required"
     assert [item["model"] for item in provider["available_models"]] == [
         "openai/whisper-large-v3",
         "x-ai/grok-stt-1.0",
     ]
-    assert provider["request"]["response_format"] == "json"
-    assert provider["chunking"]["max_window_seconds"] == 20
+    assert provider["request"]["response_format"] == "verbose_json"
+    assert provider["request"]["timestamp_granularities"] == ["word"]
+    assert provider["chunking"]["max_window_seconds"] == 300
 
 
 def test_app_service_keeps_inactive_local_model_drafts(tmp_path: Path, monkeypatch) -> None:

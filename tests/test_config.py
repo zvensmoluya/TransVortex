@@ -142,11 +142,11 @@ def test_openrouter_admin_switches_to_grok_profile_without_whisper_settings() ->
     assert provider.endpoint == "/audio/transcriptions"
     assert provider.env_key == "OPENROUTER_API_KEY"
     assert provider.credential_id == "openrouter_asr"
-    assert provider.request.response_format == "json"
-    assert provider.request.timestamp_granularities == []
-    assert provider.request.send_timestamp_granularities is False
+    assert provider.request.response_format == "verbose_json"
+    assert provider.request.timestamp_granularities == ["word"]
+    assert provider.request.send_timestamp_granularities is True
     assert provider.request.send_prompt is False
-    assert provider.chunking.max_window_seconds == 20
+    assert provider.chunking.max_window_seconds == 300
     assert provider.chunking.overlap_seconds == 0
 
 

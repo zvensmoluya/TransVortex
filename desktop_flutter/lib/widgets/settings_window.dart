@@ -2696,7 +2696,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       return '$prefix$notes';
     }
     return selectedModel == 'x-ai/grok-stt-1.0'
-        ? '实验性模型：当前按短音频窗口生成粗时间轴。'
+        ? '实验性模型：使用词级时间戳生成字幕段，缺失时间戳时会停止任务。'
         : '时间轴候选：要求服务返回分段时间戳，不会静默降级为整段字幕。';
   }
 
@@ -5476,7 +5476,7 @@ String _friendlyAsrConnectionTestError(Object? rawCode) {
     'network_error' ||
     'connection_failed' => '连接测试失败：暂时无法连接识别服务，请检查网络和服务地址。',
     'openrouter_asr_timestamps_missing' =>
-      'OpenRouter 已返回文本，但没有返回制作字幕所需的时间轴；请改用已支持时间戳的模型。',
+      'OpenRouter 已返回文本，但没有返回所选模型制作字幕所需的分段或词级时间戳；可重试或切换模型。',
     'unsupported_openrouter_asr_model' =>
       '这个 OpenRouter 模型尚未完成专项适配，请选择列表中的已支持模型。',
     'bad_schema' => '连接测试失败：上游返回了当前版本无法识别的结构。',

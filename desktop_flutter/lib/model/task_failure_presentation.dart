@@ -174,7 +174,7 @@ String _failureReason({
     case 'missing_asr_dependency':
       return '本机识别组件还没有准备好，请在识别设置中完成安装或选择其他方案。';
     case 'openrouter_asr_timestamps_missing':
-      return 'OpenRouter 上游只返回了转写文本，没有返回制作字幕所需的时间轴。请改用已支持时间戳的识别模型。';
+      return 'OpenRouter 上游只返回了转写文本，没有返回所选模型制作字幕所需的分段或词级时间轴。可以重试；持续失败时请切换模型。';
     case 'unsupported_openrouter_asr_model':
       return '这个 OpenRouter 识别模型尚未完成专项适配，请选择已支持的模型。';
     case 'provider_payment_required':

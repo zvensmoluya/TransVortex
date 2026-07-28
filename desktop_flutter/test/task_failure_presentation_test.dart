@@ -43,7 +43,8 @@ void main() {
 
       expect(presentation.target, TaskFailureRecoveryTarget.asrSettings);
       expect(presentation.actionLabel, '检查识别设置');
-      expect(presentation.reason, contains('时间轴'));
+      expect(presentation.reason, contains('分段或词级时间轴'));
+      expect(presentation.reason, contains('可以重试'));
       expect(presentation.reason, contains('OpenRouter'));
     });
 
