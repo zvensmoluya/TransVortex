@@ -11,7 +11,8 @@
 当前实现：
 - 已接入 OpenRouter `/api/v1/audio/transcriptions` JSON 传输、完整任务预检、用户级凭据解析、桌面设置入口和模型专项 profile。
 - 当前显式支持 `openai/whisper-large-v3` 与 `x-ai/grok-stt-1.0`，不会自动开放 OpenRouter 模型目录中的其他 transcription 模型。
-- Whisper profile 要求上游返回 segment timestamps；只有文本时明确失败。Grok profile 固定请求 `verbose_json + word`，由 words 生成字幕段；缺少有效 words 时同样明确失败，并在界面标为“实验性”。
+- Whisper profile 要求上游返回 segment timestamps；只有文本时明确失败。Grok profile 固定请求 `verbose_json + word`，默认使用 300 秒窗口和 3 秒 overlap；跨窗口先对齐并合并 words，再统一生成字幕段。缺少有效 words 时同样明确失败，并在界面标为“实验性”。
+- Grok 的词级 overlap 同时覆盖正常窗口与超时后的细分重试。重叠区使用带时间漂移约束的单调 token 对齐，无法可靠匹配时按 trusted boundary 回退；诊断写入 `quality/asr_word_overlap.json`，不包含转写文本。
 - OpenRouter 平台层会解析官方结构化错误，区分余额不足、权限、限流、请求拒绝和上游不可用；重试会读取有界的 `Retry-After`，成功与失败诊断都会保留不含凭据的 `X-Generation-Id`。
 - 成功响应中的 `usage.cost`、`usage.seconds` 和 token 字段会按 generation ID 去重并聚合到 `source/asr/openrouter_usage.json` 与任务诊断；单次响应先写 usage receipt，后续 fallback、分裂重试、失败、取消或进程中断不会丢掉已发生的费用。Flutter 会区分完整的“OpenRouter 用量”和字段不全的“OpenRouter 已报告用量”。进入已配置密钥的 OpenRouter ASR 设置时会自动调用普通 key 可访问的 `/api/v1/key` 展示周期用量/限额，原“查询用量”按钮用于手动刷新；该查询不发模型请求，并以 5 秒单次请求快速失败。需要 management key 的账户 `/credits` 不接入 ASR 凭据。最终费用仍以 OpenRouter Activity 和账单为准。
 - 共享边界只覆盖 HTTP、错误和追踪元数据，不把 ASR profile、时间轴或请求字段与翻译 provider 共用。
@@ -25,10 +26,11 @@
 - 6.065 秒合成英文语音验证了 Grok 的参数差异：`json` 不返回时间戳；`verbose_json + word` 通过 JSON base64 和 multipart 都返回 word timestamps。multipart 没有改善响应能力，只改变上传编码。
 - 57.033 秒合成英文语音通过单次 JSON base64 请求成功，约 4.877 秒完成，返回 95 个 words；上游 `segments` 仍只有一段，因此项目按 words 自行生成字幕段。本轮五次 Grok 请求合计报告费用约 `0.002259` 美元。
 - OpenRouter 官方当前说明 multipart 上限为 25 MB、上游处理超时约 60 秒，后者不是音频时长上限。首版 300 秒窗口由实测处理倍率和 16 kHz 单声道 PCM WAV 体积估算得出，不是官方保证。
+- 代码级边界测试已覆盖时间戳抖动、连续重复词、标点差异、中日韩紧凑文本、无法对齐时的 trusted-boundary 回退，以及正常窗口和细分重试两条接线；这些测试不等同于真实长音频验收。
 
 尚缺证据：
 - Whisper 的 prompt、长音频分片、跨分片时间轴和至少一种非英语素材仍需真实验证。
-- Grok 仍需用真实长内容验证 300 秒窗口、词级时间戳精度、word-to-caption 切句质量、跨窗口连续性和至少一种非英语素材；说话人和多声道字段尚未通过 OpenRouter 实测。
+- Grok 仍需用真实长内容验证 300 秒窗口、3 秒 overlap 阈值、词级时间戳精度、word-to-caption 切句质量、跨窗口连续性和至少一种非英语素材；说话人和多声道字段尚未通过 OpenRouter 实测。
 - 仍需在不同网络和服务负载下验证 OpenRouter 当前 STT 处理超时、请求体大小、重试费用和数据处理边界。
 
 验收条件：

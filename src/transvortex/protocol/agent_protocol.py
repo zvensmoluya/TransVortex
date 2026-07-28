@@ -276,6 +276,7 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
             "quality/reflow.jsonl",
             "quality/source_cleaning.json",
             "quality/asr_boundary_quality.json",
+            "quality/asr_word_overlap.json",
             "quality/subtitle_quality.json",
             "quality/subtitle_delivery.json",
             "final/segments.aligned.json",

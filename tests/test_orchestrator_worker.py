@@ -25,6 +25,7 @@ from transvortex.core.orchestrator import (
 from transvortex.core.openrouter_asr_usage import (
     write_openrouter_asr_usage_artifact as _write_openrouter_asr_usage_artifact,
 )
+from transvortex.core.word_timeline import build_word_timeline_rows
 from transvortex.app.config import load_app_config
 from transvortex.core.orchestrator import _asr_item_upload_mb, _take_asr_upload_batch
 from transvortex.artifacts.task_store import TaskStore
@@ -500,6 +501,24 @@ providers:
             """
         ).strip(),
         encoding="utf-8",
+    )
+
+
+def _fake_grok_word_rows(
+    words: list[dict],
+    *,
+    generation_id: str,
+) -> list[dict]:
+    return build_word_timeline_rows(
+        words,
+        base_meta={
+            "provider": "openrouter_asr",
+            "protocol": "openrouter_stt",
+            "source": "asr",
+            "service": "openrouter",
+            "model": "x-ai/grok-stt-1.0",
+            "generation_id": generation_id,
+        },
     )
 
 
@@ -2837,3 +2856,296 @@ def test_worker_streams_events_and_route_override(tmp_path: Path, monkeypatch) -
     assert task_id
     assert any(event["type"] == "task_created" for event in streamed)
     assert any(event["type"] == "done" for event in streamed)
+
+
+def test_grok_word_overlap_is_merged_before_caption_segmentation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path
+    _write_config(root)
+    _write_remote_asr_config(
+        root,
+        provider_name="openrouter_asr",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        execution="""
+execution:
+  concurrency: 1
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "example-token")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 17.0}
+
+    split_options: dict = {}
+
+    def fake_split_audio_for_asr(
+        audio_path: Path,
+        segments_dir: Path,
+        **kwargs,
+    ) -> list[dict]:
+        split_options.update(kwargs)
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        first = segments_dir / "part_00000.wav"
+        second = segments_dir / "part_00001.wav"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 10.0,
+                "trusted_start": 0.0,
+                "trusted_end": 8.5,
+                "path": str(first),
+                "source_audio_path": str(audio_path),
+            },
+            {
+                "segment_index": 1,
+                "start": 7.0,
+                "duration": 10.0,
+                "trusted_start": 8.5,
+                "trusted_end": 17.0,
+                "path": str(second),
+                "source_audio_path": str(audio_path),
+            },
+        ]
+
+    class FakeGrokAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(
+            self,
+            _audio_path: Path,
+            segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            if segment_start_offset < 1.0:
+                words = [
+                    {"text": "before", "start": 6.3, "end": 6.6},
+                    {"text": "very", "start": 7.3, "end": 7.6},
+                    {"text": "very", "start": 8.0, "end": 8.3},
+                    {"text": "today.", "start": 8.8, "end": 9.2},
+                ]
+                generation_id = "gen-main-left"
+            else:
+                words = [
+                    {"text": "very", "start": 7.38, "end": 7.68},
+                    {"text": "very", "start": 8.08, "end": 8.38},
+                    {"text": "today", "start": 8.88, "end": 9.28},
+                    {"text": "after", "start": 9.6, "end": 9.9},
+                ]
+                generation_id = "gen-main-right"
+            return SimpleNamespace(
+                rows=_fake_grok_word_rows(words, generation_id=generation_id),
+                raw_response={"text": "omitted", "usage": {"seconds": 10.0}},
+                transport_meta={"generation_id": generation_id},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeGrokAsrEngine)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.probe_provider",
+        lambda **_kwargs: {"checks": [{"status": "PASS"}]},
+    )
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="en",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.raw.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    words = [
+        word["text"]
+        for row in source_rows
+        for word in row["meta"]["word_timestamps"]
+    ]
+    assert words == ["before", "very", "very", "today.", "after"]
+    assert split_options["overlap_seconds"] == 3
+    overlap_report = json.loads(
+        (task_dir / "quality" / "asr_word_overlap.json").read_text(encoding="utf-8")
+    )
+    assert overlap_report["summary"]["aligned"] == 1
+    assert overlap_report["summary"]["total_fallback_seams"] == 0
+
+
+def test_grok_split_retry_uses_the_same_word_overlap_merge(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path
+    _write_config(root)
+    _write_remote_asr_config(
+        root,
+        provider_name="openrouter_asr",
+        protocol="openrouter_stt",
+        base_url="https://openrouter.ai/api/v1",
+        endpoint="/audio/transcriptions",
+        model="x-ai/grok-stt-1.0",
+        execution="""
+execution:
+  concurrency: 1
+        """,
+        preprocessing="""
+preprocessing:
+  trim_silence:
+    enabled: false
+        """,
+    )
+    input_file = root / "demo.mp4"
+    input_file.write_bytes(b"video")
+    monkeypatch.setenv("PROVIDER_KEY", "example-token")
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}.exe")
+
+    def fake_extract_audio(_video_path: Path, output_audio: Path, **_kwargs) -> dict:
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        output_audio.write_bytes(b"audio")
+        return {"audio_codec": "aac", "copy_mode": True, "duration_seconds": 60.0}
+
+    def fake_split_audio_for_asr(
+        audio_path: Path,
+        segments_dir: Path,
+        **_kwargs,
+    ) -> list[dict]:
+        segments_dir.mkdir(parents=True, exist_ok=True)
+        if "segments_retry" in str(segments_dir):
+            first = segments_dir / "part_00000.wav"
+            second = segments_dir / "part_00001.wav"
+            first.write_bytes(b"retry-first")
+            second.write_bytes(b"retry-second")
+            return [
+                {
+                    "segment_index": 0,
+                    "start": 0.0,
+                    "duration": 31.5,
+                    "trusted_start": 0.0,
+                    "trusted_end": 30.0,
+                    "path": str(first),
+                    "source_audio_path": str(audio_path),
+                },
+                {
+                    "segment_index": 1,
+                    "start": 28.5,
+                    "duration": 31.5,
+                    "trusted_start": 30.0,
+                    "trusted_end": 60.0,
+                    "path": str(second),
+                    "source_audio_path": str(audio_path),
+                },
+            ]
+        parent = segments_dir / "part_00000.wav"
+        parent.write_bytes(b"parent")
+        return [
+            {
+                "segment_index": 0,
+                "start": 0.0,
+                "duration": 60.0,
+                "trusted_start": 0.0,
+                "trusted_end": 60.0,
+                "path": str(parent),
+                "source_audio_path": str(audio_path),
+            }
+        ]
+
+    class FakeRetryingGrokAsrEngine:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def transcribe_segment_result(
+            self,
+            audio_path: Path,
+            segment_start_offset: float,
+            *,
+            prompt: str | None = None,
+        ):
+            del prompt
+            if "segments_retry" not in str(audio_path):
+                raise RuntimeError("provider_timeout: parent window")
+            if segment_start_offset < 1.0:
+                words = [
+                    {"text": "before", "start": 27.8, "end": 28.1},
+                    {"text": "bridge", "start": 28.8, "end": 29.1},
+                    {"text": "again", "start": 29.5, "end": 29.8},
+                    {"text": "end", "start": 30.2, "end": 30.5},
+                ]
+                generation_id = "gen-retry-left"
+            else:
+                words = [
+                    {"text": "bridge", "start": 28.88, "end": 29.18},
+                    {"text": "again", "start": 29.58, "end": 29.88},
+                    {"text": "end", "start": 30.28, "end": 30.58},
+                    {"text": "after", "start": 31.0, "end": 31.3},
+                ]
+                generation_id = "gen-retry-right"
+            return SimpleNamespace(
+                rows=_fake_grok_word_rows(words, generation_id=generation_id),
+                raw_response={"text": "omitted", "usage": {"seconds": 31.5}},
+                transport_meta={"generation_id": generation_id},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("transvortex.core.orchestrator.extract_audio_for_asr", fake_extract_audio)
+    monkeypatch.setattr("transvortex.core.orchestrator.split_audio_for_asr", fake_split_audio_for_asr)
+    monkeypatch.setattr("transvortex.core.orchestrator.AsrEngine", FakeRetryingGrokAsrEngine)
+    monkeypatch.setattr(
+        "transvortex.core.orchestrator.probe_provider",
+        lambda **_kwargs: {"checks": [{"status": "PASS"}]},
+    )
+
+    task_id = run_pipeline(
+        root_dir=root,
+        input_file=input_file,
+        source_lang="en",
+        target_lang="en",
+        input_type="video_asr",
+        cli_overrides={"source_mode": "asr"},
+    )
+
+    task_dir = TaskStore(root / "artifacts").task_dir(task_id)
+    source_rows = [
+        json.loads(line)
+        for line in (task_dir / "source" / "segments.raw.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    words = [
+        word["text"]
+        for row in source_rows
+        for word in row["meta"]["word_timestamps"]
+    ]
+    assert words == ["before", "bridge", "again", "end", "after"]
+    overlap_report = json.loads(
+        (task_dir / "quality" / "asr_word_overlap.json").read_text(encoding="utf-8")
+    )
+    assert overlap_report["summary"]["split_retry_count"] == 1
+    assert overlap_report["summary"]["total_fallback_seams"] == 0
+    assert overlap_report["split_retry_reports"][0]["report"]["summary"]["aligned"] == 1

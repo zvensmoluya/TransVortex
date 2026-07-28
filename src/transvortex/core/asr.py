@@ -33,7 +33,7 @@ from ..openrouter_asr import (
     require_openrouter_asr_model_profile,
 )
 from ..utils import write_json
-from .subtitle_quality import visual_width
+from .word_timeline import build_word_timeline_rows
 
 
 ASR_EXTRA_FORM_RESERVED_FIELDS = {
@@ -67,19 +67,6 @@ _CUDA_WHEEL_DLL_SUBDIRS = (
 _CUDA_DLL_DIRECTORY_HANDLES: list[Any] = []
 _CUDA_DLL_DIRECTORY_PATHS: set[str] = set()
 _CUDA_DLL_DIRECTORIES_REGISTERED = False
-
-_WORD_SEGMENT_MIN_SECONDS = 0.5
-_WORD_SEGMENT_TARGET_SECONDS = 4.0
-_WORD_SEGMENT_MAX_SECONDS = 6.0
-_WORD_SEGMENT_SOFT_PAUSE_SECONDS = 0.35
-_WORD_SEGMENT_HARD_PAUSE_SECONDS = 0.75
-_WORD_SEGMENT_TARGET_VISUAL_WIDTH = 64
-_WORD_SEGMENT_MAX_VISUAL_WIDTH = 84
-_WORD_STRONG_ENDINGS = (".", "?", "!", "。", "？", "！", "…")
-_WORD_WEAK_ENDINGS = (",", ";", ":", "，", "；", "：", "、")
-_WORD_TRAILING_CLOSERS = "\"'”’」』）)]}】》〉"
-_WORD_NO_SPACE_BEFORE = set(",.!?;:，。！？；：、)]}）】〕〉》」』”’%")
-_WORD_NO_SPACE_AFTER = set("([{（【〔〈《「『“‘")
 
 
 @dataclass
@@ -1204,183 +1191,14 @@ def _map_openrouter_word_timeline_rows(
         return []
 
     words.sort(key=lambda item: (float(item["start"]), float(item["end"])))
-    rows: list[dict] = []
-    for group in _segment_openrouter_words(words):
-        text = _join_openrouter_word_text(group)
-        if not text:
-            continue
-        confidences = [
-            float(item["confidence"])
-            for item in group
-            if isinstance(item.get("confidence"), (int, float))
-        ]
-        meta = {
+    return build_word_timeline_rows(
+        words,
+        base_meta={
             "provider": config.name,
             "protocol": config.protocol,
             "source": "asr",
-            "timeline_source": "response.words",
-            "word_segmentation": "punctuation_pause_duration_v1",
-            "word_timestamps": [dict(item) for item in group],
             **_asr_row_transport_meta(transport_meta),
-        }
-        for field in ("speaker", "channel", "channel_index"):
-            values = [item[field] for item in group if item.get(field) is not None]
-            if values and all(value == values[0] for value in values[1:]):
-                meta[field] = values[0]
-        rows.append(
-            {
-                "start": float(group[0]["start"]),
-                "end": max(float(item["end"]) for item in group),
-                "text": text,
-                "confidence": sum(confidences) / len(confidences) if confidences else None,
-                "meta": meta,
-            }
-        )
-    return rows
-
-
-def _segment_openrouter_words(words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    groups: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-
-    def flush(count: int | None = None) -> None:
-        nonlocal current
-        cut = len(current) if count is None else max(0, min(count, len(current)))
-        if cut:
-            groups.append(current[:cut])
-            current = current[cut:]
-
-    for index, word in enumerate(words):
-        if current and _openrouter_word_stream_changed(current[-1], word):
-            flush()
-
-        while current and _openrouter_word_hard_limit_exceeded([*current, word]):
-            preferred_cut = _preferred_openrouter_word_cut(current)
-            flush(preferred_cut)
-
-        current.append(word)
-        next_word = words[index + 1] if index + 1 < len(words) else None
-        duration = _openrouter_word_group_duration(current)
-        gap = _openrouter_word_gap(word, next_word) if next_word is not None else 0.0
-        text = str(word["text"])
-
-        if next_word is not None and _openrouter_word_stream_changed(word, next_word):
-            flush()
-        elif gap >= _WORD_SEGMENT_HARD_PAUSE_SECONDS:
-            flush()
-        elif _openrouter_word_has_strong_ending(text) and (
-            duration >= _WORD_SEGMENT_MIN_SECONDS
-            or gap >= _WORD_SEGMENT_SOFT_PAUSE_SECONDS
-        ):
-            flush()
-        elif duration >= _WORD_SEGMENT_TARGET_SECONDS and (
-            _openrouter_word_has_weak_ending(text)
-            or gap >= _WORD_SEGMENT_SOFT_PAUSE_SECONDS
-            or visual_width(_join_openrouter_word_text(current)) >= _WORD_SEGMENT_TARGET_VISUAL_WIDTH
-        ):
-            flush()
-
-    flush()
-    return groups
-
-
-def _preferred_openrouter_word_cut(words: list[dict[str, Any]]) -> int | None:
-    if len(words) < 2:
-        return None
-    start = float(words[0]["start"])
-    candidates: list[tuple[float, int]] = []
-    for index in range(1, len(words)):
-        previous = words[index - 1]
-        current = words[index]
-        duration = float(previous["end"]) - start
-        if duration < _WORD_SEGMENT_MIN_SECONDS:
-            continue
-        gap = _openrouter_word_gap(previous, current)
-        strong = _openrouter_word_has_strong_ending(str(previous["text"]))
-        weak = _openrouter_word_has_weak_ending(str(previous["text"]))
-        if not strong and not weak and gap < _WORD_SEGMENT_SOFT_PAUSE_SECONDS:
-            continue
-        score = abs(duration - _WORD_SEGMENT_TARGET_SECONDS)
-        if strong:
-            score -= 2.0
-        elif gap >= _WORD_SEGMENT_HARD_PAUSE_SECONDS:
-            score -= 1.5
-        elif weak:
-            score -= 0.75
-        candidates.append((score, index))
-    if not candidates:
-        return None
-    return min(candidates, key=lambda item: (item[0], -item[1]))[1]
-
-
-def _openrouter_word_hard_limit_exceeded(words: list[dict[str, Any]]) -> bool:
-    if not words:
-        return False
-    return (
-        _openrouter_word_group_duration(words) > _WORD_SEGMENT_MAX_SECONDS
-        or visual_width(_join_openrouter_word_text(words)) > _WORD_SEGMENT_MAX_VISUAL_WIDTH
-    )
-
-
-def _openrouter_word_group_duration(words: list[dict[str, Any]]) -> float:
-    if not words:
-        return 0.0
-    return max(float(item["end"]) for item in words) - float(words[0]["start"])
-
-
-def _openrouter_word_gap(left: dict[str, Any], right: dict[str, Any] | None) -> float:
-    if right is None:
-        return 0.0
-    return max(0.0, float(right["start"]) - float(left["end"]))
-
-
-def _openrouter_word_stream_changed(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    for field in ("speaker", "channel", "channel_index"):
-        left_value = left.get(field)
-        right_value = right.get(field)
-        if left_value is not None and right_value is not None and left_value != right_value:
-            return True
-    return False
-
-
-def _openrouter_word_has_strong_ending(text: str) -> bool:
-    normalized = text.strip().rstrip(_WORD_TRAILING_CLOSERS)
-    return normalized.endswith(_WORD_STRONG_ENDINGS)
-
-
-def _openrouter_word_has_weak_ending(text: str) -> bool:
-    normalized = text.strip().rstrip(_WORD_TRAILING_CLOSERS)
-    return normalized.endswith(_WORD_WEAK_ENDINGS)
-
-
-def _join_openrouter_word_text(words: list[dict[str, Any]]) -> str:
-    text = ""
-    for item in words:
-        token = str(item.get("text") or "").strip()
-        if not token:
-            continue
-        if text and _openrouter_word_needs_space(text[-1], token[0]):
-            text += " "
-        text += token
-    return text.strip()
-
-
-def _openrouter_word_needs_space(left: str, right: str) -> bool:
-    if right in _WORD_NO_SPACE_BEFORE or left in _WORD_NO_SPACE_AFTER:
-        return False
-    if _is_compact_asian_script(left) or _is_compact_asian_script(right):
-        return False
-    return True
-
-
-def _is_compact_asian_script(char: str) -> bool:
-    codepoint = ord(char)
-    return (
-        0x3400 <= codepoint <= 0x4DBF
-        or 0x4E00 <= codepoint <= 0x9FFF
-        or 0xF900 <= codepoint <= 0xFAFF
-        or 0x3040 <= codepoint <= 0x30FF
-        or 0x31F0 <= codepoint <= 0x31FF
+        },
     )
 
 

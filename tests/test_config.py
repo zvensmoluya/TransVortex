@@ -147,7 +147,7 @@ def test_openrouter_admin_switches_to_grok_profile_without_whisper_settings() ->
     assert provider.request.send_timestamp_granularities is True
     assert provider.request.send_prompt is False
     assert provider.chunking.max_window_seconds == 300
-    assert provider.chunking.overlap_seconds == 0
+    assert provider.chunking.overlap_seconds == 3
 
 
 def test_asr_resource_activation_can_apply_local_worker_device_settings(tmp_path: Path) -> None:

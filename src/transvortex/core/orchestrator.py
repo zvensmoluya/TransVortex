@@ -15,6 +15,7 @@ from .chunking import number_and_chunk_segments, plan_translation_chunks
 from ..app.config import apply_route_overrides, load_app_config
 from ..app.asr_runtime import asr_provider_readiness
 from ..app.credentials import resolve_credential
+from ..openrouter_asr import openrouter_asr_model_profile
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from .media import (
     extract_audio_for_asr,
@@ -57,6 +58,7 @@ from .translate import (
     translate_all_chunks,
 )
 from .translation_validation import validate_translation_response, validation_to_json
+from .word_timeline import merge_word_timeline_windows
 from ..utils import append_jsonl, gen_task_id, read_json, read_jsonl, to_plain, utc_now_iso, write_json
 
 
@@ -116,6 +118,14 @@ def _active_asr_provider(config: AppConfig):
     if provider is None:
         raise RuntimeError(f"ASR provider not found: {config.pipeline.asr_provider}")
     return provider
+
+
+def _asr_uses_word_timeline(config: AppConfig) -> bool:
+    provider = _active_asr_provider(config)
+    if provider.protocol != "openrouter_stt":
+        return False
+    profile = openrouter_asr_model_profile(provider.model)
+    return profile is not None and profile.timeline_mode == "words_required"
 
 
 def _is_retryable_asr_exception(exc: Exception) -> bool:
@@ -572,6 +582,7 @@ def _retry_asr_manifest_item_with_subsegments(
     retry_artifact_paths = dict(paths)
     retry_artifact_paths["source"] = paths["cache"] / "asr" / "retry" / f"segment_{idx:05d}"
     rows: list[dict] = []
+    child_window_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     raw_children: list[dict] = []
     preprocess_children: list[dict] = []
     child_previous_text = ""
@@ -599,6 +610,7 @@ def _retry_asr_manifest_item_with_subsegments(
         if child_rows_path.exists():
             child_rows = read_json(child_rows_path)
             rows.extend(child_rows)
+            child_window_rows.append((dict(child_item), child_rows))
             if _asr_uses_previous_text(config):
                 text = _asr_previous_text(child_rows)
                 if text:
@@ -607,7 +619,11 @@ def _retry_asr_manifest_item_with_subsegments(
             raw_children.append(child_result["raw_response"])
         if child_result.get("preprocess_meta") is not None:
             preprocess_children.append(child_result["preprocess_meta"])
-    rows.sort(key=lambda row: (float(row.get("start", 0.0)), float(row.get("end", 0.0)), str(row.get("text", ""))))
+    word_overlap_report: dict[str, Any] | None = None
+    if _asr_uses_word_timeline(config):
+        rows, word_overlap_report = merge_word_timeline_windows(child_window_rows)
+    else:
+        rows.sort(key=lambda row: (float(row.get("start", 0.0)), float(row.get("end", 0.0)), str(row.get("text", ""))))
     parent_preprocess = {
         "enabled": True,
         "reason": "split_retry",
@@ -618,6 +634,8 @@ def _retry_asr_manifest_item_with_subsegments(
         "child_artifact_dir": str(retry_artifact_paths["source"]),
         "child_preprocess": preprocess_children,
     }
+    if word_overlap_report is not None:
+        parent_preprocess["word_overlap"] = word_overlap_report
     _write_asr_segment_artifacts(
         artifact_paths=artifact_paths,
         rows=rows,
@@ -2354,31 +2372,85 @@ def _execute_task(
                 all_segments = []
                 next_id = 1
                 window_segments = []
+                word_window_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+                split_retry_overlap_reports: list[dict[str, Any]] = []
+                uses_word_timeline = _asr_uses_word_timeline(config)
                 for _idx, seg_file in sorted(segment_files, key=lambda x: x[0]):
                     _require_file(seg_file, f"source/asr/rows/{seg_file.name}")
                     rows = read_json(seg_file)
-                    parsed = _parse_asr_rows(rows, start_id=next_id)
                     manifest_item = next(
                         (item for item in segments_manifest if int(item["segment_index"]) == _idx),
                         {"segment_index": _idx},
                     )
+                    if uses_word_timeline:
+                        word_window_rows.append((manifest_item, rows))
+                        preprocess_path = _asr_artifact_paths(paths, _idx)["preprocess"]
+                        if preprocess_path.exists():
+                            preprocess_payload = read_json(preprocess_path)
+                            retry_report = (
+                                preprocess_payload.get("word_overlap")
+                                if isinstance(preprocess_payload, dict)
+                                else None
+                            )
+                            if isinstance(retry_report, dict):
+                                split_retry_overlap_reports.append(
+                                    {
+                                        "parent_window_index": _idx,
+                                        "report": retry_report,
+                                    }
+                                )
+                        continue
+                    parsed = _parse_asr_rows(rows, start_id=next_id)
                     window_segments.append((manifest_item, parsed))
                     all_segments.extend(parsed)
                     next_id = all_segments[-1].id + 1 if all_segments else next_id
-                deduped_segments = merge_asr_window_segments(
-                    window_segments,
-                    fuzzy_dedupe=_active_asr_provider(config).chunking.fuzzy_dedupe,
-                )
-                if len(deduped_segments) != len(all_segments):
-                    store.append_event(
-                        task_id,
-                        "warning",
-                        stage="ASR",
-                        level="warning",
-                        message="Removed duplicate overlap segments",
-                        details={"before": len(all_segments), "after": len(deduped_segments)},
+
+                if uses_word_timeline:
+                    merged_rows, word_overlap_report = merge_word_timeline_windows(word_window_rows)
+                    if split_retry_overlap_reports:
+                        word_overlap_report["split_retry_reports"] = split_retry_overlap_reports
+                    retry_fallback_seams = sum(
+                        int(item["report"].get("summary", {}).get("fallback_seams", 0))
+                        for item in split_retry_overlap_reports
                     )
-                all_segments = deduped_segments
+                    fallback_seams = int(
+                        word_overlap_report.get("summary", {}).get("fallback_seams", 0)
+                    )
+                    total_fallback_seams = fallback_seams + retry_fallback_seams
+                    word_overlap_report["summary"]["split_retry_count"] = len(
+                        split_retry_overlap_reports
+                    )
+                    word_overlap_report["summary"]["total_fallback_seams"] = total_fallback_seams
+                    word_overlap_path = paths["quality"] / "asr_word_overlap.json"
+                    write_json(word_overlap_path, word_overlap_report)
+                    all_segments = _parse_asr_rows(merged_rows, start_id=1)
+                    if total_fallback_seams:
+                        store.append_event(
+                            task_id,
+                            "warning",
+                            stage="ASR",
+                            level="warning",
+                            message="ASR word overlap used trusted-boundary fallback",
+                            details={
+                                "path": str(word_overlap_path),
+                                "fallback_seams": total_fallback_seams,
+                            },
+                        )
+                else:
+                    deduped_segments = merge_asr_window_segments(
+                        window_segments,
+                        fuzzy_dedupe=_active_asr_provider(config).chunking.fuzzy_dedupe,
+                    )
+                    if len(deduped_segments) != len(all_segments):
+                        store.append_event(
+                            task_id,
+                            "warning",
+                            stage="ASR",
+                            level="warning",
+                            message="Removed duplicate overlap segments",
+                            details={"before": len(all_segments), "after": len(deduped_segments)},
+                        )
+                    all_segments = deduped_segments
                 persist_raw_source_segments(paths, all_segments)
                 all_segments = _clean_asr_source_segments(
                     paths=paths,
