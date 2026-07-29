@@ -188,13 +188,22 @@ $payloadFfmpegManifest = Get-Content -LiteralPath $payloadFfmpegManifestPath -En
 $packagedCorrespondingSourceUrl = [string]$payloadFfmpegManifest.corresponding_source.url
 $packagedCorrespondingSourceSha256 = [string]$payloadFfmpegManifest.corresponding_source.sha256
 $packagedCorrespondingSourceSize = [int64]$payloadFfmpegManifest.corresponding_source.size
+$packagedCorrespondingSourceScope = [string]$payloadFfmpegManifest.corresponding_source.scope
+$packagedExternalLibrarySourcesIncluded = [bool]$payloadFfmpegManifest.corresponding_source.external_library_sources_included
 $packagedCorrespondingSourceRecorded = (
     -not [string]::IsNullOrWhiteSpace($packagedCorrespondingSourceUrl) -and
     $packagedCorrespondingSourceSha256 -match '^[0-9a-f]{64}$' -and
-    $packagedCorrespondingSourceSize -gt 0
+    $packagedCorrespondingSourceSize -gt 0 -and
+    -not [string]::IsNullOrWhiteSpace($packagedCorrespondingSourceScope)
 )
 if (-not $packagedCorrespondingSourceRecorded) {
     throw "Installer payload has no valid FFmpeg source-bundle record."
+}
+if ([bool]$payloadFfmpegManifest.public_distribution_source_ready -and -not $packagedExternalLibrarySourcesIncluded) {
+    throw "Installer payload claims FFmpeg public source readiness without external library sources."
+}
+if ([bool]$payloadFfmpegManifest.public_distribution_source_ready -and $packagedCorrespondingSourceScope -eq "ffmpeg-core-and-build-scripts") {
+    throw "Installer payload still has a traceability-only FFmpeg source scope but claims public readiness."
 }
 $packagedCorrespondingSourceReady = (
     $packagedCorrespondingSourceRecorded -and
@@ -340,6 +349,8 @@ $report = [ordered]@{
     ffmpeg_corresponding_source_url = $CorrespondingSourceUrl
     ffmpeg_corresponding_source_sha256 = $packagedCorrespondingSourceSha256
     ffmpeg_corresponding_source_bytes = $packagedCorrespondingSourceSize
+    ffmpeg_corresponding_source_scope = $packagedCorrespondingSourceScope
+    ffmpeg_external_library_sources_included = $packagedExternalLibrarySourcesIncluded
     ffmpeg_corresponding_source_ready = $packagedCorrespondingSourceReady
     ffmpeg_corresponding_source_required_for_public_release = $true
     signing_and_source_prerequisites_present = $releasePrerequisitesPresent

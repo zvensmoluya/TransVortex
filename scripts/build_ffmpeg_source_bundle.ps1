@@ -11,6 +11,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ($PSVersionTable.PSEdition -ne "Core" -or $PSVersionTable.PSVersion.Major -lt 7) {
+    throw "FFmpeg source archive generation requires the pinned PowerShell 7 build environment."
+}
+
 function Get-FullPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -39,17 +43,43 @@ function Assert-PathInsideDirectory {
     }
 }
 
+function Get-RelativeArchivePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Directory
+    )
+
+    $fullPath = Get-FullPath -Path $Path
+    $fullDirectory = Get-FullPath -Path $Directory
+    $prefix = $fullDirectory + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path is outside the expected directory: $fullPath"
+    }
+    return $fullPath.Substring($prefix.Length).Replace('\', '/')
+}
+
 function Write-Utf8NoBom {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path,
         [Parameter(Mandatory = $true)]
-        [string]$Content
+        [string]$Content,
+        [ValidateSet("Preserve", "Lf", "CrLf")]
+        [string]$LineEndings = "Preserve"
     )
 
+    $normalizedContent = $Content
+    if ($LineEndings -ne "Preserve") {
+        $normalizedContent = $normalizedContent.Replace("`r`n", "`n").Replace("`r", "`n")
+        if ($LineEndings -eq "CrLf") {
+            $normalizedContent = $normalizedContent.Replace("`n", "`r`n")
+        }
+    }
     [System.IO.File]::WriteAllText(
         $Path,
-        $Content,
+        $normalizedContent,
         [System.Text.UTF8Encoding]::new($false)
     )
 }
@@ -133,7 +163,7 @@ function New-DeterministicZip {
             $fixedTimestamp = [System.DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
             $files = @(Get-ChildItem -LiteralPath $sourceFullPath -Recurse -File | Sort-Object FullName)
             foreach ($file in $files) {
-                $relativePath = [System.IO.Path]::GetRelativePath($sourceFullPath, $file.FullName).Replace('\', '/')
+                $relativePath = Get-RelativeArchivePath -Path $file.FullName -Directory $sourceFullPath
                 $entry = $archive.CreateEntry(
                     $relativePath,
                     [System.IO.Compression.CompressionLevel]::Optimal
@@ -161,7 +191,7 @@ if ([string]::IsNullOrWhiteSpace($PinFile)) {
     $PinFile = Join-Path $repoRoot "requirements\ffmpeg-runtime.json"
 }
 $pinPath = (Resolve-Path -LiteralPath $PinFile).Path
-$pin = Get-Content -LiteralPath $pinPath -Encoding utf8 -Raw | ConvertFrom-Json
+$pin = Get-Content -LiteralPath $pinPath -Encoding utf8 -Raw | ConvertFrom-Json -DateKind String
 if ([int]$pin.schema_version -ne 1 -or [string]$pin.platform -ne "windows-x64") {
     throw "Unsupported FFmpeg runtime pin: $pinPath"
 }
@@ -172,8 +202,108 @@ $variant = [string]$pin.variant
 $licenseSpdx = [string]$pin.license
 $binary = $pin.binary
 $source = $pin.corresponding_source
+$archiveBuilder = $source.archive_builder
 $ffmpegSource = $source.ffmpeg_archive
 $buildScriptsSource = $source.build_scripts_archive
+$repository = [string]$source.repository
+$releaseTag = [string]$source.release_tag
+$sourceAssetName = [string]$source.asset_name
+$expectedSourceAssetSize = [int64]$source.size
+$expectedSourceAssetSha256 = [string]$source.sha256
+$sourceScope = [string]$source.scope
+$externalLibrarySourcesIncluded = [bool]$source.external_library_sources_included
+$publicDistributionReady = [bool]$source.public_distribution_ready
+
+$requiredPinStrings = [ordered]@{
+    version = $version
+    ffmpeg_commit = $ffmpegCommit
+    variant = $variant
+    license = $licenseSpdx
+    binary_asset_name = [string]$binary.asset_name
+    binary_url = [string]$binary.url
+    binary_upstream_url = [string]$binary.upstream_url
+    binary_sha256 = [string]$binary.sha256
+    source_scope = $sourceScope
+    source_repository = $repository
+    source_release_tag = $releaseTag
+    source_asset_name = $sourceAssetName
+    source_url = [string]$source.url
+    source_sha256 = $expectedSourceAssetSha256
+    archive_builder_powershell_version = [string]$archiveBuilder.powershell_version
+    archive_builder_source_notice_line_endings = [string]$archiveBuilder.source_notice_line_endings
+    archive_builder_manifest_line_endings = [string]$archiveBuilder.manifest_line_endings
+    archive_builder_zip_compression = [string]$archiveBuilder.zip_compression
+    archive_builder_entry_timestamp = [string]$archiveBuilder.entry_timestamp
+    ffmpeg_source_asset_name = [string]$ffmpegSource.asset_name
+    ffmpeg_source_url = [string]$ffmpegSource.url
+    ffmpeg_source_sha256 = [string]$ffmpegSource.sha256
+    build_scripts_asset_name = [string]$buildScriptsSource.asset_name
+    build_scripts_url = [string]$buildScriptsSource.url
+    build_scripts_sha256 = [string]$buildScriptsSource.sha256
+}
+foreach ($entry in $requiredPinStrings.GetEnumerator()) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+        throw "FFmpeg runtime pin is missing $($entry.Key): $pinPath"
+    }
+}
+foreach ($commit in @($ffmpegCommit, [string]$binary.build_commit)) {
+    if ($commit -notmatch '^[0-9a-f]{40}$') {
+        throw "FFmpeg runtime pin contains an invalid commit: $commit"
+    }
+}
+foreach ($sha256 in @(
+    [string]$binary.sha256,
+    $expectedSourceAssetSha256,
+    [string]$ffmpegSource.sha256,
+    [string]$buildScriptsSource.sha256
+)) {
+    if ($sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "FFmpeg runtime pin contains an invalid SHA-256 value: $sha256"
+    }
+}
+foreach ($size in @(
+    [int64]$binary.size,
+    $expectedSourceAssetSize,
+    [int64]$ffmpegSource.size,
+    [int64]$buildScriptsSource.size
+)) {
+    if ($size -le 0) {
+        throw "FFmpeg runtime pin contains a non-positive asset size: $size"
+    }
+}
+foreach ($assetName in @(
+    [string]$binary.asset_name,
+    $sourceAssetName,
+    [string]$ffmpegSource.asset_name,
+    [string]$buildScriptsSource.asset_name
+)) {
+    if ([System.IO.Path]::GetFileName($assetName) -ne $assetName) {
+        throw "FFmpeg runtime pin contains an invalid asset name: $assetName"
+    }
+}
+$releaseBaseUrl = "https://github.com/$repository/releases/download/$releaseTag"
+if ([string]$binary.url -ne "$releaseBaseUrl/$([string]$binary.asset_name)") {
+    throw "Pinned FFmpeg binary URL does not match its repository, release tag, and asset name."
+}
+if ([string]$source.url -ne "$releaseBaseUrl/$sourceAssetName") {
+    throw "Pinned FFmpeg source URL does not match its repository, release tag, and asset name."
+}
+if ($publicDistributionReady -and -not $externalLibrarySourcesIncluded) {
+    throw "FFmpeg source cannot be public-distribution ready without external library sources."
+}
+if ($publicDistributionReady -and $sourceScope -eq "ffmpeg-core-and-build-scripts") {
+    throw "FFmpeg source scope is still traceability-only but is marked public-distribution ready."
+}
+$requiredPowerShellVersion = [string]$archiveBuilder.powershell_version
+if ($PSVersionTable.PSEdition -ne "Core" -or $PSVersionTable.PSVersion.ToString() -ne $requiredPowerShellVersion) {
+    throw "FFmpeg source archive generation requires PowerShell $requiredPowerShellVersion exactly. Current=$($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+}
+if ([string]$archiveBuilder.source_notice_line_endings -ne "lf" -or
+    [string]$archiveBuilder.manifest_line_endings -ne "crlf" -or
+    [string]$archiveBuilder.zip_compression -ne "optimal" -or
+    [string]$archiveBuilder.entry_timestamp -ne "1980-01-01T00:00:00Z") {
+    throw "Unsupported FFmpeg source archive-builder pin."
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "dist\ffmpeg-source\$version"
@@ -199,7 +329,7 @@ if ([string]::IsNullOrWhiteSpace($BuildScriptsArchivePath)) {
 
 $resolvedBinaryArchive = Get-VerifiedFile `
     -Path (Get-FullPath -Path $BinaryArchivePath) `
-    -Url ([string]$binary.upstream_url) `
+    -Url ([string]$binary.url) `
     -ExpectedSize ([int64]$binary.size) `
     -ExpectedSha256 ([string]$binary.sha256)
 $resolvedFfmpegSource = Get-VerifiedFile `
@@ -213,10 +343,11 @@ $resolvedBuildScripts = Get-VerifiedFile `
     -ExpectedSize ([int64]$buildScriptsSource.size) `
     -ExpectedSha256 ([string]$buildScriptsSource.sha256)
 
-$assetName = [string]$source.asset_name
+$assetName = $sourceAssetName
 $assetPath = Join-Path $outputFullPath $assetName
+$unpinnedAssetPath = "$assetPath.unpinned"
 $buildManifestPath = Join-Path $outputFullPath "ffmpeg_distribution_build.json"
-foreach ($generatedPath in @($assetPath, $buildManifestPath)) {
+foreach ($generatedPath in @($assetPath, $unpinnedAssetPath, $buildManifestPath)) {
     Assert-PathInsideDirectory -Path $generatedPath -Directory $outputFullPath
     if (Test-Path -LiteralPath $generatedPath) {
         if (-not $Force) {
@@ -272,7 +403,10 @@ Scope limitation:
   library compiled into the binary, so it is not marked ready for public
   installer distribution.
 "@
-    Write-Utf8NoBom -Path (Join-Path $bundleRoot "SOURCE_NOTICE.txt") -Content $sourceNotice
+    Write-Utf8NoBom `
+        -Path (Join-Path $bundleRoot "SOURCE_NOTICE.txt") `
+        -Content $sourceNotice `
+        -LineEndings Lf
 
     $bundleManifest = [ordered]@{
         schema_version = 1
@@ -319,7 +453,8 @@ Scope limitation:
     }
     Write-Utf8NoBom `
         -Path (Join-Path $bundleRoot "ffmpeg_corresponding_source.json") `
-        -Content ($bundleManifest | ConvertTo-Json -Depth 10)
+        -Content ($bundleManifest | ConvertTo-Json -Depth 10) `
+        -LineEndings CrLf
 
     New-DeterministicZip -SourceRoot $bundleRoot -DestinationPath $stagedAsset
     Move-Item -LiteralPath $stagedAsset -Destination $assetPath
@@ -332,13 +467,23 @@ Scope limitation:
 
 $sourceAsset = Get-Item -LiteralPath $assetPath
 $sourceAssetSha256 = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($sourceAsset.Length -ne $expectedSourceAssetSize -or $sourceAssetSha256 -ne $expectedSourceAssetSha256) {
+    $actualSourceAssetSize = [int64]$sourceAsset.Length
+    Move-Item -LiteralPath $assetPath -Destination $unpinnedAssetPath
+    throw (
+        "Generated corresponding-source asset does not match the immutable pin. " +
+        "ExpectedSize=$expectedSourceAssetSize ActualSize=$actualSourceAssetSize " +
+        "ExpectedSha256=$expectedSourceAssetSha256 ActualSha256=$sourceAssetSha256 " +
+        "QuarantinedPath=$unpinnedAssetPath"
+    )
+}
 $buildManifest = [ordered]@{
     schema_version = 1
     component = "transvortex-ffmpeg-distribution"
     version = $version
     platform = "windows-x64"
-    repository = [string]$source.repository
-    release_tag = [string]$source.release_tag
+    repository = $repository
+    release_tag = $releaseTag
     assets = @(
         [ordered]@{
             kind = "binary"
@@ -356,7 +501,7 @@ $buildManifest = [ordered]@{
         }
     )
     corresponding_source_url = [string]$source.url
-    public_distribution_source_ready = [bool]$source.public_distribution_ready
+    public_distribution_source_ready = $publicDistributionReady
     generated_at = (Get-Date).ToUniversalTime().ToString("o")
 }
 Write-Utf8NoBom -Path $buildManifestPath -Content ($buildManifest | ConvertTo-Json -Depth 10)
@@ -364,10 +509,11 @@ Write-Utf8NoBom -Path $buildManifestPath -Content ($buildManifest | ConvertTo-Js
 $report = [ordered]@{
     ok = $true
     version = $version
-    release_tag = [string]$source.release_tag
+    release_tag = $releaseTag
     source_asset = $sourceAsset.FullName
     source_asset_size = [int64]$sourceAsset.Length
     source_asset_sha256 = $sourceAssetSha256
+    source_asset_pin_verified = $true
     build_manifest = $buildManifestPath
     binary_archive = $resolvedBinaryArchive
     binary_sha256 = [string]$binary.sha256

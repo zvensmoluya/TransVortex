@@ -406,10 +406,20 @@ function Test-PackagedFfmpegRuntime {
     $correspondingSourceUrl = [string]$manifest.corresponding_source.url
     $correspondingSourceSha256 = [string]$manifest.corresponding_source.sha256
     $correspondingSourceSize = [int64]$manifest.corresponding_source.size
+    $correspondingSourceScope = [string]$manifest.corresponding_source.scope
+    $externalLibrarySourcesIncluded = [bool]$manifest.corresponding_source.external_library_sources_included
+    $publicDistributionSourceReady = [bool]$manifest.public_distribution_source_ready
     if ([string]::IsNullOrWhiteSpace($correspondingSourceUrl) -or
         $correspondingSourceSha256 -notmatch '^[0-9a-f]{64}$' -or
-        $correspondingSourceSize -le 0) {
+        $correspondingSourceSize -le 0 -or
+        [string]::IsNullOrWhiteSpace($correspondingSourceScope)) {
         throw "Packaged FFmpeg runtime has an incomplete corresponding-source record."
+    }
+    if ($publicDistributionSourceReady -and -not $externalLibrarySourcesIncluded) {
+        throw "Packaged FFmpeg runtime claims public source readiness without external library sources."
+    }
+    if ($publicDistributionSourceReady -and $correspondingSourceScope -eq "ffmpeg-core-and-build-scripts") {
+        throw "Packaged FFmpeg runtime still has a traceability-only source scope but claims public readiness."
     }
 
     return [ordered]@{
@@ -423,7 +433,9 @@ function Test-PackagedFfmpegRuntime {
         ffprobe_version_line = [string]$ffprobeOutput[0]
         shared_library_count = $libraryProperties.Count
         public_distribution_requires_corresponding_source = [bool]$manifest.public_distribution_requires_corresponding_source
-        public_distribution_source_ready = [bool]$manifest.public_distribution_source_ready
+        public_distribution_source_ready = $publicDistributionSourceReady
+        external_library_sources_included = $externalLibrarySourcesIncluded
+        corresponding_source_scope = $correspondingSourceScope
         corresponding_source_url = $correspondingSourceUrl
         corresponding_source_size = $correspondingSourceSize
         corresponding_source_sha256 = $correspondingSourceSha256

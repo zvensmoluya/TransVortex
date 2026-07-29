@@ -37,6 +37,9 @@ $correspondingSourceSize = [int64]$pin.corresponding_source.size
 $correspondingSourceSha256 = [string]$pin.corresponding_source.sha256
 $correspondingSourceScope = [string]$pin.corresponding_source.scope
 $correspondingSourceReady = [bool]$pin.corresponding_source.public_distribution_ready
+$correspondingSourceExternalLibrariesIncluded = [bool]$pin.corresponding_source.external_library_sources_included
+$correspondingSourceRepository = [string]$pin.corresponding_source.repository
+$correspondingSourceReleaseTag = [string]$pin.corresponding_source.release_tag
 
 $requiredPinStrings = [ordered]@{
     version = $ffmpegVersion
@@ -53,19 +56,40 @@ $requiredPinStrings = [ordered]@{
     corresponding_source_url = $correspondingSourceUrl
     corresponding_source_asset = $correspondingSourceAsset
     corresponding_source_sha256 = $correspondingSourceSha256
+    corresponding_source_scope = $correspondingSourceScope
+    corresponding_source_repository = $correspondingSourceRepository
+    corresponding_source_release_tag = $correspondingSourceReleaseTag
 }
 foreach ($entry in $requiredPinStrings.GetEnumerator()) {
     if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
         throw "FFmpeg runtime pin is missing $($entry.Key): $pinPath"
     }
 }
-foreach ($hash in @($ffmpegCommit, $buildCommit, $archiveSha256, $correspondingSourceSha256)) {
-    if ($hash -notmatch '^[0-9a-f]{40}$' -and $hash -notmatch '^[0-9a-f]{64}$') {
-        throw "FFmpeg runtime pin contains an invalid commit or SHA-256 value: $hash"
+foreach ($commit in @($ffmpegCommit, $buildCommit)) {
+    if ($commit -notmatch '^[0-9a-f]{40}$') {
+        throw "FFmpeg runtime pin contains an invalid commit: $commit"
+    }
+}
+foreach ($sha256 in @($archiveSha256, $correspondingSourceSha256)) {
+    if ($sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "FFmpeg runtime pin contains an invalid SHA-256 value: $sha256"
     }
 }
 if ($archiveSize -le 0 -or $correspondingSourceSize -le 0) {
     throw "FFmpeg runtime pin must contain positive binary and corresponding-source sizes."
+}
+$releaseBaseUrl = "https://github.com/$correspondingSourceRepository/releases/download/$correspondingSourceReleaseTag"
+if ($archiveUrl -ne "$releaseBaseUrl/$archiveName") {
+    throw "Pinned FFmpeg binary URL does not match its repository, release tag, and asset name."
+}
+if ($correspondingSourceUrl -ne "$releaseBaseUrl/$correspondingSourceAsset") {
+    throw "Pinned FFmpeg source URL does not match its repository, release tag, and asset name."
+}
+if ($correspondingSourceReady -and -not $correspondingSourceExternalLibrariesIncluded) {
+    throw "FFmpeg source cannot be public-distribution ready without external library sources."
+}
+if ($correspondingSourceReady -and $correspondingSourceScope -eq "ffmpeg-core-and-build-scripts") {
+    throw "FFmpeg source scope is still traceability-only but is marked public-distribution ready."
 }
 
 function Get-FullPath {
@@ -230,6 +254,11 @@ try {
     }
     Copy-Item -LiteralPath $sourceLicense -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE.txt")
 
+    $sourceReadinessNotice = if ($correspondingSourceReady) {
+        "The pinned source bundle is marked complete for public distribution and includes the required external library sources."
+    } else {
+        "This bundle does not yet include the exact sources of every external LGPL library compiled into the BtbN binary. It does not complete the public-release source obligation."
+    }
     $sourceNotice = @"
 TransVortex FFmpeg distribution notice
 ======================================
@@ -258,9 +287,7 @@ Exact source commits:
 FFmpeg is licensed under $licenseSpdx in this build. The copied
 FFmpeg-LICENSE.txt file is part of this distribution.
 
-This bundle does not yet include the exact sources of every external LGPL
-library compiled into the BtbN binary. It does not complete the public-release
-source obligation until public_distribution_source_ready becomes true.
+$sourceReadinessNotice
 "@
     Write-Utf8NoBom -Path (Join-Path $payloadRoot "SOURCE_NOTICE.txt") -Content $sourceNotice
 
@@ -299,6 +326,7 @@ source obligation until public_distribution_source_ready becomes true.
             size = $correspondingSourceSize
             sha256 = $correspondingSourceSha256
             scope = $correspondingSourceScope
+            external_library_sources_included = $correspondingSourceExternalLibrariesIncluded
         }
         public_distribution_requires_corresponding_source = $true
         public_distribution_source_ready = $correspondingSourceReady

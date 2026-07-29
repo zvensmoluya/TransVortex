@@ -20,6 +20,13 @@
     "scope": "ffmpeg-core-and-build-scripts",
     "external_library_sources_included": false,
     "public_distribution_ready": false,
+    "archive_builder": {
+      "powershell_version": "7.6.4",
+      "source_notice_line_endings": "lf",
+      "manifest_line_endings": "crlf",
+      "zip_compression": "optimal",
+      "entry_timestamp": "1980-01-01T00:00:00Z"
+    },
     "repository": "zvensmoluya/transvortex-assets",
     "release_tag": "ffmpeg-runtime-v8.1.2-31-g8c9502e9b0",
     "asset_name": "transvortex-ffmpeg-8.1.2-31-g8c9502e9b0-corresponding-source.zip",

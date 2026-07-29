@@ -35,7 +35,28 @@ dist\app-runtime\windows-x64\
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_ffmpeg_runtime.ps1 -Force -Json
 ```
 
-脚本固定到 FFmpeg `8.1.2-21-gce3c09c101` 的 Windows x64 LGPL shared 构建，校验官方发布资产 SHA-256，拒绝启用 GPL / nonfree 的构建，并记录 `ffmpeg.exe`、`ffprobe.exe` 和所有 shared DLL 的哈希。默认输出到 `dist\ffmpeg-runtime\windows-x64`。`SOURCE_NOTICE.txt` 记录精确源码和构建脚本版本；公开分发前仍必须把完整对应源码放到与安装包配套的公开位置，并完成许可审查。
+脚本固定到 FFmpeg `8.1.2-31-g8c9502e9b0` 的 Windows x64 LGPL shared 构建，从 TransVortex 的版本化资产镜像下载并校验大小与 SHA-256，同时保留原始 BtbN 发布地址用于追溯。脚本拒绝启用 GPL / nonfree 的构建，并记录 `ffmpeg.exe`、`ffprobe.exe` 和所有 shared DLL 的哈希。默认输出到 `dist\ffmpeg-runtime\windows-x64`。
+
+FFmpeg 源码追溯资产单独生成：
+
+```powershell
+pwsh -NoProfile -File scripts\build_ffmpeg_source_bundle.ps1 -Force -Json
+```
+
+该命令使用 `requirements/ffmpeg-runtime.json` 固定的 PowerShell 7.6.4、`SOURCE_NOTICE.txt` LF、JSON manifest CRLF、ZIP 压缩级别和 entry 时间戳，验证二进制、FFmpeg 源码和 BtbN 构建脚本输入，并要求生成 ZIP 的大小与 SHA-256 严格匹配统一 pin。源码资产的压缩字节会随 PowerShell/.NET 实现变化，因此这一项发布维护命令不使用 Windows PowerShell 5.1；普通 runtime、portable 和安装器构建仍可继续使用系统自带的 PowerShell 5.1。
+
+当前源码 ZIP 只包含精确 FFmpeg 源码和 BtbN 构建控制脚本，清单保持 `public_distribution_ready=false`；它是源码追溯资产，不是完整对应源码。公开安装器分发前仍需补齐实际静态链接外部库的精确源码、许可证与通知，并完成许可审查。
+
+发布维护者可在安装并登录 GitHub CLI 后验证或首次发布这两个固定资产：
+
+```powershell
+gh auth status
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_ffmpeg_distribution.ps1 `
+  -BuildManifest dist\ffmpeg-source\8.1.2-31-g8c9502e9b0\ffmpeg_distribution_build.json `
+  -Json
+```
+
+发布脚本会再次把本地文件与统一 pin 比对。若 Release 已存在，只验证远端资产且不覆盖；若不存在，先创建 draft，上传并验证服务端 digest 后再公开。固定 URL 下的资产不允许通过 `-Force` 替换，内容变化必须使用新的 release tag 并更新 pin。`gh` 只属于发布机或 CI，不是本地构建、应用运行或终端用户依赖。
 
 ## Flutter 启动规则
 
