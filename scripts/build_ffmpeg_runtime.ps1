@@ -2,19 +2,71 @@ param(
     [string]$OutputRoot = "",
     [string]$CacheRoot = "",
     [string]$ArchivePath = "",
+    [string]$PinFile = "",
     [switch]$Force,
     [switch]$Json
 )
 
 $ErrorActionPreference = "Stop"
 
-$ffmpegVersion = "8.1.2-21-gce3c09c101"
-$ffmpegCommit = "ce3c09c101c83add623774d414a9f9498caf5c25"
-$buildTag = "autobuild-2026-06-30-13-34"
-$buildCommit = "7a83528ea3431e9eca982a712bc3a7cd0789d5d0"
-$archiveName = "ffmpeg-n8.1.2-21-gce3c09c101-win64-lgpl-shared-8.1.zip"
-$archiveSha256 = "27bcaf58b5140171dfe838a0b365d12c60607d71fc168424456410bad6a834da"
-$archiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$buildTag/$archiveName"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ([string]::IsNullOrWhiteSpace($PinFile)) {
+    $PinFile = Join-Path $repoRoot "requirements\ffmpeg-runtime.json"
+}
+$pinPath = (Resolve-Path -LiteralPath $PinFile).Path
+$pin = Get-Content -LiteralPath $pinPath -Encoding utf8 -Raw | ConvertFrom-Json
+if ([int]$pin.schema_version -ne 1 -or [string]$pin.platform -ne "windows-x64") {
+    throw "Unsupported FFmpeg runtime pin: $pinPath"
+}
+
+$ffmpegVersion = [string]$pin.version
+$ffmpegCommit = [string]$pin.ffmpeg_commit
+$variant = [string]$pin.variant
+$licenseSpdx = [string]$pin.license
+$buildProvider = [string]$pin.binary.build_provider
+$buildTag = [string]$pin.binary.build_tag
+$buildCommit = [string]$pin.binary.build_commit
+$archiveName = [string]$pin.binary.asset_name
+$archiveUrl = [string]$pin.binary.url
+$upstreamArchiveUrl = [string]$pin.binary.upstream_url
+$archiveSize = [int64]$pin.binary.size
+$archiveSha256 = [string]$pin.binary.sha256
+$correspondingSourceUrl = [string]$pin.corresponding_source.url
+$correspondingSourceAsset = [string]$pin.corresponding_source.asset_name
+$correspondingSourceSize = [int64]$pin.corresponding_source.size
+$correspondingSourceSha256 = [string]$pin.corresponding_source.sha256
+$correspondingSourceScope = [string]$pin.corresponding_source.scope
+$correspondingSourceReady = [bool]$pin.corresponding_source.public_distribution_ready
+
+$requiredPinStrings = [ordered]@{
+    version = $ffmpegVersion
+    ffmpeg_commit = $ffmpegCommit
+    variant = $variant
+    license = $licenseSpdx
+    build_provider = $buildProvider
+    build_tag = $buildTag
+    build_commit = $buildCommit
+    archive_name = $archiveName
+    archive_url = $archiveUrl
+    upstream_archive_url = $upstreamArchiveUrl
+    archive_sha256 = $archiveSha256
+    corresponding_source_url = $correspondingSourceUrl
+    corresponding_source_asset = $correspondingSourceAsset
+    corresponding_source_sha256 = $correspondingSourceSha256
+}
+foreach ($entry in $requiredPinStrings.GetEnumerator()) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+        throw "FFmpeg runtime pin is missing $($entry.Key): $pinPath"
+    }
+}
+foreach ($hash in @($ffmpegCommit, $buildCommit, $archiveSha256, $correspondingSourceSha256)) {
+    if ($hash -notmatch '^[0-9a-f]{40}$' -and $hash -notmatch '^[0-9a-f]{64}$') {
+        throw "FFmpeg runtime pin contains an invalid commit or SHA-256 value: $hash"
+    }
+}
+if ($archiveSize -le 0 -or $correspondingSourceSize -le 0) {
+    throw "FFmpeg runtime pin must contain positive binary and corresponding-source sizes."
+}
 
 function Get-FullPath {
     param(
@@ -91,10 +143,13 @@ function Get-VerifiedArchive {
     if ($actualSha256 -ne $archiveSha256) {
         throw "FFmpeg archive SHA-256 mismatch. Expected=$archiveSha256 Actual=$actualSha256 Path=$Path"
     }
+    $actualSize = (Get-Item -LiteralPath $Path).Length
+    if ($actualSize -ne $archiveSize) {
+        throw "FFmpeg archive size mismatch. Expected=$archiveSize Actual=$actualSize Path=$Path"
+    }
     return (Resolve-Path -LiteralPath $Path).Path
 }
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "dist\ffmpeg-runtime\windows-x64"
 }
@@ -162,6 +217,9 @@ try {
     if ($versionText -match "--enable-gpl" -or $versionText -match "--enable-nonfree") {
         throw "Pinned FFmpeg archive unexpectedly enables GPL or nonfree components."
     }
+    if ($licenseSpdx -eq "LGPL-3.0-or-later" -and $versionText -notmatch "--enable-version3") {
+        throw "Pinned FFmpeg archive does not report the expected LGPLv3 build configuration."
+    }
 
     $targetFfmpeg = Join-Path $payloadRoot "bin\ffmpeg.exe"
     $targetFfprobe = Join-Path $payloadRoot "bin\ffprobe.exe"
@@ -185,17 +243,24 @@ Binary release:
   $archiveUrl
   SHA-256: $archiveSha256
 
-Exact source references:
-  FFmpeg: https://github.com/FFmpeg/FFmpeg/archive/$ffmpegCommit.tar.gz
-  Build scripts: https://github.com/BtbN/FFmpeg-Builds/archive/$buildCommit.tar.gz
+Original upstream binary:
+  $upstreamArchiveUrl
 
-FFmpeg is licensed under LGPL-2.1-or-later in this build. The copied
+Source traceability bundle:
+  $correspondingSourceUrl
+  SHA-256: $correspondingSourceSha256
+  Scope: $correspondingSourceScope
+
+Exact source commits:
+  FFmpeg: $ffmpegCommit
+  Build scripts: $buildCommit
+
+FFmpeg is licensed under $licenseSpdx in this build. The copied
 FFmpeg-LICENSE.txt file is part of this distribution.
 
-Before publishing an installer, the distributor must make the complete
-corresponding source for this exact binary build available alongside the
-download. The URLs above provide traceability; they do not replace the
-distributor's source-hosting and legal review responsibilities.
+This bundle does not yet include the exact sources of every external LGPL
+library compiled into the BtbN binary. It does not complete the public-release
+source obligation until public_distribution_source_ready becomes true.
 "@
     Write-Utf8NoBom -Path (Join-Path $payloadRoot "SOURCE_NOTICE.txt") -Content $sourceNotice
 
@@ -211,13 +276,15 @@ distributor's source-hosting and legal review responsibilities.
         platform = "windows-x64"
         version = $ffmpegVersion
         ffmpeg_commit = $ffmpegCommit
-        variant = "win64-lgpl-shared-8.1"
-        license = "LGPL-2.1-or-later"
-        build_provider = "BtbN/FFmpeg-Builds"
+        variant = $variant
+        license = $licenseSpdx
+        build_provider = $buildProvider
         build_tag = $buildTag
         build_commit = $buildCommit
         archive_name = $archiveName
         archive_url = $archiveUrl
+        upstream_archive_url = $upstreamArchiveUrl
+        archive_size = $archiveSize
         archive_sha256 = $archiveSha256
         ffmpeg_sha256 = (Get-FileHash -LiteralPath $targetFfmpeg -Algorithm SHA256).Hash.ToLowerInvariant()
         ffprobe_sha256 = (Get-FileHash -LiteralPath $targetFfprobe -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -226,7 +293,15 @@ distributor's source-hosting and legal review responsibilities.
         ffmpeg_version_line = [string]$versionOutput[0]
         ffprobe_version_line = [string]$probeVersionOutput[0]
         source_notice = "SOURCE_NOTICE.txt"
+        corresponding_source = [ordered]@{
+            asset_name = $correspondingSourceAsset
+            url = $correspondingSourceUrl
+            size = $correspondingSourceSize
+            sha256 = $correspondingSourceSha256
+            scope = $correspondingSourceScope
+        }
         public_distribution_requires_corresponding_source = $true
+        public_distribution_source_ready = $correspondingSourceReady
         generated_at = (Get-Date).ToUniversalTime().ToString("o")
     }
     Write-Utf8NoBom -Path (Join-Path $payloadRoot "ffmpeg_runtime.json") -Content ($manifest | ConvertTo-Json -Depth 6)
@@ -252,10 +327,14 @@ $report = [ordered]@{
     archive_path = $resolvedArchive
     archive_sha256 = $archiveSha256
     version = $ffmpegVersion
-    variant = "win64-lgpl-shared-8.1"
+    variant = $variant
+    license = $licenseSpdx
     ffmpeg_path = Join-Path $outputFullPath "bin\ffmpeg.exe"
     ffprobe_path = Join-Path $outputFullPath "bin\ffprobe.exe"
+    corresponding_source_url = $correspondingSourceUrl
+    corresponding_source_sha256 = $correspondingSourceSha256
     public_distribution_requires_corresponding_source = $true
+    public_distribution_source_ready = $correspondingSourceReady
 }
 
 if ($Json) {

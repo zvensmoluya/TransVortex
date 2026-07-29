@@ -403,6 +403,15 @@ function Test-PackagedFfmpegRuntime {
         }
     }
 
+    $correspondingSourceUrl = [string]$manifest.corresponding_source.url
+    $correspondingSourceSha256 = [string]$manifest.corresponding_source.sha256
+    $correspondingSourceSize = [int64]$manifest.corresponding_source.size
+    if ([string]::IsNullOrWhiteSpace($correspondingSourceUrl) -or
+        $correspondingSourceSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $correspondingSourceSize -le 0) {
+        throw "Packaged FFmpeg runtime has an incomplete corresponding-source record."
+    }
+
     return [ordered]@{
         ok = $true
         version = [string]$manifest.version
@@ -414,6 +423,10 @@ function Test-PackagedFfmpegRuntime {
         ffprobe_version_line = [string]$ffprobeOutput[0]
         shared_library_count = $libraryProperties.Count
         public_distribution_requires_corresponding_source = [bool]$manifest.public_distribution_requires_corresponding_source
+        public_distribution_source_ready = [bool]$manifest.public_distribution_source_ready
+        corresponding_source_url = $correspondingSourceUrl
+        corresponding_source_size = $correspondingSourceSize
+        corresponding_source_sha256 = $correspondingSourceSha256
     }
 }
 
@@ -830,7 +843,7 @@ $report = [ordered]@{
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
         "native NSIS installer install, upgrade, running-process protection, and uninstall acceptance",
-        "publish complete corresponding FFmpeg source alongside any public installer"
+        "publish complete corresponding FFmpeg source, including external LGPL library sources, alongside any public installer"
     )
 }
 $manifestName = if ($InstallerPayload) { "installer_payload_manifest.json" } else { "portable_manifest.json" }

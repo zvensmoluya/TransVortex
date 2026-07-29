@@ -180,6 +180,31 @@ $payloadManifest = Get-Content -LiteralPath $payloadManifestPath -Encoding utf8 
 if ($payloadManifest.package_type -ne "installer_payload" -or -not [bool]$payloadManifest.ffmpeg_included) {
     throw "Installer payload manifest does not describe the required fixed runtime layout."
 }
+$payloadFfmpegManifestPath = Join-Path $payloadRoot "tools\ffmpeg\ffmpeg_runtime.json"
+if (-not (Test-Path -LiteralPath $payloadFfmpegManifestPath)) {
+    throw "Installer payload is missing its FFmpeg runtime manifest."
+}
+$payloadFfmpegManifest = Get-Content -LiteralPath $payloadFfmpegManifestPath -Encoding utf8 -Raw | ConvertFrom-Json
+$packagedCorrespondingSourceUrl = [string]$payloadFfmpegManifest.corresponding_source.url
+$packagedCorrespondingSourceSha256 = [string]$payloadFfmpegManifest.corresponding_source.sha256
+$packagedCorrespondingSourceSize = [int64]$payloadFfmpegManifest.corresponding_source.size
+$packagedCorrespondingSourceRecorded = (
+    -not [string]::IsNullOrWhiteSpace($packagedCorrespondingSourceUrl) -and
+    $packagedCorrespondingSourceSha256 -match '^[0-9a-f]{64}$' -and
+    $packagedCorrespondingSourceSize -gt 0
+)
+if (-not $packagedCorrespondingSourceRecorded) {
+    throw "Installer payload has no valid FFmpeg source-bundle record."
+}
+$packagedCorrespondingSourceReady = (
+    $packagedCorrespondingSourceRecorded -and
+    [bool]$payloadFfmpegManifest.public_distribution_source_ready
+)
+if ([string]::IsNullOrWhiteSpace($CorrespondingSourceUrl)) {
+    $CorrespondingSourceUrl = $packagedCorrespondingSourceUrl
+} elseif ($CorrespondingSourceUrl -ne $packagedCorrespondingSourceUrl) {
+    throw "CorrespondingSourceUrl does not match the source bundle pinned by the packaged FFmpeg runtime."
+}
 $windowlessPython = Join-Path $payloadRoot "runtime\python\pythonw.exe"
 if (-not (Test-Path -LiteralPath $windowlessPython)) {
     throw "Installer payload is missing pythonw.exe for windowless maintenance tasks."
@@ -257,7 +282,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     $signed = $true
 }
 
-$releasePrerequisitesPresent = $signed -and -not [string]::IsNullOrWhiteSpace($CorrespondingSourceUrl)
+$releasePrerequisitesPresent = $signed -and $packagedCorrespondingSourceReady
 $installerFile = Get-Item -LiteralPath $installerPath
 $report = [ordered]@{
     ok = $true
@@ -313,6 +338,9 @@ $report = [ordered]@{
     signed = $signed
     signing_required_for_public_release = $true
     ffmpeg_corresponding_source_url = $CorrespondingSourceUrl
+    ffmpeg_corresponding_source_sha256 = $packagedCorrespondingSourceSha256
+    ffmpeg_corresponding_source_bytes = $packagedCorrespondingSourceSize
+    ffmpeg_corresponding_source_ready = $packagedCorrespondingSourceReady
     ffmpeg_corresponding_source_required_for_public_release = $true
     signing_and_source_prerequisites_present = $releasePrerequisitesPresent
     public_release_ready = $false
