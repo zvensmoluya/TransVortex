@@ -59,7 +59,17 @@ pwsh -NoProfile -File scripts\build_ffmpeg_core_prototype.ps1 -Force -Json
 
 2026-07-30 的本机 prototype 为 31,182,018 字节，当前固定完整 runtime 为 143,476,938 字节，减少 78.27%。自动兼容验证已覆盖带 H.264 视频、音频和文本字幕轨的 MP4 / MKV，以及 WAV、MP3、M4A、FLAC、AAC、Ogg Vorbis、Opus、AC3、EAC3 的探测、解码和 16 kHz 单声道 PCM 重采样；同时覆盖 AAC / MP3 直拷、AAC 音轨提取、`silencedetect` 和 SRT / ASS / SSA / WebVTT / mov_text 转 SRT。PE import 检查确认产物只依赖包内 FFmpeg DLL 与 Windows 系统 DLL。
 
-该候选把外部媒体库对应源码清单降为空，但仍保持 `public_distribution_ready=false`：它尚未替换 `requirements/ffmpeg-runtime.json`，也未进入 portable / installer 构建、正式源码资产和干净 Windows 真实片源验收。采用前需要完成这些发布集成并生成新的不可变 binary/source pin。以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
+该候选已经生成独立的正式资产 pin：
+
+```powershell
+pwsh -NoProfile -File scripts\build_ffmpeg_core_distribution.ps1 -Force -Json
+```
+
+`requirements/ffmpeg-core-runtime.json` 固定 binary/source 的 GitHub Release 目标、大小、SHA-256、PowerShell 7.6.4、ZIP 时间戳、原始 FFmpeg 源码、BtbN 构建脚本和 TransVortex 构建控制文件。二进制 ZIP 为 13,715,579 字节，SHA-256 为 `c02b1c27ee5aa5822a54edf221c5c0c59016dcb9b09d4f57a2df9c4da5d21d6f`；对应源码 ZIP 为 16,930,472 字节，SHA-256 为 `ca60180843fb7020ad3e86e6777d4c0b87621e92986d01495fc4f0bfd6ec895e`。本机在两个独立输出目录重复生成后字节哈希一致，普通严格模式也已验证 pin。
+
+这个新 pin 仍是 `status=candidate`、`adopted=false` 和 `public_distribution_ready=false`。当前 `requirements/ffmpeg-runtime.json`、portable 与 installer 没有切换，GitHub 目标资产也尚未上传；下一步是发布这两个不可变资产，再让 runtime builder 识别自建版本/布局并完成 portable、NSIS 和干净 Windows 真实媒体验收。源码包已经把外部媒体库对应源码清单降为空并包含完整技术构建输入，但在许可审查完成前不把它表述为公开分发就绪。
+
+以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
 
 发布维护者可在安装并登录 GitHub CLI 后验证或首次发布这两个固定资产：
 

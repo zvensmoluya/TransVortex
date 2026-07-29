@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "id": "transvortex-ffmpeg-core-runtime",
+  "status": "candidate",
+  "adopted": false,
+  "platform": "windows-x64",
+  "version": "8.1.2-31-g8c9502e9b0",
+  "ffmpeg_commit": "8c9502e9b048e21e1cae96477e338ac0635645ba",
+  "variant": "transvortex-core-shared",
+  "license": "LGPL-3.0-or-later",
+  "binary": {
+    "build_provider": "TransVortex",
+    "build_tag": "transvortex-core-2026-07-30-r1",
+    "build_commit": "168da1e3ffe8abd742a65484630161824d53d168",
+    "btbn_build_commit": "8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665",
+    "builder_image": "ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:80f095930d8ec013bbc5205522a7ba0dc45e4c554e9f2b4b1e0818c1876e5e87",
+    "source_date_epoch": 1784816021,
+    "archive_root": "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared",
+    "asset_name": "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared.zip",
+    "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1/ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared.zip",
+    "size": 13715579,
+    "sha256": "c02b1c27ee5aa5822a54edf221c5c0c59016dcb9b09d4f57a2df9c4da5d21d6f"
+  },
+  "corresponding_source": {
+    "scope": "complete-core-build-inputs-no-optional-external-libraries",
+    "build_input_scope_complete": true,
+    "external_library_sources_required": [],
+    "external_library_sources_included": true,
+    "optional_external_media_source_scope_complete": true,
+    "license_review_complete": false,
+    "public_distribution_ready": false,
+    "public_distribution_blockers": [
+      "candidate_assets_not_published",
+      "portable_installer_not_integrated",
+      "clean_windows_real_media_acceptance_pending",
+      "license_review_pending"
+    ],
+    "archive_builder": {
+      "powershell_version": "7.6.4",
+      "source_notice_line_endings": "lf",
+      "manifest_line_endings": "crlf",
+      "zip_compression": "optimal",
+      "entry_timestamp": "1980-01-01T00:00:00Z"
+    },
+    "repository": "zvensmoluya/transvortex-assets",
+    "release_tag": "ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1",
+    "asset_name": "transvortex-ffmpeg-n8.1.2-31-g8c9502e9b0-core-corresponding-source.zip",
+    "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1/transvortex-ffmpeg-n8.1.2-31-g8c9502e9b0-core-corresponding-source.zip",
+    "size": 16930472,
+    "sha256": "ca60180843fb7020ad3e86e6777d4c0b87621e92986d01495fc4f0bfd6ec895e",
+    "ffmpeg_archive": {
+      "asset_name": "FFmpeg-8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
+      "url": "https://github.com/FFmpeg/FFmpeg/archive/8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
+      "size": 16902915,
+      "sha256": "97da8d05b040186096349179bd349168609235781776acee37015e87f8e898fc"
+    },
+    "build_scripts_archive": {
+      "asset_name": "FFmpeg-Builds-8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665.tar.gz",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/archive/8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665.tar.gz",
+      "size": 101690,
+      "sha256": "697d798f9031b5c5ead281761a79c87590e90677af4b28c3fa76f552dc16aedc"
+    },
+    "build_control_files": [
+      {
+        "path": "requirements/ffmpeg-runtime.json",
+        "size": 2534,
+        "sha256": "e5049a84d9682c2a61f9821307f72860d406f61cd8a9eb17de7ce09ac74cf374"
+      },
+      {
+        "path": "requirements/ffmpeg-core-prototype.json",
+        "size": 1870,
+        "sha256": "eda74d0c634360f23d49d5a46bd91d08eeb49c528a36169ee802184401ff7fe7"
+      },
+      {
+        "path": "scripts/ffmpeg_core_prototype.Dockerfile",
+        "size": 2133,
+        "sha256": "743bca48ec5c9d583bb335553408751ef1539830c12aa331a614f042d9e6c8de"
+      },
+      {
+        "path": "scripts/build_ffmpeg_core_prototype.ps1",
+        "size": 19885,
+        "sha256": "1296372b20fccbb2f2390573f59cf24feb43f336b450151359ddf29df23dc46d"
+      },
+      {
+        "path": "scripts/build_ffmpeg_runtime.ps1",
+        "size": 15639,
+        "sha256": "a59fb00c47b98267d6e9100742061945d8bedce0e42cae6abf6849133a43a466"
+      },
+      {
+        "path": "scripts/verify_ffmpeg_core_runtime.py",
+        "size": 20662,
+        "sha256": "5295cf05c03de5e30c49abf4d1f1ab46c28221fddb14a654ada6aea977a335c1"
+      }
+    ]
+  },
+  "integration": {
+    "current_release_pin": "requirements/ffmpeg-runtime.json",
+    "replaces_current_release": false,
+    "portable_enabled": false,
+    "installer_enabled": false
+  }
+}
