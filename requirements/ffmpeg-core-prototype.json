@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "id": "transvortex-ffmpeg-core-prototype",
+  "status": "evaluation",
+  "platform": "windows-x64",
+  "source_pin": "requirements/ffmpeg-runtime.json",
+  "ffmpeg_commit": "8c9502e9b048e21e1cae96477e338ac0635645ba",
+  "btbn_build_commit": "8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665",
+  "source_date_epoch": 1784816021,
+  "builder_image": "ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:80f095930d8ec013bbc5205522a7ba0dc45e4c554e9f2b4b1e0818c1876e5e87",
+  "variant": "transvortex-core-shared",
+  "license": "LGPL-3.0-or-later",
+  "configure_flags": [
+    "--enable-version3",
+    "--enable-shared",
+    "--disable-static",
+    "--disable-debug",
+    "--disable-doc",
+    "--disable-autodetect",
+    "--disable-gpl",
+    "--disable-nonfree",
+    "--disable-ffplay",
+    "--extra-version=transvortex-core"
+  ],
+  "policy": {
+    "preserve_ffmpeg_builtin_components": true,
+    "extreme_component_pruning": false,
+    "external_library_allowlist": [],
+    "replace_current_release": false
+  },
+  "compatibility": {
+    "audio_extensions": [
+      ".mp3",
+      ".wav",
+      ".m4a",
+      ".flac",
+      ".aac",
+      ".ogg",
+      ".opus"
+    ],
+    "audio_codecs": [
+      "aac",
+      "mp3",
+      "pcm_s16le",
+      "flac",
+      "opus",
+      "vorbis",
+      "ac3",
+      "eac3"
+    ],
+    "text_subtitle_codecs": [
+      "subrip",
+      "ass",
+      "ssa",
+      "webvtt",
+      "mov_text"
+    ],
+    "required_filters": [
+      "silencedetect"
+    ],
+    "required_encoders": [
+      "aac",
+      "pcm_s16le",
+      "srt"
+    ],
+    "required_operations": [
+      "probe_streams_and_format_json",
+      "select_and_extract_audio_stream",
+      "copy_aac_and_mp3_audio",
+      "encode_aac_m4a",
+      "resample_mono_pcm_s16le_16000hz",
+      "split_and_trim_audio_windows",
+      "detect_silence",
+      "extract_text_subtitle_to_srt"
+    ]
+  }
+}

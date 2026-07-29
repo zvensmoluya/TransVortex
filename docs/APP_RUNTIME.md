@@ -47,6 +47,20 @@ pwsh -NoProfile -File scripts\build_ffmpeg_source_bundle.ps1 -Force -Json
 
 当前源码 ZIP 只包含精确 FFmpeg 源码和 BtbN 构建控制脚本，清单保持 `public_distribution_ready=false`；它是源码追溯资产，不是完整对应源码。公开安装器分发前仍需补齐实际静态链接外部库的精确源码、许可证与通知，并完成许可审查。
 
+### 无可选外部库的 FFmpeg core 候选
+
+仓库同时提供一个不替换当前 release 的自建候选：
+
+```powershell
+pwsh -NoProfile -File scripts\build_ffmpeg_core_prototype.ps1 -Force -Json
+```
+
+该脚本使用 `requirements/ffmpeg-core-prototype.json` 固定 FFmpeg commit、BtbN Windows x64 基础镜像 digest、`SOURCE_DATE_EPOCH` 和 configure flags。它保留 FFmpeg 自带的 demuxer、decoder、encoder、muxer、parser、protocol 和 filter，只关闭可选依赖自动探测；不使用 `--disable-everything` 或逐组件极限裁剪。构建需要本机 Docker Desktop，但 Docker 镜像只属于维护者构建缓存，不进入安装包；不需要 `gh` 或 GitHub 登录。首次构建会下载数 GB 的交叉编译工具链，本机这次构建后 Docker 报告 8.236 GB 可回收 build cache；保留缓存可让后续重建直接复用，清理后下次需要重新下载。
+
+2026-07-30 的本机 prototype 为 31,182,018 字节，当前固定完整 runtime 为 143,476,938 字节，减少 78.27%。自动兼容验证已覆盖带 H.264 视频、音频和文本字幕轨的 MP4 / MKV，以及 WAV、MP3、M4A、FLAC、AAC、Ogg Vorbis、Opus、AC3、EAC3 的探测、解码和 16 kHz 单声道 PCM 重采样；同时覆盖 AAC / MP3 直拷、AAC 音轨提取、`silencedetect` 和 SRT / ASS / SSA / WebVTT / mov_text 转 SRT。PE import 检查确认产物只依赖包内 FFmpeg DLL 与 Windows 系统 DLL。
+
+该候选把外部媒体库对应源码清单降为空，但仍保持 `public_distribution_ready=false`：它尚未替换 `requirements/ffmpeg-runtime.json`，也未进入 portable / installer 构建、正式源码资产和干净 Windows 真实片源验收。采用前需要完成这些发布集成并生成新的不可变 binary/source pin。以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
+
 发布维护者可在安装并登录 GitHub CLI 后验证或首次发布这两个固定资产：
 
 ```powershell
