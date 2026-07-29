@@ -430,6 +430,12 @@ def asr_storage_status(
         disk_error = str(exc)
     return {
         "root": str(paths.storage_root),
+        "disk_root": str(disk_root),
+        "selection_origin": (
+            "configured"
+            if paths.storage_config_file.is_file() and not config_error
+            else "fallback"
+        ),
         "default_root": str(paths.app_data_root),
         "customized": paths.storage_root != paths.app_data_root,
         "total_bytes": total_bytes,

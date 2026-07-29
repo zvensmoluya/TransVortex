@@ -23,12 +23,12 @@ that command is globally installed. Start with:
 
 ```powershell
 transvortex agent-info --json
-transvortex asr setup-plan --json
+transvortex asr setup-plan --scope <scope> --json
 transvortex probe-provider --strict
 ```
 
-`agent-info --json`, `doctor --json`, `asr setup-plan --json`, and
-`asr setup-verify --json --strict` must be treated as secret-free structured
+`agent-info --json`, `doctor --json`, `asr setup-plan --scope <scope> --json`, and
+`asr setup-verify --scope <scope> --json` must be treated as secret-free structured
 metadata; still apply a field allowlist before forwarding third-party output.
 CLI JSON and JSONL stdout is ASCII-safe JSON: non-ASCII text is represented with
 JSON escapes and is restored by any conforming JSON parser, independent of the
@@ -39,14 +39,24 @@ send a network request. It is not an ASR route probe.
 
 ## ASR Environment Setup Contract
 
-`asr setup-plan --json` emits version 2 of the read-only
+`asr setup-plan --scope <scope> --json` emits version 2 of the read-only
 `transvortex.agent_setup` contract. `provider_mode` describes where ASR runs;
 `resources` separately describes runtime, model, accelerator, driver, and
 configuration sources. `plan.actions[]` identifies the executor and ownership
 for every preparation, apply, registration, activation, and verification step.
 For a setup plan, `ok: true` means the contract was generated; it does not mean
-the environment is usable. Use `ready: true`, `plan_status: "ready"`, and an
-empty blocking list together before presenting the plan as ready.
+the environment is usable. In a plan, `asr_ready` is the current readiness
+snapshot. In `setup-verify`, it is the verified complete ASR result, while
+`scope_result.complete` reports completion for the requested scope.
+The plan's scope result is provisional and therefore never completes the task;
+only the corresponding `setup-verify` result is a completion result.
+
+Treat `current_configuration` only as an inspection baseline. The Agent owns the
+model, CPU/CUDA, and managed/external selection after inspecting the host. Use
+the pinned sizes and compatibility facts under `selection`; do not execute all
+`role: "candidate"` actions in a `choice_group`. Read capacity from `storage`,
+which represents the resolved ASR resource root, not the configuration volume.
+For accelerator state, distinguish `configured`, `available`, and `active`.
 
 The CLI `--root` value is the configuration/project root. For an installed
 Windows desktop app, use `%LOCALAPPDATA%\TransVortex\Config` (or the explicit
@@ -82,15 +92,22 @@ Python remains a CLI/development compatibility path; it is not something the
 setup Agent should build for a normal desktop user. Model and accelerator
 sources are independent, and external directories remain externally owned.
 
-After the selected scope has been applied and connected, run:
+For complete local setup, run:
 
 ```powershell
-transvortex asr setup-verify --json --strict
+transvortex asr setup-verify --scope full --json --strict
 ```
 
-Treat `ok: true` as the only successful environment result. The verify command
+For `inspect`, `prepare_model`, `prepare_accelerator`, or `register`, run the
+advertised `setup-verify --scope <scope> --json` command without `--strict` and
+read `scope_result` separately from `asr_ready`. The Agent reports its host
+inspection and recommendation directly in its conversation; TransVortex does
+not consume a nested Agent result.
+
+Treat `ok: true` as the complete ASR-ready result. The verify command
 does not mutate TransVortex configuration or components and does not use the
-network. For local workers it launches the selected runtime locally, loads the
+network. The `inspect` scope uses a lightweight `scope_only` profile and does
+not load a model or hash large model files. Other local-worker verification launches the selected runtime locally, loads the
 model, and transcribes generated probe audio in addition to checking readiness,
 managed markers, external registrations, and managed model file SHA-256 values. When the catalog publishes
 an archive SHA-256, the component marker records the install-time verified digest;

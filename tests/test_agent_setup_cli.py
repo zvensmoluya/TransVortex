@@ -16,6 +16,7 @@ from transvortex.protocol.agent_protocol import agent_info_payload
 from transvortex.protocol.agent_setup import (
     _hardware_payload,
     _safe_url,
+    setup_failure_payload,
     setup_plan_payload,
     setup_verify_payload,
 )
@@ -83,10 +84,18 @@ def test_agent_info_advertises_read_only_setup_contract(tmp_path: Path) -> None:
 
     assert payload["setup_contract"]["contract"] == "transvortex.agent_setup"
     assert payload["setup_contract"]["schema_version"] == 2
+    assert payload["setup_contract"]["supported_scopes"] == [
+        "inspect",
+        "prepare_model",
+        "prepare_accelerator",
+        "register",
+        "full",
+    ]
+    assert payload["setup_contract"]["strict_scope"] == "full"
     assert payload["installation"]["config_root"] == str(tmp_path.resolve())
     assert payload["installation"]["capabilities_argv"][-2:] == ["agent-info", "--json"]
-    assert payload["recommended_argv"][1][-2:] == ["setup-plan", "--json"]
-    assert "transvortex asr setup-plan --json" in payload["recommended_workflow"]
+    assert payload["recommended_argv"][1][-4:] == ["setup-plan", "--scope", "full", "--json"]
+    assert "transvortex asr setup-plan --scope <scope> --json" in payload["recommended_workflow"]
     assert payload["commands"]["asr setup-plan"]["read_only"] is True
     assert payload["commands"]["asr setup-verify"]["supports_strict"] is True
     assert payload["commands"]["asr setup-apply"]["executor"] == "transvortex"
@@ -114,6 +123,12 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
     assert payload["active_asr"]["requested_device"] == "cpu"
     assert payload["active_asr"]["resolved_device"] == "cpu"
     assert payload["provider_mode"] == "local_worker"
+    assert payload["requested_scope"] == "full"
+    assert payload["current_configuration"] == payload["active_asr"]
+    assert payload["scope_policy"]["selection_authority"] == "agent"
+    assert payload["scope_policy"]["current_configuration_is_target"] is False
+    assert payload["selection"]["authority"] == "agent"
+    assert payload["selection"]["target_locked"] is False
     assert "route" not in payload
     assert payload["active_asr"]["credential_required"] is False
     assert payload["active_asr"]["credential_configured"] is False
@@ -131,6 +146,142 @@ def test_setup_plan_is_stable_and_secret_free(tmp_path: Path, monkeypatch) -> No
     assert "--accelerator-id" in payload["agent_argv"]["register_accelerator"]
     assert "--accelerator-registration-id" in payload["agent_argv"]["activate_external_cuda"]
     assert "super-secret-value" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_inspect_scope_is_machine_readable_and_forbids_mutation(tmp_path: Path, monkeypatch) -> None:
+    providers_file = _write_setup_config(tmp_path)
+
+    plan = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file, scope="inspect")
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup._local_worker_probe",
+        lambda *_args, **_kwargs: pytest.fail("inspect scope must not execute the local worker"),
+    )
+    verify = setup_verify_payload(root_dir=tmp_path, providers_file=providers_file, scope="inspect")
+
+    assert plan["requested_scope"] == "inspect"
+    assert plan["scope_policy"]["permitted_mutations"] == []
+    assert plan["scope_policy"]["mutation_policy"] == "forbidden"
+    assert all(action["mutating"] is False for action in plan["plan"]["actions"])
+    assert plan["verification"]["strict"] is False
+    assert plan["scope_result"]["complete"] is False
+    assert plan["scope_result"]["provisional"] is True
+    assert "--scope" in plan["verification"]["argv"]
+    assert "--strict" not in plan["verification"]["argv"]
+    assert verify["ok"] is False
+    assert verify["asr_ready"] is False
+    assert verify["scope_result"]["complete"] is True
+    assert verify["scope_result"]["verification_performed"] is True
+    assert verify["scope_result"]["agent_report_required"] is True
+    assert verify["verification_profile"] == "scope_only"
+    assert verify["executes_local_code"] is False
+    assert verify["integrity"]["model_files"]["status"] == "not_checked"
+
+
+def test_prepare_model_scope_leaves_model_and_device_selection_to_agent(tmp_path: Path) -> None:
+    providers_file = _write_setup_config(tmp_path)
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file, scope="prepare_model")
+
+    actions = {action["id"]: action for action in payload["plan"]["actions"]}
+    managed_install = actions["install_model"]
+    assert payload["current_configuration"]["model"] == "large-v3"
+    assert payload["selection"]["current_configuration_is_target"] is False
+    assert {item["id"] for item in payload["selection"]["model_candidates"]} == {
+        "small",
+        "medium",
+        "large-v3",
+    }
+    assert payload["selection"]["device_options"] == ["cpu", "cuda", "auto"]
+    assert managed_install["choice_group"] == "model_source"
+    assert "<model-id>" in managed_install["argv_template"]
+    assert "large-v3" not in managed_install["argv_template"]
+    assert {"prepare_accelerator", "register_accelerator", "activate_accelerator"} <= set(actions)
+
+
+def test_register_scope_only_advertises_existing_resource_registration(tmp_path: Path) -> None:
+    providers_file = _write_setup_config(tmp_path)
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file, scope="register")
+
+    mutating = [action for action in payload["plan"]["actions"] if action["mutating"]]
+    assert mutating
+    assert {action["operation"] for action in mutating} <= {"register", "activate"}
+    assert all(action["requires_network"] is False for action in mutating)
+    assert "prepare_external_model" not in payload["allowed_actions"]
+
+
+def test_setup_plan_reports_resolved_asr_storage_volume(tmp_path: Path, monkeypatch) -> None:
+    providers_file = _write_setup_config(tmp_path)
+    storage_root = Path("D:/TransVortex/Resources")
+    monkeypatch.setattr(
+        "transvortex.protocol.agent_setup.asr_runtime_snapshot",
+        lambda _root: {
+            "paths": {
+                "app_data_root": "C:/Users/Test/AppData/Local/TransVortex",
+                "storage_root": str(storage_root),
+                "components_root": str(storage_root / "Components"),
+                "models_root": str(storage_root / "Models" / "faster-whisper"),
+                "downloads_root": str(storage_root / "Downloads" / "ASR"),
+            },
+            "storage": {
+                "root": str(storage_root),
+                "disk_root": "D:/",
+                "selection_origin": "configured",
+                "total_bytes": 1_000_000,
+                "free_bytes": 750_000,
+                "reserve_bytes": 100_000,
+                "space_known": True,
+                "writable": True,
+                "can_change": True,
+                "change_blocker": "",
+                "config_error": "",
+            },
+            "runtime": {"id": "managed:faster-whisper", "installed": False},
+            "accelerators": [],
+            "models": [],
+            "registered_models": [],
+            "registered_accelerators": [],
+            "environments": [],
+        },
+    )
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file, scope="inspect")
+
+    assert payload["storage"]["root"] == str(storage_root)
+    assert payload["storage"]["disk_root"] == "D:/"
+    assert payload["storage"]["free_bytes"] == 750_000
+    assert payload["current"]["paths"]["storage_root"] == str(storage_root)
+    assert "disk" not in payload["platform"]
+
+
+def test_accelerator_contract_separates_configuration_availability_and_activation(tmp_path: Path) -> None:
+    providers_file = _write_setup_config(tmp_path)
+
+    payload = setup_plan_payload(root_dir=tmp_path, providers_file=providers_file, scope="prepare_accelerator")
+
+    accelerator = payload["resources"]["accelerator"]
+    assert accelerator["configured"] is True
+    assert accelerator["available"] is False
+    assert accelerator["active"] is False
+    assert accelerator["state"] == "not_requested"
+    assert payload["active_asr"]["configured_preferences"]["accelerator"]["id"] == "nvidia-cuda12"
+    assert payload["active_asr"]["execution"]["resolved_device"] == "cpu"
+    assert payload["active_asr"]["execution"]["accelerator_active"] is False
+    assert "prepare_external_model" not in payload["allowed_actions"]
+    assert "prepare_external_accelerator" in payload["allowed_actions"]
+    action_ids = {action["id"] for action in payload["plan"]["actions"]}
+    assert {"prepare_accelerator", "register_accelerator", "activate_accelerator"} <= action_ids
+
+
+def test_setup_failure_keeps_scope_contract_shape(tmp_path: Path) -> None:
+    payload = setup_failure_payload(kind="setup_plan", root_dir=tmp_path, scope="inspect")
+
+    assert payload["requested_scope"] == "inspect"
+    assert payload["scope_result"]["status"] == "blocked"
+    assert payload["scope_policy"]["permitted_mutations"] == []
+    assert payload["current_configuration"] is None
+    assert payload["selection"]["authority"] == "agent"
+    assert payload["storage"]["space_known"] is False
 
 
 def test_setup_plan_strips_query_credentials_from_endpoint_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -356,6 +507,32 @@ def test_setup_verify_strict_returns_nonzero(tmp_path: Path, monkeypatch, capsys
     assert payload["ok"] is False
 
 
+def test_setup_verify_inspect_strict_uses_scope_completion(tmp_path: Path, monkeypatch, capsys) -> None:
+    providers_file = _write_setup_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "transvortex",
+            "--root",
+            str(tmp_path),
+            "asr",
+            "setup-verify",
+            "--scope",
+            "inspect",
+            "--providers-file",
+            str(providers_file),
+            "--json",
+            "--strict",
+        ],
+    )
+
+    main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["scope_result"]["complete"] is True
+
+
 def test_setup_plan_keeps_readiness_failures_structured(tmp_path: Path, monkeypatch) -> None:
     providers_file = _write_setup_config(tmp_path)
     monkeypatch.setattr(
@@ -478,6 +655,7 @@ asr_engines:
     }
     assert "prepare_system_acceleration" in action_ids
     assert "configure_local_worker_device" in action_ids
+    assert "activate_managed_accelerator" in action_ids
     assert "install_accelerator" not in action_ids
     assert "install_model" not in action_ids
 
@@ -606,6 +784,11 @@ def test_remote_route_does_not_require_managed_catalog(tmp_path: Path, monkeypat
     assert payload["requirements"]["runtime"] is None
     assert payload["requirements"]["model"] is None
     assert "catalog_invalid" not in {item["code"] for item in payload["blocking_items"]}
+    assert not {
+        action["id"]
+        for action in payload["plan"]["actions"]
+        if action.get("resource") in {"runtime", "model", "accelerator", "driver"}
+    }
 
 
 def test_provider_test_requires_structured_remote_confirmations(tmp_path: Path, monkeypatch, capsys) -> None:

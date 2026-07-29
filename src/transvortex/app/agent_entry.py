@@ -20,6 +20,7 @@ INSTALL_MARKER_NAME = ".transvortex-install.ini"
 AGENT_ENTRY_DIRECTORY_NAME = "Agent"
 AGENT_ENTRY_DOCUMENT_NAME = "README.md"
 AGENT_ENTRY_STATE_NAME = "current.json"
+ASR_ENVIRONMENT_SCOPES = ("inspect", "prepare_model", "prepare_accelerator", "register", "full")
 
 
 class AgentEntryError(RuntimeError):
@@ -162,7 +163,7 @@ def agent_entry_service_payload(*, config_root: Path, executable: Path | None = 
     workflow = str(payload["documents"]["asr_environment_setup"])
     asr_handoffs = {
         scope: _asr_handoff_text(entry_document, workflow=workflow, scope=scope)
-        for scope in ("inspect", "prepare_model", "prepare_accelerator", "register", "full")
+        for scope in ASR_ENVIRONMENT_SCOPES
     }
     result["asr_environment_handoffs"] = asr_handoffs
     result["asr_environment_handoff_text"] = asr_handoffs["full"]
@@ -259,18 +260,25 @@ def _handoff_text(entry_document: str, *, workflow: str | None = None) -> str:
 def _asr_handoff_text(entry_document: str, *, workflow: str, scope: str) -> str:
     goals = {
         "inspect": "侦查这台电脑当前的 ASR、GPU、驱动、磁盘和可复用资源，只给出结论与可执行方案，暂不准备或接入资源",
-        "prepare_model": "侦查本机后准备一个适合当前配置的 Whisper 模型；可调用 TransVortex 托管下载，也可用你自己的工具准备外部模型，并在完成后注册、激活和验证",
+        "prepare_model": "侦查本机后选择并准备一个适合本机与用户任务的 Whisper 模型；可调用 TransVortex 托管下载，也可用你自己的工具准备外部模型，并在完成后注册、激活和验证",
         "prepare_accelerator": "侦查本机 NVIDIA GPU、驱动和用户态 CUDA 资源后准备可用的 GPU 加速；可调用 TransVortex 托管下载，也可用你自己的工具准备外部资源，并在完成后注册、激活和验证",
         "register": "接入用户已经准备好的模型或 GPU 加速资源；先探测，随后使用 TransVortex 广告的注册、激活和验证命令，不重新下载资源",
         "full": "侦查这台电脑并把本地 ASR 环境准备到可用；TransVortex runtime 使用产品托管版本，模型和 GPU 加速可分别选择托管资源或由你准备外部资源，最后注册、激活并完成严格验证",
     }
     goal = goals.get(scope, goals["full"])
+    verification = (
+        f"最后执行契约广告的 `setup-verify --scope {scope}`，以 `scope_result.complete` 判断本范围是否完成；完整 ASR 是否可用单独读取 `asr_ready`"
+        if scope != "full"
+        else "最后执行契约广告的 `setup-verify --scope full --strict`，以严格结构化结果确认完整 ASR 已可用"
+    )
     return (
         "请使用本机安装的 TransVortex。"
         f"稳定入口：`{entry_document}`；ASR 环境与资源工作流：`{workflow}`。"
         "先读取入口、current.json 和 capabilities_argv 返回的当前契约。"
         f"本次范围：{goal}。"
-        "把执行模式与 runtime、模型、GPU 加速资源的来源分别处理，并以 setup-verify --strict 的结构化结果作为完成依据。"
+        f"执行契约广告的 `setup-plan --scope {scope}`；当前配置只作为侦查基线，不是强制目标。"
+        "请在侦查后自行选择合适的模型、CPU 或 CUDA 路径，以及 managed 或 external 资源来源；候选动作是互斥或按需依赖，不要全部执行。"
+        f"{verification}。结果直接在当前 Agent 对话中说明，不写回 TransVortex UI。"
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..app.agent_entry import AGENT_PROTOCOL_VERSION, runtime_agent_context
+from .agent_setup import SETUP_SCOPES
 
 
 PROTOCOL_VERSION = AGENT_PROTOCOL_VERSION
@@ -38,15 +39,18 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "agent_result",
             ],
             "read_only_commands": [
-                "transvortex asr setup-plan --json",
-                "transvortex asr setup-verify --json --strict",
+                "transvortex asr setup-plan --scope <scope> --json",
+                "transvortex asr setup-verify --scope <scope> --json [--strict for full]",
             ],
             "read_only_argv": [
-                cli_argv("asr", "setup-plan", "--json"),
-                cli_argv("asr", "setup-verify", "--json", "--strict"),
+                cli_argv("asr", "setup-plan", "--scope", "full", "--json"),
+                cli_argv("asr", "setup-verify", "--scope", "full", "--json", "--strict"),
             ],
             "root_argument": "--root <config-root>",
             "providers_file_argument": "--providers-file <providers-file>",
+            "scope_argument": "--scope <inspect|prepare_model|prepare_accelerator|register|full>",
+            "supported_scopes": list(SETUP_SCOPES),
+            "strict_scope": "full",
             "schema_asset": "agent/references/setup_contract.schema.json",
             "workflow_asset": "agent/workflows/ASR_ENVIRONMENT_SETUP.md",
             "packaged_schema_asset": "agent/references/setup_contract.schema.json",
@@ -54,17 +58,19 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
         },
         "recommended_argv": [
             cli_argv("agent-info", "--json"),
-            cli_argv("asr", "setup-plan", "--json"),
-            cli_argv("asr", "setup-verify", "--json", "--strict"),
+            cli_argv("asr", "setup-plan", "--scope", "full", "--json"),
+            cli_argv("asr", "setup-verify", "--scope", "full", "--json", "--strict"),
         ],
         "recommended_workflow": [
             "transvortex agent-info --json",
-            "transvortex asr setup-plan --json",
+            "transvortex asr setup-plan --scope <scope> --json",
             "inspect the local environment and execute only the user-selected preparation scope",
+            "treat current_configuration as an inspection baseline and let the Agent select model, device, and resource sources",
             "use advertised setup-apply for managed resources, or prepare external resources with Agent tools",
             "register and activate external resources with the advertised TransVortex commands",
             "if provider_mode is local_service or remote_provider: run the advertised asr engine-test command",
-            "transvortex asr setup-verify --json --strict",
+            "for full: transvortex asr setup-verify --scope full --json --strict",
+            "for other scopes: transvortex asr setup-verify --scope <scope> --json and read scope_result separately from asr_ready",
             "transvortex probe-provider --strict",
             "transvortex run --input <video> --src <lang> --tgt <lang> --detach --json",
             "transvortex events --task-id <task_id> --follow",
@@ -108,7 +114,8 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "read_only": True,
                 "network_access": False,
                 "purpose": "Describe provider mode, independently sourced resources, current state, and executable setup actions",
-                "command": "transvortex --root <config-root> asr setup-plan --providers-file <providers-file> --json",
+                "supported_scopes": list(SETUP_SCOPES),
+                "command": "transvortex --root <config-root> asr setup-plan --scope <scope> --providers-file <providers-file> --json",
             },
             "asr setup-apply": {
                 "long_running": True,
@@ -170,8 +177,10 @@ def agent_info_payload(*, root_dir: Path | None = None) -> dict:
                 "read_only": True,
                 "network_access": False,
                 "supports_strict": True,
-                "purpose": "Verify readiness, component integrity, and the local worker/model protocol without network access",
-                "command": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
+                "strict_scope": "full",
+                "supported_scopes": list(SETUP_SCOPES),
+                "purpose": "Report scope completion separately from full ASR readiness without network access",
+                "command": "transvortex --root <config-root> asr setup-verify --scope <scope> [--strict for full] --providers-file <providers-file> --json",
             },
             "asr engine-test": {
                 "long_running": False,

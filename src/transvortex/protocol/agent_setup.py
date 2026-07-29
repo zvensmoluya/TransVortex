@@ -13,7 +13,6 @@ import importlib.metadata
 import json
 import platform
 import re
-import shutil
 import sys
 import urllib.parse
 from datetime import datetime, timezone
@@ -37,13 +36,14 @@ from ..app.asr_runtime import (
 )
 from ..app.config import load_app_config, resolve_providers_file
 from ..app.credentials import resolve_provider_credential
-from ..app.agent_entry import cli_argv_prefix
+from ..app.agent_entry import ASR_ENVIRONMENT_SCOPES, cli_argv_prefix
 from ..utils import read_json
 from ..utils import utc_now_iso
 
 
 AGENT_SETUP_SCHEMA_VERSION = 2
 AGENT_SETUP_CONTRACT = "transvortex.agent_setup"
+SETUP_SCOPES = ASR_ENVIRONMENT_SCOPES
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _PROVIDER_TEST_MAX_AGE_SECONDS = 24 * 60 * 60
 
@@ -58,6 +58,7 @@ ALLOWED_ACTIONS = [
     "prepare_system_acceleration",
     "register_external_resource",
     "activate_registered_resource",
+    "run_authorized_route_probe",
     "run_transvortex_verification",
 ]
 
@@ -66,6 +67,124 @@ FORBIDDEN_ACTIONS = [
     "write_secret_values_to_configuration_or_reports",
     "claim_success_without_transvortex_verify",
 ]
+
+
+def _setup_scope(value: str | None) -> str:
+    scope = str(value or "full").strip().lower()
+    if scope not in SETUP_SCOPES:
+        raise ValueError(f"unsupported setup scope: {scope}")
+    return scope
+
+
+def _scope_policy(scope: str) -> dict[str, Any]:
+    """Describe task bounds without taking the setup decision away from the Agent."""
+
+    policies: dict[str, dict[str, Any]] = {
+        "inspect": {
+            "permitted_mutations": [],
+            "permitted_resources": ["environment", "configuration"],
+            "completion_conditions": [
+                "host_environment_inspected",
+                "reusable_resources_reported",
+                "suitable_next_step_recommended",
+            ],
+        },
+        "prepare_model": {
+            "permitted_mutations": [
+                "apply_managed_runtime_dependency",
+                "apply_selected_managed_model",
+                "prepare_register_activate_external_model",
+                "prepare_register_activate_accelerator_dependency_when_selected",
+                "activate_local_worker_selection",
+            ],
+            "permitted_resources": ["runtime", "model", "accelerator", "driver", "configuration"],
+            "completion_conditions": ["selected_model_available", "selected_model_activated", "selected_model_probe_passed"],
+        },
+        "prepare_accelerator": {
+            "permitted_mutations": [
+                "apply_managed_runtime_dependency",
+                "apply_managed_accelerator_when_published",
+                "prepare_register_activate_external_accelerator",
+                "prepare_system_driver_with_separate_confirmation",
+                "activate_cuda_selection",
+            ],
+            "permitted_resources": ["runtime", "accelerator", "driver", "configuration"],
+            "completion_conditions": ["selected_accelerator_available", "cuda_probe_passed", "selected_accelerator_activated"],
+        },
+        "register": {
+            "permitted_mutations": ["register_existing_external_resource", "activate_registered_resource"],
+            "permitted_resources": ["model", "accelerator", "configuration"],
+            "completion_conditions": ["existing_resource_probe_passed", "registration_saved", "registered_resource_activated"],
+        },
+        "full": {
+            "permitted_mutations": [
+                "apply_managed_runtime_dependency",
+                "apply_selected_managed_model",
+                "prepare_register_activate_external_model",
+                "apply_managed_accelerator_when_published",
+                "prepare_register_activate_external_accelerator",
+                "prepare_system_driver_with_separate_confirmation",
+                "activate_local_worker_selection",
+                "run_authorized_route_probe",
+            ],
+            "permitted_resources": ["runtime", "model", "accelerator", "driver", "configuration", "provider"],
+            "completion_conditions": ["active_asr_readiness_passed", "all_applicable_integrity_and_protocol_checks_passed"],
+        },
+    }
+    selected = policies[scope]
+    return {
+        "requested_scope": scope,
+        "selection_authority": "agent",
+        "current_configuration_role": "inspection_baseline",
+        "current_configuration_is_target": False,
+        "mutation_policy": "forbidden" if not selected["permitted_mutations"] else "limited_to_scope",
+        "permitted_mutations": list(selected["permitted_mutations"]),
+        "permitted_resources": list(selected["permitted_resources"]),
+        "completion_conditions": list(selected["completion_conditions"]),
+        "additional_confirmation_required_for": [
+            "system_driver_or_admin_change",
+            "system_restart",
+            "remote_media_upload",
+            "paid_remote_request",
+        ],
+        "result_destination": "agent_conversation",
+    }
+
+
+def _scope_allowed_actions(scope: str) -> list[str]:
+    allowed = {
+        "inspect": [
+            "inspect_local_environment",
+            "run_transvortex_verification",
+        ],
+        "prepare_model": [
+            "inspect_local_environment",
+            "apply_transvortex_managed_resource",
+            "prepare_external_model",
+            "prepare_external_accelerator",
+            "prepare_system_acceleration",
+            "register_external_resource",
+            "activate_registered_resource",
+            "run_transvortex_verification",
+        ],
+        "prepare_accelerator": [
+            "inspect_local_environment",
+            "apply_transvortex_managed_resource",
+            "prepare_external_accelerator",
+            "prepare_system_acceleration",
+            "register_external_resource",
+            "activate_registered_resource",
+            "run_transvortex_verification",
+        ],
+        "register": [
+            "inspect_local_environment",
+            "register_external_resource",
+            "activate_registered_resource",
+            "run_transvortex_verification",
+        ],
+        "full": list(ALLOWED_ACTIONS),
+    }
+    return list(allowed[scope])
 
 def _safe_int(value: Any, default: int = 0) -> int:
     if isinstance(value, bool):
@@ -135,22 +254,13 @@ def _package_version() -> str:
         return "unknown"
 
 
-def _platform_payload(paths_root: Path) -> dict[str, Any]:
-    try:
-        disk = shutil.disk_usage(paths_root)
-        disk_payload: dict[str, Any] = {
-            "free_bytes": int(disk.free),
-            "total_bytes": int(disk.total),
-        }
-    except OSError:
-        disk_payload = {"free_bytes": None, "total_bytes": None}
+def _platform_payload() -> dict[str, Any]:
     return {
         "system": platform.system().lower(),
         "release": platform.release(),
         "machine": platform.machine().lower(),
         "python_version": platform.python_version(),
         "python_executable": str(Path(sys.executable).resolve()),
-        "disk": disk_payload,
     }
 
 
@@ -342,6 +452,19 @@ def _provider_payload(provider: Any, *, root_dir: Path | None = None) -> dict[st
             )
         ),
     }
+    payload["configured_preferences"] = {
+        "runtime": {"source": str(runtime.source), "id": str(runtime.id)},
+        "model": {
+            "source": str(local.model_source) if is_local_worker else "",
+            "id": str(provider.model),
+        },
+        "accelerator": {
+            "source": str(provider.accelerator.source) if is_local_worker else "",
+            "id": str(provider.accelerator.id) if is_local_worker else "",
+        },
+        "device": str(local.device) if is_local_worker else "",
+        "compute_type": str(local.compute_type) if is_local_worker else "",
+    }
     # Endpoint metadata is useful when an Agent discovers an existing local
     # or remote ASR. A managed worker's default OpenAI-shaped fields are not
     # an active network route, so omit them to avoid a misleading plan.
@@ -462,6 +585,7 @@ def _mode_alternatives(
 
 def _plan_actions(
     *,
+    scope: str,
     provider: Any,
     requirements: dict[str, Any],
     current: dict[str, Any],
@@ -496,8 +620,9 @@ def _plan_actions(
             "requires_restart": False,
             "requires_network": False,
             "may_cost_money": False,
-            "command": "transvortex --root <config-root> asr setup-plan --providers-file <providers-file> --json",
-            "argv": asr_argv("setup-plan"),
+            "role": "required",
+            "command": f"transvortex --root <config-root> asr setup-plan --scope {scope} --providers-file <providers-file> --json",
+            "argv": asr_argv("setup-plan", "--scope", scope),
             "expected_outputs": ["versioned setup contract"],
             "rollback": "No changes are made",
         }
@@ -513,6 +638,7 @@ def _plan_actions(
                 "executor": "agent",
                 "ownership": "system",
                 "description": "Inspect the local GPU, driver, storage, and reusable resource directories",
+                "role": "required",
                 "mutating": False,
                 "requires_confirmation": False,
                 "requires_admin": False,
@@ -535,7 +661,10 @@ def _plan_actions(
                     "ownership": "system",
                     "description": "Inspect and prepare the NVIDIA driver state required by this machine",
                     "mutating": True,
-                    "requires_confirmation": False,
+                    "role": "candidate",
+                    "choice_group": "device_path",
+                    "when": "agent_selects_cuda_and_system_driver_change_is_required",
+                    "requires_confirmation": True,
                     "requires_admin": True,
                     "requires_restart": True,
                     "requires_network": True,
@@ -605,7 +734,8 @@ def _plan_actions(
                 "operation": "apply",
                 "executor": "transvortex",
                 "ownership": "transvortex",
-                "description": "Install the catalog-pinned Whisper runtime in the user data root",
+                "description": "Install the catalog-pinned Whisper runtime in the configured ASR resource root",
+                "role": "dependency",
                 "mutating": True,
                 "requires_confirmation": True,
                 "requires_admin": False,
@@ -916,24 +1046,432 @@ def _plan_actions(
                 "rollback": "No TransVortex files are changed except the non-secret probe status record",
             }
         )
+
+    # The configured provider is evidence about the current machine, not the
+    # target the Agent must reproduce.  For scopes that authorize selection,
+    # replace configuration-pinned model/accelerator actions with explicit
+    # alternative templates.  The Agent chooses one branch after inspecting
+    # the host; it must not execute every candidate action.
+    readiness = current.get("readiness") if isinstance(current.get("readiness"), dict) else {}
+    full_needs_action = readiness.get("can_run") is not True
+    model_resource = resources.get("model") if isinstance(resources.get("model"), dict) else {}
+    model_selection_needed = provider_mode == "local_worker" and (
+        scope == "prepare_model"
+        or (scope == "full" and model_resource.get("state") != "ready")
+    )
+    accelerator_selection_needed = provider_mode == "local_worker" and (
+        scope in {"prepare_model", "prepare_accelerator"}
+        or (scope == "full" and full_needs_action)
+    )
+    model_action_ids = {"prepare_model", "register_model", "activate_model", "install_model"}
+    accelerator_action_ids = {
+        "prepare_system_acceleration",
+        "install_accelerator",
+        "prepare_accelerator",
+        "register_accelerator",
+        "activate_accelerator",
+    }
+    if scope == "inspect":
+        actions = [action for action in actions if action.get("mutating") is not True]
+    elif scope == "register":
+        actions = [action for action in actions if action.get("mutating") is not True]
+    else:
+        if model_selection_needed:
+            actions = [action for action in actions if str(action.get("id") or "") not in model_action_ids]
+        if accelerator_selection_needed:
+            actions = [action for action in actions if str(action.get("id") or "") not in accelerator_action_ids]
+        if scope in {"prepare_model", "prepare_accelerator"}:
+            actions = [action for action in actions if str(action.get("resource") or "") != "provider"]
+
+    model_candidates = [
+        row
+        for row in _list_value(requirements.get("available_models"))
+        if isinstance(row, dict) and pinned_model(row)
+    ]
+    accelerator_candidates = [
+        row
+        for row in _list_value(requirements.get("available_accelerators"))
+        if isinstance(row, dict)
+    ]
+    enable_model_selection = model_selection_needed
+    enable_accelerator_selection = accelerator_selection_needed
+    enable_registration = scope == "register" and provider_mode == "local_worker"
+
+    if enable_model_selection and model_candidates:
+        actions.extend(
+            [
+                {
+                    "id": "install_model",
+                    "kind": "managed_model_install",
+                    "resource": "model",
+                    "operation": "apply",
+                    "executor": "transvortex",
+                    "ownership": "transvortex",
+                    "description": "Install the one catalog model selected by the Agent after host inspection",
+                    "role": "candidate",
+                    "choice_group": "model_source",
+                    "when": "agent_selects_managed_model",
+                    "mutating": True,
+                    "requires_confirmation": True,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": True,
+                    "may_cost_money": False,
+                    "inputs": {"candidate_ids": [str(row.get("id") or "") for row in model_candidates]},
+                    "argv_template": asr_argv("setup-apply", "--resource", "model", "--item-id", "<model-id>"),
+                    "expected_outputs": ["one selected model marker", "verified model files"],
+                    "rollback": "Remove only the selected managed model through the advertised TransVortex operation API",
+                },
+                {
+                    "id": "activate_managed_model",
+                    "kind": "resource_activation",
+                    "resource": "configuration",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "transvortex",
+                    "description": "Activate the selected managed model with the Agent's chosen CPU or CUDA settings",
+                    "role": "candidate",
+                    "choice_group": "model_source",
+                    "when": "agent_selects_managed_model",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": asr_argv(
+                        "resources-activate",
+                        "--managed-model-id",
+                        "<model-id>",
+                        "--device",
+                        "<cpu|cuda|auto>",
+                        "--compute-type",
+                        "<compute-type>",
+                    ),
+                    "expected_outputs": ["active provider references the selected managed model"],
+                    "rollback": "Select the previous model and device settings through the same activation command",
+                },
+            ]
+        )
+
+    if enable_model_selection:
+        actions.append(
+            {
+                "id": "prepare_model",
+                "kind": "agent_resource_prepare",
+                "resource": "model",
+                "operation": "prepare",
+                "executor": "agent",
+                "ownership": "external",
+                "description": "Prepare one compatible CTranslate2 Whisper model selected after host inspection",
+                "role": "candidate",
+                "choice_group": "model_source",
+                "when": "agent_selects_external_model",
+                "mutating": True,
+                "requires_confirmation": False,
+                "requires_admin": False,
+                "requires_restart": False,
+                "requires_network": True,
+                "may_cost_money": False,
+                "expected_outputs": ["external model directory containing config.json and model.bin"],
+                "rollback": "Remove only the external directory created by the Agent for this plan",
+            }
+        )
+
+    if enable_model_selection or enable_registration:
+        actions.extend(
+            [
+                {
+                    "id": "register_model",
+                    "kind": "external_resource_register",
+                    "resource": "model",
+                    "operation": "register",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Load-test and register one selected existing external model directory",
+                    "role": "candidate",
+                    "choice_group": "model_source",
+                    "when": "agent_selects_external_model",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_variants": {
+                        "cpu": asr_argv(
+                            "model-register",
+                            "--model-path",
+                            "<model-path>",
+                            "--device",
+                            "cpu",
+                            "--compute-type",
+                            "<compute-type>",
+                            "--timeout-seconds",
+                            "120",
+                        ),
+                        "cuda": asr_argv(
+                            "model-register",
+                            "--model-path",
+                            "<model-path>",
+                            "--device",
+                            "cuda",
+                            "--compute-type",
+                            "<compute-type>",
+                            "--accelerator-root",
+                            "<accelerator-root>",
+                            "--timeout-seconds",
+                            "120",
+                        ),
+                    },
+                    "expected_outputs": ["external model registration ID", "model load and transcription probe result"],
+                    "rollback": "Remove the registration from configuration; external files remain untouched",
+                },
+                {
+                    "id": "activate_model",
+                    "kind": "resource_activation",
+                    "resource": "configuration",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Activate the selected external model registration and chosen device settings",
+                    "role": "candidate",
+                    "choice_group": "model_source",
+                    "when": "agent_selects_external_model",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": asr_argv(
+                        "resources-activate",
+                        "--model-registration-id",
+                        "<model-registration-id>",
+                        "--device",
+                        "<cpu|cuda|auto>",
+                        "--compute-type",
+                        "<compute-type>",
+                    ),
+                    "expected_outputs": ["active provider references the selected external model registration"],
+                    "rollback": "Select the previous model and device settings through the same activation command",
+                },
+            ]
+        )
+
+    if enable_accelerator_selection:
+        actions.append(
+            {
+                "id": "prepare_system_acceleration",
+                "kind": "agent_system_prepare",
+                "resource": "driver",
+                "operation": "prepare",
+                "executor": "agent",
+                "ownership": "system",
+                "description": "Prepare the NVIDIA system driver only if the Agent selects CUDA and inspection proves it necessary",
+                "role": "candidate",
+                "choice_group": "device_path",
+                "when": "agent_selects_cuda_and_driver_is_missing_or_incompatible",
+                "mutating": True,
+                "requires_confirmation": True,
+                "requires_admin": True,
+                "requires_restart": True,
+                "requires_network": True,
+                "may_cost_money": False,
+                "expected_outputs": ["NVIDIA driver compatible with the selected CUDA user-space libraries"],
+                "rollback": "System driver changes remain outside TransVortex resource management",
+            }
+        )
+        published_accelerators = [row for row in accelerator_candidates if pinned_component(row)]
+        installed_accelerator_ids = {
+            str(row.get("id") or "")
+            for row in _list_value(current.get("accelerators"))
+            if isinstance(row, dict) and row.get("installed") is True
+        }
+        managed_accelerator_ids = sorted(
+            installed_accelerator_ids
+            | {str(row.get("id") or "") for row in published_accelerators}
+        )
+        if published_accelerators:
+            actions.append(
+                {
+                    "id": "install_accelerator",
+                    "kind": "managed_component_install",
+                    "resource": "accelerator",
+                    "operation": "apply",
+                    "executor": "transvortex",
+                    "ownership": "transvortex",
+                    "description": "Install the one published managed accelerator selected by the Agent",
+                    "role": "candidate",
+                    "choice_group": "accelerator_source",
+                    "when": "agent_selects_cuda_with_published_managed_accelerator",
+                    "mutating": True,
+                    "requires_confirmation": True,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": True,
+                    "may_cost_money": False,
+                    "inputs": {"candidate_ids": [str(row.get("id") or "") for row in published_accelerators]},
+                    "argv_template": asr_argv(
+                        "setup-apply", "--resource", "accelerator", "--item-id", "<accelerator-id>"
+                    ),
+                    "expected_outputs": ["selected accelerator marker", "user-scoped CUDA component directory"],
+                    "rollback": "Remove only the selected managed accelerator through the advertised operation API",
+                }
+            )
+        if managed_accelerator_ids:
+            actions.append(
+                {
+                    "id": "activate_managed_accelerator",
+                    "kind": "resource_activation",
+                    "resource": "configuration",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "transvortex",
+                    "description": "Activate a published or already installed managed accelerator for CUDA execution",
+                    "role": "candidate",
+                    "choice_group": "accelerator_source",
+                    "when": "agent_selects_cuda_with_managed_accelerator",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "inputs": {"candidate_ids": managed_accelerator_ids},
+                    "argv_template": asr_argv(
+                        "resources-activate",
+                        "--managed-accelerator-id",
+                        "<accelerator-id>",
+                        "--device",
+                        "cuda",
+                        "--compute-type",
+                        "<compute-type>",
+                    ),
+                    "expected_outputs": ["active provider references the selected managed accelerator"],
+                    "rollback": "Select CPU or the previous accelerator through the same activation command",
+                }
+            )
+        actions.append(
+            {
+                "id": "prepare_accelerator",
+                "kind": "agent_resource_prepare",
+                "resource": "accelerator",
+                "operation": "prepare",
+                "executor": "agent",
+                "ownership": "external",
+                "description": "Prepare compatible NVIDIA user-space libraries if the Agent selects CUDA",
+                "role": "candidate",
+                "choice_group": "accelerator_source",
+                "when": "agent_selects_cuda_with_external_accelerator",
+                "mutating": True,
+                "requires_confirmation": False,
+                "requires_admin": False,
+                "requires_restart": False,
+                "requires_network": True,
+                "may_cost_money": False,
+                "inputs": {"candidates": accelerator_candidates},
+                "expected_outputs": ["external NVIDIA package root with the advertised DLL layout"],
+                "rollback": "Remove only the external directory created by the Agent for this plan",
+            }
+        )
+
+    if enable_accelerator_selection or enable_registration:
+        actions.extend(
+            [
+                {
+                    "id": "register_accelerator",
+                    "kind": "external_resource_register",
+                    "resource": "accelerator",
+                    "operation": "register",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Probe and register one selected existing external accelerator directory",
+                    "role": "candidate",
+                    "choice_group": "accelerator_source",
+                    "when": "agent_selects_cuda_with_external_accelerator",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": asr_argv(
+                        "accelerator-register",
+                        "--accelerator-root",
+                        "<accelerator-root>",
+                        "--accelerator-id",
+                        "<accelerator-id>",
+                        "--compute-type",
+                        "<compute-type>",
+                        "--timeout-seconds",
+                        "120",
+                    ),
+                    "expected_outputs": ["external accelerator registration ID", "CUDA probe result"],
+                    "rollback": "Remove the registration from configuration; external files remain untouched",
+                },
+                {
+                    "id": "activate_accelerator",
+                    "kind": "resource_activation",
+                    "resource": "configuration",
+                    "operation": "activate",
+                    "executor": "transvortex",
+                    "ownership": "external",
+                    "description": "Activate the selected external accelerator registration for CUDA execution",
+                    "role": "candidate",
+                    "choice_group": "accelerator_source",
+                    "when": "agent_selects_cuda_with_external_accelerator",
+                    "mutating": True,
+                    "requires_confirmation": False,
+                    "requires_admin": False,
+                    "requires_restart": False,
+                    "requires_network": False,
+                    "may_cost_money": False,
+                    "argv_template": asr_argv(
+                        "resources-activate",
+                        "--accelerator-registration-id",
+                        "<accelerator-registration-id>",
+                        "--device",
+                        "cuda",
+                        "--compute-type",
+                        "<compute-type>",
+                    ),
+                    "expected_outputs": ["active provider references the selected external accelerator registration"],
+                    "rollback": "Select CPU or the previous accelerator through the same activation command",
+                },
+            ]
+        )
+
+    verify_parts = ["setup-verify", "--scope", scope]
+    strict_verification = scope == "full"
+    if strict_verification:
+        verify_parts.append("--strict")
     actions.append(
         {
             "id": "verify",
-            "kind": "strict_read_only_verification",
+            "kind": "strict_read_only_verification" if strict_verification else "scoped_read_only_verification",
             "resource": "configuration",
             "operation": "verify",
             "executor": "transvortex",
             "ownership": "transvortex",
-            "description": "Re-read readiness and managed integrity after approved actions",
+            "description": "Re-read the checks applicable to the requested setup scope",
+            "role": "completion",
             "mutating": False,
             "requires_confirmation": False,
             "requires_admin": False,
             "requires_restart": False,
             "requires_network": False,
             "may_cost_money": False,
-            "command": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
-            "argv": asr_argv("setup-verify", "--strict"),
-            "expected_outputs": ["ok=true", "all applicable checks pass"],
+            "command": (
+                f"transvortex --root <config-root> asr setup-verify --scope {scope}"
+                f"{' --strict' if strict_verification else ''} --providers-file <providers-file> --json"
+            ),
+            "argv": asr_argv(*verify_parts),
+            "expected_outputs": (
+                ["ok=true", "scope_result.complete=true", "all applicable checks pass"]
+                if strict_verification
+                else ["scope_result with ASR readiness reported separately"]
+            ),
             "rollback": "No changes are made",
         }
     )
@@ -1354,12 +1892,27 @@ def _snapshot_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "probe": _hardware_payload(raw.get("probe")),
             }
         )
+    storage_raw = snapshot.get("storage") if isinstance(snapshot.get("storage"), dict) else {}
+    storage = {
+        "root": str(storage_raw.get("root") or (snapshot.get("paths") or {}).get("storage_root") or ""),
+        "disk_root": str(storage_raw.get("disk_root") or ""),
+        "selection_origin": str(storage_raw.get("selection_origin") or "unknown"),
+        "total_bytes": _safe_int(storage_raw.get("total_bytes")),
+        "free_bytes": _safe_int(storage_raw.get("free_bytes")),
+        "reserve_bytes": _safe_int(storage_raw.get("reserve_bytes")),
+        "space_known": _is_true(storage_raw.get("space_known")),
+        "writable": _is_true(storage_raw.get("writable")),
+        "can_change": _is_true(storage_raw.get("can_change")),
+        "change_blocker": _safe_code(storage_raw.get("change_blocker"), "") if storage_raw.get("change_blocker") else "",
+        "config_valid": not bool(storage_raw.get("config_error")),
+    }
     return {
         "paths": {
             str(key): str(value)
             for key, value in (snapshot.get("paths") or {}).items()
-            if key in {"app_data_root", "components_root", "models_root", "downloads_root"}
+            if key in {"app_data_root", "storage_root", "components_root", "models_root", "downloads_root"}
         },
+        "storage": storage,
         "runtime": runtime,
         "accelerators": accelerators,
         "models": models,
@@ -1468,6 +2021,8 @@ def _resource_contract(
         )
 
     accelerator_requested = isinstance(requirements.get("accelerator"), dict)
+    device_resolution = _device_resolution(provider, current)
+    accelerator_active = str(device_resolution.get("resolved_device") or "") == "cuda"
     readiness = current.get("readiness") if isinstance(current.get("readiness"), dict) else {}
     readiness_code = str(readiness.get("code") or "")
     if readiness.get("can_run") is True:
@@ -1506,6 +2061,9 @@ def _resource_contract(
         "runtime": {
             "source": runtime_source,
             "selected_id": runtime_id,
+            "configured": True,
+            "available": runtime_ready,
+            "active": runtime_ready,
             "ownership": "transvortex" if runtime_source == "managed" else "external",
             "executor": "transvortex",
             "state": "ready" if runtime_ready else "needs_preparation",
@@ -1525,6 +2083,9 @@ def _resource_contract(
             "source": model_source,
             "selected_id": model_id,
             "registration_id": model_registration_id,
+            "configured": bool(model_id),
+            "available": model_ready,
+            "active": model_ready,
             "ownership": "transvortex" if model_source == "managed" else "external",
             "prepare_executor": "transvortex" if model_source == "managed" else "agent",
             "state": "ready" if model_ready else "needs_preparation",
@@ -1550,6 +2111,11 @@ def _resource_contract(
         "accelerator": {
             "source": accelerator_source,
             "selected_id": accelerator_id,
+            "configured": bool(accelerator_source and accelerator_id),
+            "available": accelerator_ready,
+            "active": accelerator_active,
+            "availability_state": "ready" if accelerator_ready else "not_ready",
+            "activation_state": "active" if accelerator_active else "inactive",
             "ownership": "transvortex" if accelerator_source == "managed" else "external",
             "prepare_executor": "transvortex" if accelerator_source == "managed" else "agent",
             "state": accelerator_state,
@@ -1581,6 +2147,7 @@ def _resource_contract(
                 if not accelerator_requested
                 else ("ready" if readiness.get("can_run") is True else "inspect")
             ),
+            "active": accelerator_active,
             "operations": ["inspect", "prepare"] if accelerator_requested else [],
         },
         "configuration": {
@@ -1590,6 +2157,158 @@ def _resource_contract(
             "state": "configured",
             "operations": ["activate", "verify"],
         },
+    }
+
+
+def _selection_contract(
+    *,
+    scope: str,
+    current: dict[str, Any],
+    requirements: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose authoritative candidates while leaving suitability to the Agent."""
+
+    installed_models = {
+        str(row.get("id") or "")
+        for row in _list_value(current.get("models"))
+        if isinstance(row, dict) and row.get("installed") is True
+    }
+    managed_models = [
+        {
+            **row,
+            "source": "managed",
+            "installed": str(row.get("id") or "") in installed_models,
+        }
+        for row in _list_value(requirements.get("available_models"))
+        if isinstance(row, dict)
+    ]
+    managed_accelerators = {
+        str(row.get("id") or ""): row
+        for row in _list_value(current.get("accelerators"))
+        if isinstance(row, dict)
+    }
+    accelerator_candidates = [
+        {
+            **row,
+            "source": "managed",
+            "installed": (
+                isinstance(managed_accelerators.get(str(row.get("id") or "")), dict)
+                and managed_accelerators[str(row.get("id") or "")].get("installed") is True
+            ),
+        }
+        for row in _list_value(requirements.get("available_accelerators"))
+        if isinstance(row, dict)
+    ]
+    return {
+        "authority": "agent",
+        "target_locked": False,
+        "current_configuration_is_target": False,
+        "decision_timing": "after_host_inspection",
+        "model_candidates": managed_models,
+        "registered_model_candidates": list(_list_value(current.get("registered_models"))),
+        "accelerator_candidates": accelerator_candidates,
+        "registered_accelerator_candidates": list(_list_value(current.get("registered_accelerators"))),
+        "model_source_options": ["managed", "external"],
+        "accelerator_source_options": ["managed", "external"],
+        "device_options": ["cpu", "cuda", "auto"],
+        "scope": scope,
+    }
+
+
+def _scope_result(
+    *,
+    scope: str,
+    plan_status: str,
+    asr_ready: bool,
+    resources: dict[str, Any],
+    checks: list[dict[str, Any]] | None = None,
+    verification_performed: bool = False,
+) -> dict[str, Any]:
+    """Summarize scope completion separately from full ASR readiness."""
+
+    model = resources.get("model") if isinstance(resources.get("model"), dict) else {}
+    accelerator = resources.get("accelerator") if isinstance(resources.get("accelerator"), dict) else {}
+    check_by_id = {
+        str(row.get("id") or ""): str(row.get("status") or "")
+        for row in (checks or [])
+        if isinstance(row, dict)
+    }
+
+    criteria: list[dict[str, str]] = []
+    if scope == "inspect":
+        complete = plan_status != "blocked"
+        criteria.append(
+            {
+                "id": "transvortex_inspection_snapshot",
+                "status": "pass" if complete else "fail",
+            }
+        )
+    elif scope == "prepare_model":
+        available = model.get("available") is True or model.get("state") == "ready"
+        probe_status = check_by_id.get("runtime_protocol_probe", "")
+        probe_ok = not checks or probe_status == "pass"
+        complete = available and probe_ok
+        criteria.extend(
+            [
+                {"id": "selected_model_available", "status": "pass" if available else "fail"},
+                {"id": "selected_model_probe", "status": "pass" if probe_ok else "fail"},
+            ]
+        )
+    elif scope == "prepare_accelerator":
+        available = accelerator.get("available") is True and accelerator.get("state") == "ready"
+        active = accelerator.get("active") is True
+        accelerator_checks = [
+            status
+            for check_id, status in check_by_id.items()
+            if check_id in {"cuda_accelerator", "cuda_accelerator_marker", "external_accelerator"}
+        ]
+        probe_ok = not checks or (bool(accelerator_checks) and all(status == "pass" for status in accelerator_checks))
+        complete = available and active and probe_ok
+        criteria.extend(
+            [
+                {"id": "selected_accelerator_available", "status": "pass" if available else "fail"},
+                {"id": "selected_accelerator_active", "status": "pass" if active else "fail"},
+                {"id": "selected_accelerator_probe", "status": "pass" if probe_ok else "fail"},
+            ]
+        )
+    elif scope == "register":
+        external_model_ready = model.get("source") == "external" and model.get("available") is True
+        external_accelerator_ready = (
+            accelerator.get("source") == "external"
+            and accelerator.get("available") is True
+            and accelerator.get("active") is True
+        )
+        complete = external_model_ready or external_accelerator_ready
+        criteria.append(
+            {
+                "id": "registered_external_resource_active",
+                "status": "pass" if complete else "fail",
+            }
+        )
+    else:
+        complete = asr_ready
+        criteria.append({"id": "active_asr_ready", "status": "pass" if complete else "fail"})
+
+    if plan_status == "blocked":
+        complete = False
+    if not verification_performed:
+        complete = False
+        for criterion in criteria:
+            criterion["status"] = "pending"
+    return {
+        "requested_scope": scope,
+        "status": "complete" if complete else ("blocked" if plan_status == "blocked" else "needs_action"),
+        "complete": bool(complete),
+        "asr_ready": bool(asr_ready),
+        "basis": (
+            "plan_snapshot"
+            if not verification_performed
+            else ("strict_asr_verification" if scope == "full" else "scope_specific_checks")
+        ),
+        "verification_performed": verification_performed,
+        "provisional": not verification_performed,
+        "agent_report_required": scope == "inspect",
+        "criteria": criteria,
     }
 
 
@@ -1787,9 +2506,16 @@ def _load_context(root_dir: Path, providers_file: Path | None) -> dict[str, Any]
     return context
 
 
-def setup_failure_payload(*, kind: str, root_dir: Path, code: str = "setup_contract_failed") -> dict[str, Any]:
+def setup_failure_payload(
+    *,
+    kind: str,
+    root_dir: Path,
+    code: str = "setup_contract_failed",
+    scope: str = "full",
+) -> dict[str, Any]:
     """Return a schema-compatible, secret-free CLI failure envelope."""
 
+    requested_scope = _setup_scope(scope)
     blocker = _blocking_item(code, "The Agent setup contract could not be generated", action="inspect_configuration")
     readiness = {
         "state": "unavailable",
@@ -1803,7 +2529,19 @@ def setup_failure_payload(*, kind: str, root_dir: Path, code: str = "setup_contr
         "schema_version": AGENT_SETUP_SCHEMA_VERSION,
         "contract": AGENT_SETUP_CONTRACT,
         "kind": kind,
+        "requested_scope": requested_scope,
+        "scope_policy": _scope_policy(requested_scope),
+        "scope_result": {
+            "requested_scope": requested_scope,
+            "status": "blocked",
+            "complete": False,
+            "asr_ready": False,
+            "basis": "contract_generation_failed",
+            "agent_report_required": requested_scope == "inspect",
+            "criteria": [{"id": "setup_contract", "status": "fail"}],
+        },
         "ok": False,
+        "asr_ready": False,
         "ready": False,
         "root_dir": str(root_dir),
         "active_asr": None,
@@ -1828,28 +2566,66 @@ def setup_failure_payload(*, kind: str, root_dir: Path, code: str = "setup_contr
             "plan_id": "",
         }
     plan_id = "setup-error-" + hashlib.sha256(f"{root_dir}:{code}".encode("utf-8")).hexdigest()[:12]
+    allowed_actions = _scope_allowed_actions(requested_scope)
     return {
         **base,
         "plan_status": "blocked",
         "generated_at": utc_now_iso(),
         "product": {"name": "transvortex", "version": _package_version()},
-        "platform": {"system": platform.system().lower(), "machine": platform.machine().lower(), "disk": {"free_bytes": None, "total_bytes": None}},
+        "platform": {"system": platform.system().lower(), "machine": platform.machine().lower()},
+        "storage": {"root": "", "space_known": False, "free_bytes": 0, "total_bytes": 0},
         "provider_mode": None,
         "alternatives": [],
         "plan_id": plan_id,
-        "current": {"readiness": readiness, "runtime": {}, "accelerators": [], "registered_accelerators": [], "models": [], "registered_models": [], "environment_candidates": [], "provider_test": None},
-        "requirements": {"runtime": None, "accelerator": None, "model": None, "available_models": []},
+        "current_configuration": None,
+        "execution_resolution": {},
+        "current": {
+            "readiness": readiness,
+            "paths": {},
+            "storage": {"root": "", "space_known": False},
+            "runtime": {},
+            "accelerators": [],
+            "registered_accelerators": [],
+            "models": [],
+            "registered_models": [],
+            "environment_candidates": [],
+            "provider_test": None,
+        },
+        "requirements": {
+            "binding_role": "current_configuration_only",
+            "target_locked": False,
+            "runtime": None,
+            "managed_runtime": {},
+            "accelerator": None,
+            "available_accelerators": [],
+            "model": None,
+            "available_models": [],
+        },
+        "selection": _selection_contract(scope=requested_scope, current={}, requirements={}),
         "resources": {},
-        "allowed_actions": list(ALLOWED_ACTIONS),
-        "forbidden_actions": list(FORBIDDEN_ACTIONS),
+        "allowed_actions": allowed_actions,
+        "forbidden_actions": [*FORBIDDEN_ACTIONS, "execute_out_of_scope_mutation"],
         "verification": {"command": "", "argv": [], "read_only": True, "network_access": False},
-        "plan": {"plan_id": plan_id, "created_at": utc_now_iso(), "provider_mode": None, "actions": [], "rollback": []},
+        "plan": {
+            "plan_id": plan_id,
+            "created_at": utc_now_iso(),
+            "provider_mode": None,
+            "requested_scope": requested_scope,
+            "actions": [],
+            "rollback": [],
+        },
     }
 
 
-def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) -> dict[str, Any]:
+def setup_plan_payload(
+    *,
+    root_dir: Path,
+    providers_file: Path | None = None,
+    scope: str = "full",
+) -> dict[str, Any]:
     """Return a read-only, versioned setup contract for a local Agent."""
 
+    requested_scope = _setup_scope(scope)
     context = _load_context(root_dir, providers_file)
     root = context["root"]
     agent_cli_prefix = cli_argv_prefix(root_dir=root)
@@ -1863,9 +2639,17 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         snapshot = {
             "paths": {
                 "app_data_root": str(paths.app_data_root),
+                "storage_root": str(paths.storage_root),
                 "components_root": str(paths.components_root),
                 "models_root": str(paths.models_root),
                 "downloads_root": str(paths.downloads_root),
+            },
+            "storage": {
+                "root": str(paths.storage_root),
+                "selection_origin": "unknown",
+                "space_known": False,
+                "writable": False,
+                "can_change": False,
             },
             "runtime": {},
             "accelerators": [],
@@ -1885,7 +2669,12 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
     selected_model = _model_requirement(model_catalog_entry(catalog, model_id)) if model_required else None
     active_asr = _provider_payload(provider, root_dir=root) if provider is not None else None
     if isinstance(active_asr, dict):
-        active_asr.update(_device_resolution(provider, snapshot))
+        execution_resolution = _device_resolution(provider, snapshot)
+        active_asr.update(execution_resolution)
+        active_asr["execution"] = {
+            **execution_resolution,
+            "accelerator_active": execution_resolution.get("resolved_device") == "cuda",
+        }
     blockers: list[dict[str, str]] = []
     if context["catalog_error"] and (runtime_required or accelerator_required or model_required):
         blockers.append(_blocking_item(context["catalog_error"], "The ASR component catalog is invalid or could not be loaded", action="repair_catalog"))
@@ -1959,14 +2748,21 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "model_path_unavailable",
         "model_unverified",
         "model_changed",
+        "model_mismatch",
+        "unsupported_model",
         "hardware_incompatible",
         "compute_type_incompatible",
     }:
         plan_status = "blocked"
+    available_accelerator = _accelerator_requirement(catalog)
     requirements = {
+        "binding_role": "current_configuration_only",
+        "target_locked": False,
         "runtime": _runtime_requirement(catalog) if runtime_required else None,
         "accelerator": _accelerator_requirement(catalog) if accelerator_required else None,
         "model": selected_model,
+        "managed_runtime": _runtime_requirement(catalog),
+        "available_accelerators": [available_accelerator] if available_accelerator is not None else [],
         "available_models": [
             item
             for raw in _list_value(catalog.get("models"))
@@ -1976,6 +2772,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
     current = {
         "readiness": readiness,
         "paths": safe_snapshot.get("paths", {}),
+        "storage": safe_snapshot.get("storage", {}),
         "runtime": safe_snapshot.get("runtime", {}),
         "accelerators": safe_snapshot.get("accelerators", []),
         "registered_accelerators": safe_snapshot.get("registered_accelerators", []),
@@ -1989,7 +2786,12 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         ),
     }
     resources = _resource_contract(provider, current=current, requirements=requirements)
+    if isinstance(active_asr, dict) and isinstance(active_asr.get("execution"), dict):
+        accelerator_resource = resources.get("accelerator") if isinstance(resources.get("accelerator"), dict) else {}
+        active_asr["execution"]["accelerator_available"] = accelerator_resource.get("available") is True
+    selection = _selection_contract(scope=requested_scope, current=current, requirements=requirements)
     actions = _plan_actions(
+        scope=requested_scope,
         provider=provider,
         requirements=requirements,
         current=current,
@@ -2002,6 +2804,7 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
     plan_identity = {
         "contract": AGENT_SETUP_CONTRACT,
         "schema_version": AGENT_SETUP_SCHEMA_VERSION,
+        "requested_scope": requested_scope,
         "root_dir": str(root),
         "active_asr": active_asr,
         "readiness": {
@@ -2018,41 +2821,76 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
         "plan_id": plan_id,
         "created_at": utc_now_iso(),
         "provider_mode": provider_mode,
+        "requested_scope": requested_scope,
         "actions": actions,
         "rollback": [
             "Do not delete or overwrite user-owned model directories",
             "Use only the advertised TransVortex operation removal/cancel capability for managed components",
         ],
     }
+    asr_ready = plan_status == "ready"
+    scope_result = _scope_result(
+        scope=requested_scope,
+        plan_status=plan_status,
+        asr_ready=asr_ready,
+        resources=resources,
+        verification_performed=False,
+    )
+    scope_policy = _scope_policy(requested_scope)
+    allowed_actions = _scope_allowed_actions(requested_scope)
+    verify_parts = ["asr", "setup-verify", "--scope", requested_scope]
+    if requested_scope == "full":
+        verify_parts.append("--strict")
+    verify_argv = [
+        *agent_cli_prefix,
+        *verify_parts,
+        "--providers-file",
+        str(context["providers_file"]),
+        "--json",
+    ]
+    verify_command = (
+        f"transvortex --root <config-root> asr setup-verify --scope {requested_scope}"
+        f"{' --strict' if requested_scope == 'full' else ''} --providers-file <providers-file> --json"
+    )
     return {
         "schema_version": AGENT_SETUP_SCHEMA_VERSION,
         "contract": AGENT_SETUP_CONTRACT,
         "kind": "setup_plan",
+        "requested_scope": requested_scope,
+        "scope_policy": scope_policy,
+        "scope_result": scope_result,
         "ok": True,
-        "ready": plan_status == "ready",
+        "ready": asr_ready,
+        "asr_ready": asr_ready,
         "read_only": True,
         "network_access": False,
         "plan_status": plan_status,
         "generated_at": utc_now_iso(),
         "product": {"name": "transvortex", "version": _package_version()},
-        "platform": _platform_payload(paths.app_data_root),
+        "platform": _platform_payload(),
+        "storage": safe_snapshot.get("storage", {}),
         "root_dir": str(root),
         "providers_file": str(context["providers_file"]),
         "provider_mode": provider_mode,
         "alternatives": alternatives,
         "plan_id": plan_id,
         "active_asr": active_asr,
+        "current_configuration": active_asr,
+        "execution_resolution": (
+            dict(active_asr.get("execution") or {}) if isinstance(active_asr, dict) else {}
+        ),
         "current": current,
         "requirements": requirements,
+        "selection": selection,
         "resources": resources,
-        "allowed_actions": list(ALLOWED_ACTIONS),
-        "forbidden_actions": list(FORBIDDEN_ACTIONS),
+        "allowed_actions": allowed_actions,
+        "forbidden_actions": [*FORBIDDEN_ACTIONS, "execute_out_of_scope_mutation"],
         "blocking_items": blockers,
         "success_conditions": _applicable_success_conditions(provider, current),
         "plan": plan,
         "agent_commands": {
-            "plan": "transvortex --root <config-root> asr setup-plan --providers-file <providers-file> --json",
-            "verify": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
+            "plan": f"transvortex --root <config-root> asr setup-plan --scope {requested_scope} --providers-file <providers-file> --json",
+            "verify": verify_command,
             "apply_managed": "transvortex --root <config-root> asr setup-apply --resource <resource> --item-id <item-id> --providers-file <providers-file> --json",
             "register_model": "transvortex --root <config-root> asr model-register --model-path <model-path> [--label <display-name>] --providers-file <providers-file> --json",
             "register_accelerator": "transvortex --root <config-root> asr accelerator-register --accelerator-root <accelerator-root> --providers-file <providers-file> --json",
@@ -2060,8 +2898,17 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             "protocol": "transvortex --root <config-root> agent-info --json",
         },
         "agent_argv": {
-            "plan": [*agent_cli_prefix, "asr", "setup-plan", "--providers-file", str(context["providers_file"]), "--json"],
-            "verify": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
+            "plan": [
+                *agent_cli_prefix,
+                "asr",
+                "setup-plan",
+                "--scope",
+                requested_scope,
+                "--providers-file",
+                str(context["providers_file"]),
+                "--json",
+            ],
+            "verify": verify_argv,
             "register_model_cpu": [
                 *agent_cli_prefix,
                 "asr",
@@ -2131,8 +2978,10 @@ def setup_plan_payload(*, root_dir: Path, providers_file: Path | None = None) ->
             "protocol": [*agent_cli_prefix, "agent-info", "--json"],
         },
         "verification": {
-            "command": "transvortex --root <config-root> asr setup-verify --strict --providers-file <providers-file> --json",
-            "argv": [*agent_cli_prefix, "asr", "setup-verify", "--strict", "--providers-file", str(context["providers_file"]), "--json"],
+            "command": verify_command,
+            "argv": verify_argv,
+            "strict": requested_scope == "full",
+            "completion_field": "ok" if requested_scope == "full" else "scope_result.complete",
             "read_only": True,
             "network_access": False,
             "executes_local_code": provider is not None and provider.kind == "local_worker",
@@ -2491,11 +3340,72 @@ def _local_worker_probe(plan: dict[str, Any], integrity: dict[str, Any]) -> dict
     }
 
 
-def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) -> dict[str, Any]:
+def setup_verify_payload(
+    *,
+    root_dir: Path,
+    providers_file: Path | None = None,
+    scope: str = "full",
+) -> dict[str, Any]:
     """Return read-only verification checks for the active ASR setup."""
 
-    plan = setup_plan_payload(root_dir=root_dir, providers_file=providers_file)
+    requested_scope = _setup_scope(scope)
+    plan = setup_plan_payload(root_dir=root_dir, providers_file=providers_file, scope=requested_scope)
     blockers = list(plan.get("blocking_items") or [])
+    if requested_scope == "inspect":
+        plan_status = str(plan.get("plan_status") or "blocked")
+        contract_ok = plan.get("ok") is True and plan_status != "blocked"
+        asr_ready = plan.get("asr_ready") is True
+        checks = [
+            {
+                "id": "inspection_contract",
+                "status": "pass" if contract_ok else "fail",
+                "code": "inspection_snapshot_ready" if contract_ok else "inspection_snapshot_blocked",
+                "message": (
+                    "The read-only inspection snapshot and scope policy are available"
+                    if contract_ok
+                    else "The inspection snapshot is blocked by configuration or contract errors"
+                ),
+            }
+        ]
+        scope_result = _scope_result(
+            scope=requested_scope,
+            plan_status=plan_status,
+            asr_ready=asr_ready,
+            resources=plan.get("resources") if isinstance(plan.get("resources"), dict) else {},
+            checks=checks,
+            verification_performed=True,
+        )
+        return {
+            "schema_version": AGENT_SETUP_SCHEMA_VERSION,
+            "contract": AGENT_SETUP_CONTRACT,
+            "kind": "setup_verify",
+            "requested_scope": requested_scope,
+            "scope_policy": plan.get("scope_policy", _scope_policy(requested_scope)),
+            "scope_result": scope_result,
+            "ok": asr_ready,
+            "asr_ready": asr_ready,
+            "asr_verification_performed": False,
+            "verification_profile": "scope_only",
+            "network_access": False,
+            "executes_local_code": False,
+            "verified_at": utc_now_iso(),
+            "root_dir": plan.get("root_dir"),
+            "active_asr": plan.get("active_asr"),
+            "readiness": plan.get("current", {}).get("readiness", {}),
+            "integrity": {
+                "runtime_marker": {"status": "not_checked"},
+                "runtime_probe": {"status": "not_checked"},
+                "accelerator_marker": {"status": "not_checked"},
+                "model_files": {"status": "not_checked"},
+                "hashes_not_checked": [],
+            },
+            "checks": checks,
+            "blocking_items": blockers,
+            "success_conditions": list((plan.get("scope_policy") or {}).get("completion_conditions") or []),
+            "provider_mode": plan.get("provider_mode"),
+            "plan_id": plan.get("plan_id"),
+            "read_only": True,
+        }
     checks: list[dict[str, Any]] = []
     integrity = _integrity_payload(plan)
     integrity["runtime_probe"] = _local_worker_probe(plan, integrity)
@@ -2688,11 +3598,25 @@ def setup_verify_payload(*, root_dir: Path, providers_file: Path | None = None) 
             for item in plan.get("blocking_items") or []
         )
     )
+    scope_result = _scope_result(
+        scope=requested_scope,
+        plan_status=str(plan.get("plan_status") or "blocked"),
+        asr_ready=bool(ok),
+        resources=plan.get("resources") if isinstance(plan.get("resources"), dict) else {},
+        checks=checks,
+        verification_performed=True,
+    )
     return {
         "schema_version": AGENT_SETUP_SCHEMA_VERSION,
         "contract": AGENT_SETUP_CONTRACT,
         "kind": "setup_verify",
+        "requested_scope": requested_scope,
+        "scope_policy": plan.get("scope_policy", _scope_policy(requested_scope)),
+        "scope_result": scope_result,
         "ok": bool(ok),
+        "asr_ready": bool(ok),
+        "asr_verification_performed": True,
+        "verification_profile": "full",
         "network_access": False,
         "executes_local_code": isinstance(plan.get("active_asr"), dict) and plan["active_asr"].get("kind") == "local_worker",
         "verified_at": utc_now_iso(),

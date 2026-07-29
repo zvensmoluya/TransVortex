@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import read_json, utc_now_iso, write_json
+from .agent_entry import ASR_ENVIRONMENT_SCOPES
 
 
 AGENT_CLIENT_SCHEMA_VERSION = 1
@@ -23,13 +24,7 @@ AGENT_HANDOFF_STATE_NAME = "handoff.json"
 AGENT_HANDOFF_RETENTION_DAYS = 7
 CODEX_CLIENT_ID = "codex_cli"
 CODEX_INITIAL_PROMPT = "请读取当前工作区的 handoff.md，并按其中限定的任务范围完成工作。"
-SUPPORTED_ASR_HANDOFF_SCOPES = {
-    "inspect",
-    "prepare_model",
-    "prepare_accelerator",
-    "register",
-    "full",
-}
+SUPPORTED_ASR_HANDOFF_SCOPES = frozenset(ASR_ENVIRONMENT_SCOPES)
 
 
 class AgentClientError(RuntimeError):

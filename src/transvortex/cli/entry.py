@@ -87,6 +87,7 @@ from ..prompts.asr_admin import (
 )
 from ..protocol.agent_protocol import agent_info_payload
 from ..protocol.agent_setup import (
+    SETUP_SCOPES,
     provider_test_contract_payload,
     provider_test_error_payload,
     setup_failure_payload,
@@ -951,7 +952,7 @@ def _build_parser() -> argparse.ArgumentParser:
     asr_p = sub.add_parser("asr", help="Run ASR only and emit source segments, or inspect Agent setup")
     _add_providers_file_arg(asr_p)
     # Keep the historical ``asr --input ...`` form while allowing a nested,
-    # machine-readable setup contract: ``asr setup-plan --json``.  The input
+    # machine-readable setup contract: ``asr setup-plan --scope <scope> --json``.  The input
     # and source flags are validated in the legacy branch below so argparse
     # can also parse the nested commands without making them mandatory.
     asr_p.add_argument("--input", required=False)
@@ -962,11 +963,13 @@ def _build_parser() -> argparse.ArgumentParser:
     asr_sub = asr_p.add_subparsers(dest="asr_command")
     asr_setup_plan_p = asr_sub.add_parser("setup-plan", help="Print a read-only Agent environment setup plan")
     asr_setup_plan_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_setup_plan_p.add_argument("--scope", dest="setup_scope", choices=SETUP_SCOPES, default="full")
     asr_setup_plan_p.add_argument("--json", action="store_true", help="Print machine-readable setup contract")
     asr_setup_verify_p = asr_sub.add_parser("setup-verify", help="Verify the active ASR environment without changing it")
     asr_setup_verify_p.add_argument("--providers-file", dest="setup_providers_file", default=None)
+    asr_setup_verify_p.add_argument("--scope", dest="setup_scope", choices=SETUP_SCOPES, default="full")
     asr_setup_verify_p.add_argument("--json", action="store_true", help="Print machine-readable verification result")
-    asr_setup_verify_p.add_argument("--strict", action="store_true", help="Exit with code 1 when verification is not ready")
+    asr_setup_verify_p.add_argument("--strict", action="store_true", help="Exit with code 1 when the requested scope is incomplete")
     asr_setup_apply_p = asr_sub.add_parser(
         "setup-apply",
         help="Apply a TransVortex-managed ASR resource action and wait for completion",
@@ -1331,9 +1334,13 @@ def main() -> None:
     if args.command == "asr" and getattr(args, "asr_command", None) in {"setup-plan", "setup-verify"}:
         if args.asr_command == "setup-plan":
             try:
-                payload = setup_plan_payload(root_dir=root, providers_file=providers_file)
+                payload = setup_plan_payload(
+                    root_dir=root,
+                    providers_file=providers_file,
+                    scope=args.setup_scope,
+                )
             except Exception:  # noqa: BLE001 - the Agent contract must remain structured
-                payload = setup_failure_payload(kind="setup_plan", root_dir=root)
+                payload = setup_failure_payload(kind="setup_plan", root_dir=root, scope=args.setup_scope)
             if args.json:
                 _print_json(payload)
             else:
@@ -1342,14 +1349,22 @@ def main() -> None:
                 raise SystemExit(1)
             return
         try:
-            payload = setup_verify_payload(root_dir=root, providers_file=providers_file)
+            payload = setup_verify_payload(
+                root_dir=root,
+                providers_file=providers_file,
+                scope=args.setup_scope,
+            )
         except Exception:  # noqa: BLE001 - the Agent contract must remain structured
-            payload = setup_failure_payload(kind="setup_verify", root_dir=root)
+            payload = setup_failure_payload(kind="setup_verify", root_dir=root, scope=args.setup_scope)
         if args.json:
             _print_json(payload)
         else:
             _print_json(payload)
-        if args.strict and payload.get("ok") is not True:
+        scope_complete = (
+            isinstance(payload.get("scope_result"), dict)
+            and payload["scope_result"].get("complete") is True
+        )
+        if args.strict and not scope_complete:
             raise SystemExit(1)
         return
 

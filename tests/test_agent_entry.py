@@ -96,9 +96,15 @@ def test_agent_entry_service_payload_offers_scoped_asr_handoffs(tmp_path: Path) 
     assert "薄适配" in payload["handoff_text"]
     assert set(handoffs) == {"inspect", "prepare_model", "prepare_accelerator", "register", "full"}
     assert "暂不准备或接入资源" in handoffs["inspect"]
+    assert "setup-plan --scope inspect" in handoffs["inspect"]
+    assert "scope_result.complete" in handoffs["inspect"]
+    assert "当前配置只作为侦查基线" in handoffs["inspect"]
     assert "模型" in handoffs["prepare_model"]
+    assert "自行选择合适的模型、CPU 或 CUDA" in handoffs["prepare_model"]
     assert "NVIDIA" in handoffs["prepare_accelerator"]
     assert "不重新下载" in handoffs["register"]
+    assert "setup-verify --scope full --strict" in handoffs["full"]
+    assert "结果直接在当前 Agent 对话中说明" in handoffs["full"]
     assert payload["asr_environment_handoff_text"] == handoffs["full"]
 
 

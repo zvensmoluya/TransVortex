@@ -11,17 +11,25 @@
     "kind": {"type": "string", "enum": ["setup_plan", "setup_verify", "managed_apply", "model_probe", "model_register", "accelerator_probe", "accelerator_register", "resources_activate", "provider_test", "agent_plan", "agent_result"]},
     "ok": {"type": "boolean", "description": "For setup_plan, the contract was generated; for setup_verify/provider_test, the verification or probe succeeded."},
     "ready": {"type": "boolean", "description": "Whether a generated setup_plan has no blocking items and is ready for use."},
+    "asr_ready": {"type": "boolean", "description": "Current active ASR readiness in setup_plan; the verified complete readiness result in setup_verify, independent of requested scope completion."},
+    "requested_scope": {"$ref": "#/$defs/setup_scope"},
+    "scope_policy": {"$ref": "#/$defs/scope_policy"},
+    "scope_result": {"$ref": "#/$defs/scope_result"},
     "network_access": {"type": "boolean"},
     "plan_status": {"type": "string", "enum": ["ready", "needs_action", "blocked"]},
     "generated_at": {"type": "string", "format": "date-time"},
     "verified_at": {"type": "string", "format": "date-time"},
     "product": {"$ref": "#/$defs/product"},
     "platform": {"$ref": "#/$defs/platform"},
+    "storage": {"$ref": "#/$defs/storage"},
     "root_dir": {"type": "string"},
     "providers_file": {"type": "string"},
     "active_asr": {"oneOf": [{"$ref": "#/$defs/asr"}, {"type": "null"}]},
+    "current_configuration": {"oneOf": [{"$ref": "#/$defs/asr"}, {"type": "null"}]},
+    "execution_resolution": {"type": "object", "additionalProperties": true},
     "current": {"$ref": "#/$defs/current"},
     "requirements": {"$ref": "#/$defs/requirements"},
+    "selection": {"$ref": "#/$defs/selection"},
     "resources": {"$ref": "#/$defs/resources"},
     "allowed_actions": {"type": "array", "items": {"type": "string"}},
     "forbidden_actions": {"type": "array", "items": {"type": "string"}},
@@ -29,6 +37,8 @@
     "success_conditions": {"type": "array", "items": {"type": "string"}},
     "verification": {"$ref": "#/$defs/verification"},
     "executes_local_code": {"type": "boolean"},
+    "asr_verification_performed": {"type": "boolean"},
+    "verification_profile": {"type": "string", "enum": ["scope_only", "full"]},
     "executor": {"type": "string", "enum": ["transvortex", "agent"]},
     "ownership": {"type": "string", "enum": ["transvortex", "external", "system"]},
     "resource": {"type": "string"},
@@ -64,17 +74,24 @@
         "required": [
           "ok",
           "ready",
+          "asr_ready",
+          "requested_scope",
+          "scope_policy",
+          "scope_result",
           "plan_status",
           "product",
           "platform",
+          "storage",
           "root_dir",
           "active_asr",
+          "current_configuration",
           "provider_mode",
           "alternatives",
           "plan_id",
           "plan",
           "current",
           "requirements",
+          "selection",
           "resources",
           "allowed_actions",
           "forbidden_actions",
@@ -91,6 +108,10 @@
       "then": {
         "required": [
           "ok",
+          "asr_ready",
+          "requested_scope",
+          "scope_policy",
+          "scope_result",
           "root_dir",
           "active_asr",
           "readiness",
@@ -207,6 +228,54 @@
   ],
   "additionalProperties": true,
   "$defs": {
+    "setup_scope": {
+      "type": "string",
+      "enum": ["inspect", "prepare_model", "prepare_accelerator", "register", "full"]
+    },
+    "scope_policy": {
+      "type": "object",
+      "required": ["requested_scope", "selection_authority", "current_configuration_role", "permitted_mutations", "completion_conditions", "result_destination"],
+      "properties": {
+        "requested_scope": {"$ref": "#/$defs/setup_scope"},
+        "selection_authority": {"type": "string", "const": "agent"},
+        "current_configuration_role": {"type": "string", "const": "inspection_baseline"},
+        "current_configuration_is_target": {"type": "boolean", "const": false},
+        "mutation_policy": {"type": "string", "enum": ["forbidden", "limited_to_scope"]},
+        "permitted_mutations": {"type": "array", "items": {"type": "string"}},
+        "permitted_resources": {"type": "array", "items": {"type": "string"}},
+        "completion_conditions": {"type": "array", "items": {"type": "string"}},
+        "additional_confirmation_required_for": {"type": "array", "items": {"type": "string"}},
+        "result_destination": {"type": "string", "const": "agent_conversation"}
+      },
+      "additionalProperties": true
+    },
+    "scope_result": {
+      "type": "object",
+      "required": ["requested_scope", "status", "complete", "asr_ready", "basis", "criteria"],
+      "properties": {
+        "requested_scope": {"$ref": "#/$defs/setup_scope"},
+        "status": {"type": "string", "enum": ["complete", "needs_action", "blocked"]},
+        "complete": {"type": "boolean"},
+        "asr_ready": {"type": "boolean"},
+        "basis": {"type": "string"},
+        "verification_performed": {"type": "boolean"},
+        "provisional": {"type": "boolean"},
+        "agent_report_required": {"type": "boolean"},
+        "criteria": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status"],
+            "properties": {
+              "id": {"type": "string"},
+              "status": {"type": "string", "enum": ["pass", "fail", "pending"]}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "product": {
       "type": "object",
       "required": ["name"],
@@ -236,6 +305,23 @@
           },
           "additionalProperties": true
         }
+      },
+      "additionalProperties": true
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "root": {"type": "string"},
+        "disk_root": {"type": "string"},
+        "selection_origin": {"type": "string", "enum": ["configured", "fallback", "unknown"]},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "free_bytes": {"type": "integer", "minimum": 0},
+        "reserve_bytes": {"type": "integer", "minimum": 0},
+        "space_known": {"type": "boolean"},
+        "writable": {"type": "boolean"},
+        "can_change": {"type": "boolean"},
+        "change_blocker": {"type": "string"},
+        "config_valid": {"type": "boolean"}
       },
       "additionalProperties": true
     },
@@ -275,7 +361,9 @@
         "credential_metadata_valid": {"type": "boolean"},
         "base_url": {"type": "string"},
         "endpoint": {"type": "string"},
-        "network_scope": {"type": "string", "enum": ["loopback", "remote", "invalid"]}
+        "network_scope": {"type": "string", "enum": ["loopback", "remote", "invalid"]},
+        "configured_preferences": {"type": "object", "additionalProperties": true},
+        "execution": {"type": "object", "additionalProperties": true}
       },
       "additionalProperties": true
     },
@@ -295,6 +383,8 @@
       "type": "object",
       "properties": {
         "readiness": {"$ref": "#/$defs/readiness"},
+        "paths": {"type": "object", "additionalProperties": {"type": "string"}},
+        "storage": {"$ref": "#/$defs/storage"},
         "runtime": {"type": "object", "additionalProperties": true},
         "accelerators": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "models": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
@@ -308,8 +398,12 @@
     "requirements": {
       "type": "object",
       "properties": {
+        "binding_role": {"type": "string", "const": "current_configuration_only"},
+        "target_locked": {"type": "boolean", "const": false},
         "runtime": {"oneOf": [{"$ref": "#/$defs/requirement"}, {"type": "null"}]},
+        "managed_runtime": {"$ref": "#/$defs/requirement"},
         "accelerator": {"oneOf": [{"$ref": "#/$defs/requirement"}, {"type": "null"}]},
+        "available_accelerators": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},
         "model": {"oneOf": [{"$ref": "#/$defs/model_requirement"}, {"type": "null"}]},
         "available_models": {"type": "array", "items": {"$ref": "#/$defs/model_requirement"}}
       },
@@ -327,12 +421,36 @@
       },
       "additionalProperties": true
     },
+    "selection": {
+      "type": "object",
+      "required": ["authority", "target_locked", "current_configuration_is_target", "decision_timing", "device_options", "scope"],
+      "properties": {
+        "authority": {"type": "string", "const": "agent"},
+        "target_locked": {"type": "boolean", "const": false},
+        "current_configuration_is_target": {"type": "boolean", "const": false},
+        "decision_timing": {"type": "string", "const": "after_host_inspection"},
+        "model_candidates": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "registered_model_candidates": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "accelerator_candidates": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "registered_accelerator_candidates": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "model_source_options": {"type": "array", "items": {"type": "string"}},
+        "accelerator_source_options": {"type": "array", "items": {"type": "string"}},
+        "device_options": {"type": "array", "items": {"type": "string", "enum": ["cpu", "cuda", "auto"]}},
+        "scope": {"$ref": "#/$defs/setup_scope"}
+      },
+      "additionalProperties": true
+    },
     "resource": {
       "type": "object",
       "properties": {
         "source": {"type": "string"},
         "selected_id": {"type": "string"},
         "registration_id": {"type": "string"},
+        "configured": {"type": "boolean"},
+        "available": {"type": "boolean"},
+        "active": {"type": "boolean"},
+        "availability_state": {"type": "string"},
+        "activation_state": {"type": "string"},
         "ownership": {"type": "string", "enum": ["transvortex", "external", "system"]},
         "executor": {"type": "string", "enum": ["transvortex", "agent"]},
         "prepare_executor": {"type": "string", "enum": ["transvortex", "agent"]},
@@ -449,6 +567,7 @@
         "plan_id": {"type": "string"},
         "created_at": {"type": "string", "format": "date-time"},
         "provider_mode": {"oneOf": [{"type": "string", "enum": ["local_worker", "local_service", "remote_provider"]}, {"type": "null"}]},
+        "requested_scope": {"$ref": "#/$defs/setup_scope"},
         "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
         "rollback": {"type": "array", "items": {"type": "string"}}
       },
@@ -476,6 +595,9 @@
         "executor": {"type": "string", "enum": ["transvortex", "agent"]},
         "ownership": {"type": "string", "enum": ["transvortex", "external", "system", "none"]},
         "description": {"type": "string"},
+        "role": {"type": "string", "enum": ["required", "dependency", "candidate", "completion"]},
+        "choice_group": {"type": "string"},
+        "when": {"type": "string"},
         "mutating": {"type": "boolean"},
         "requires_confirmation": {"type": "boolean"},
         "requires_admin": {"type": "boolean"},
@@ -485,6 +607,10 @@
         "command": {"type": "string"},
         "argv": {"type": "array", "items": {"type": "string"}},
         "argv_template": {"type": "array", "items": {"type": "string"}},
+        "argv_variants": {
+          "type": "object",
+          "additionalProperties": {"type": "array", "items": {"type": "string"}}
+        },
         "inputs": {"type": "object", "additionalProperties": true},
         "expected_outputs": {"type": "array", "items": {"type": "string"}},
         "rollback": {"type": "string"}
@@ -499,6 +625,8 @@
         "read_only": {"type": "boolean"},
         "network_access": {"type": "boolean"},
         "executes_local_code": {"type": "boolean"},
+        "strict": {"type": "boolean"},
+        "completion_field": {"type": "string", "enum": ["ok", "scope_result.complete"]},
         "doctor": {"type": "string", "enum": ["pass", "fail", "not_run"]},
         "readiness": {"type": "string", "enum": ["pass", "fail", "not_run"]},
         "probe": {"type": "string", "enum": ["pass", "fail", "not_run"]}
