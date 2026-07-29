@@ -77,7 +77,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 
 桌面端把本机 Codex CLI 作为首个默认 Agent 客户端，但它仍是用户独立安装和登录的外部程序。直接交接时，Local Service 在 `<WorkspaceRoot>\Cache\AgentHandoffs\<handoff-id>` 创建 `handoff.md` 与 `handoff.json`，再以该目录作为 `codex -C` 的工作区启动可见交互会话；启动参数不包含 Full Access、`--yolo` 或审批覆盖。状态文件只记录范围、客户端路径、版本、进程和生命周期，不复制配置、模型、凭据或其他产品目录。已结束的自有交接保留七天后按需清理；普通缓存清理可以立即删除已结束交接，但保留仍在运行的目录，活动交接结束前也不允许迁移工作数据。
 
-目标 `App` 非空且没有有效安装归属标记时，安装器拒绝覆盖。检测到注册表中的已有安装时，升级继续使用原程序、工作区和识别资源位置，不借升级之机把旧版 `TransVortex` / `TransVortexData` / `TransVortexResources` 布局搬进新层级；如需更换程序路径，应先卸载旧版本。检测到已有任务或缓存时也沿用原工作区，安装后可在“应用设置 → 工作数据”中查看占用、清理缓存或安全迁移。
+目标 `App` 非空且没有有效安装归属标记时，安装器拒绝覆盖。检测到注册表中的已有安装时，升级继续使用原程序、工作区和识别资源位置，不借升级之机把旧版 `TransVortex` / `TransVortexData` / `TransVortexResources` 布局搬进新层级；如需更换程序路径，应先卸载旧版本。检测到已有任务或缓存时也沿用原工作区，安装后可在“应用设置 → 工作数据”中查看占用、清理缓存或安全迁移。卸载程序但保留任务后，重新安装只在保留的 `WorkspaceLocation`、`TransVortex\Data` 路径形状和工作区所有权标记内容同时匹配时恢复原产品根；同名目录本身不构成复用依据。
 
 安装器与卸载器使用和 Flutter 一致的瓷白、柔墨、草莓粉及浅青品牌资产。公开界面隐藏逐文件 DLL 与 staging 路径，只显示准备目录、安装运行环境、校验内容和创建入口等产品阶段；失败信息仍保留具体恢复原因。欢迎图与顶部图由 `scripts/build_brand_assets.ps1` 从仓库内 SVG 确定性生成，不引入另一套图标或插画语言。
 

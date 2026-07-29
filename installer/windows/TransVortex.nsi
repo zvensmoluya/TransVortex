@@ -9,6 +9,9 @@ SetCompressor /SOLID lzma
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !include "nsDialogs.nsh"
+!include "StrFunc.nsh"
+
+${Using:StrFunc} StrTrimNewLines
 
 !ifndef APP_SOURCE
   !error "APP_SOURCE must point to the validated installer payload"
@@ -223,6 +226,55 @@ install_layout_modern:
 install_layout_done:
 FunctionEnd
 
+Function ResolvePreservedProductRoot
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+
+  StrCpy $ProductRoot ""
+  ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"
+  StrCmp $0 "" preserved_product_root_done
+  ${GetFileName} "$0" $1
+  System::Call 'kernel32::lstrcmpiW(w "$1", w "Data") i .r2'
+  IntCmp $2 0 0 preserved_product_root_done preserved_product_root_done
+  ${GetParent} "$0" $2
+  ${GetFileName} "$2" $1
+  System::Call 'kernel32::lstrcmpiW(w "$1", w "${APP_NAME}") i .r3'
+  IntCmp $3 0 0 preserved_product_root_done preserved_product_root_done
+  IfFileExists "$0\.transvortex-workspace.json" 0 preserved_product_root_done
+
+  ClearErrors
+  FileOpen $3 "$0\.transvortex-workspace.json" r
+  IfErrors preserved_product_root_done
+  FileRead $3 $4
+  ${StrTrimNewLines} $4 "$4"
+  StrCmp $4 "{" 0 preserved_product_root_close
+  FileRead $3 $4
+  ${StrTrimNewLines} $4 "$4"
+  StrCmp $4 '  "schema_version": 1,' 0 preserved_product_root_close
+  FileRead $3 $4
+  ${StrTrimNewLines} $4 "$4"
+  StrCmp $4 '  "app_id": "${APP_ID}"' 0 preserved_product_root_close
+  FileRead $3 $4
+  ${StrTrimNewLines} $4 "$4"
+  StrCmp $4 "}" 0 preserved_product_root_close
+  FileClose $3
+  StrCpy $ProductRoot "$2"
+  Goto preserved_product_root_done
+
+preserved_product_root_close:
+  FileClose $3
+
+preserved_product_root_done:
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
 Function CheckInstallDirectorySafety
   StrCpy $2 "0"
   ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
@@ -286,6 +338,8 @@ FunctionEnd
 Function DirectoryPagePrepare
   StrCmp $ProductRoot "" 0 directory_page_ready
   Call ResolveInstallLayout
+  StrCmp $ProductRoot "" 0 directory_page_ready
+  Call ResolvePreservedProductRoot
   StrCmp $ProductRoot "" 0 directory_page_ready
   StrCpy $ProductRoot "$INSTDIR"
 

@@ -79,9 +79,29 @@ def test_installer_directory_page_exposes_product_root_instead_of_app_root() -> 
     assert prepare.index("Call ResolveInstallLayout") < prepare.index(
         'StrCpy $ProductRoot "$INSTDIR"'
     )
+    assert prepare.index("Call ResolvePreservedProductRoot") < prepare.index(
+        'StrCpy $ProductRoot "$INSTDIR"'
+    )
     assert leave.index('StrCpy $INSTDIR "$ProductRoot"') < leave.index(
         "Call NormalizeInstallDirectory"
     )
+
+
+def test_installer_restores_only_an_owned_preserved_product_root() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+    resolver_start = installer.index("Function ResolvePreservedProductRoot")
+    resolver_end = installer.index("FunctionEnd", resolver_start)
+    resolver = installer[resolver_start:resolver_end]
+
+    assert 'ReadRegStr $0 HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"' in resolver
+    assert 'lstrcmpiW(w "$1", w "Data")' in resolver
+    assert 'lstrcmpiW(w "$1", w "${APP_NAME}")' in resolver
+    assert 'IfFileExists "$0\\.transvortex-workspace.json"' in resolver
+    assert 'StrCmp $4 \'  "schema_version": 1,\'' in resolver
+    assert 'StrCmp $4 \'  "app_id": "${APP_ID}"\'' in resolver
+    assert 'StrCpy $ProductRoot "$2"' in resolver
 
 
 def test_installer_preserves_classic_storage_defaults_for_existing_layouts() -> None:
