@@ -36,6 +36,7 @@ def test_core_distribution_pin_is_immutable_but_not_adopted() -> None:
     assert pin["ffmpeg_commit"] == current["ffmpeg_commit"]
     assert binary["btbn_build_commit"] == current["binary"]["build_commit"]
     assert binary["build_provider"] == "TransVortex"
+    assert binary["archive_layout"] == "transvortex-core-v1"
     assert binary["builder_image"].startswith(
         "ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:"
     )
@@ -65,7 +66,7 @@ def test_core_distribution_pin_is_immutable_but_not_adopted() -> None:
     assert source["public_distribution_ready"] is False
     assert set(source["public_distribution_blockers"]) == {
         "candidate_assets_not_published",
-        "portable_installer_not_integrated",
+        "default_release_pin_not_adopted",
         "clean_windows_real_media_acceptance_pending",
         "license_review_pending",
     }
@@ -120,6 +121,9 @@ def test_core_distribution_builder_enforces_deterministic_candidate_assets() -> 
     assert "do not match the immutable candidate pin" in builder
     assert 'component = "ffmpeg-core-candidate"' in builder
     assert 'component = "ffmpeg-core-corresponding-source"' in builder
+    assert 'component = "transvortex-ffmpeg-distribution"' in builder
+    assert 'distribution_kind = "transvortex-core"' in builder
+    assert "public_distribution_source_ready" in builder
     assert "unexpected_external" in builder
     assert 'public_distribution_ready = $false' in builder
     assert 'replaces_current_release = $false' in builder
@@ -132,3 +136,19 @@ def test_core_distribution_builder_enforces_deterministic_candidate_assets() -> 
     assert "generated_at" not in runtime_manifest_block
     assert "runtime_root" not in runtime_manifest_block
     assert "fixture_generator_root" not in runtime_manifest_block
+
+
+def test_standard_runtime_builder_supports_the_core_archive_contract() -> None:
+    builder = (ROOT / "scripts" / "build_ffmpeg_runtime.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"transvortex-core-v1"' in builder
+    assert 'component -ne "ffmpeg-core-candidate"' in builder
+    assert "coreArchiveManifest.files.PSObject.Properties" in builder
+    assert "coreArchiveManifest.archive_layout" in builder
+    assert "core executable version lines do not match" in builder
+    assert "complete technical build-input set" in builder
+    assert 'Join-Path $payloadRoot "build-info"' in builder
+    assert 'Join-Path $payloadRoot "ffmpeg_compatibility.json"' in builder
+    assert "archive_layout = $archiveLayout" in builder

@@ -132,6 +132,10 @@ def test_ffmpeg_release_scripts_share_the_pin_and_verify_public_source() -> None
     assert "--clobber" not in publisher
     assert "-Force is intentionally unsupported" in publisher
     assert "server-reported digest" in publisher
+    assert "Reproducible TransVortex core binary archive" in publisher
+    assert "Complete technical build-input set" in publisher
+    assert "external_library_sources_required" in packager
+    assert "complete the recorded license review" in packager
     assert "public_distribution_source_ready" in packager
     assert "packagedCorrespondingSourceReady" in installer_builder
     assert "ffmpeg_corresponding_source_sha256" in installer_builder

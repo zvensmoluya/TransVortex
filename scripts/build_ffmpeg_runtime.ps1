@@ -26,6 +26,13 @@ $licenseSpdx = [string]$pin.license
 $buildProvider = [string]$pin.binary.build_provider
 $buildTag = [string]$pin.binary.build_tag
 $buildCommit = [string]$pin.binary.build_commit
+$btbnBuildCommit = [string]$pin.binary.btbn_build_commit
+$builderImage = [string]$pin.binary.builder_image
+$archiveLayout = [string]$pin.binary.archive_layout
+if ([string]::IsNullOrWhiteSpace($archiveLayout)) {
+    $archiveLayout = "btbn-lgpl-shared-v1"
+}
+$archiveRootName = [string]$pin.binary.archive_root
 $archiveName = [string]$pin.binary.asset_name
 $archiveUrl = [string]$pin.binary.url
 $upstreamArchiveUrl = [string]$pin.binary.upstream_url
@@ -40,6 +47,9 @@ $correspondingSourceReady = [bool]$pin.corresponding_source.public_distribution_
 $correspondingSourceExternalLibrariesIncluded = [bool]$pin.corresponding_source.external_library_sources_included
 $correspondingSourceRepository = [string]$pin.corresponding_source.repository
 $correspondingSourceReleaseTag = [string]$pin.corresponding_source.release_tag
+$externalLibrarySourcesRequired = @($pin.corresponding_source.external_library_sources_required)
+$buildInputScopeComplete = [bool]$pin.corresponding_source.build_input_scope_complete
+$licenseReviewComplete = [bool]$pin.corresponding_source.license_review_complete
 
 $requiredPinStrings = [ordered]@{
     version = $ffmpegVersion
@@ -49,9 +59,9 @@ $requiredPinStrings = [ordered]@{
     build_provider = $buildProvider
     build_tag = $buildTag
     build_commit = $buildCommit
+    archive_layout = $archiveLayout
     archive_name = $archiveName
     archive_url = $archiveUrl
-    upstream_archive_url = $upstreamArchiveUrl
     archive_sha256 = $archiveSha256
     corresponding_source_url = $correspondingSourceUrl
     corresponding_source_asset = $correspondingSourceAsset
@@ -63,6 +73,25 @@ $requiredPinStrings = [ordered]@{
 foreach ($entry in $requiredPinStrings.GetEnumerator()) {
     if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
         throw "FFmpeg runtime pin is missing $($entry.Key): $pinPath"
+    }
+}
+$supportedArchiveLayouts = @("btbn-lgpl-shared-v1", "transvortex-core-v1")
+if ($supportedArchiveLayouts -notcontains $archiveLayout) {
+    throw "FFmpeg runtime pin contains an unsupported archive layout: $archiveLayout"
+}
+if ($archiveLayout -eq "btbn-lgpl-shared-v1" -and [string]::IsNullOrWhiteSpace($upstreamArchiveUrl)) {
+    throw "BtbN FFmpeg runtime pin is missing upstream_archive_url: $pinPath"
+}
+if ($archiveLayout -eq "transvortex-core-v1") {
+    if ([string]::IsNullOrWhiteSpace($archiveRootName) -or
+        [System.IO.Path]::GetFileName($archiveRootName) -ne $archiveRootName) {
+        throw "TransVortex core runtime pin contains an invalid archive_root: $archiveRootName"
+    }
+    if ($btbnBuildCommit -notmatch '^[0-9a-f]{40}$') {
+        throw "TransVortex core runtime pin contains an invalid BtbN build commit: $btbnBuildCommit"
+    }
+    if ($builderImage -notmatch '^ghcr\.io/btbn/ffmpeg-builds/base-win64@sha256:[0-9a-f]{64}$') {
+        throw "TransVortex core runtime pin must use an immutable BtbN base-win64 image digest."
     }
 }
 foreach ($commit in @($ffmpegCommit, $buildCommit)) {
@@ -226,6 +255,49 @@ try {
         throw "Pinned shared FFmpeg archive does not contain its required DLLs."
     }
 
+    $coreArchiveManifest = $null
+    if ($archiveLayout -eq "transvortex-core-v1") {
+        if ((Split-Path -Leaf $sourceRoot) -ne $archiveRootName) {
+            throw "TransVortex core archive root does not match its pin. Expected=$archiveRootName Actual=$(Split-Path -Leaf $sourceRoot)"
+        }
+        $coreArchiveManifestPath = Join-Path $sourceRoot "ffmpeg_runtime.json"
+        if (-not (Test-Path -LiteralPath $coreArchiveManifestPath -PathType Leaf)) {
+            throw "TransVortex core archive is missing ffmpeg_runtime.json."
+        }
+        $coreArchiveManifest = Get-Content -LiteralPath $coreArchiveManifestPath -Encoding utf8 -Raw | ConvertFrom-Json
+        if ([string]$coreArchiveManifest.component -ne "ffmpeg-core-candidate" -or
+            [string]$coreArchiveManifest.archive_layout -ne $archiveLayout -or
+            [string]$coreArchiveManifest.version -ne $ffmpegVersion -or
+            [string]$coreArchiveManifest.ffmpeg_commit -ne $ffmpegCommit -or
+            [string]$coreArchiveManifest.variant -ne $variant -or
+            [string]$coreArchiveManifest.license -ne $licenseSpdx -or
+            [string]$coreArchiveManifest.build_commit -ne $buildCommit -or
+            [string]$coreArchiveManifest.btbn_build_commit -ne $btbnBuildCommit -or
+            [string]$coreArchiveManifest.builder_image -ne $builderImage) {
+            throw "TransVortex core archive manifest does not match its immutable pin."
+        }
+        if (@($coreArchiveManifest.optional_external_libraries).Count -ne 0) {
+            throw "TransVortex core archive unexpectedly contains optional external libraries."
+        }
+        foreach ($fileProperty in @($coreArchiveManifest.files.PSObject.Properties)) {
+            $relativePath = [string]$fileProperty.Name
+            if ([string]::IsNullOrWhiteSpace($relativePath) -or [System.IO.Path]::IsPathRooted($relativePath)) {
+                throw "TransVortex core archive manifest contains an invalid file path: $relativePath"
+            }
+            $pinnedFilePath = Get-FullPath -Path (Join-Path $sourceRoot $relativePath.Replace('/', '\'))
+            Assert-PathInsideDirectory -Path $pinnedFilePath -Directory $sourceRoot
+            if (-not (Test-Path -LiteralPath $pinnedFilePath -PathType Leaf)) {
+                throw "TransVortex core archive is missing a pinned file: $relativePath"
+            }
+            $pinnedFile = Get-Item -LiteralPath $pinnedFilePath
+            $pinnedFileSha256 = (Get-FileHash -LiteralPath $pinnedFilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($pinnedFile.Length -ne [int64]$fileProperty.Value.size -or
+                $pinnedFileSha256 -ne [string]$fileProperty.Value.sha256) {
+                throw "TransVortex core archive file does not match its manifest: $relativePath"
+            }
+        }
+    }
+
     $versionOutput = @(& $sourceFfmpeg -version 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "ffmpeg -version failed with exit code $LASTEXITCODE"
@@ -235,8 +307,13 @@ try {
         throw "ffprobe -version failed with exit code $LASTEXITCODE"
     }
     $versionText = $versionOutput -join "`n"
-    if ($versionText -notmatch [regex]::Escape("ffmpeg version n$ffmpegVersion")) {
-        throw "Unexpected FFmpeg version in pinned archive: $($versionOutput[0])"
+    if ($archiveLayout -eq "transvortex-core-v1") {
+        if ([string]$versionOutput[0] -ne [string]$coreArchiveManifest.ffmpeg_version_line -or
+            [string]$probeVersionOutput[0] -ne [string]$coreArchiveManifest.ffprobe_version_line) {
+            throw "TransVortex core executable version lines do not match the archive manifest."
+        }
+    } elseif ($versionText -notmatch [regex]::Escape("ffmpeg version n$ffmpegVersion")) {
+        throw "Unexpected FFmpeg version in pinned BtbN archive: $($versionOutput[0])"
     }
     if ($versionText -match "--enable-gpl" -or $versionText -match "--enable-nonfree") {
         throw "Pinned FFmpeg archive unexpectedly enables GPL or nonfree components."
@@ -253,18 +330,58 @@ try {
         Copy-Item -LiteralPath $library.FullName -Destination (Join-Path $payloadRoot "bin")
     }
     Copy-Item -LiteralPath $sourceLicense -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE.txt")
+    if ($archiveLayout -eq "transvortex-core-v1") {
+        $coreBuildInfo = Join-Path $sourceRoot "build-info"
+        $coreCompatibility = Join-Path $sourceRoot "ffmpeg_compatibility.json"
+        $coreLicenseSummary = Join-Path $sourceRoot "LICENSE.md"
+        foreach ($coreEvidencePath in @($coreBuildInfo, $coreCompatibility, $coreLicenseSummary)) {
+            if (-not (Test-Path -LiteralPath $coreEvidencePath)) {
+                throw "TransVortex core archive is missing packaged evidence: $coreEvidencePath"
+            }
+        }
+        Copy-Item -LiteralPath $coreBuildInfo -Destination (Join-Path $payloadRoot "build-info") -Recurse
+        Copy-Item -LiteralPath $coreCompatibility -Destination (Join-Path $payloadRoot "ffmpeg_compatibility.json")
+        Copy-Item -LiteralPath $coreLicenseSummary -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE-SUMMARY.md")
+    }
 
     $sourceReadinessNotice = if ($correspondingSourceReady) {
         "The pinned source bundle is marked complete for public distribution and includes the required external library sources."
+    } elseif ($archiveLayout -eq "transvortex-core-v1" -and
+        $correspondingSourceExternalLibrariesIncluded -and
+        $externalLibrarySourcesRequired.Count -eq 0 -and
+        $buildInputScopeComplete) {
+        "The pinned source bundle contains the complete technical build-input set and no optional external media library is compiled in. Public distribution remains blocked until the recorded release and license-review gates are complete."
     } else {
         "This bundle does not yet include the exact sources of every external LGPL library compiled into the BtbN binary. It does not complete the public-release source obligation."
+    }
+    $binaryDescription = if ($archiveLayout -eq "transvortex-core-v1") {
+        "the reproducible TransVortex FFmpeg core build and its shared libraries"
+    } else {
+        "unmodified FFmpeg command-line executables and their shared libraries from the BtbN FFmpeg Builds win64 LGPL-shared variant"
+    }
+    $upstreamBinaryNotice = if ([string]::IsNullOrWhiteSpace($upstreamArchiveUrl)) {
+        ""
+    } else {
+        @"
+Original upstream binary:
+  $upstreamArchiveUrl
+
+"@
+    }
+    $buildProvenanceNotice = if ($archiveLayout -eq "transvortex-core-v1") {
+        @"
+  TransVortex build: $buildCommit
+  BtbN base build: $btbnBuildCommit
+  Builder image: $builderImage
+"@
+    } else {
+        "  BtbN build scripts: $buildCommit"
     }
     $sourceNotice = @"
 TransVortex FFmpeg distribution notice
 ======================================
 
-This directory contains unmodified FFmpeg command-line executables and their
-shared libraries from the BtbN FFmpeg Builds win64 LGPL-shared variant.
+This directory contains $binaryDescription.
 TransVortex invokes these executables as separate processes and is not linked
 to FFmpeg libraries.
 
@@ -272,9 +389,7 @@ Binary release:
   $archiveUrl
   SHA-256: $archiveSha256
 
-Original upstream binary:
-  $upstreamArchiveUrl
-
+$upstreamBinaryNotice
 Source traceability bundle:
   $correspondingSourceUrl
   SHA-256: $correspondingSourceSha256
@@ -282,7 +397,7 @@ Source traceability bundle:
 
 Exact source commits:
   FFmpeg: $ffmpegCommit
-  Build scripts: $buildCommit
+$buildProvenanceNotice
 
 FFmpeg is licensed under $licenseSpdx in this build. The copied
 FFmpeg-LICENSE.txt file is part of this distribution.
@@ -308,9 +423,12 @@ $sourceReadinessNotice
         build_provider = $buildProvider
         build_tag = $buildTag
         build_commit = $buildCommit
+        btbn_build_commit = if ([string]::IsNullOrWhiteSpace($btbnBuildCommit)) { $null } else { $btbnBuildCommit }
+        builder_image = if ([string]::IsNullOrWhiteSpace($builderImage)) { $null } else { $builderImage }
+        archive_layout = $archiveLayout
         archive_name = $archiveName
         archive_url = $archiveUrl
-        upstream_archive_url = $upstreamArchiveUrl
+        upstream_archive_url = if ([string]::IsNullOrWhiteSpace($upstreamArchiveUrl)) { $null } else { $upstreamArchiveUrl }
         archive_size = $archiveSize
         archive_sha256 = $archiveSha256
         ffmpeg_sha256 = (Get-FileHash -LiteralPath $targetFfmpeg -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -327,6 +445,9 @@ $sourceReadinessNotice
             sha256 = $correspondingSourceSha256
             scope = $correspondingSourceScope
             external_library_sources_included = $correspondingSourceExternalLibrariesIncluded
+            external_library_sources_required = $externalLibrarySourcesRequired
+            build_input_scope_complete = $buildInputScopeComplete
+            license_review_complete = $licenseReviewComplete
         }
         public_distribution_requires_corresponding_source = $true
         public_distribution_source_ready = $correspondingSourceReady
@@ -356,6 +477,7 @@ $report = [ordered]@{
     archive_sha256 = $archiveSha256
     version = $ffmpegVersion
     variant = $variant
+    archive_layout = $archiveLayout
     license = $licenseSpdx
     ffmpeg_path = Join-Path $outputFullPath "bin\ffmpeg.exe"
     ffprobe_path = Join-Path $outputFullPath "bin\ffprobe.exe"

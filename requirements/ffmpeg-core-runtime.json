@@ -11,15 +11,16 @@
   "binary": {
     "build_provider": "TransVortex",
     "build_tag": "transvortex-core-2026-07-30-r1",
-    "build_commit": "168da1e3ffe8abd742a65484630161824d53d168",
+    "build_commit": "e9de92320a8b211412ec8c40e20c40195cec7be7",
     "btbn_build_commit": "8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665",
     "builder_image": "ghcr.io/btbn/ffmpeg-builds/base-win64@sha256:80f095930d8ec013bbc5205522a7ba0dc45e4c554e9f2b4b1e0818c1876e5e87",
     "source_date_epoch": 1784816021,
+    "archive_layout": "transvortex-core-v1",
     "archive_root": "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared",
     "asset_name": "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared.zip",
     "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1/ffmpeg-n8.1.2-31-g8c9502e9b0-win64-transvortex-core-shared.zip",
-    "size": 13715579,
-    "sha256": "c02b1c27ee5aa5822a54edf221c5c0c59016dcb9b09d4f57a2df9c4da5d21d6f"
+    "size": 13715587,
+    "sha256": "3bc9e9ecc1fb8273946ad41270e427c2fb34a9beed227a6cfedaaa5167cde5ca"
   },
   "corresponding_source": {
     "scope": "complete-core-build-inputs-no-optional-external-libraries",
@@ -31,7 +32,7 @@
     "public_distribution_ready": false,
     "public_distribution_blockers": [
       "candidate_assets_not_published",
-      "portable_installer_not_integrated",
+      "default_release_pin_not_adopted",
       "clean_windows_real_media_acceptance_pending",
       "license_review_pending"
     ],
@@ -46,8 +47,8 @@
     "release_tag": "ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1",
     "asset_name": "transvortex-ffmpeg-n8.1.2-31-g8c9502e9b0-core-corresponding-source.zip",
     "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-core-runtime-v8.1.2-31-g8c9502e9b0-r1/transvortex-ffmpeg-n8.1.2-31-g8c9502e9b0-core-corresponding-source.zip",
-    "size": 16930472,
-    "sha256": "ca60180843fb7020ad3e86e6777d4c0b87621e92986d01495fc4f0bfd6ec895e",
+    "size": 16931970,
+    "sha256": "5b08f437fe0feb2cd66d5c88c0be89ea51ed52c62448fe42d5d11a5ae61bef25",
     "ffmpeg_archive": {
       "asset_name": "FFmpeg-8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
       "url": "https://github.com/FFmpeg/FFmpeg/archive/8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
@@ -83,8 +84,8 @@
       },
       {
         "path": "scripts/build_ffmpeg_runtime.ps1",
-        "size": 15639,
-        "sha256": "a59fb00c47b98267d6e9100742061945d8bedce0e42cae6abf6849133a43a466"
+        "size": 22950,
+        "sha256": "63f640026d28987e33bfcbebb519797d8c56f90dd4f76bfa297826584955ef5f"
       },
       {
         "path": "scripts/verify_ffmpeg_core_runtime.py",

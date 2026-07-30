@@ -179,8 +179,19 @@ if ($null -eq $remote) {
         throw "Could not access GitHub repository $Repository."
     }
 
+    $buildProvider = [string]$pin.binary.build_provider
+    $distributionKind = [string]$manifest.distribution_kind
+    $binaryDescription = if ($distributionKind -eq "transvortex-core" -or $buildProvider -eq "TransVortex") {
+        "Reproducible TransVortex core binary archive built without optional external media libraries."
+    } else {
+        "Original unmodified BtbN $($manifest.version) LGPL shared binary archive."
+    }
     $sourceDescription = if ([bool]$manifest.public_distribution_source_ready) {
-        "Complete corresponding FFmpeg source and exact BtbN build-control scripts."
+        "Complete corresponding FFmpeg source and exact build-control scripts."
+    } elseif ([bool]$sourcePin.build_input_scope_complete -and
+        [bool]$sourcePin.external_library_sources_included -and
+        @($sourcePin.external_library_sources_required).Count -eq 0) {
+        "Complete technical build-input set for a core build with no optional external media libraries; application public-release readiness remains gated separately."
     } else {
         "FFmpeg source and exact BtbN build-control scripts for traceability; external-library corresponding sources are not yet included."
     }
@@ -188,7 +199,7 @@ if ($null -eq $remote) {
 Pinned Windows x64 FFmpeg runtime used by TransVortex.
 
 Included assets:
-- Original unmodified BtbN $($manifest.version) LGPL shared binary archive.
+- $binaryDescription
 - $sourceDescription
 
 The binary and source assets are versioned together and verified by SHA-256 in the TransVortex release manifest.

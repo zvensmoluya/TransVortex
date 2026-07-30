@@ -65,9 +65,11 @@ pwsh -NoProfile -File scripts\build_ffmpeg_core_prototype.ps1 -Force -Json
 pwsh -NoProfile -File scripts\build_ffmpeg_core_distribution.ps1 -Force -Json
 ```
 
-`requirements/ffmpeg-core-runtime.json` 固定 binary/source 的 GitHub Release 目标、大小、SHA-256、PowerShell 7.6.4、ZIP 时间戳、原始 FFmpeg 源码、BtbN 构建脚本和 TransVortex 构建控制文件。二进制 ZIP 为 13,715,579 字节，SHA-256 为 `c02b1c27ee5aa5822a54edf221c5c0c59016dcb9b09d4f57a2df9c4da5d21d6f`；对应源码 ZIP 为 16,930,472 字节，SHA-256 为 `ca60180843fb7020ad3e86e6777d4c0b87621e92986d01495fc4f0bfd6ec895e`。本机在两个独立输出目录重复生成后字节哈希一致，普通严格模式也已验证 pin。
+`requirements/ffmpeg-core-runtime.json` 固定 binary/source 的 GitHub Release 目标、大小、SHA-256、PowerShell 7.6.4、ZIP 时间戳、原始 FFmpeg 源码、BtbN 构建脚本和 TransVortex 构建控制文件。适配新主线 provenance 和标准 runtime 后，二进制 ZIP 为 13,715,587 字节，SHA-256 为 `3bc9e9ecc1fb8273946ad41270e427c2fb34a9beed227a6cfedaaa5167cde5ca`；对应源码 ZIP 为 16,931,970 字节，SHA-256 为 `5b08f437fe0feb2cd66d5c88c0be89ea51ed52c62448fe42d5d11a5ae61bef25`。本机在两个独立输出目录重复生成后字节哈希一致，普通严格模式也已验证 pin。
 
-这个新 pin 仍是 `status=candidate`、`adopted=false` 和 `public_distribution_ready=false`。当前 `requirements/ffmpeg-runtime.json`、portable 与 installer 没有切换，GitHub 目标资产也尚未上传；下一步是发布这两个不可变资产，再让 runtime builder 识别自建版本/布局并完成 portable、NSIS 和干净 Windows 真实媒体验收。源码包已经把外部媒体库对应源码清单降为空并包含完整技术构建输入，但在许可审查完成前不把它表述为公开分发就绪。
+标准 runtime builder 已能识别 `transvortex-core-v1`，验证候选归档内 manifest 和逐文件哈希，并保留构建、PE 导入、兼容性和许可证据。该 runtime 已通过 WAV、MP3、M4A、FLAC、AAC、Ogg/Vorbis、Opus、AC3、EAC3、H.264 MKV/MP4 和常见文本字幕的探测、提取、转换、重采样、切分、静音检测与字幕提取矩阵；本机 portable RC 的包内 Local Service、可见窗口启动和 FFmpeg 校验通过，unsigned internal NSIS installer 也已生成并校验 payload。
+
+这个新 pin 仍是 `status=candidate`、`adopted=false` 和 `public_distribution_ready=false`。当前正式 `requirements/ffmpeg-runtime.json` 尚未切换，GitHub 目标资产也尚未上传；本机因已有 `D:\TransVortex\App` 安装记录，安全护栏没有执行会改写现有 HKCU 安装状态的全套 installer acceptance。下一步是发布两个不可变候选资产，在干净 Windows/用户环境完成最终 installer 与真实媒体 RC 验收，完成许可审查后再切换默认 pin。源码包的外部媒体库对应源码清单为空，并包含完整技术构建输入；这里的许可审查是发布记录确认，不代表还缺 43 个外部库的源码。
 
 以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
 
@@ -76,7 +78,7 @@ pwsh -NoProfile -File scripts\build_ffmpeg_core_distribution.ps1 -Force -Json
 ```powershell
 gh auth status
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_ffmpeg_distribution.ps1 `
-  -BuildManifest dist\ffmpeg-source\8.1.2-31-g8c9502e9b0\ffmpeg_distribution_build.json `
+  -BuildManifest dist\ffmpeg-core-distribution\8.1.2-31-g8c9502e9b0\ffmpeg_core_distribution_build.json `
   -Json
 ```
 

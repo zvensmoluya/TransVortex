@@ -245,6 +245,7 @@ $releaseTag = [string]$source.release_tag
 $releaseBaseUrl = "https://github.com/$repository/releases/download/$releaseTag"
 $binaryAssetName = [string]$binary.asset_name
 $sourceAssetName = [string]$source.asset_name
+$archiveLayout = [string]$binary.archive_layout
 $archiveRootName = [string]$binary.archive_root
 
 $requiredStrings = [ordered]@{
@@ -257,6 +258,7 @@ $requiredStrings = [ordered]@{
     binary_build_commit = [string]$binary.build_commit
     binary_btbn_build_commit = [string]$binary.btbn_build_commit
     binary_builder_image = [string]$binary.builder_image
+    binary_archive_layout = $archiveLayout
     binary_archive_root = $archiveRootName
     binary_asset_name = $binaryAssetName
     binary_url = [string]$binary.url
@@ -321,6 +323,9 @@ foreach ($assetName in @(
 }
 if ([string]$binary.url -ne "$releaseBaseUrl/$binaryAssetName") {
     throw "Pinned FFmpeg core binary URL does not match its release coordinates."
+}
+if ($archiveLayout -ne "transvortex-core-v1") {
+    throw "FFmpeg core distribution pin contains an unsupported archive layout: $archiveLayout"
 }
 if ([string]$source.url -ne "$releaseBaseUrl/$sourceAssetName") {
     throw "Pinned FFmpeg core source URL does not match its release coordinates."
@@ -582,6 +587,7 @@ Windows acceptance, and license review are complete.
         ffmpeg_commit = $ffmpegCommit
         variant = $variant
         license = $licenseSpdx
+        archive_layout = $archiveLayout
         build_provider = [string]$binary.build_provider
         build_tag = [string]$binary.build_tag
         build_commit = [string]$binary.build_commit
@@ -684,6 +690,7 @@ acceptance, and license review.
         ffmpeg_commit = $ffmpegCommit
         variant = $variant
         license = $licenseSpdx
+        archive_layout = $archiveLayout
         scope = [string]$source.scope
         build_input_scope_complete = $true
         external_library_sources_required = @()
@@ -771,7 +778,8 @@ if (-not $BootstrapPin -and -not $pinVerified) {
 
 $buildManifest = [ordered]@{
     schema_version = 1
-    component = "transvortex-ffmpeg-core-distribution"
+    component = "transvortex-ffmpeg-distribution"
+    distribution_kind = "transvortex-core"
     status = "candidate"
     version = $version
     platform = "windows-x64"
@@ -780,6 +788,8 @@ $buildManifest = [ordered]@{
     pin_file = $pinPath
     pin_verified = $pinVerified
     bootstrap_mode = [bool]$BootstrapPin
+    corresponding_source_url = [string]$source.url
+    public_distribution_source_ready = [bool]$source.public_distribution_ready
     public_distribution_ready = $false
     replaces_current_release = $false
     assets = @(

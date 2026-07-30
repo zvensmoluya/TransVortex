@@ -408,6 +408,9 @@ function Test-PackagedFfmpegRuntime {
     $correspondingSourceSize = [int64]$manifest.corresponding_source.size
     $correspondingSourceScope = [string]$manifest.corresponding_source.scope
     $externalLibrarySourcesIncluded = [bool]$manifest.corresponding_source.external_library_sources_included
+    $externalLibrarySourcesRequired = @($manifest.corresponding_source.external_library_sources_required)
+    $buildInputScopeComplete = [bool]$manifest.corresponding_source.build_input_scope_complete
+    $licenseReviewComplete = [bool]$manifest.corresponding_source.license_review_complete
     $publicDistributionSourceReady = [bool]$manifest.public_distribution_source_ready
     if ([string]::IsNullOrWhiteSpace($correspondingSourceUrl) -or
         $correspondingSourceSha256 -notmatch '^[0-9a-f]{64}$' -or
@@ -435,6 +438,9 @@ function Test-PackagedFfmpegRuntime {
         public_distribution_requires_corresponding_source = [bool]$manifest.public_distribution_requires_corresponding_source
         public_distribution_source_ready = $publicDistributionSourceReady
         external_library_sources_included = $externalLibrarySourcesIncluded
+        external_library_sources_required = $externalLibrarySourcesRequired
+        build_input_scope_complete = $buildInputScopeComplete
+        license_review_complete = $licenseReviewComplete
         corresponding_source_scope = $correspondingSourceScope
         corresponding_source_url = $correspondingSourceUrl
         corresponding_source_size = $correspondingSourceSize
@@ -812,6 +818,14 @@ if (-not $NoZip) {
 
 $files = Get-ChildItem -LiteralPath $packageRoot -Recurse -File
 $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
+$ffmpegPublicationRequirement = if ([bool]$ffmpegReport.public_distribution_source_ready) {
+    "publish the pinned corresponding FFmpeg source alongside any public installer"
+} elseif ([bool]$ffmpegReport.build_input_scope_complete -and
+    @($ffmpegReport.external_library_sources_required).Count -eq 0) {
+    "publish the pinned FFmpeg core corresponding source and complete the recorded license review before any public installer"
+} else {
+    "publish complete corresponding FFmpeg source, including required external LGPL library sources, alongside any public installer"
+}
 $report = [ordered]@{
     ok = $true
     package_type = if ($InstallerPayload) { "installer_payload" } else { "portable" }
@@ -855,7 +869,7 @@ $report = [ordered]@{
     manual_acceptance_required = @(
         "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
         "native NSIS installer install, upgrade, running-process protection, and uninstall acceptance",
-        "publish complete corresponding FFmpeg source, including external LGPL library sources, alongside any public installer"
+        $ffmpegPublicationRequirement
     )
 }
 $manifestName = if ($InstallerPayload) { "installer_payload_manifest.json" } else { "portable_manifest.json" }
