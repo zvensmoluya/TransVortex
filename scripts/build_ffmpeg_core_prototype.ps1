@@ -18,13 +18,26 @@ if ([string]::IsNullOrWhiteSpace($SpecFile)) {
     $SpecFile = Join-Path $repoRoot "requirements\ffmpeg-core-prototype.json"
 }
 if ([string]::IsNullOrWhiteSpace($PinFile)) {
-    $PinFile = Join-Path $repoRoot "requirements\ffmpeg-runtime.json"
+    $PinFile = Join-Path $repoRoot "requirements\ffmpeg-btbn-build-base.json"
 }
 
 $specPath = (Resolve-Path -LiteralPath $SpecFile).Path
 $pinPath = (Resolve-Path -LiteralPath $PinFile).Path
 $spec = Get-Content -LiteralPath $specPath -Encoding utf8 -Raw | ConvertFrom-Json
 $pin = Get-Content -LiteralPath $pinPath -Encoding utf8 -Raw | ConvertFrom-Json
+$specSourcePin = [string]$spec.source_pin
+if ([string]::IsNullOrWhiteSpace($specSourcePin)) {
+    throw "FFmpeg core prototype spec is missing source_pin: $specPath"
+}
+$specSourcePinCandidate = if ([System.IO.Path]::IsPathRooted($specSourcePin)) {
+    $specSourcePin
+} else {
+    Join-Path $repoRoot $specSourcePin
+}
+$expectedPinPath = (Resolve-Path -LiteralPath $specSourcePinCandidate).Path
+if (-not [string]::Equals($pinPath, $expectedPinPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "FFmpeg core prototype pin does not match source_pin. Expected=$expectedPinPath Actual=$pinPath"
+}
 
 function Get-FullPath {
     param(
@@ -335,7 +348,8 @@ try {
     $targetFfmpeg = Join-Path $exportRoot "bin\ffmpeg.exe"
     $targetFfprobe = Join-Path $exportRoot "bin\ffprobe.exe"
     $targetLicense = Join-Path $exportRoot "licenses\FFmpeg-LICENSE.txt"
-    foreach ($requiredFile in @($targetFfmpeg, $targetFfprobe, $targetLicense)) {
+    $targetGplLicense = Join-Path $exportRoot "licenses\FFmpeg-GPLv3.txt"
+    foreach ($requiredFile in @($targetFfmpeg, $targetFfprobe, $targetLicense, $targetGplLicense)) {
         if (-not (Test-Path -LiteralPath $requiredFile)) {
             throw "FFmpeg core build is missing a required output: $requiredFile"
         }

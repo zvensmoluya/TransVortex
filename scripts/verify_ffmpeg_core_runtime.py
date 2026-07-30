@@ -427,6 +427,20 @@ def verify_runtime(
     ffmpeg = _binary(runtime_root, "ffmpeg")
     ffprobe = _binary(runtime_root, "ffprobe")
     generator = _binary(fixture_generator_root, "ffmpeg")
+    license_paths = {
+        "lgpl_v3": runtime_root / "licenses" / "FFmpeg-LICENSE.txt",
+        "gpl_v3": runtime_root / "licenses" / "FFmpeg-GPLv3.txt",
+        "upstream_summary": runtime_root
+        / "licenses"
+        / "FFmpeg-LICENSE-SUMMARY.md",
+    }
+    missing_license_paths = [
+        str(path) for path in license_paths.values() if not path.is_file()
+    ]
+    if missing_license_paths:
+        raise VerificationError(
+            f"Core build is missing required license evidence: {missing_license_paths}"
+        )
     policy = _verify_build_policy(ffmpeg)
     capabilities = _verify_named_capabilities(ffmpeg, spec)
     pe_imports = _verify_pe_imports(runtime_root)
@@ -585,6 +599,9 @@ def verify_runtime(
         "runtime_file_count": len(runtime_files),
         "runtime_bytes": sum(path.stat().st_size for path in runtime_files),
         "policy": policy,
+        "license_evidence": {
+            name: str(path) for name, path in license_paths.items()
+        },
         "capabilities": capabilities,
         "pe_imports": pe_imports,
         "audio_fixtures": audio_results,

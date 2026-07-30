@@ -1,0 +1,8 @@
+/.gitattributes text eol=lf
+requirements/ffmpeg-btbn-build-base.json text eol=lf
+requirements/ffmpeg-core-prototype.json text eol=lf
+scripts/ffmpeg_core_prototype.Dockerfile text eol=lf
+scripts/build_ffmpeg_core_prototype.ps1 text eol=lf
+scripts/build_ffmpeg_runtime.ps1 -text diff whitespace=cr-at-eol
+scripts/verify_ffmpeg_core_runtime.py text eol=lf
+docs/FFMPEG_DISTRIBUTION_COMPLIANCE.md text eol=lf

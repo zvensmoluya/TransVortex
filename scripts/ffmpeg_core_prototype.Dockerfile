@@ -41,6 +41,7 @@ RUN set -eux; \
     cp /opt/transvortex-ffmpeg/bin/ffprobe.exe /export/bin/; \
     cp /opt/transvortex-ffmpeg/bin/*.dll /export/bin/; \
     cp /work/ffmpeg/COPYING.LGPLv3 /export/licenses/FFmpeg-LICENSE.txt; \
+    cp /work/ffmpeg/COPYING.GPLv3 /export/licenses/FFmpeg-GPLv3.txt; \
     cp /work/ffmpeg/LICENSE.md /export/licenses/FFmpeg-LICENSE-SUMMARY.md; \
     printf '%s\n' "${FFMPEG_COMMIT}" > /export/build-info/ffmpeg-commit.txt; \
     printf '%s\n' "${FFMPEG_VERSION}" > /export/build-info/ffmpeg-version.txt; \

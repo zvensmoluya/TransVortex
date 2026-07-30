@@ -61,21 +61,29 @@ def _pinned_powershell() -> str | None:
     return None
 
 
-def test_ffmpeg_distribution_pin_is_immutable_and_traceable() -> None:
+def test_ffmpeg_distribution_pin_adopts_the_published_core() -> None:
     pin = _pin()
     binary = pin["binary"]
     source = pin["corresponding_source"]
 
     assert pin["platform"] == "windows-x64"
-    assert pin["variant"] == "win64-lgpl-shared-8.1"
+    assert pin["status"] == "active"
+    assert pin["adopted"] is True
+    assert pin["variant"] == "transvortex-core-shared"
     assert pin["license"] == "LGPL-3.0-or-later"
-    assert binary["build_tag"].startswith("autobuild-")
-    assert binary["build_tag"] != "latest"
+    assert binary["build_provider"] == "TransVortex"
+    assert binary["archive_layout"] == "transvortex-core-v2"
+    assert binary["build_tag"] == "transvortex-core-2026-07-30-r2"
     assert "/zvensmoluya/transvortex-assets/releases/download/" in binary["url"]
-    assert "/BtbN/FFmpeg-Builds/releases/download/autobuild-" in binary["upstream_url"]
     assert source["repository"] == "zvensmoluya/transvortex-assets"
-    assert source["scope"] == "ffmpeg-core-and-build-scripts"
-    assert source["external_library_sources_included"] is False
+    assert source["scope"] == (
+        "complete-core-build-inputs-no-optional-external-libraries"
+    )
+    assert source["assets_published"] is True
+    assert source["external_library_sources_required"] == []
+    assert source["external_library_sources_included"] is True
+    assert source["build_input_scope_complete"] is True
+    assert source["license_review_complete"] is True
     assert source["public_distribution_ready"] is False
     assert source["archive_builder"] == {
         "powershell_version": "7.6.4",
@@ -117,7 +125,7 @@ def test_ffmpeg_release_scripts_share_the_pin_and_verify_public_source() -> None
     ).read_text(encoding="utf-8")
 
     assert 'requirements\\ffmpeg-runtime.json' in runtime_builder
-    assert 'requirements\\ffmpeg-runtime.json' in source_builder
+    assert 'requirements\\ffmpeg-btbn-build-base.json' in source_builder
     assert "LGPL-2.1-or-later" not in runtime_builder
     assert "New-DeterministicZip" in source_builder
     assert "Get-RelativeArchivePath" in source_builder
@@ -131,14 +139,26 @@ def test_ffmpeg_release_scripts_share_the_pin_and_verify_public_source() -> None
     assert 'requirements\\ffmpeg-runtime.json' in publisher
     assert "--clobber" not in publisher
     assert "-Force is intentionally unsupported" in publisher
+    assert "ResumeDraft" in publisher
+    assert "every pinned asset matches" in publisher
     assert "server-reported digest" in publisher
+    assert '"--prerelease"' in publisher
+    assert '"--latest=false"' in publisher
+    assert "release prerelease state does not match" in publisher
+    assert '$ErrorActionPreference = "Continue"' in publisher
+    assert "$remoteExitCode = $LASTEXITCODE" in publisher
     assert "Reproducible TransVortex core binary archive" in publisher
     assert "Complete technical build-input set" in publisher
     assert "external_library_sources_required" in packager
-    assert "complete the recorded license review" in packager
+    assert "license_review_complete" in packager
+    assert "corresponding_source_assets_published" in packager
+    assert "complete the recorded FFmpeg license review" in packager
     assert "public_distribution_source_ready" in packager
-    assert "packagedCorrespondingSourceReady" in installer_builder
+    assert "packagedFfmpegPublicDistributionReady" in installer_builder
     assert "ffmpeg_corresponding_source_sha256" in installer_builder
+    assert "ffmpeg_corresponding_source_assets_published" in installer_builder
+    assert "ffmpeg_license_review_complete" in installer_builder
+    assert "signing_and_ffmpeg_compliance_prerequisites_present" in installer_builder
 
 
 def test_source_bundle_runs_on_pinned_powershell_and_enforces_output_pin(

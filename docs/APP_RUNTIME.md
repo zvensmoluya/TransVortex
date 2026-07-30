@@ -35,21 +35,21 @@ dist\app-runtime\windows-x64\
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_ffmpeg_runtime.ps1 -Force -Json
 ```
 
-脚本固定到 FFmpeg `8.1.2-31-g8c9502e9b0` 的 Windows x64 LGPL shared 构建，从 TransVortex 的版本化资产镜像下载并校验大小与 SHA-256，同时保留原始 BtbN 发布地址用于追溯。脚本拒绝启用 GPL / nonfree 的构建，并记录 `ffmpeg.exe`、`ffprobe.exe` 和所有 shared DLL 的哈希。默认输出到 `dist\ffmpeg-runtime\windows-x64`。
+脚本默认读取 `requirements/ffmpeg-runtime.json`，下载并校验已经采用的 TransVortex FFmpeg core `8.1.2-31-g8c9502e9b0`。该构建保留 FFmpeg 内建媒体能力，不启用可选外部媒体库、GPL 或 nonfree 组件；标准 runtime 记录 `ffmpeg.exe`、`ffprobe.exe`、所有 shared DLL 以及构建与兼容性证据的哈希。默认输出到 `dist\ffmpeg-runtime\windows-x64`。
 
-FFmpeg 源码追溯资产单独生成：
+旧 BtbN 构建基线的源码追溯资产单独生成：
 
 ```powershell
 pwsh -NoProfile -File scripts\build_ffmpeg_source_bundle.ps1 -Force -Json
 ```
 
-该命令使用 `requirements/ffmpeg-runtime.json` 固定的 PowerShell 7.6.4、`SOURCE_NOTICE.txt` LF、JSON manifest CRLF、ZIP 压缩级别和 entry 时间戳，验证二进制、FFmpeg 源码和 BtbN 构建脚本输入，并要求生成 ZIP 的大小与 SHA-256 严格匹配统一 pin。源码资产的压缩字节会随 PowerShell/.NET 实现变化，因此这一项发布维护命令不使用 Windows PowerShell 5.1；普通 runtime、portable 和安装器构建仍可继续使用系统自带的 PowerShell 5.1。
+该命令使用 `requirements/ffmpeg-btbn-build-base.json` 固定的 PowerShell 7.6.4、`SOURCE_NOTICE.txt` LF、JSON manifest CRLF、ZIP 压缩级别和 entry 时间戳，保留旧完整 BtbN runtime 的历史追溯与未来 core 重建样本来源。源码资产的压缩字节会随 PowerShell/.NET 实现变化，因此这一项发布维护命令不使用 Windows PowerShell 5.1；普通 runtime、portable 和安装器构建仍可继续使用系统自带的 PowerShell 5.1。
 
-当前源码 ZIP 只包含精确 FFmpeg 源码和 BtbN 构建控制脚本，清单保持 `public_distribution_ready=false`；它是源码追溯资产，不是完整对应源码。公开安装器分发前仍需补齐实际静态链接外部库的精确源码、许可证与通知，并完成许可审查。
+该旧源码 ZIP 只属于未采用的 BtbN 构建基线，不再作为当前安装包的对应源码。当前 core 使用同一 GitHub prerelease 中的独立 corresponding-source ZIP，其中外部媒体库清单为空并包含完整技术构建输入。
 
-### 无可选外部库的 FFmpeg core 候选
+### 无可选外部库的 FFmpeg core
 
-仓库同时提供一个不替换当前 release 的自建候选：
+仓库保留 core prototype 构建入口，用于未来版本重建和兼容性验证：
 
 ```powershell
 pwsh -NoProfile -File scripts\build_ffmpeg_core_prototype.ps1 -Force -Json
@@ -57,32 +57,35 @@ pwsh -NoProfile -File scripts\build_ffmpeg_core_prototype.ps1 -Force -Json
 
 该脚本使用 `requirements/ffmpeg-core-prototype.json` 固定 FFmpeg commit、BtbN Windows x64 基础镜像 digest、`SOURCE_DATE_EPOCH` 和 configure flags。它保留 FFmpeg 自带的 demuxer、decoder、encoder、muxer、parser、protocol 和 filter，只关闭可选依赖自动探测；不使用 `--disable-everything` 或逐组件极限裁剪。构建需要本机 Docker Desktop，但 Docker 镜像只属于维护者构建缓存，不进入安装包；不需要 `gh` 或 GitHub 登录。首次构建会下载数 GB 的交叉编译工具链，本机这次构建后 Docker 报告 8.236 GB 可回收 build cache；保留缓存可让后续重建直接复用，清理后下次需要重新下载。
 
-2026-07-30 的本机 prototype 为 31,182,018 字节，当前固定完整 runtime 为 143,476,938 字节，减少 78.27%。自动兼容验证已覆盖带 H.264 视频、音频和文本字幕轨的 MP4 / MKV，以及 WAV、MP3、M4A、FLAC、AAC、Ogg Vorbis、Opus、AC3、EAC3 的探测、解码和 16 kHz 单声道 PCM 重采样；同时覆盖 AAC / MP3 直拷、AAC 音轨提取、`silencedetect` 和 SRT / ASS / SSA / WebVTT / mov_text 转 SRT。PE import 检查确认产物只依赖包内 FFmpeg DLL 与 Windows 系统 DLL。
+2026-07-30 的本机 license-complete prototype 为 31,217,853 字节，当前固定完整 runtime 为 143,476,938 字节，减少 78.24%。自动兼容验证已覆盖带 H.264 视频、音频和文本字幕轨的 MP4 / MKV，以及 WAV、MP3、M4A、FLAC、AAC、Ogg Vorbis、Opus、AC3、EAC3 的探测、解码和 16 kHz 单声道 PCM 重采样；同时覆盖 AAC / MP3 直拷、AAC 音轨提取、`silencedetect` 和 SRT / ASS / SSA / WebVTT / mov_text 转 SRT。PE import 检查确认产物只依赖包内 FFmpeg DLL 与 Windows 系统 DLL。
 
-该候选已经生成独立的正式资产 pin：
+已发布的 r1 当时由下列维护入口生成，当前不需要重跑：
 
 ```powershell
 pwsh -NoProfile -File scripts\build_ffmpeg_core_distribution.ps1 -Force -Json
 ```
 
-`requirements/ffmpeg-core-runtime.json` 固定 binary/source 的 GitHub Release 目标、大小、SHA-256、PowerShell 7.6.4、ZIP 时间戳、原始 FFmpeg 源码、BtbN 构建脚本和 TransVortex 构建控制文件。适配新主线 provenance 和标准 runtime 后，二进制 ZIP 为 13,715,587 字节，SHA-256 为 `3bc9e9ecc1fb8273946ad41270e427c2fb34a9beed227a6cfedaaa5167cde5ca`；对应源码 ZIP 为 16,931,970 字节，SHA-256 为 `5b08f437fe0feb2cd66d5c88c0be89ea51ed52c62448fe42d5d11a5ae61bef25`。本机在两个独立输出目录重复生成后字节哈希一致，普通严格模式也已验证 pin。
+`requirements/ffmpeg-core-runtime.json` 保留 r1 的历史资产和构建控制快照：二进制 ZIP 为 13,715,587 字节，SHA-256 为 `3bc9e9ecc1fb8273946ad41270e427c2fb34a9beed227a6cfedaaa5167cde5ca`；对应源码 ZIP 为 16,931,970 字节，SHA-256 为 `5b08f437fe0feb2cd66d5c88c0be89ea51ed52c62448fe42d5d11a5ae61bef25`。精确复现 r1 时应使用已发布 corresponding-source ZIP 内固定的历史构建控制文件；后续主线文件发生变化后，不应把历史 r1 pin 当成当前工作树的新候选生成入口。
 
-标准 runtime builder 已能识别 `transvortex-core-v1`，验证候选归档内 manifest 和逐文件哈希，并保留构建、PE 导入、兼容性和许可证据。该 runtime 已通过 WAV、MP3、M4A、FLAC、AAC、Ogg/Vorbis、Opus、AC3、EAC3、H.264 MKV/MP4 和常见文本字幕的探测、提取、转换、重采样、切分、静音检测与字幕提取矩阵；本机 portable RC 的包内 Local Service、可见窗口启动和 FFmpeg 校验通过，unsigned internal NSIS installer 也已生成并校验 payload。
+`requirements/ffmpeg-core-runtime-r2.json` 是许可材料补齐后的候选快照：二进制 ZIP 为 13,742,918 字节，SHA-256 为 `40ca746ee1c1110cc08cfdfa7eb095f389f8fa7cad9fcb1678efc0e599afaa38`；对应源码 ZIP 为 16,949,021 字节，SHA-256 为 `81bb859cafb7370b2e47b5dd3a13a2e46594152b395a88ce34dd0c7ea750582b`。r2 新增 GPLv3 正文、无 FFmpeg 源码修改声明和技术许可审查记录；九个 EXE/DLL 与 r1 的逐文件 SHA-256 完全一致。审查证据见 [`FFMPEG_DISTRIBUTION_COMPLIANCE.md`](FFMPEG_DISTRIBUTION_COMPLIANCE.md)。
 
-这个新 pin 仍是 `status=candidate`、`adopted=false` 和 `public_distribution_ready=false`。当前正式 `requirements/ffmpeg-runtime.json` 尚未切换，GitHub 目标资产也尚未上传；本机因已有 `D:\TransVortex\App` 安装记录，安全护栏没有执行会改写现有 HKCU 安装状态的全套 installer acceptance。下一步是发布两个不可变候选资产，在干净 Windows/用户环境完成最终 installer 与真实媒体 RC 验收，完成许可审查后再切换默认 pin。源码包的外部媒体库对应源码清单为空，并包含完整技术构建输入；这里的许可审查是发布记录确认，不代表还缺 43 个外部库的源码。
+标准 runtime builder 同时识别历史 `transvortex-core-v1` 和许可材料完整的 `transvortex-core-v2`，验证归档内 manifest 和逐文件哈希，并保留构建、PE 导入、兼容性和许可证据。该 runtime 已通过 WAV、MP3、M4A、FLAC、AAC、Ogg/Vorbis、Opus、AC3、EAC3、H.264 MKV/MP4 和常见文本字幕的探测、提取、转换、重采样、切分、静音检测与字幕提取矩阵；本机 portable RC 的包内 Local Service、可见窗口启动和 FFmpeg 校验通过，unsigned internal NSIS installer 也已生成并校验 payload。
+
+`requirements/ffmpeg-core-runtime.json` 保留 r1 历史快照，`requirements/ffmpeg-core-runtime-r2.json` 保留已完成技术许可审查的 r2 快照；两个版本的 binary/source 都已发布为独立 GitHub prerelease。`requirements/ffmpeg-runtime.json` 是当前 `status=active`、`adopted=true` 的 r2 默认 pin，普通 runtime、portable 和 installer 构建会直接下载并使用 core。`public_distribution_ready` 仍为 false：本机因已有 `D:\TransVortex\App` 安装记录，没有执行会改写现有 HKCU 安装状态的全套 installer acceptance，干净 Windows 真实媒体 RC 验收仍待完成。
 
 以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
 
-发布维护者可在安装并登录 GitHub CLI 后验证或首次发布这两个固定资产：
+发布维护者可在安装并登录 GitHub CLI 后复核已发布资产；新 tag 首次发布也使用同一入口：
 
 ```powershell
 gh auth status
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_ffmpeg_distribution.ps1 `
-  -BuildManifest dist\ffmpeg-core-distribution\8.1.2-31-g8c9502e9b0\ffmpeg_core_distribution_build.json `
+pwsh -NoProfile -File scripts\publish_ffmpeg_distribution.ps1 `
+  -BuildManifest dist\ffmpeg-core-distribution\8.1.2-31-g8c9502e9b0-r2\ffmpeg_core_distribution_build.json `
+  -PinFile requirements\ffmpeg-runtime.json `
   -Json
 ```
 
-发布脚本会再次把本地文件与统一 pin 比对。若 Release 已存在，只验证远端资产且不覆盖；若不存在，先创建 draft，上传并验证服务端 digest 后再公开。固定 URL 下的资产不允许通过 `-Force` 替换，内容变化必须使用新的 release tag 并更新 pin。`gh` 只属于发布机或 CI，不是本地构建、应用运行或终端用户依赖。
+发布脚本会再次把本地文件与统一 pin 比对。若 Release 已存在，只验证远端资产且不覆盖；若不存在，先创建 draft，上传并验证服务端 digest，再以 prerelease 发布且不设为 Latest。中断后只有已检查的 draft 可通过 `-ResumeDraft` 恢复，并且仍要求全部资产 digest 精确匹配。固定 URL 下的资产不允许通过 `-Force` 替换，内容变化必须使用新的 release tag 并更新 pin。`gh` 只属于发布机或 CI，不是本地构建、应用运行或终端用户依赖。
 
 ## Flutter 启动规则
 
@@ -116,7 +119,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_instal
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_installer.ps1
 ```
 
-`-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。公开发布仍需 Authenticode 签名、FFmpeg 完整对应源码托管，以及干净 Windows 环境的首启和真实媒体任务验收。
+`-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease；公开发布剩余门槛是 Authenticode 签名，以及干净 Windows 环境的首启和真实媒体任务验收。
 
 全新安装把用户选择的位置整理为一个专用产品根，并建立 `App`、`Data`、`Resources` 三个相互隔离的子目录。默认布局是 `%LOCALAPPDATA%\Programs\TransVortex\App`、`Data` 和 `Resources`；选择其他磁盘时三者一起跟随到所选位置。升级的 staging、旧版本回滚和卸载程序删除边界都只落在 `App`，不会覆盖 `Data` 或 `Resources`。确认页面直接展示程序、工作数据和识别资源的最终路径，其中工作数据仍可单独更改；配置和凭据固定在 Windows 用户目录。
 
@@ -149,4 +152,4 @@ Agent / CLI 定位文件属于已安装程序入口，不属于用户设置；�
 
 同一隔离安装目录随后启动了可见 Flutter APP，并完成一条确实需要 ASR 的真实媒体任务。机器报告固定了 `DONE` 任务与 checkpoint、正常退出的 Python Worker、23 条 `managed + stdio_jsonl + cuda + int8_float16` 识别行，以及非空 SRT / ASS；人工操作覆盖运行态、独立任务处理窗审看和重新导出。无活动 Worker 后静默卸载返回 0，程序目录删除，隔离任务与报告保留。因此“本机内部安装路径真实任务”已经闭环。
 
-该结论不覆盖干净 Windows、通知聚焦、公开组件下载、Authenticode 和 FFmpeg 对应源码托管；这些仍是独立发布边界。当次证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。
+该结论不覆盖干净 Windows、通知聚焦、公开组件下载和 Authenticode；这些仍是独立发布边界。FFmpeg binary/source 托管与技术许可审查已在 2026-07-30 的 r2 固定 GitHub prerelease 中完成。当次证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。

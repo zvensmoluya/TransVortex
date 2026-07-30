@@ -44,6 +44,7 @@ $correspondingSourceSize = [int64]$pin.corresponding_source.size
 $correspondingSourceSha256 = [string]$pin.corresponding_source.sha256
 $correspondingSourceScope = [string]$pin.corresponding_source.scope
 $correspondingSourceReady = [bool]$pin.corresponding_source.public_distribution_ready
+$correspondingSourceAssetsPublished = [bool]$pin.corresponding_source.assets_published
 $correspondingSourceExternalLibrariesIncluded = [bool]$pin.corresponding_source.external_library_sources_included
 $correspondingSourceRepository = [string]$pin.corresponding_source.repository
 $correspondingSourceReleaseTag = [string]$pin.corresponding_source.release_tag
@@ -75,14 +76,20 @@ foreach ($entry in $requiredPinStrings.GetEnumerator()) {
         throw "FFmpeg runtime pin is missing $($entry.Key): $pinPath"
     }
 }
-$supportedArchiveLayouts = @("btbn-lgpl-shared-v1", "transvortex-core-v1")
+$supportedArchiveLayouts = @(
+    "btbn-lgpl-shared-v1",
+    "transvortex-core-v1",
+    "transvortex-core-v2"
+)
 if ($supportedArchiveLayouts -notcontains $archiveLayout) {
     throw "FFmpeg runtime pin contains an unsupported archive layout: $archiveLayout"
 }
+$isTransVortexCore = $archiveLayout -in @("transvortex-core-v1", "transvortex-core-v2")
+$hasCompleteLicenseEvidence = $archiveLayout -eq "transvortex-core-v2"
 if ($archiveLayout -eq "btbn-lgpl-shared-v1" -and [string]::IsNullOrWhiteSpace($upstreamArchiveUrl)) {
     throw "BtbN FFmpeg runtime pin is missing upstream_archive_url: $pinPath"
 }
-if ($archiveLayout -eq "transvortex-core-v1") {
+if ($isTransVortexCore) {
     if ([string]::IsNullOrWhiteSpace($archiveRootName) -or
         [System.IO.Path]::GetFileName($archiveRootName) -ne $archiveRootName) {
         throw "TransVortex core runtime pin contains an invalid archive_root: $archiveRootName"
@@ -256,7 +263,7 @@ try {
     }
 
     $coreArchiveManifest = $null
-    if ($archiveLayout -eq "transvortex-core-v1") {
+    if ($isTransVortexCore) {
         if ((Split-Path -Leaf $sourceRoot) -ne $archiveRootName) {
             throw "TransVortex core archive root does not match its pin. Expected=$archiveRootName Actual=$(Split-Path -Leaf $sourceRoot)"
         }
@@ -278,6 +285,10 @@ try {
         }
         if (@($coreArchiveManifest.optional_external_libraries).Count -ne 0) {
             throw "TransVortex core archive unexpectedly contains optional external libraries."
+        }
+        if ($hasCompleteLicenseEvidence -and
+            [bool]$coreArchiveManifest.license_review_complete -ne $licenseReviewComplete) {
+            throw "TransVortex core archive license-review state does not match its immutable pin."
         }
         foreach ($fileProperty in @($coreArchiveManifest.files.PSObject.Properties)) {
             $relativePath = [string]$fileProperty.Name
@@ -307,7 +318,7 @@ try {
         throw "ffprobe -version failed with exit code $LASTEXITCODE"
     }
     $versionText = $versionOutput -join "`n"
-    if ($archiveLayout -eq "transvortex-core-v1") {
+    if ($isTransVortexCore) {
         if ([string]$versionOutput[0] -ne [string]$coreArchiveManifest.ffmpeg_version_line -or
             [string]$probeVersionOutput[0] -ne [string]$coreArchiveManifest.ffprobe_version_line) {
             throw "TransVortex core executable version lines do not match the archive manifest."
@@ -330,7 +341,7 @@ try {
         Copy-Item -LiteralPath $library.FullName -Destination (Join-Path $payloadRoot "bin")
     }
     Copy-Item -LiteralPath $sourceLicense -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE.txt")
-    if ($archiveLayout -eq "transvortex-core-v1") {
+    if ($isTransVortexCore) {
         $coreBuildInfo = Join-Path $sourceRoot "build-info"
         $coreCompatibility = Join-Path $sourceRoot "ffmpeg_compatibility.json"
         $coreLicenseSummary = Join-Path $sourceRoot "LICENSE.md"
@@ -342,19 +353,40 @@ try {
         Copy-Item -LiteralPath $coreBuildInfo -Destination (Join-Path $payloadRoot "build-info") -Recurse
         Copy-Item -LiteralPath $coreCompatibility -Destination (Join-Path $payloadRoot "ffmpeg_compatibility.json")
         Copy-Item -LiteralPath $coreLicenseSummary -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE-SUMMARY.md")
+        if ($hasCompleteLicenseEvidence) {
+            $coreGplLicense = Join-Path $sourceRoot "GPLv3.txt"
+            $coreLicenseReview = Join-Path $sourceRoot "LICENSE_REVIEW.md"
+            $coreSourceChanges = Join-Path $sourceRoot "SOURCE_CHANGES.txt"
+            foreach ($completeLicenseEvidencePath in @(
+                $coreGplLicense,
+                $coreLicenseReview,
+                $coreSourceChanges
+            )) {
+                if (-not (Test-Path -LiteralPath $completeLicenseEvidencePath -PathType Leaf)) {
+                    throw "TransVortex core archive is missing complete license evidence: $completeLicenseEvidencePath"
+                }
+            }
+            Copy-Item -LiteralPath $coreGplLicense -Destination (Join-Path $payloadRoot "licenses\FFmpeg-GPLv3.txt")
+            Copy-Item -LiteralPath $coreLicenseReview -Destination (Join-Path $payloadRoot "licenses\FFmpeg-LICENSE-REVIEW.md")
+            Copy-Item -LiteralPath $coreSourceChanges -Destination (Join-Path $payloadRoot "build-info\FFmpeg-SOURCE-CHANGES.txt")
+        }
     }
 
     $sourceReadinessNotice = if ($correspondingSourceReady) {
         "The pinned source bundle is marked complete for public distribution and includes the required external library sources."
-    } elseif ($archiveLayout -eq "transvortex-core-v1" -and
+    } elseif ($isTransVortexCore -and
         $correspondingSourceExternalLibrariesIncluded -and
         $externalLibrarySourcesRequired.Count -eq 0 -and
         $buildInputScopeComplete) {
-        "The pinned source bundle contains the complete technical build-input set and no optional external media library is compiled in. Public distribution remains blocked until the recorded release and license-review gates are complete."
+        if ($licenseReviewComplete) {
+            "The pinned source bundle contains the complete technical build-input set, no optional external media library is compiled in, and the technical license review is complete. Public distribution remains blocked only by the recorded non-license release gates."
+        } else {
+            "The pinned source bundle contains the complete technical build-input set and no optional external media library is compiled in. Public distribution remains blocked until the recorded license review is complete."
+        }
     } else {
         "This bundle does not yet include the exact sources of every external LGPL library compiled into the BtbN binary. It does not complete the public-release source obligation."
     }
-    $binaryDescription = if ($archiveLayout -eq "transvortex-core-v1") {
+    $binaryDescription = if ($isTransVortexCore) {
         "the reproducible TransVortex FFmpeg core build and its shared libraries"
     } else {
         "unmodified FFmpeg command-line executables and their shared libraries from the BtbN FFmpeg Builds win64 LGPL-shared variant"
@@ -368,7 +400,7 @@ Original upstream binary:
 
 "@
     }
-    $buildProvenanceNotice = if ($archiveLayout -eq "transvortex-core-v1") {
+    $buildProvenanceNotice = if ($isTransVortexCore) {
         @"
   TransVortex build: $buildCommit
   BtbN base build: $btbnBuildCommit
@@ -399,8 +431,8 @@ Exact source commits:
   FFmpeg: $ffmpegCommit
 $buildProvenanceNotice
 
-FFmpeg is licensed under $licenseSpdx in this build. The copied
-FFmpeg-LICENSE.txt file is part of this distribution.
+FFmpeg is licensed under $licenseSpdx in this build. The copied license files
+and technical review record are part of this distribution.
 
 $sourceReadinessNotice
 "@
@@ -444,6 +476,7 @@ $sourceReadinessNotice
             size = $correspondingSourceSize
             sha256 = $correspondingSourceSha256
             scope = $correspondingSourceScope
+            assets_published = $correspondingSourceAssetsPublished
             external_library_sources_included = $correspondingSourceExternalLibrariesIncluded
             external_library_sources_required = $externalLibrarySourcesRequired
             build_input_scope_complete = $buildInputScopeComplete

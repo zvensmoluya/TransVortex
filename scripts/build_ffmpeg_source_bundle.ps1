@@ -188,7 +188,7 @@ function New-DeterministicZip {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($PinFile)) {
-    $PinFile = Join-Path $repoRoot "requirements\ffmpeg-runtime.json"
+    $PinFile = Join-Path $repoRoot "requirements\ffmpeg-btbn-build-base.json"
 }
 $pinPath = (Resolve-Path -LiteralPath $PinFile).Path
 $pin = Get-Content -LiteralPath $pinPath -Encoding utf8 -Raw | ConvertFrom-Json -DateKind String

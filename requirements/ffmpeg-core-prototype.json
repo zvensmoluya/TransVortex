@@ -3,7 +3,7 @@
   "id": "transvortex-ffmpeg-core-prototype",
   "status": "evaluation",
   "platform": "windows-x64",
-  "source_pin": "requirements/ffmpeg-runtime.json",
+  "source_pin": "requirements/ffmpeg-btbn-build-base.json",
   "ffmpeg_commit": "8c9502e9b048e21e1cae96477e338ac0635645ba",
   "btbn_build_commit": "8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665",
   "source_date_epoch": 1784816021,

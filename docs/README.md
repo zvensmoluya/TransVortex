@@ -22,6 +22,7 @@
 | 后端分层 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Python core、CLI、协议和桌面接入的所有权边界 |
 | 桌面运行架构 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) | Local Service、Worker、Supervisor、托盘和发布基础 |
 | 应用运行时与安装 | [`APP_RUNTIME.md`](APP_RUNTIME.md) | 固定 Python / FFmpeg runtime、NSIS 安装器和公开发布边界 |
+| FFmpeg 分发合规 | [`FFMPEG_DISTRIBUTION_COMPLIANCE.md`](FFMPEG_DISTRIBUTION_COMPLIANCE.md) | core 编译许可、对应源码、通知和技术审查证据 |
 | 配置与凭据 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) | 配置优先级、provider、用户级凭据和安全边界 |
 | 本机语音识别 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) | 本机 Whisper 组件、模型、下载和安装边界 |
 | Agent / CLI 接入 | [`../agent/README.md`](../agent/README.md) / [`../agent/AGENT_USAGE.md`](../agent/AGENT_USAGE.md) | 安装后稳定入口、机器可读能力、Agent 自适配和按需 workflow |

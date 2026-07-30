@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "transvortex-ffmpeg-btbn-build-base",
+  "status": "build-base",
+  "adopted": false,
+  "platform": "windows-x64",
+  "version": "8.1.2-31-g8c9502e9b0",
+  "ffmpeg_commit": "8c9502e9b048e21e1cae96477e338ac0635645ba",
+  "variant": "win64-lgpl-shared-8.1",
+  "license": "LGPL-3.0-or-later",
+  "binary": {
+    "build_provider": "BtbN/FFmpeg-Builds",
+    "build_tag": "autobuild-2026-07-28-13-32",
+    "build_commit": "8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665",
+    "asset_name": "ffmpeg-n8.1.2-31-g8c9502e9b0-win64-lgpl-shared-8.1.zip",
+    "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-runtime-v8.1.2-31-g8c9502e9b0/ffmpeg-n8.1.2-31-g8c9502e9b0-win64-lgpl-shared-8.1.zip",
+    "upstream_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-28-13-32/ffmpeg-n8.1.2-31-g8c9502e9b0-win64-lgpl-shared-8.1.zip",
+    "size": 70510952,
+    "sha256": "c9273ed9c4662b31742c0f1d7cce63f56f9b3a1867063ab55c305e809c6c0a7f"
+  },
+  "corresponding_source": {
+    "scope": "ffmpeg-core-and-build-scripts",
+    "external_library_sources_included": false,
+    "public_distribution_ready": false,
+    "archive_builder": {
+      "powershell_version": "7.6.4",
+      "source_notice_line_endings": "lf",
+      "manifest_line_endings": "crlf",
+      "zip_compression": "optimal",
+      "entry_timestamp": "1980-01-01T00:00:00Z"
+    },
+    "repository": "zvensmoluya/transvortex-assets",
+    "release_tag": "ffmpeg-runtime-v8.1.2-31-g8c9502e9b0",
+    "asset_name": "transvortex-ffmpeg-8.1.2-31-g8c9502e9b0-corresponding-source.zip",
+    "url": "https://github.com/zvensmoluya/transvortex-assets/releases/download/ffmpeg-runtime-v8.1.2-31-g8c9502e9b0/transvortex-ffmpeg-8.1.2-31-g8c9502e9b0-corresponding-source.zip",
+    "size": 16899381,
+    "sha256": "c27e167aeba0cf7a82e133f7e9606448e0f3dca269e6e1ab20eafadb9ff237d3",
+    "ffmpeg_archive": {
+      "asset_name": "FFmpeg-8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
+      "url": "https://github.com/FFmpeg/FFmpeg/archive/8c9502e9b048e21e1cae96477e338ac0635645ba.tar.gz",
+      "size": 16902915,
+      "sha256": "97da8d05b040186096349179bd349168609235781776acee37015e87f8e898fc"
+    },
+    "build_scripts_archive": {
+      "asset_name": "FFmpeg-Builds-8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665.tar.gz",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/archive/8c736b2d6fe5da2a10a8896d01e53bfb0ca4f665.tar.gz",
+      "size": 101690,
+      "sha256": "697d798f9031b5c5ead281761a79c87590e90677af4b28c3fa76f552dc16aedc"
+    }
+  }
+}

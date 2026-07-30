@@ -189,7 +189,10 @@ $packagedCorrespondingSourceUrl = [string]$payloadFfmpegManifest.corresponding_s
 $packagedCorrespondingSourceSha256 = [string]$payloadFfmpegManifest.corresponding_source.sha256
 $packagedCorrespondingSourceSize = [int64]$payloadFfmpegManifest.corresponding_source.size
 $packagedCorrespondingSourceScope = [string]$payloadFfmpegManifest.corresponding_source.scope
+$packagedCorrespondingSourceAssetsPublished = [bool]$payloadFfmpegManifest.corresponding_source.assets_published
+$packagedBuildInputScopeComplete = [bool]$payloadFfmpegManifest.corresponding_source.build_input_scope_complete
 $packagedExternalLibrarySourcesIncluded = [bool]$payloadFfmpegManifest.corresponding_source.external_library_sources_included
+$packagedLicenseReviewComplete = [bool]$payloadFfmpegManifest.corresponding_source.license_review_complete
 $packagedCorrespondingSourceRecorded = (
     -not [string]::IsNullOrWhiteSpace($packagedCorrespondingSourceUrl) -and
     $packagedCorrespondingSourceSha256 -match '^[0-9a-f]{64}$' -and
@@ -205,7 +208,13 @@ if ([bool]$payloadFfmpegManifest.public_distribution_source_ready -and -not $pac
 if ([bool]$payloadFfmpegManifest.public_distribution_source_ready -and $packagedCorrespondingSourceScope -eq "ffmpeg-core-and-build-scripts") {
     throw "Installer payload still has a traceability-only FFmpeg source scope but claims public readiness."
 }
-$packagedCorrespondingSourceReady = (
+if ([bool]$payloadFfmpegManifest.public_distribution_source_ready -and
+    (-not $packagedCorrespondingSourceAssetsPublished -or
+        -not $packagedBuildInputScopeComplete -or
+        -not $packagedLicenseReviewComplete)) {
+    throw "Installer payload claims FFmpeg public readiness without published source assets, complete build inputs, and license review."
+}
+$packagedFfmpegPublicDistributionReady = (
     $packagedCorrespondingSourceRecorded -and
     [bool]$payloadFfmpegManifest.public_distribution_source_ready
 )
@@ -291,7 +300,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     $signed = $true
 }
 
-$releasePrerequisitesPresent = $signed -and $packagedCorrespondingSourceReady
+$releaseCompliancePrerequisitesPresent = $signed -and $packagedFfmpegPublicDistributionReady
 $installerFile = Get-Item -LiteralPath $installerPath
 $report = [ordered]@{
     ok = $true
@@ -350,10 +359,14 @@ $report = [ordered]@{
     ffmpeg_corresponding_source_sha256 = $packagedCorrespondingSourceSha256
     ffmpeg_corresponding_source_bytes = $packagedCorrespondingSourceSize
     ffmpeg_corresponding_source_scope = $packagedCorrespondingSourceScope
+    ffmpeg_corresponding_source_recorded = $packagedCorrespondingSourceRecorded
+    ffmpeg_corresponding_source_assets_published = $packagedCorrespondingSourceAssetsPublished
+    ffmpeg_build_input_scope_complete = $packagedBuildInputScopeComplete
     ffmpeg_external_library_sources_included = $packagedExternalLibrarySourcesIncluded
-    ffmpeg_corresponding_source_ready = $packagedCorrespondingSourceReady
+    ffmpeg_license_review_complete = $packagedLicenseReviewComplete
+    ffmpeg_public_distribution_ready = $packagedFfmpegPublicDistributionReady
     ffmpeg_corresponding_source_required_for_public_release = $true
-    signing_and_source_prerequisites_present = $releasePrerequisitesPresent
+    signing_and_ffmpeg_compliance_prerequisites_present = $releaseCompliancePrerequisitesPresent
     public_release_ready = $false
     acceptance_complete = $false
     acceptance_required = @(

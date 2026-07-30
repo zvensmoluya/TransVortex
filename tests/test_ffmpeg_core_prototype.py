@@ -12,7 +12,7 @@ from scripts.verify_ffmpeg_core_runtime import _write_audio_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "requirements" / "ffmpeg-core-prototype.json"
-PIN_PATH = ROOT / "requirements" / "ffmpeg-runtime.json"
+PIN_PATH = ROOT / "requirements" / "ffmpeg-btbn-build-base.json"
 
 
 def _json(path: Path) -> dict[str, object]:
@@ -89,8 +89,11 @@ def test_core_build_is_reproducible_and_cannot_publish_or_replace_release() -> N
     assert "COPY ffmpeg-source.tar.gz" in dockerfile
     assert "--no-insert-timestamp" in dockerfile
     assert "SOURCE_DATE_EPOCH" in dockerfile
+    assert "COPYING.GPLv3" in dockerfile
+    assert "FFmpeg-GPLv3.txt" in builder
     assert "requirements\\ffmpeg-core-prototype.json" in builder
-    assert "requirements\\ffmpeg-runtime.json" in builder
+    assert "requirements\\ffmpeg-btbn-build-base.json" in builder
+    assert "prototype pin does not match source_pin" in builder
     assert "verify_ffmpeg_core_runtime.py" in builder
     assert "compatibility.runtime_root = $outputFullPath" in builder
     assert "Extreme component pruning is intentionally unsupported" in builder

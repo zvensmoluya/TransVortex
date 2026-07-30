@@ -324,8 +324,11 @@ foreach ($assetName in @(
 if ([string]$binary.url -ne "$releaseBaseUrl/$binaryAssetName") {
     throw "Pinned FFmpeg core binary URL does not match its release coordinates."
 }
-if ($archiveLayout -ne "transvortex-core-v1") {
+if ($archiveLayout -notin @("transvortex-core-v1", "transvortex-core-v2")) {
     throw "FFmpeg core distribution pin contains an unsupported archive layout: $archiveLayout"
+}
+if ([bool]$source.license_review_complete -and $archiveLayout -ne "transvortex-core-v2") {
+    throw "A license-reviewed core candidate must use the complete-license transvortex-core-v2 layout."
 }
 if ([string]$source.url -ne "$releaseBaseUrl/$sourceAssetName") {
     throw "Pinned FFmpeg core source URL does not match its release coordinates."
@@ -346,8 +349,12 @@ if (-not [bool]$source.build_input_scope_complete -or
     @($source.external_library_sources_required).Count -ne 0) {
     throw "The core source pin must describe a complete build-input set with no optional external libraries."
 }
-if ([bool]$source.public_distribution_ready -or [bool]$source.license_review_complete) {
-    throw "The local core candidate must remain blocked until publication, integration, acceptance, and license review are complete."
+if ([bool]$source.public_distribution_ready) {
+    throw "The local core candidate cannot claim public distribution readiness before publication, integration, and acceptance."
+}
+$licenseReviewBlockerPresent = @($source.public_distribution_blockers) -contains "license_review_pending"
+if ([bool]$source.license_review_complete -eq $licenseReviewBlockerPresent) {
+    throw "The core candidate license-review flag and blocker list are inconsistent."
 }
 if ([bool]$pin.integration.replaces_current_release -or
     [bool]$pin.integration.portable_enabled -or
@@ -412,6 +419,14 @@ foreach ($control in @($source.build_control_files)) {
 if ($resolvedBuildControls.Count -eq 0) {
     throw "FFmpeg core pin does not list any build-control files."
 }
+$licenseReviewRelativePath = "docs/FFMPEG_DISTRIBUTION_COMPLIANCE.md"
+$licenseReviewControl = @(
+    $resolvedBuildControls | Where-Object { $_.relative_path -eq $licenseReviewRelativePath }
+)
+if ($licenseReviewControl.Count -ne 1) {
+    throw "The core candidate must pin exactly one technical license-review document: $licenseReviewRelativePath"
+}
+$licenseReviewPath = [string]$licenseReviewControl[0].resolved_path
 
 $prototypeManifestPath = Join-Path $prototypeFullPath "ffmpeg_core_runtime.json"
 $prototypeCompatibilityPath = Join-Path $prototypeFullPath "ffmpeg_core_compatibility.json"
@@ -421,6 +436,7 @@ foreach ($requiredPath in @(
     (Join-Path $prototypeFullPath "bin\ffmpeg.exe"),
     (Join-Path $prototypeFullPath "bin\ffprobe.exe"),
     (Join-Path $prototypeFullPath "licenses\FFmpeg-LICENSE.txt"),
+    (Join-Path $prototypeFullPath "licenses\FFmpeg-GPLv3.txt"),
     (Join-Path $prototypeFullPath "licenses\FFmpeg-LICENSE-SUMMARY.md")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -517,6 +533,30 @@ try {
     Copy-Item `
         -LiteralPath (Join-Path $prototypeFullPath "licenses\FFmpeg-LICENSE-SUMMARY.md") `
         -Destination (Join-Path $binaryBundleRoot "LICENSE.md")
+    Copy-Item `
+        -LiteralPath (Join-Path $prototypeFullPath "licenses\FFmpeg-GPLv3.txt") `
+        -Destination (Join-Path $binaryBundleRoot "GPLv3.txt")
+    Copy-Item -LiteralPath $licenseReviewPath -Destination (Join-Path $binaryBundleRoot "LICENSE_REVIEW.md")
+
+    $sourceChanges = @"
+FFmpeg source modifications
+===========================
+
+None. This build extracts the exact upstream FFmpeg archive for commit
+$ffmpegCommit and applies only the recorded configure and compiler flags. No
+patch, generated source replacement, addition, or deletion is applied.
+"@
+    Write-Utf8NoBom `
+        -Path (Join-Path $binaryBundleRoot "SOURCE_CHANGES.txt") `
+        -Content $sourceChanges `
+        -LineEndings Lf
+
+    $licenseReviewStatus = if ([bool]$source.license_review_complete) {
+        "The technical open-source license review is recorded as complete."
+    } else {
+        "The technical open-source license review remains pending."
+    }
+    $remainingBlockers = @($source.public_distribution_blockers) -join ", "
 
     $binaryNotice = @"
 TransVortex FFmpeg core candidate notice
@@ -525,6 +565,9 @@ TransVortex FFmpeg core candidate notice
 This Windows x64 candidate preserves FFmpeg's built-in media components while
 disabling optional dependency autodetection. It contains no optional external
 media library and reports an LGPL-3.0-or-later configuration.
+
+No FFmpeg source patch is applied. LGPLv3, GPLv3, the upstream license summary,
+and the technical review record are included in this archive.
 
 Binary candidate:
   Version: $version
@@ -541,9 +584,8 @@ Build provenance:
   Builder image: $([string]$binary.builder_image)
   SOURCE_DATE_EPOCH: $([int64]$binary.source_date_epoch)
 
-This candidate has not replaced the current TransVortex release runtime. Public
-distribution remains blocked until publication, packaging integration, clean
-Windows acceptance, and license review are complete.
+$licenseReviewStatus
+Candidate blockers: $remainingBlockers
 "@
     Write-Utf8NoBom `
         -Path (Join-Path $binaryBundleRoot "SOURCE_NOTICE.txt") `
@@ -605,7 +647,8 @@ Windows acceptance, and license review are complete.
             url = [string]$source.url
             scope = [string]$source.scope
         }
-        public_distribution_ready = $false
+        license_review_complete = [bool]$source.license_review_complete
+        public_distribution_ready = [bool]$source.public_distribution_ready
         public_distribution_blockers = @($source.public_distribution_blockers)
         replaces_current_release = $false
     }
@@ -622,7 +665,10 @@ Windows acceptance, and license review are complete.
     Copy-Item -LiteralPath $resolvedFfmpegSource -Destination (Join-Path $sourceBundleRoot "sources\$([string]$ffmpegSource.asset_name)")
     Copy-Item -LiteralPath $resolvedBuildScripts -Destination (Join-Path $sourceBundleRoot "sources\$([string]$buildScriptsSource.asset_name)")
     Copy-Item -LiteralPath (Join-Path $prototypeFullPath "licenses\FFmpeg-LICENSE.txt") -Destination (Join-Path $sourceBundleRoot "licenses\FFmpeg-LICENSE.txt")
+    Copy-Item -LiteralPath (Join-Path $prototypeFullPath "licenses\FFmpeg-GPLv3.txt") -Destination (Join-Path $sourceBundleRoot "licenses\FFmpeg-GPLv3.txt")
     Copy-Item -LiteralPath (Join-Path $prototypeFullPath "licenses\FFmpeg-LICENSE-SUMMARY.md") -Destination (Join-Path $sourceBundleRoot "licenses\FFmpeg-LICENSE-SUMMARY.md")
+    Copy-Item -LiteralPath $licenseReviewPath -Destination (Join-Path $sourceBundleRoot "LICENSE_REVIEW.md")
+    Write-Utf8NoBom -Path (Join-Path $sourceBundleRoot "SOURCE_CHANGES.txt") -Content $sourceChanges -LineEndings Lf
 
     $bundledBuildControls = @()
     foreach ($control in $resolvedBuildControls) {
@@ -647,7 +693,8 @@ Windows acceptance, and license review are complete.
 # Rebuilding the TransVortex FFmpeg core
 
 The exact FFmpeg source, BtbN build definitions, TransVortex build controls,
-license texts, immutable builder image digest, and SOURCE_DATE_EPOCH are bundled
+license texts, no-source-change declaration, technical license review, immutable
+builder image digest, and SOURCE_DATE_EPOCH are bundled
 here. From this extracted source bundle on Windows, the core build can be run
 from the build-control directory with the pinned PowerShell and Docker environment:
 
@@ -671,13 +718,13 @@ TransVortex FFmpeg core corresponding source candidate
 This archive accompanies $binaryAssetName (SHA-256 $($binaryEvidence.sha256)).
 It contains the exact FFmpeg source archive, the pinned BtbN build definitions,
 the TransVortex Docker and orchestration controls used for the candidate, and
-the relevant FFmpeg license texts.
+the relevant FFmpeg license texts. SOURCE_CHANGES.txt records that no FFmpeg
+source patch was applied.
 
 No optional external media library is compiled into this core build, so the
 external-library corresponding-source requirement list is empty. The technical
-build-input set is complete, but public distribution remains blocked pending
-asset publication, portable/installer integration, clean Windows real-media
-acceptance, and license review.
+build-input set is complete. $licenseReviewStatus
+Candidate blockers: $remainingBlockers
 "@
     Write-Utf8NoBom -Path (Join-Path $sourceBundleRoot "SOURCE_NOTICE.txt") -Content $sourceNotice -LineEndings Lf
 
@@ -696,8 +743,8 @@ acceptance, and license review.
         external_library_sources_required = @()
         external_library_sources_included = $true
         optional_external_media_source_scope_complete = $true
-        license_review_complete = $false
-        public_distribution_ready = $false
+        license_review_complete = [bool]$source.license_review_complete
+        public_distribution_ready = [bool]$source.public_distribution_ready
         public_distribution_blockers = @($source.public_distribution_blockers)
         binary = [ordered]@{
             asset_name = $binaryAssetName
@@ -789,6 +836,7 @@ $buildManifest = [ordered]@{
     pin_verified = $pinVerified
     bootstrap_mode = [bool]$BootstrapPin
     corresponding_source_url = [string]$source.url
+    license_review_complete = [bool]$source.license_review_complete
     public_distribution_source_ready = [bool]$source.public_distribution_ready
     public_distribution_ready = $false
     replaces_current_release = $false

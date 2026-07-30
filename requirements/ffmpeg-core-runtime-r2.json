@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "id": "transvortex-ffmpeg-runtime",
-  "status": "active",
-  "adopted": true,
+  "id": "transvortex-ffmpeg-core-runtime-r2",
+  "status": "candidate",
+  "adopted": false,
   "platform": "windows-x64",
   "version": "8.1.2-31-g8c9502e9b0",
   "ffmpeg_commit": "8c9502e9b048e21e1cae96477e338ac0635645ba",
@@ -24,7 +24,7 @@
   },
   "corresponding_source": {
     "scope": "complete-core-build-inputs-no-optional-external-libraries",
-    "assets_published": true,
+    "assets_published": false,
     "build_input_scope_complete": true,
     "external_library_sources_required": [],
     "external_library_sources_included": true,
@@ -32,6 +32,8 @@
     "license_review_complete": true,
     "public_distribution_ready": false,
     "public_distribution_blockers": [
+      "candidate_assets_not_published",
+      "default_release_pin_not_adopted",
       "clean_windows_installer_acceptance_pending",
       "clean_windows_real_media_acceptance_pending"
     ],
@@ -100,10 +102,10 @@
   },
   "integration": {
     "candidate_pin": "requirements/ffmpeg-core-runtime-r2.json",
-    "previous_runtime_pin": "requirements/ffmpeg-core-runtime.json",
+    "previous_runtime_pin": "requirements/ffmpeg-runtime.json",
     "current_release_pin": "requirements/ffmpeg-runtime.json",
-    "replaces_current_release": true,
-    "portable_enabled": true,
-    "installer_enabled": true
+    "replaces_current_release": false,
+    "portable_enabled": false,
+    "installer_enabled": false
   }
 }

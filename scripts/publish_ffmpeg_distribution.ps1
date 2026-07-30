@@ -3,6 +3,7 @@ param(
     [string]$BuildManifest,
     [string]$PinFile = "",
     [string]$Repository = "",
+    [switch]$ResumeDraft,
     [switch]$Force,
     [switch]$Json
 )
@@ -19,10 +20,38 @@ function Get-RemoteRelease {
         [string]$Tag
     )
 
-    $remoteResponse = @(& $GhPath api "repos/$Repository/releases/tags/$Tag" 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $remoteResponse = @(& $GhPath api "repos/$Repository/releases/tags/$Tag" 2>&1)
+        $remoteExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($remoteExitCode -ne 0) {
         $failureText = $remoteResponse -join "`n"
         if ($failureText -match '(?i)HTTP\s+404|not\s+found') {
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                $releaseListResponse = @(& $GhPath api "repos/$Repository/releases?per_page=100" 2>&1)
+                $releaseListExitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+            if ($releaseListExitCode -ne 0) {
+                throw "Could not inspect draft GitHub releases for $Tag in $Repository. $($releaseListResponse -join "`n")"
+            }
+            $releaseMatches = @(
+                (($releaseListResponse -join "`n") | ConvertFrom-Json) |
+                    Where-Object { [string]$_.tag_name -eq $Tag }
+            )
+            if ($releaseMatches.Count -gt 1) {
+                throw "GitHub contains multiple releases with the pinned FFmpeg tag: $Tag"
+            }
+            if ($releaseMatches.Count -eq 1) {
+                return $releaseMatches[0]
+            }
             return $null
         }
         throw "Could not read GitHub release $Tag in $Repository. $failureText"
@@ -107,6 +136,10 @@ if ([string]$manifest.corresponding_source_url -ne [string]$sourcePin.url) {
 if ([bool]$manifest.public_distribution_source_ready -ne [bool]$sourcePin.public_distribution_ready) {
     throw "FFmpeg distribution manifest readiness does not match the immutable pin."
 }
+if ([bool]$manifest.license_review_complete -ne [bool]$sourcePin.license_review_complete) {
+    throw "FFmpeg distribution manifest license-review state does not match the immutable pin."
+}
+$releaseIsPrerelease = [string]$manifest.status -eq "candidate"
 
 $expectedAssets = @{
     binary = [pscustomobject]@{
@@ -173,6 +206,7 @@ if ($LASTEXITCODE -ne 0) { throw "GitHub CLI is not authenticated." }
 
 $remote = Get-RemoteRelease -GhPath $ghPath -Repository $Repository -Tag $tag
 $createdRelease = $false
+$resumedDraft = $false
 if ($null -eq $remote) {
     & $ghPath api "repos/$Repository" --silent
     if ($LASTEXITCODE -ne 0) {
@@ -191,7 +225,11 @@ if ($null -eq $remote) {
     } elseif ([bool]$sourcePin.build_input_scope_complete -and
         [bool]$sourcePin.external_library_sources_included -and
         @($sourcePin.external_library_sources_required).Count -eq 0) {
-        "Complete technical build-input set for a core build with no optional external media libraries; application public-release readiness remains gated separately."
+        if ([bool]$sourcePin.license_review_complete) {
+            "Complete corresponding FFmpeg source, exact build controls, and technical license-review evidence; application public-release readiness remains gated separately."
+        } else {
+            "Complete technical build-input set for a core build with no optional external media libraries; application public-release readiness remains gated separately."
+        }
     } else {
         "FFmpeg source and exact BtbN build-control scripts for traceability; external-library corresponding sources are not yet included."
     }
@@ -202,13 +240,27 @@ Included assets:
 - $binaryDescription
 - $sourceDescription
 
+FFmpeg is free software distributed in this build under LGPL-3.0-or-later.
+Corresponding source: $([string]$sourcePin.url)
+
 The binary and source assets are versioned together and verified by SHA-256 in the TransVortex release manifest.
 "@
-    & $ghPath release create $tag `
-        --repo $Repository `
-        --title "TransVortex FFmpeg runtime $($manifest.version)" `
-        --notes $notes `
-        --draft
+    $releaseTitle = "TransVortex FFmpeg runtime $($manifest.version)"
+    if ($releaseIsPrerelease) {
+        $releaseTitle += " candidate"
+    }
+    $createArguments = @(
+        "release", "create", $tag,
+        "--repo", $Repository,
+        "--title", $releaseTitle,
+        "--notes", $notes,
+        "--draft",
+        "--latest=false"
+    )
+    if ($releaseIsPrerelease) {
+        $createArguments += "--prerelease"
+    }
+    & $ghPath @createArguments
     if ($LASTEXITCODE -ne 0) { throw "Could not create draft GitHub Release $tag." }
     $createdRelease = $true
 
@@ -226,9 +278,25 @@ The binary and source assets are versioned together and verified by SHA-256 in t
     $remote = Get-RemoteRelease -GhPath $ghPath -Repository $Repository -Tag $tag
     if ($null -eq $remote) { throw "Could not read the published FFmpeg release $tag." }
 } elseif ([bool]$remote.draft) {
-    throw "FFmpeg release $tag already exists as a draft. Inspect and recover that draft explicitly instead of replacing assets."
+    if (-not $ResumeDraft) {
+        throw "FFmpeg release $tag already exists as a draft. Inspect it, then pass -ResumeDraft to publish only when every pinned asset matches."
+    }
+    Assert-RemoteAssets -Remote $remote -ExpectedAssets $verifiedAssets
+    if ([bool]$remote.prerelease -ne $releaseIsPrerelease) {
+        throw "Draft FFmpeg release prerelease state does not match its distribution manifest: $tag"
+    }
+    & $ghPath release edit $tag --repo $Repository --draft=false
+    if ($LASTEXITCODE -ne 0) { throw "Verified FFmpeg draft could not be published: $tag" }
+    $remote = Get-RemoteRelease -GhPath $ghPath -Repository $Repository -Tag $tag
+    if ($null -eq $remote -or [bool]$remote.draft) {
+        throw "Could not read the published FFmpeg release after resuming its verified draft: $tag"
+    }
+    $resumedDraft = $true
 }
 
+if ([bool]$remote.prerelease -ne $releaseIsPrerelease) {
+    throw "Published FFmpeg release prerelease state does not match its distribution manifest: $tag"
+}
 Assert-RemoteAssets -Remote $remote -ExpectedAssets $verifiedAssets
 
 $result = [ordered]@{
@@ -237,7 +305,9 @@ $result = [ordered]@{
     release_tag = $tag
     release_url = [string]$remote.html_url
     release_created = $createdRelease
+    release_resumed_from_draft = $resumedDraft
     existing_release_verified = -not $createdRelease
+    github_release_prerelease = [bool]$remote.prerelease
     github_release_immutable = [bool]$remote.immutable
     publisher_allows_asset_replacement = $false
     public_distribution_source_ready = [bool]$manifest.public_distribution_source_ready
