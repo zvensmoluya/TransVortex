@@ -73,12 +73,14 @@ class TaskOption {
   const TaskOption({
     required this.label,
     required this.configured,
+    this.detail = '',
     this.provider,
     this.model,
   });
 
   final String label;
   final bool configured;
+  final String detail;
   final String? provider;
   final String? model;
 }
@@ -206,6 +208,7 @@ class MainWindowViewModel {
     this.reasoningConfigurable = false,
     this.reasoningOptions = const <ReasoningEffortChoice>[],
     this.reasoningSupport = const ReasoningEffortSupport.unsupported(),
+    this.asrDetail = '',
   });
 
   final MainState state;
@@ -217,6 +220,7 @@ class MainWindowViewModel {
   final bool translationConfigured;
   final String asrLabel;
   final bool asrConfigured;
+  final String asrDetail;
   final List<TranslationRuntimeChoice> translationOptions;
   final List<TranslationRuntimeChoice> translationDirectOptions;
   final List<TaskOption> asrOptions;
@@ -1010,8 +1014,9 @@ class MainWindowController extends ChangeNotifier {
       translationLabel: translation.configured ? translation.label : '需配置',
       translationDetail: translation.configured ? translation.detail : '',
       translationConfigured: translation.configured,
-      asrLabel: asr.configured ? asr.label : '需配置',
+      asrLabel: asr.label,
       asrConfigured: asr.configured,
+      asrDetail: asr.detail,
       translationOptions: _translationOptions(snapshot),
       translationDirectOptions: _translationDirectOptions(snapshot),
       asrOptions: _asrOptions(snapshot),
@@ -1347,6 +1352,7 @@ class MainWindowController extends ChangeNotifier {
     return TaskOption(
       label: label,
       configured: readiness?.asrConfigured ?? false,
+      detail: _asrReadinessDetail(readiness?.asrCode ?? ''),
       provider: provider,
       model: model,
     );
@@ -1453,16 +1459,34 @@ class MainWindowController extends ChangeNotifier {
   List<TaskOption> _asrOptions(DesktopSnapshot? snapshot) {
     if (snapshot == null) return const [];
     return snapshot.asrProviders
-        .where((provider) => provider.canRun)
+        .where(
+          (provider) =>
+              provider.canRun || provider.name == snapshot.asrProviderName,
+        )
         .map(
           (provider) => TaskOption(
             label: _asrDisplayLabel(snapshot, provider.name, provider.model),
-            configured: true,
+            configured: provider.canRun,
+            detail: provider.canRun
+                ? ''
+                : _asrReadinessDetail(provider.readiness.code),
             provider: provider.name,
             model: provider.model.isEmpty ? null : provider.model,
           ),
         )
         .toList(growable: false);
+  }
+
+  static String _asrReadinessDetail(String code) {
+    return switch (code) {
+      'credential_missing' => '未配置 API key',
+      'connection_untested' => '尚未测试连接',
+      'service_unreachable' => '识别服务当前不可用',
+      'runtime_missing' => '缺少本机识别组件',
+      'model_missing' => '缺少识别模型',
+      'model_unverified' || 'model_changed' => '需要重新验证模型',
+      _ => '当前方案尚未准备好',
+    };
   }
 
   static String _asrDisplayLabel(

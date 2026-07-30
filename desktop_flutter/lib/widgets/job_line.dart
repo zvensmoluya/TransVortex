@@ -38,7 +38,11 @@ class JobLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final asrLabel = view.asrConfigured ? view.asrLabel : '先配置识别';
+    final asrLabel = view.asrConfigured
+        ? view.asrLabel
+        : view.asrLabel == '需配置'
+        ? '先配置识别'
+        : '${view.asrLabel}（需配置）';
     final translationLabel = view.translationConfigured
         ? _compactEngineLabel(view.translationLabel)
         : '先配置翻译';
@@ -72,9 +76,13 @@ class JobLine extends StatelessWidget {
               const Text('源语，语音用', style: T.tBody),
               _Word(
                 label: asrLabel,
-                fullLabel: view.asrConfigured ? view.asrLabel : null,
+                fullLabel: view.asrConfigured
+                    ? view.asrLabel
+                    : view.asrDetail.isEmpty
+                    ? view.asrLabel
+                    : '${view.asrLabel} · ${view.asrDetail}',
                 warn: !view.asrConfigured,
-                onPick: view.asrConfigured ? onPickAsr : onConfigureAsr,
+                onPick: view.asrOptions.isEmpty ? onConfigureAsr : onPickAsr,
               ),
               const Text('识别，交给', style: T.tBody),
             ] else

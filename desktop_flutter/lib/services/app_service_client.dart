@@ -773,22 +773,26 @@ class AppServiceClient {
     required Map<String, Object?> providerDraft,
     String? apiKey,
     Map<String, Object?>? expectedVersion,
+    bool setDefault = true,
   }) {
     return call('asr.provider.save', {
       'provider_draft': providerDraft,
       'api_key': ?apiKey,
       'expected_version': ?expectedVersion,
+      'set_default': setDefault,
     }).then(_stringMap);
   }
 
   Future<Map<String, Object?>> asrProviderTest({
     String? provider,
     Map<String, Object?>? providerDraft,
+    String? apiKey,
     String sourceLang = 'en',
   }) {
     return call('asr.provider.test', {
       'provider': ?provider,
       'provider_draft': ?providerDraft,
+      'api_key': ?apiKey,
       'source_lang': sourceLang,
     }).then(_stringMap);
   }

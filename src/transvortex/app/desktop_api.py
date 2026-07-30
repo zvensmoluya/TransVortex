@@ -505,6 +505,7 @@ class DesktopApi:
             provider_draft=_dict_param(params, "provider_draft", "providerDraft"),
             api_key=_optional_text(params, "api_key", "apiKey"),
             expected_version=_optional_dict(params, "expected_version", "expectedVersion"),
+            set_default=_optional_bool(params, "set_default", "setDefault") is not False,
         )
 
     def asr_status(self, _params: dict[str, Any]) -> dict[str, Any]:

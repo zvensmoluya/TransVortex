@@ -1537,6 +1537,7 @@ routing:
         'model': 'whisper-1',
       },
       expectedVersion: {'mtime_ns': 3, 'size': 4},
+      setDefault: false,
     );
     final setup = await client.asrSetupStart('small');
     final storage = await client.asrStorageSet(r'D:\TransVortex-ASR');
@@ -1586,6 +1587,7 @@ routing:
     });
     expect(transport.calls[5].params['active_profile'], 'route_1');
     expect(transport.calls[5].params['next_profile_seq'], 2);
+    expect(transport.calls[6].params['set_default'], isFalse);
     expect(transport.calls[5].params['expected_version'], {
       'mtime_ns': 5,
       'size': 6,

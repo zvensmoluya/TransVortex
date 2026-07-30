@@ -1276,7 +1276,7 @@ class _SegmentButtonState extends State<SegmentButton> {
                     const SizedBox(width: T.s4),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: T.s4,
+                        horizontal: 3,
                         vertical: 1,
                       ),
                       decoration: BoxDecoration(

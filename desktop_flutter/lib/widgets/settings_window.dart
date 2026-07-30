@@ -254,6 +254,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   Future<void> _loadConfig({
     bool preserveAsrDraft = false,
     bool silent = false,
+    String? preferredAsrProvider,
   }) async {
     final revision = ++_configLoadRevision;
     if (!silent) {
@@ -279,6 +280,12 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final retainedSelection = canRetainSelection
           ? _asrSelectionIdForProvider(snapshot, previousProviderName)
           : '';
+      final preferredProviderName = preferredAsrProvider?.trim() ?? '';
+      final canUsePreferredProvider =
+          preferredProviderName.isNotEmpty &&
+          snapshot.asrProviders.any(
+            (provider) => provider.name == preferredProviderName,
+          );
       setState(() {
         _snapshot = snapshot;
         if (widget.type == AppWindowType.diagnostics) {
@@ -288,7 +295,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         }
         if (_isAsr) {
           if (!preserveAsrDraft) {
-            _selectedAsrProvider = canRetainSelection
+            _selectedAsrProvider = canUsePreferredProvider
+                ? _asrSelectionIdForProvider(snapshot, preferredProviderName)
+                : canRetainSelection
                 ? retainedSelection
                 : _asrSelectionIdForProvider(
                     snapshot,
@@ -503,6 +512,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final activeSelection = snapshot == null
         ? ''
         : _asrSelectionIdForProvider(snapshot, snapshot.asrProviderName);
+    final activeProvider = snapshot == null
+        ? null
+        : _asrProviderByName(snapshot, snapshot.asrProviderName);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -512,6 +524,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               child: _SegmentedEngines(
                 selected: _selectedAsrProvider,
                 active: activeSelection,
+                activeReady: activeProvider?.canRun ?? false,
                 onPick:
                     _savingAsr ||
                         _probingAsrModel ||
@@ -605,13 +618,21 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     final protocol = '${draft['protocol']}';
     final isOpenRouter = protocol == 'openrouter_stt';
     final provider = _selectedAsrOption();
+    final canSetDefault =
+        kind != 'remote' ||
+        _keyTextOrNull() != null ||
+        provider?.hasKey == true;
     if (kind == 'local_worker') {
       return _localWhisperSetupDetails(provider);
     }
     return ToolPanel(
       footer: [
         ActionButton(
-          label: _savingAsr ? '保存中' : '保存并设为默认',
+          label: _savingAsr
+              ? '保存中'
+              : canSetDefault
+              ? '保存并设为默认'
+              : '保存配置',
           strong: true,
           onTap: _savingAsr || _testingAsr ? null : _saveAsrProvider,
         ),
@@ -632,7 +653,9 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           ),
       ],
       footnote: kind == 'remote'
-          ? isOpenRouter
+          ? !canSetDefault
+                ? '先保存服务配置；添加 API key 后才能设为默认。'
+                : isOpenRouter
                 ? '音频会上传到 OpenRouter 并产生模型费用；密钥保存在用户级凭据文件中。'
                 : '密钥保存在用户级凭据文件中。'
           : null,
@@ -727,7 +750,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
               obscure: true,
               onChanged: (_) => isOpenRouter
                   ? _markOpenRouterKeyChanged()
-                  : _markAsrDraftDirty(),
+                  : _markAsrCredentialChanged(),
             ),
           ],
         ],
@@ -1772,6 +1795,14 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     });
   }
 
+  void _markAsrCredentialChanged() {
+    setState(() {
+      _asrDraftDirty = true;
+      _message = null;
+      _error = null;
+    });
+  }
+
   Future<void> _saveAsrProvider({
     String? successMessage,
     String? providerNameOverride,
@@ -1789,7 +1820,13 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final latest = await _client.desktopSnapshot();
       _snapshot = latest;
       final draft = draftOverride ?? _asrDraft(providerName);
-      if ('${draft['kind'] ?? ''}' == 'local_worker') {
+      final providerKind = '${draft['kind'] ?? ''}';
+      final savedCredential = _asrProviderByName(latest, providerName).hasKey;
+      final setAsDefault =
+          providerKind != 'remote' ||
+          _keyTextOrNull() != null ||
+          savedCredential;
+      if (providerKind == 'local_worker') {
         await _activateLocalAsrResources(
           providerName: providerName,
           snapshot: latest,
@@ -1799,24 +1836,30 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           providerDraft: draft,
           apiKey: _keyTextOrNull(),
           expectedVersion: latest.pipelineFileVersion,
+          setDefault: setAsDefault,
         );
       }
-      await _loadConfig();
+      await _loadConfig(preferredAsrProvider: providerName);
       if (!mounted) return;
       final savedSnapshot = _snapshot;
       final savedProvider = savedSnapshot == null
           ? null
           : _asrProviderByName(savedSnapshot, providerName);
-      await widget.bridge.setAsrDefault(
-        savedProvider?.displayLabel ?? _asrLabelForDraft(draft),
-        configured: savedProvider?.canRun ?? false,
-      );
+      if (setAsDefault) {
+        await widget.bridge.setAsrDefault(
+          savedProvider?.displayLabel ?? _asrLabelForDraft(draft),
+          configured: savedProvider?.canRun ?? false,
+        );
+      }
       await widget.bridge.refreshServiceSnapshot();
       if (!mounted) return;
-      setState(
-        () =>
-            _message = successMessage ?? '识别默认已保存：${_asrLabelForDraft(draft)}。',
-      );
+      setState(() {
+        _message =
+            successMessage ??
+            (setAsDefault
+                ? '识别默认已保存：${_asrLabelForDraft(draft)}。'
+                : '识别配置已保存：${_asrLabelForDraft(draft)}。添加 API key 后可设为默认。');
+      });
     } on Object catch (error) {
       if (!mounted) return;
       setState(() => _error = _friendlySettingsError(error));
@@ -1971,6 +2014,8 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       setState(() {
         _activeAsrOperation = operation;
       });
+      await widget.bridge.refreshServiceSnapshot();
+      if (!mounted) return;
       _startAsrOperationPolling();
     } on Object catch (error) {
       if (!mounted) return;
@@ -2393,6 +2438,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       final providerDraft = _asrDraft(_selectedAsrProvider);
       final result = await _client.asrProviderTest(
         providerDraft: providerDraft,
+        apiKey: _keyTextOrNull(),
       );
       if (!mounted) return;
       setState(() {
@@ -3463,11 +3509,13 @@ class _SegmentedEngines extends StatelessWidget {
   const _SegmentedEngines({
     required this.selected,
     required this.active,
+    required this.activeReady,
     required this.onPick,
   });
 
   final String selected;
   final String active;
+  final bool activeReady;
   final ValueChanged<String>? onPick;
 
   @override
@@ -3488,7 +3536,12 @@ class _SegmentedEngines extends StatelessWidget {
               label: items[index].$2,
               detail: items[index].$3,
               selected: selected == items[index].$1,
-              statusLabel: active == items[index].$1 ? '当前默认' : null,
+              statusLabel: active == items[index].$1
+                  ? activeReady
+                        ? '当前默认'
+                        : '默认未配置'
+                  : null,
+              statusColor: activeReady ? T.ok : T.warn,
               onTap: onPick == null ? null : () => onPick!(items[index].$1),
             ),
           ),
@@ -4451,6 +4504,7 @@ Color _asrStateColor(String state) {
 }
 
 String _asrStatusChipLabel(AsrReadiness? readiness) {
+  if (readiness?.code == 'credential_missing') return '缺少密钥';
   return switch (readiness?.state) {
     'ready' => '可以开始',
     'checking' => '检查中',
@@ -4462,6 +4516,9 @@ String _asrStatusChipLabel(AsrReadiness? readiness) {
 String _asrReadinessHint(AsrReadiness? readiness) {
   final value = readiness;
   if (value == null) return '正在读取本机识别状态。';
+  if (value.code == 'credential_missing') {
+    return '还未配置 API key，添加后才能设为默认并开始识别。';
+  }
   return switch (value.state) {
     'ready' => '本地识别方案已准备好，可以开始处理视频。',
     'checking' => '正在检查运行环境和模型。',

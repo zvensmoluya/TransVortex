@@ -929,7 +929,15 @@ void main() {
   test(
     'controller blocks run submission when ASR default is missing',
     () async {
-      final handle = _FakeHandle(_desktopSnapshot(asrHasKey: false));
+      final handle = _FakeHandle(
+        _desktopSnapshot(
+          asrHasKey: false,
+          asrProviderName: 'openai_whisper',
+          asrKind: 'remote',
+          asrProtocol: 'openai_transcriptions',
+          asrModel: 'whisper-1',
+        ),
+      );
       final controller = MainWindowController(
         service: _readyController(handle: handle),
       );
@@ -940,8 +948,12 @@ void main() {
 
       expect(controller.view.state, MainState.blocked);
       expect(controller.view.statusLine, contains('需要先配置识别'));
-      expect(controller.view.asrLabel, '需配置');
+      expect(controller.view.asrLabel, 'OpenAI Whisper · whisper-1');
       expect(controller.view.asrConfigured, isFalse);
+      expect(controller.view.asrDetail, '未配置 API key');
+      expect(controller.view.asrOptions, hasLength(1));
+      expect(controller.view.asrOptions.single.configured, isFalse);
+      expect(controller.view.asrOptions.single.detail, '未配置 API key');
 
       await controller.submitRun();
 
@@ -1473,8 +1485,10 @@ LocalServiceController _readyController({
 DesktopSnapshot _desktopSnapshot({
   bool translationHasKey = true,
   bool asrHasKey = true,
+  String asrProviderName = 'local',
   String asrModel = 'large-v3',
   String asrKind = 'local_inprocess',
+  String asrProtocol = 'faster_whisper',
   String asrModelSource = 'managed',
   List<String> extraModels = const [],
   List<Map<String, Object?>> routingProfiles = const [],
@@ -1499,7 +1513,7 @@ DesktopSnapshot _desktopSnapshot({
       if (routingProfiles.isNotEmpty) 'routing_profiles': routingProfiles,
       if (routingProfiles.isNotEmpty)
         'active_routing_profile': activeProfile?['id'],
-      'pipeline': {'asr_provider': 'local'},
+      'pipeline': {'asr_provider': asrProviderName},
       'providers': [
         {
           'name': 'RealProvider',
@@ -1525,12 +1539,19 @@ DesktopSnapshot _desktopSnapshot({
         },
       ],
       'asr_providers': {
-        'local': {
-          'name': 'local',
+        asrProviderName: {
+          'name': asrProviderName,
           'kind': asrKind,
-          'protocol': 'faster_whisper',
+          'protocol': asrProtocol,
           'model': asrModel,
           'has_key': asrHasKey,
+          if (!asrHasKey && asrKind == 'remote')
+            'readiness': {
+              'state': 'needs_action',
+              'code': 'credential_missing',
+              'can_run': false,
+              'primary_action': 'set_credential',
+            },
           if (asrKind == 'local_worker')
             'local': {'model_source': asrModelSource},
         },

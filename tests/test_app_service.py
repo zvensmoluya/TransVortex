@@ -1097,6 +1097,47 @@ def test_app_service_asr_provider_save_updates_pipeline_and_redacts_key(tmp_path
     assert config["asr_providers"]["openai_asr"]["has_key"] is True
 
 
+def test_app_service_asr_provider_save_without_default_preserves_active_engine(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_config(tmp_path)
+    monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    service = DesktopApi(root_dir=tmp_path)
+
+    response = handle_line(
+        service,
+        _request(
+            "asr.provider.save",
+            {
+                "provider_draft": {
+                    "name": "openai_asr",
+                    "kind": "remote",
+                    "protocol": "openai_transcriptions",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "whisper-1",
+                    "auth": {
+                        "type": "bearer",
+                        "env_key": "OPENAI_API_KEY",
+                        "credential_id": "openai_asr",
+                    },
+                },
+                "set_default": False,
+            },
+        ),
+        root_dir=tmp_path,
+    )
+    snapshot = handle_line(service, _request("desktop.snapshot"), root_dir=tmp_path)
+    config = snapshot["result"]["config"]
+
+    assert response["result"]["default_changed"] is False
+    assert response["result"]["active_provider"] == "faster_whisper_large_v3"
+    assert config["pipeline"]["asr_provider"] == "faster_whisper_large_v3"
+    assert config["asr_providers"]["openai_asr"]["has_key"] is False
+    assert config["asr_providers"]["openai_asr"]["readiness"]["code"] == "credential_missing"
+
+
 def test_app_service_exposes_curated_openrouter_asr_profiles(tmp_path: Path, monkeypatch) -> None:
     _write_config(tmp_path)
     monkeypatch.setenv("TRANSVORTEX_HOME", str(tmp_path / "home"))

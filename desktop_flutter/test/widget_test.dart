@@ -25,6 +25,7 @@ import 'package:transvortex_desktop_flutter/widgets/designed_tooltip.dart';
 import 'package:transvortex_desktop_flutter/widgets/application_network_settings.dart';
 import 'package:transvortex_desktop_flutter/widgets/application_settings_panel.dart';
 import 'package:transvortex_desktop_flutter/widgets/asr_resource_management.dart';
+import 'package:transvortex_desktop_flutter/widgets/job_line.dart';
 import 'package:transvortex_desktop_flutter/widgets/result_review_workspace.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_common.dart';
 import 'package:transvortex_desktop_flutter/widgets/settings_window.dart';
@@ -1637,6 +1638,57 @@ void main() {
     expect(find.text('源语，直接交给'), findsOneWidget);
     expect(find.text('先配置识别'), findsNothing);
     expect(find.text('开始译制'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets('main keeps an unavailable current ASR provider visible', (
+    tester,
+  ) async {
+    installFilePickerMock(tester);
+    final openAiProvider = <String, Object?>{
+      'name': 'openai_whisper',
+      'kind': 'remote',
+      'protocol': 'openai_transcriptions',
+      'model': 'whisper-1',
+      'has_key': false,
+      'readiness': {
+        'state': 'needs_action',
+        'code': 'credential_missing',
+        'can_run': false,
+        'primary_action': 'set_credential',
+      },
+    };
+    await tester.pumpWidget(
+      TransVortexApp(
+        localServiceController: _readyController(
+          snapshot: _desktopSnapshot(
+            activeAsrProvider: 'openai_whisper',
+            additionalAsrProviders: {'openai_whisper': openAiProvider},
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('选择片源'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final jobLine = tester.widget<JobLine>(find.byType(JobLine));
+    expect(jobLine.view.requiresAsr, isTrue);
+    expect(jobLine.view.asrLabel, 'OpenAI Whisper · whisper-1');
+    expect(jobLine.view.asrDetail, '未配置 API key');
+    final unavailableAsr = find.textContaining(
+      'OpenAI Whisper · whisper-1（需配置）',
+    );
+    expect(unavailableAsr, findsOneWidget);
+    await tester.tap(unavailableAsr);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('OpenAI Whisper · whisper-1'), findsOneWidget);
+    expect(find.text('未配置 API key'), findsOneWidget);
+    expect(find.text('去语音识别设置'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -4376,6 +4428,95 @@ void main() {
     },
   );
 
+  testWidgets('ASR settings saves a remote draft without making it default', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 620));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    Map<String, Object?>? savedParams;
+    Map<String, Object?>? testedParams;
+    final openAiProvider = <String, Object?>{
+      'name': 'openai_whisper',
+      'kind': 'remote',
+      'protocol': 'openai_transcriptions',
+      'base_url': 'https://api.openai.com/v1',
+      'endpoint': '/v1/audio/transcriptions',
+      'model': 'whisper-1',
+      'auth': {
+        'type': 'bearer',
+        'env_key': 'OPENAI_API_KEY',
+        'credential_id': 'openai_whisper',
+      },
+      'has_key': false,
+      'readiness': {
+        'state': 'needs_action',
+        'code': 'credential_missing',
+        'can_run': false,
+        'primary_action': 'set_credential',
+      },
+    };
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return _desktopSnapshot(
+          activeAsrProvider: 'local',
+          additionalAsrProviders: {'openai_whisper': openAiProvider},
+        ).raw;
+      }
+      if (method == 'asr.provider.save') {
+        savedParams = Map<String, Object?>.from(params);
+        return {
+          'ok': true,
+          'provider': 'openai_whisper',
+          'default_changed': false,
+          'active_provider': 'local',
+        };
+      }
+      if (method == 'asr.provider.test') {
+        testedParams = Map<String, Object?>.from(params);
+        return {'ok': true, 'code': 'ready'};
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI Whisper').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('缺少密钥'), findsOneWidget);
+    expect(find.textContaining('添加后才能设为默认并开始识别'), findsOneWidget);
+    expect(find.text('保存配置'), findsOneWidget);
+    expect(find.textContaining('先保存服务配置'), findsOneWidget);
+
+    await tester.tap(find.text('保存配置'));
+    await tester.pumpAndSettle();
+
+    expect(savedParams?['set_default'], isFalse);
+    expect(find.textContaining('识别配置已保存：OpenAI Whisper'), findsOneWidget);
+    expect(find.text('OpenAI API key（留空则沿用已保存密钥）'), findsOneWidget);
+
+    final keyInput = find.widgetWithText(Input, 'OpenAI API key（留空则沿用已保存密钥）');
+    await tester.enterText(
+      find.descendant(of: keyInput, matching: find.byType(TextField)),
+      'example-token',
+    );
+    await tester.pump();
+
+    expect(find.text('保存并设为默认'), findsOneWidget);
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+    expect(testedParams?['api_key'], 'example-token');
+    expectNoFlutterException();
+  });
+
   testWidgets('ASR settings exposes curated OpenRouter model profiles', (
     tester,
   ) async {
@@ -5546,7 +5687,11 @@ void main() {
     final store = WindowStateStore();
     final bridge = WindowStateBridge.main(store);
     final calls = <String>[];
+    var serviceRefreshes = 0;
     Map<String, Object?>? setupParams;
+    bridge.attachServiceRefresher(() async {
+      serviceRefreshes += 1;
+    });
     final snapshot = _desktopSnapshot(
       withAsrProviders: false,
       asrLocal: const {
@@ -5619,6 +5764,7 @@ void main() {
     expect(calls, contains('asr.setup.start'));
     expect(calls, isNot(contains('asr.provider.save')));
     expect(calls, isNot(contains('asr.component.install')));
+    expect(serviceRefreshes, 1);
     expect(setupParams, {
       'model_id': 'small',
       'activate_on_complete': true,

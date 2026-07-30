@@ -344,6 +344,7 @@ def _persist_asr_engine_resolution(
     current_rows: list[dict[str, Any]],
     resolution: Any,
     api_key: str | None = None,
+    set_default: bool = True,
 ) -> dict[str, Any]:
     provider = resolution.runtime
     engine_row = asr_engine_to_yaml_row(resolution.spec, resolution.overrides)
@@ -352,8 +353,9 @@ def _persist_asr_engine_resolution(
 
     payload = dict(existing)
     asr = _as_dict(payload.get("asr"))
-    asr.pop("provider", None)
-    asr["engine"] = provider.name
+    if set_default:
+        asr.pop("provider", None)
+        asr["engine"] = provider.name
     payload["asr"] = asr
     payload.pop("asr_providers", None)
     payload["asr_engines"] = next_rows
@@ -389,6 +391,8 @@ def _persist_asr_engine_resolution(
         "credential_id": credential_id,
         "has_key": has_key,
         "credential_source": credential_source,
+        "default_changed": set_default,
+        "active_provider": _text(asr, "engine", "provider"),
     }
 
 
@@ -398,6 +402,7 @@ def save_asr_provider_config(
     provider_draft: dict[str, Any],
     api_key: str | None = None,
     expected_version: dict[str, Any] | None = None,
+    set_default: bool = True,
 ) -> dict[str, Any]:
     pipeline_file = root_dir / "pipeline.yaml"
     _check_expected_version(pipeline_file, expected_version)
@@ -417,6 +422,7 @@ def save_asr_provider_config(
         current_rows=current_rows,
         resolution=resolution,
         api_key=api_key,
+        set_default=set_default,
     )
 
 

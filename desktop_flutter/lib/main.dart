@@ -2330,6 +2330,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       footerLabel: '去语音识别设置',
       onFooter: () => _openToolWindow(AppWindowType.asrSettings),
       labelOf: (option) => option.label,
+      detailOf: (option) => option.detail,
+      enabledOf: (option) => option.configured,
     );
     if (selected != null) _controller.selectAsr(selected);
   }
@@ -2379,6 +2381,8 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     required List<TValue> options,
     required String emptyLabel,
     required String Function(TValue option) labelOf,
+    String Function(TValue option)? detailOf,
+    bool Function(TValue option)? enabledOf,
     Key? Function(TValue option)? keyOf,
     String? footerLabel,
     VoidCallback? onFooter,
@@ -2402,7 +2406,26 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             PopupMenuItem<Object>(
               key: keyOf?.call(option),
               value: option as Object,
-              child: Text(labelOf(option), style: T.tBody),
+              enabled: enabledOf?.call(option) ?? true,
+              child: Builder(
+                builder: (context) {
+                  final detail = detailOf?.call(option) ?? '';
+                  if (detail.isEmpty) {
+                    return Text(labelOf(option), style: T.tBody);
+                  }
+                  return SizedBox(
+                    width: 260,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(labelOf(option), style: T.tBody),
+                        const SizedBox(height: 2),
+                        Text(detail, style: T.tCaption),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
         if (footerLabel != null) const PopupMenuDivider(),
         if (footerLabel != null)
