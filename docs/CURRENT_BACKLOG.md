@@ -16,14 +16,12 @@
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| ASR 组件公开下载与可见 APP 验收 | 待验收 | 单一设置任务、取消/恢复、托盘反馈、首次下载前独立资源目录、目标盘空间判断和 760×560 界面已实现并通过自动验证；仍需用已发布 runtime 完成可见 Flutter 真实点击下载、取消/续传、关窗重开、`small + CPU` 真实媒体任务和干净系统首启；NVIDIA 加速另行开放 | [`ASR_RELEASE_RECAP_2026-07-21.md`](ASR_RELEASE_RECAP_2026-07-21.md) |
-| 干净 Windows 首启与媒体任务 | 待验收 | 在未配置开发环境的干净系统完成安装、首启、配置和真实任务 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
-| 已安装路径通知行为 | 待验收 | 通知中心归属正确，点击通知能够聚焦应用 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
+| 最终 Release Candidate 干净 Windows 复验 | 待验收 | 现有安装、首启和真实任务路径已经过现场使用；待包含最终 FFmpeg 和签名状态的 RC 生成后，在未配置开发环境的 Windows 重跑精简真实任务，并保存版本、安装包哈希和结果证据 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | Authenticode 签名 | 外部条件 | 正式安装包和主可执行文件完成签名、时间戳和 Windows 验证 | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | FFmpeg 自建 core 与公开分发闭环 | 待实现 | 无可选外部库的平衡型 core 已完成固定构建、兼容验证和独立的不可变 binary/source 候选 pin；当前正式 runtime 尚未切换。仍需发布候选资产、接入 portable / installer，并完成干净 Windows 真实片源和许可审查后才能采用并将 `public_distribution_ready` 提升为 true | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
 | 可复现的 CI 构建 | 待实现 | 在干净构建执行器生成 runtime、安装包、manifest 和验收结果 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 完成第一阶段人工 E2E，真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。2026-07-18 又完成受管 Whisper runtime、NVIDIA 组件和 `large-v3` 模型的隔离校验安装，并从正式安装目录启动可见 APP，在不依赖工作区 Python 的情况下完成 `managed + stdio_jsonl + cuda + int8_float16` 真实媒体任务、SRT / ASS 审看、重新导出和卸载清理，详见 [`2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。不要把这些已完成基础重新列为待办；它们仍不等于公开组件下载、干净系统发布就绪或通知验收。
+当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 完成第一阶段人工 E2E，真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。2026-07-18 又完成受管 Whisper runtime、NVIDIA 组件和 `large-v3` 模型的隔离校验安装，并从正式安装目录启动可见 APP，在不依赖工作区 Python 的情况下完成 `managed + stdio_jsonl + cuda + int8_float16` 真实媒体任务、SRT / ASS 审看、重新导出和卸载清理，详见 [`2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。2026-07-30 现场确认又已多次从可见 Flutter APP 完成公开 CPU runtime 的下载与 `small + CPU` 真实媒体任务，原 ASR 公开下载验收不再列为 P0；Windows 通知也已正常归属并显示，点击聚焦只随最终 RC 做轻量回归，不再作为独立发布阻塞项。最终 RC 仍需针对其确切安装包、FFmpeg 和签名状态保留一次可追溯的干净 Windows 复验。
 
 ## P1：桌面生命周期与数据安全
 
