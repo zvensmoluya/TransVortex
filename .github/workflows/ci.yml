@@ -20,11 +20,12 @@ env:
   PYTHONIOENCODING: utf-8
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PUB_HOSTED_URL: https://pub.dev
 
 jobs:
   python-tests:
-    name: Python tests
-    runs-on: ubuntu-24.04
+    name: Python tests (Windows)
+    runs-on: windows-2022
     timeout-minutes: 20
     steps:
       - name: Check out repository
