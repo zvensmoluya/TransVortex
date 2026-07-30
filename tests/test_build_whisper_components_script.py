@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell delivery script")
 
 
 def _powershell() -> str:

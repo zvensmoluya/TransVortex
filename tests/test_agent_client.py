@@ -46,6 +46,7 @@ class _FakeProcess:
         return self._exit_code
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows cmd shim behavior")
 def test_codex_client_status_uses_the_user_path_client(tmp_path: Path, monkeypatch) -> None:
     executable = tmp_path / "codex.cmd"
     executable.write_text("@echo off\n", encoding="utf-8")

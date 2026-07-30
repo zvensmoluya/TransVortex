@@ -24,8 +24,8 @@ env:
 
 jobs:
   python-tests:
-    name: Python tests (Windows)
-    runs-on: windows-2022
+    name: Python tests
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -53,8 +53,8 @@ jobs:
         run: python -m pytest -q -m "not release_asset"
 
   flutter-quality:
-    name: Flutter quality
-    runs-on: ubuntu-24.04
+    name: Flutter quality (Windows)
+    runs-on: windows-2022
     timeout-minutes: 30
     defaults:
       run:

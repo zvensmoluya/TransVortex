@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import threading
 import time
 import zipfile
@@ -762,6 +763,7 @@ def test_managed_hardware_probe_is_saved_to_accelerator_marker(tmp_path: Path, m
     assert marker["hardware_probe"]["checked_at"]
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows executable discovery behavior")
 def test_environment_discovery_uses_registered_locations_without_executing_python(
     tmp_path: Path,
     monkeypatch,
