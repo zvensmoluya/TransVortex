@@ -35,5 +35,9 @@ where = ["src"]
 transvortex = ["resources/*.json"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not release_asset'"
 testpaths = ["tests"]
 norecursedirs = ["artifacts", ".venv", "src/transvortex.egg-info"]
+markers = [
+  "release_asset: validates immutable release assets and runs only in release-candidate verification",
+]

@@ -19,6 +19,48 @@ def _pin() -> dict[str, object]:
     return json.loads(PIN_PATH.read_text(encoding="utf-8"))
 
 
+def _pinned_powershell() -> str | None:
+    candidates: list[str] = []
+    discovered = shutil.which("pwsh")
+    if discovered:
+        candidates.append(discovered)
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(
+                str(
+                    Path(local_app_data)
+                    / "Programs"
+                    / "PowerShell"
+                    / "7.6.4"
+                    / "pwsh.exe"
+                )
+            )
+
+    checked: set[str] = set()
+    for candidate in candidates:
+        resolved = str(Path(candidate).resolve())
+        if resolved in checked or not Path(resolved).is_file():
+            continue
+        checked.add(resolved)
+        version = subprocess.run(
+            [
+                resolved,
+                "-NoProfile",
+                "-Command",
+                "Write-Output \"$($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)\"",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if version.returncode == 0 and version.stdout.strip() == "Core 7.6.4":
+            return resolved
+    return None
+
+
 def test_ffmpeg_distribution_pin_is_immutable_and_traceable() -> None:
     pin = _pin()
     binary = pin["binary"]
@@ -98,15 +140,9 @@ def test_ffmpeg_release_scripts_share_the_pin_and_verify_public_source() -> None
 def test_source_bundle_runs_on_pinned_powershell_and_enforces_output_pin(
     tmp_path: Path,
 ) -> None:
-    powershell = shutil.which("pwsh")
-    if powershell is None and os.name == "nt":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            candidate = Path(local_app_data) / "Programs" / "PowerShell" / "7.6.4" / "pwsh.exe"
-            if candidate.is_file():
-                powershell = str(candidate)
+    powershell = _pinned_powershell()
     if powershell is None:
-        pytest.skip("Pinned PowerShell is not available")
+        pytest.skip("Pinned PowerShell 7.6.4 is not available")
 
     binary_archive = tmp_path / "binary.zip"
     ffmpeg_archive = tmp_path / "ffmpeg-source.tar.gz"

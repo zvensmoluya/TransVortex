@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_PIN_PATH = ROOT / "requirements" / "ffmpeg-core-runtime.json"
@@ -84,6 +86,7 @@ def test_core_distribution_pin_is_immutable_but_not_adopted() -> None:
     assert current["variant"] == "win64-lgpl-shared-8.1"
 
 
+@pytest.mark.release_asset
 def test_core_distribution_pins_exact_build_controls() -> None:
     source = _json(CORE_PIN_PATH)["corresponding_source"]
     controls = source["build_control_files"]

@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.13.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.13.14
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/app-runtime.txt
+            requirements/ci.txt
+
+      - name: Install pinned test environment
+        run: |
+          python -m pip install "pip==25.1.1" "setuptools==80.9.0" "wheel==0.45.1"
+          python -m pip install --requirement requirements/ci.txt
+          python -m pip install --no-deps --no-build-isolation --editable .
+
+      - name: Run Python test suite
+        run: python -m pytest -q -m "not release_asset"
+
+  flutter-quality:
+    name: Flutter quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter 3.44.4
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.44.4
+          cache: true
+
+      - name: Resolve locked Flutter dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Check Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze Flutter sources
+        run: flutter analyze --fatal-infos
+
+      - name: Run Flutter test suite
+        run: flutter test
+
+  windows-release-build:
+    name: Windows release compile (tag or manual)
+    needs:
+      - python-tests
+      - flutter-quality
+    if: >-
+      ${{ success() &&
+          (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter 3.44.4
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.44.4
+          cache: true
+
+      - name: Enable Windows desktop support
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve locked Flutter dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Compile Windows release bundle
+        run: flutter build windows --release

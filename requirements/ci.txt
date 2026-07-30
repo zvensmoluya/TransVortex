@@ -1,0 +1,10 @@
+-r app-runtime.txt
+
+# Test dependencies are pinned separately from the product runtime so CI can
+# be reproduced without shipping development-only packages to users.
+colorama==0.4.6; sys_platform == "win32"
+iniconfig==2.3.0
+packaging==25.0
+pluggy==1.6.0
+Pygments==2.20.0
+pytest==9.0.3
