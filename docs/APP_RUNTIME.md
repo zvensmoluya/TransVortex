@@ -115,11 +115,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package_flutter_rele
 NSIS 原生安装器使用：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -AllowUnsigned -Force
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1 -ReleaseCandidate -AllowUnsigned -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_installer.ps1 `
+  -InstallerPath .\dist\installer\windows\TransVortex-0.1.0-windows-x64-setup-candidate.exe
 ```
 
-`-AllowUnsigned` 只允许生成内部验收产物。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease；公开发布剩余门槛是 Authenticode 签名，以及干净 Windows 环境的首启和真实媒体任务验收。
+`-AllowUnsigned` 显式确认本次构建允许没有 Authenticode；不带 `-ReleaseCandidate` 时仍生成 `internal` 验收件，二者同时使用才生成未签名 `candidate`。首版 `0.1.0` 的签名策略是 `optional_for_initial_release`：未签名不再阻止公开候选和最终发布，但下载页必须明确说明 Windows 可能显示“未知发布者”或 SmartScreen 提示。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease；公开发布剩余门槛是确切 RC 在干净 Windows 环境的首启和真实媒体任务验收。
 
 全新安装把用户选择的位置整理为一个专用产品根，并建立 `App`、`Data`、`Resources` 三个相互隔离的子目录。默认布局是 `%LOCALAPPDATA%\Programs\TransVortex\App`、`Data` 和 `Resources`；选择其他磁盘时三者一起跟随到所选位置。升级的 staging、旧版本回滚和卸载程序删除边界都只落在 `App`，不会覆盖 `Data` 或 `Resources`。确认页面直接展示程序、工作数据和识别资源的最终路径，其中工作数据仍可单独更改；配置和凭据固定在 Windows 用户目录。
 
@@ -152,4 +153,4 @@ Agent / CLI 定位文件属于已安装程序入口，不属于用户设置；�
 
 同一隔离安装目录随后启动了可见 Flutter APP，并完成一条确实需要 ASR 的真实媒体任务。机器报告固定了 `DONE` 任务与 checkpoint、正常退出的 Python Worker、23 条 `managed + stdio_jsonl + cuda + int8_float16` 识别行，以及非空 SRT / ASS；人工操作覆盖运行态、独立任务处理窗审看和重新导出。无活动 Worker 后静默卸载返回 0，程序目录删除，隔离任务与报告保留。因此“本机内部安装路径真实任务”已经闭环。
 
-该结论不覆盖干净 Windows、通知聚焦、公开组件下载和 Authenticode；这些仍是独立发布边界。FFmpeg binary/source 托管与技术许可审查已在 2026-07-30 的 r2 固定 GitHub prerelease 中完成。当次证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。
+该结论不覆盖干净 Windows、通知聚焦和公开组件下载；这些仍是独立发布边界。首版未签名策略已经明确，不再把 Authenticode 作为验收门槛。FFmpeg binary/source 托管与技术许可审查已在 2026-07-30 的 r2 固定 GitHub prerelease 中完成。当次证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。

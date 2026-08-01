@@ -143,14 +143,15 @@ flutter run -d windows
 
 ## Windows 安装包
 
-内部未签名安装包：
+首版未签名 Release Candidate：
 
 ```powershell
-.\scripts\build_windows_installer.ps1 -AllowUnsigned -Force
-.\scripts\accept_windows_installer.ps1
+.\scripts\build_windows_installer.ps1 -ReleaseCandidate -AllowUnsigned -Force
+.\scripts\accept_windows_installer.ps1 `
+  -InstallerPath .\dist\installer\windows\TransVortex-0.1.0-windows-x64-setup-candidate.exe
 ```
 
-当前 `0.1.0` Alpha 内部安装包已通过本机安装、升级、运行中保护、固定 runtime、快捷方式、卸载和用户数据保留验收。它还不是公开发布件；剩余门槛见 [`docs/APP_RUNTIME.md`](docs/APP_RUNTIME.md)。
+`0.1.0` Alpha 明确允许未签名发布；`-AllowUnsigned` 是对该策略的显式确认，`-ReleaseCandidate` 负责把产物从内部验收件区分为公开候选。Windows 仍可能显示“未知发布者”或 SmartScreen 提示，这属于首版已接受的用户可见限制，不再是发布阻塞项。当前内部安装路径已通过安装、升级、运行中保护、固定 runtime、快捷方式、卸载和用户数据保留验收；最终候选仍需按其确切哈希完成干净 Windows 复验，详见 [`docs/APP_RUNTIME.md`](docs/APP_RUNTIME.md)。
 
 ## 输出与工件
 

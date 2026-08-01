@@ -163,6 +163,24 @@ def test_release_pipeline_requires_windowless_python() -> None:
         assert "pythonw.exe" in content, relative_path
 
 
+def test_first_release_supports_an_explicit_unsigned_candidate() -> None:
+    builder = (ROOT / "scripts" / "build_windows_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    acceptance = (ROOT / "scripts" / "accept_windows_installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[switch]$ReleaseCandidate" in builder
+    assert '$releaseChannel = if ($ReleaseCandidate -or' in builder
+    assert 'signing_policy = "optional_for_initial_release"' in builder
+    assert "signing_required_for_public_release = $false" in builder
+    assert "unsigned_release_acknowledged = $unsignedReleaseAcknowledged" in builder
+    assert "$signed -and $packagedFfmpegPublicDistributionReady" not in builder
+    assert "release_compliance_prerequisites_present" in builder
+    assert "explicit unsigned-release acknowledgement" in acceptance
+
+
 def test_release_pipeline_requires_the_agent_client_runtime_module() -> None:
     packaging = (ROOT / "scripts" / "package_flutter_release.ps1").read_text(
         encoding="utf-8"

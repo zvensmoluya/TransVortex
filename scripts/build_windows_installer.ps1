@@ -10,6 +10,7 @@ param(
     [switch]$BuildAppRuntime,
     [switch]$BuildFfmpegRuntime,
     [switch]$AllowUnsigned,
+    [switch]$ReleaseCandidate,
     [switch]$Force,
     [switch]$Json
 )
@@ -113,10 +114,14 @@ if ($pubspecVersionLine -notmatch '^version:\s*([0-9]+)\.([0-9]+)\.([0-9]+)\+([0
 $appVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
 $appFileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$($Matches[4])"
 $releaseStage = "alpha"
-$releaseChannel = if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) { "internal" } else { "candidate" }
+$releaseChannel = if ($ReleaseCandidate -or -not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) { "candidate" } else { "internal" }
 if ([string]::IsNullOrWhiteSpace($CertificateThumbprint) -and -not $AllowUnsigned) {
-    throw "No signing certificate was provided. Pass -CertificateThumbprint for a signed candidate, or explicitly pass -AllowUnsigned for internal acceptance only."
+    throw "No signing certificate was provided. Pass -AllowUnsigned to explicitly accept an unsigned installer; add -ReleaseCandidate when building the first public release candidate."
 }
+$unsignedReleaseAcknowledged = (
+    [string]::IsNullOrWhiteSpace($CertificateThumbprint) -and
+    [bool]$AllowUnsigned
+)
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "dist\installer\windows"
@@ -300,7 +305,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     $signed = $true
 }
 
-$releaseCompliancePrerequisitesPresent = $signed -and $packagedFfmpegPublicDistributionReady
+$releaseCompliancePrerequisitesPresent = $packagedFfmpegPublicDistributionReady
 $installerFile = Get-Item -LiteralPath $installerPath
 $report = [ordered]@{
     ok = $true
@@ -315,6 +320,7 @@ $report = [ordered]@{
     app_file_version = $appFileVersion
     release_stage = $releaseStage
     release_channel = $releaseChannel
+    release_candidate = ($releaseChannel -eq "candidate")
     install_scope = "per_user"
     default_product_root = "%LOCALAPPDATA%\Programs\TransVortex"
     default_install_root = "%LOCALAPPDATA%\Programs\TransVortex\App"
@@ -354,7 +360,9 @@ $report = [ordered]@{
     agent_entry_removed_by_uninstaller = $true
     running_process_mutex = "Local\\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B"
     signed = $signed
-    signing_required_for_public_release = $true
+    signing_policy = "optional_for_initial_release"
+    signing_required_for_public_release = $false
+    unsigned_release_acknowledged = $unsignedReleaseAcknowledged
     ffmpeg_corresponding_source_url = $CorrespondingSourceUrl
     ffmpeg_corresponding_source_sha256 = $packagedCorrespondingSourceSha256
     ffmpeg_corresponding_source_bytes = $packagedCorrespondingSourceSize
@@ -366,7 +374,7 @@ $report = [ordered]@{
     ffmpeg_license_review_complete = $packagedLicenseReviewComplete
     ffmpeg_public_distribution_ready = $packagedFfmpegPublicDistributionReady
     ffmpeg_corresponding_source_required_for_public_release = $true
-    signing_and_ffmpeg_compliance_prerequisites_present = $releaseCompliancePrerequisitesPresent
+    release_compliance_prerequisites_present = $releaseCompliancePrerequisitesPresent
     public_release_ready = $false
     acceptance_complete = $false
     acceptance_required = @(

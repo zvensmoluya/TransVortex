@@ -158,7 +158,8 @@ def test_ffmpeg_release_scripts_share_the_pin_and_verify_public_source() -> None
     assert "ffmpeg_corresponding_source_sha256" in installer_builder
     assert "ffmpeg_corresponding_source_assets_published" in installer_builder
     assert "ffmpeg_license_review_complete" in installer_builder
-    assert "signing_and_ffmpeg_compliance_prerequisites_present" in installer_builder
+    assert "release_compliance_prerequisites_present" in installer_builder
+    assert "signing_and_ffmpeg_compliance_prerequisites_present" not in installer_builder
 
 
 def test_source_bundle_runs_on_pinned_powershell_and_enforces_output_pin(

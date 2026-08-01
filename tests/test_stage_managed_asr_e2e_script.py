@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -26,6 +27,14 @@ class StagingFixture:
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _isolated_powershell_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in tuple(environment):
+        if key.casefold() == "psmodulepath":
+            environment.pop(key)
+    return environment
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -177,6 +186,7 @@ def _run_staging(
     return subprocess.run(
         command,
         cwd=fixture.script.parents[1],
+        env=_isolated_powershell_environment(),
         check=check,
         capture_output=True,
         text=True,

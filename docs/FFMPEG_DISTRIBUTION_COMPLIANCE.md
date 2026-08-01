@@ -55,6 +55,6 @@ source asset pinned by `requirements/ffmpeg-runtime.json`. The packaged
 `tools/ffmpeg/SOURCE_NOTICE.txt` and the FFmpeg Release page must retain the
 same source coordinates.
 
-Codec patent clearance, trademarks, privacy terms, Authenticode signing, and
+Codec patent clearance, trademarks, privacy terms, optional Authenticode signing, and
 installer acceptance are separate release decisions. Completing this review
 does not set the application-level `public_release_ready` flag by itself.

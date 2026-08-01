@@ -141,10 +141,9 @@ NSIS 安装器已经自动验证全新安装、升级、运行中保护、固定
 
 Release Candidate 仍需：
 
-- 针对最终候选安装包、FFmpeg 和签名状态的干净 Windows 首启与精简真实媒体任务复验。
-- Authenticode 签名。
+- 针对最终候选安装包、FFmpeg、明确未签名状态和确切哈希的干净 Windows 首启与精简真实媒体任务复验。
 - 可复现 CI 构建。
 
-已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。通知点击聚焦随最终候选做轻量回归，不再作为独立发布阻塞项。
+已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。首版 `0.1.0` 明确允许未签名发布，Windows“未知发布者”/SmartScreen 提示属于已接受限制，不再作为发布阻塞项。通知点击聚焦随最终候选做轻量回归，不再作为独立发布阻塞项。
 
 这些事项的状态和优先级只在 [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md) 维护。

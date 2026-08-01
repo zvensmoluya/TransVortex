@@ -440,6 +440,13 @@ $installerManifest = Get-Content -LiteralPath $installerManifestPath -Encoding u
 if (-not [bool]$installerManifest.native_installer -or -not [bool]$installerManifest.installer_format_complete) {
     throw "Installer manifest does not describe a complete native installer."
 }
+if (
+    [string]$installerManifest.release_channel -eq "candidate" -and
+    -not [bool]$installerManifest.signed -and
+    -not [bool]$installerManifest.unsigned_release_acknowledged
+) {
+    throw "Unsigned release candidate manifest does not record explicit unsigned-release acknowledgement."
+}
 $actualInstallerHash = (Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualInstallerHash -ne [string]$installerManifest.installer_sha256) {
     throw "Installer SHA-256 does not match its build manifest."
@@ -751,6 +758,7 @@ try {
         app_version = [string]$installerManifest.app_version
         release_stage = [string]$installerManifest.release_stage
         release_channel = [string]$installerManifest.release_channel
+        release_candidate = [bool]$installerManifest.release_candidate
         install_scope = "per_user"
         custom_install_root = $true
         dedicated_install_subdirectory = $true
@@ -786,6 +794,9 @@ try {
         preexisting_config_restored = $true
         silent_uninstall_cleanup_default = "preserve"
         signed = [bool]$installerManifest.signed
+        signing_policy = [string]$installerManifest.signing_policy
+        signing_required_for_public_release = [bool]$installerManifest.signing_required_for_public_release
+        unsigned_release_acknowledged = [bool]$installerManifest.unsigned_release_acknowledged
         public_release_ready = $false
         generated_at = (Get-Date).ToUniversalTime().ToString("o")
     }

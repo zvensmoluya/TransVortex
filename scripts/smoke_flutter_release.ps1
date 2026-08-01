@@ -82,6 +82,16 @@ asr_engines:
     model: {source: managed, id: large-v3}
     device: cpu
     compute_type: int8
+  - id: smoke_remote
+    type: openai_transcription
+    model: whisper-1
+    endpoint:
+      base_url: https://api.openai.com/v1
+      path: /v1/audio/transcriptions
+      credential:
+        binding_id: smoke_remote
+        secret_ref: smoke_remote
+        env_fallback: OPENAI_API_KEY
 "@
 $providerModels = @("demo-model")
 if ($TranslationScenario -eq "longModels") {
@@ -122,12 +132,22 @@ routing:
 "@
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$smokeAsrEngine = if ($MainPhase -eq "blockedAsr") { "missing_local" } else { "local" }
+$smokeAsrEngine = switch ($MainPhase) {
+    "ready" { "smoke_remote" }
+    "blockedAsr" { "missing_local" }
+    default { "local" }
+}
 $pipeline = $pipeline.Replace("__SMOKE_ASR_ENGINE__", $smokeAsrEngine)
 [System.IO.File]::WriteAllText((Join-Path $serviceRoot "pipeline.yaml"), $pipeline, $utf8NoBom)
+$smokeEnvLines = @("OPENAI_API_KEY=example-token")
 if ($MainPhase -ne "blockedTranslation") {
-    [System.IO.File]::WriteAllText((Join-Path $serviceRoot ".env"), "SMOKE_PROVIDER_KEY=example-token`n", $utf8NoBom)
+    $smokeEnvLines += "SMOKE_PROVIDER_KEY=example-token"
 }
+[System.IO.File]::WriteAllText(
+    (Join-Path $serviceRoot ".env"),
+    (($smokeEnvLines -join "`n") + "`n"),
+    $utf8NoBom
+)
 
 function Start-SmokeProviderServer {
     $scriptPath = Join-Path $tempRoot "smoke_provider.py"
