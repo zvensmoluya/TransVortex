@@ -47,6 +47,7 @@ def test_register_agent_entry_writes_stable_secret_free_locator(
 ) -> None:
     install_root, config_root = _installed_layout(tmp_path, marker_encoding=marker_encoding)
     monkeypatch.setenv("EXAMPLE_API_TOKEN", "super-secret-value")
+    monkeypatch.setenv("CI_TEST_PASSWORD", "root")
 
     payload = register_agent_entry(install_root=install_root, config_root=config_root)
 

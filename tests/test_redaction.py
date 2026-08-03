@@ -56,3 +56,23 @@ def test_write_json_and_events_redact_persisted_secrets(tmp_path: Path, monkeypa
     raw_event = store.events_file("t1").read_text(encoding="utf-8")
     assert "sk-persist-secret" not in raw_event
     assert "event-token" not in raw_event
+
+
+def test_write_json_preserves_short_common_environment_secret_values(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CI_TEST_PASSWORD", "root")
+    output = tmp_path / "payload.json"
+
+    write_json(
+        output,
+        {
+            "cli_argv": ["transvortex", "--root", "C:/storage_root/data"],
+            "password": "root",
+        },
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["cli_argv"] == ["transvortex", "--root", "C:/storage_root/data"]
+    assert payload["password"] == REDACTED

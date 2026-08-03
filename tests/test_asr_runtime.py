@@ -375,7 +375,11 @@ def test_managed_runtime_and_model_can_be_removed_independently(tmp_path: Path) 
     assert manager.remove("runtime")["removed"] is False
 
 
-def test_asr_storage_root_can_change_before_managed_downloads(tmp_path: Path) -> None:
+def test_asr_storage_root_can_change_before_managed_downloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CI_TEST_PASSWORD", "root")
     app_root = tmp_path / "LocalAppData" / "TransVortex"
     config_root = app_root / "Config"
     config_root.mkdir(parents=True)

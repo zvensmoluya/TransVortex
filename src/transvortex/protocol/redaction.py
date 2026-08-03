@@ -7,6 +7,7 @@ from typing import Any
 
 
 REDACTED = "***REDACTED***"
+MIN_ENV_SECRET_VALUE_LENGTH = 8
 SENSITIVE_FIELD_NAMES = {
     "api_key",
     "apikey",
@@ -58,7 +59,11 @@ def collect_secret_values(root_dir: Path | None = None) -> list[str]:
     values.extend(_dotenv_values(root_dir))
     out: list[str] = []
     for value in values:
-        if len(value) < 4:
+        # Environment-derived values are replaced as raw substrings. Short,
+        # common values such as "root" are too ambiguous for that strategy:
+        # they can corrupt paths and CLI flags. Structured sensitive fields
+        # and recognizable secret formats are still redacted independently.
+        if len(value) < MIN_ENV_SECRET_VALUE_LENGTH:
             continue
         if value not in out:
             out.append(value)
