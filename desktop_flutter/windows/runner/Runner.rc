@@ -93,7 +93,7 @@ BEGIN
             VALUE "FileDescription", "TransVortex" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "TransVortex" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 TransVortex. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Zven. Apache-2.0 licensed." "\0"
             VALUE "OriginalFilename", "TransVortex.exe" "\0"
             VALUE "ProductName", "TransVortex" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

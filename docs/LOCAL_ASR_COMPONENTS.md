@@ -98,7 +98,7 @@ python .\scripts\accept_managed_asr_staging.py `
   --output "$sessionRoot\managed_asr_installed_app_e2e.json"
 ```
 
-验收器要求任务与 checkpoint 都为 `DONE`、Python Worker 正常退出并持久化最终事件、所有 ASR 行证明 `managed + stdio_jsonl + cuda + int8_float16`，同时要求 SRT / ASS 非空且在 Worker 结束后重新写出。2026-07-18 的可见安装版验收已满足这些条件，并在无活动 Worker 后静默卸载；程序目录被删除，隔离任务和机器报告保留。该结论仍不覆盖公开 HTTPS 下载和干净 Windows 首启。
+验收器要求任务与 checkpoint 都为 `DONE`、Python Worker 正常退出并持久化最终事件、所有 ASR 行证明 `managed + stdio_jsonl + cuda + int8_float16`，同时要求 SRT / ASS 非空且在 Worker 结束后重新写出。2026-07-18 的可见安装版验收已满足这些条件，并在无活动 Worker 后静默卸载；程序目录被删除，隔离任务和机器报告保留。该次结论本身不覆盖公开 HTTPS 下载和干净 Windows 首启；2026-07-30 已另外完成公开 CPU runtime 下载及 `small + CPU` 可见 APP 真实任务，当前只随最终候选保留一次干净 Windows 回归。
 
 上传并启用清单：
 

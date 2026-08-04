@@ -62,7 +62,7 @@ Flutter 只使用后端返回的 `readiness.can_run` 判断识别方案能否执
 - `checking`：组件下载、模型下载或硬件检查正在进行。
 - `unavailable`：已有模型目录失效、服务不可达或硬件 / 计算精度不兼容。
 
-本机 Whisper、OpenAI Whisper 和 FunASR 是三套独立方案，不自动回退。FunASR 需要最小音频连接测试；OpenAI Whisper 固定使用官方 Transcriptions 地址并独立检查用户凭据；本机 Whisper 始终使用受管运行组件，并检查模型来源、已有模型目录指纹和 NVIDIA 硬件。保存识别设置后，Flutter 会重新读取后端状态再更新主窗口，不做乐观“已配置”。
+本机 Whisper、OpenAI Whisper、OpenRouter 和 FunASR 是四套独立方案，不自动回退。FunASR 需要最小音频连接测试；OpenAI Whisper 固定使用官方 Transcriptions 地址并独立检查用户凭据；OpenRouter 只接受经过验证的模型 profile，并独立检查凭据和用量；本机 Whisper 始终使用受管运行组件，并检查模型来源、已有模型目录指纹和 NVIDIA 硬件。保存识别设置后，Flutter 会重新读取后端状态再更新主窗口，不做乐观“已配置”。
 
 没有可解析密钥的远程识别草稿可以保存，但不会改写当前默认方案。当前默认方案后来变为未就绪时，主窗口继续显示方案名称和具体原因，只阻止执行与选择，不把它折叠成无来源的“需配置”。
 

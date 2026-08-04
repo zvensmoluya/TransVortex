@@ -193,6 +193,31 @@ def test_release_pipeline_requires_the_agent_client_runtime_module() -> None:
     )
 
 
+def test_release_packages_project_and_font_licenses() -> None:
+    packaging = (ROOT / "scripts" / "package_flutter_release.ps1").read_text(
+        encoding="utf-8"
+    )
+    portable_install = (
+        ROOT / "scripts" / "install_flutter_portable_release.ps1"
+    ).read_text(encoding="utf-8")
+    installer_acceptance = (
+        ROOT / "scripts" / "accept_windows_installer.ps1"
+    ).read_text(encoding="utf-8")
+
+    required_license_paths = (
+        '"LICENSE"',
+        '"licenses\\fonts\\NotoSansSC-OFL.txt"',
+        '"licenses\\fonts\\LXGWWenKaiLite-OFL.txt"',
+    )
+    for required_path in required_license_paths:
+        assert required_path in packaging
+        assert required_path in portable_install
+        assert required_path in installer_acceptance
+
+    assert '"desktop_flutter\\assets\\fonts\\NotoSansSC-OFL.txt"' in packaging
+    assert '"desktop_flutter\\assets\\fonts\\LXGWWenKaiLite-OFL.txt"' in packaging
+
+
 def test_release_packages_an_empty_provider_seed_and_a_neutral_example() -> None:
     product_seed = yaml.safe_load(
         (ROOT / "providers.desktop.yaml").read_text(encoding="utf-8")

@@ -139,11 +139,11 @@ tools/ffmpeg/ffmpeg_runtime.json
 
 NSIS 安装器已经自动验证全新安装、升级、运行中保护、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留。
 
-Release Candidate 仍需：
+`0.1.0` 唯一 P0 是一次完整的最终候选发布验收：
 
-- 针对最终候选安装包、FFmpeg、明确未签名状态和确切哈希的干净 Windows 首启与精简真实媒体任务复验。
-- 可复现 CI 构建。
+- 从拟发布 commit 生成并冻结最终安装包，记录版本、commit、安装包 SHA-256、明确未签名状态和 FFmpeg 对应源码地址。
+- 在干净 Windows 用户环境完成首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出，并轻量回归通知点击聚焦；通过后归档证据并显式确认发布状态。
 
-已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。首版 `0.1.0` 明确允许未签名发布，Windows“未知发布者”/SmartScreen 提示属于已接受限制，不再作为发布阻塞项。通知点击聚焦随最终候选做轻量回归，不再作为独立发布阻塞项。
+已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。首版 `0.1.0` 明确允许未签名发布，Windows“未知发布者”/SmartScreen 提示属于已接受限制，不再作为发布阻塞项。当前 CI 已覆盖 Python / Flutter 质量检查和 Flutter Windows Release 编译；固定 Python / FFmpeg runtime、安装包、manifest 与验收报告的完整 CI 打包属于后续发布工程化，不阻断首版。
 
 这些事项的状态和优先级只在 [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md) 维护。

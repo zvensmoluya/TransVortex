@@ -85,7 +85,7 @@ VIAddVersionKey /LANG=2052 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=2052 "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey /LANG=2052 "FileDescription" "${APP_NAME} 用户级安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${APP_FILE_VERSION}"
-VIAddVersionKey /LANG=2052 "LegalCopyright" "Apache-2.0 licensed"
+VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright (C) 2026 Zven. Apache-2.0 licensed."
 
 Var ProductRoot
 

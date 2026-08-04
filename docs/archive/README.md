@@ -21,6 +21,8 @@
   - 可见 Flutter Release 使用开发态 external Whisper Worker 完成首阶段人工 APP E2E 的机器证据与体验结论。
 - [`e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)
   - 受管 ASR 本地暂存、安装目录内置 runtime 和可见 APP 真实任务的分阶段验收证据。
+- [`e2e-reports/2026-07-21-asr-release-recap.md`](e2e-reports/2026-07-21-asr-release-recap.md)
+  - 公开 CPU ASR 下载、安装和设置体验的单次现场复盘；其中待办已被后续实现与当前专题文档取代。
 
 ## 设计快照与研究
 

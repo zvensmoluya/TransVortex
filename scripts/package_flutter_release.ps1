@@ -724,6 +724,12 @@ Copy-RequiredFile -Source (Join-Path $repoRoot "providers.example.yaml") -Destin
 Copy-RequiredFile -Source (Join-Path $repoRoot "providers.desktop.yaml") -Destination (Join-Path $packageRoot "providers.yaml")
 Copy-RequiredFile -Source (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md")
 Copy-RequiredFile -Source (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE")
+Copy-RequiredFile `
+    -Source (Join-Path $repoRoot "desktop_flutter\assets\fonts\NotoSansSC-OFL.txt") `
+    -Destination (Join-Path $packageRoot "licenses\fonts\NotoSansSC-OFL.txt")
+Copy-RequiredFile `
+    -Source (Join-Path $repoRoot "desktop_flutter\assets\fonts\LXGWWenKaiLite-OFL.txt") `
+    -Destination (Join-Path $packageRoot "licenses\fonts\LXGWWenKaiLite-OFL.txt")
 if ($InstallerPayload) {
     New-InstallerPayloadReadme -Path (Join-Path $packageRoot "README_INSTALLER_PAYLOAD.txt")
 } else {
@@ -740,6 +746,9 @@ $requiredPaths = @(
     "flutter_windows.dll",
     "flutter_local_notifications_windows.dll",
     "data\flutter_assets\FontManifest.json",
+    "LICENSE",
+    "licenses\fonts\NotoSansSC-OFL.txt",
+    "licenses\fonts\LXGWWenKaiLite-OFL.txt",
     "runtime\app_runtime.json",
     "runtime\python\python.exe",
     "runtime\python\pythonw.exe",

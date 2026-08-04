@@ -1,4 +1,8 @@
-# TransVortex 配置说明
+# TransVortex 高级配置与协议参考
+
+本文面向 CLI、Agent、手工 YAML 配置和兼容服务接入。使用 Windows 桌面应用完成安装、模型连接、语音识别设置和字幕制作时，先阅读 [`USER_GUIDE.md`](USER_GUIDE.md)；普通桌面用户不需要直接编辑本文提到的配置文件。
+
+本文中的字段名表示代码和协议契约，不等同于桌面界面向用户展示的产品文案。API key、token 和密码只能通过统一凭据入口保存，不能写入 Provider YAML。
 
 ## 1. 配置文件分层
 

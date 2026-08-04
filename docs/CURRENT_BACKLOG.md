@@ -1,8 +1,8 @@
 # TransVortex 当前待办
 
-更新时间：2026-08-01
+更新时间：2026-08-04
 
-本文件是仓库级待办入口，只维护未闭环事项的状态和优先级。具体产品语义、架构方案和验证步骤以链接的专题文档为准。
+本文件是仓库级短期待办入口，并在 `0.1.0` 发布前维护当前发布口径。待办部分只保留未闭环事项的状态和优先级；具体产品语义、架构方案和验证步骤以链接的专题文档为准。正式发布后，版本事实应沉淀到 Release Notes，本文件继续只维护下一阶段待办。
 
 状态含义：
 
@@ -12,15 +12,30 @@
 - `外部条件`：需要证书、发布资源或目标环境。
 - `低优先级验证`：保存真实观察，但不承诺近期实现。
 
+## `0.1.0` 首版发布口径
+
+以下内容是 README、Release Notes 和专题文档描述首版时的统一事实来源：
+
+- 公开桌面交付物是 Windows x64 用户级 NSIS 安装器。安装包包含 Flutter 应用、固定 Embedded Python 主 runtime 和固定 FFmpeg runtime；终端用户不需要另行安装 Python、FFmpeg 或 PowerShell。
+- `0.1.0` 接受未签名安装包。Windows 显示“未知发布者”或 SmartScreen 提示是必须在下载页明确披露的已知限制，不是发布阻塞项。
+- 首轮公开的受管本机识别路径只保证 CPU；Whisper runtime 和模型按需下载，不进入基础安装包。产品还支持用户提供的 FunASR 服务、OpenAI Transcriptions，以及具有显式模型 profile 的 OpenRouter 语音识别。
+- 翻译使用用户配置的远端 provider。选择远端 ASR 时音频会上传到对应服务；本机 Whisper 不上传媒体，翻译 provider 只接收任务所需的文本和上下文。
+- `0.1.0` 的桌面界面和用户文档仅提供简体中文；字幕源语言和目标语言不受界面语言限制。英文用户文档后续逐步补充，界面国际化不属于首版发布范围。
+- macOS / Linux 正式交付、受管 NVIDIA 安装入口、独立于 Flutter engine 的 App Host / Supervisor、应用崩溃恢复和已有 ASR 资源自动迁移不属于 `0.1.0` 发布承诺。
+
 ## P0：发布闭环
 
 | 事项 | 状态 | 完成边界 | 关联文档 |
 | --- | --- | --- | --- |
-| 最终 Release Candidate 干净 Windows 复验 | 待验收 | 现有安装、首启和真实任务路径已经过现场使用；待包含最终 FFmpeg、明确未签名策略和确切哈希的 RC 生成后，在未配置开发环境的 Windows 重跑精简真实任务，并保存版本、安装包哈希和结果证据 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
-| FFmpeg 自建 core 与公开分发闭环 | 待验收 | license-complete r2 binary/source 已发布为固定 GitHub prerelease，并成为标准 runtime、portable 和 installer 的 active 默认 pin；完整媒体矩阵、包内 Local Service、可见启动、对应源码和技术许可审查已闭环。仍需在干净 Windows/用户环境完成人工 installer 与真实片源 RC 验收，才能将 `public_distribution_ready` 提升为 true | [`APP_RUNTIME.md`](APP_RUNTIME.md) |
-| 可复现的 CI 构建 | 待实现 | 在干净构建执行器生成 runtime、安装包、manifest 和验收结果 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
+| `0.1.0` 最终候选发布验收 | 待验收 | 从拟发布 commit 生成并冻结 Windows x64 安装包，记录版本、commit、安装包 SHA-256、未签名状态和 FFmpeg 对应源码地址；随后在没有工作区 Python、系统 FFmpeg 或开发配置的干净 Windows 用户环境完成安装、首启、受管 CPU Whisper 真实媒体任务、结果审看与导出，并轻量回归通知点击聚焦。通过后归档证据并显式确认发布状态 | [`APP_RUNTIME.md`](APP_RUNTIME.md)、[`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：NSIS 内部安装包已通过本机全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收。2026-07-17 开发态可见 Flutter Release 完成第一阶段人工 E2E，真实媒体经 external `local_worker` 完成识别、翻译、结果审看和重新导出，详见 [`2026-07-17-flutter-app-e2e-first-stage.md`](archive/e2e-reports/2026-07-17-flutter-app-e2e-first-stage.md)。2026-07-18 又完成受管 Whisper runtime、NVIDIA 组件和 `large-v3` 模型的隔离校验安装，并从正式安装目录启动可见 APP，在不依赖工作区 Python 的情况下完成 `managed + stdio_jsonl + cuda + int8_float16` 真实媒体任务、SRT / ASS 审看、重新导出和卸载清理，详见 [`2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。2026-07-30 现场确认又已多次从可见 Flutter APP 完成公开 CPU runtime 的下载与 `small + CPU` 真实媒体任务，原 ASR 公开下载验收不再列为 P0；Windows 通知也已正常归属并显示，点击聚焦只随最终 RC 做轻量回归，不再作为独立发布阻塞项。首版 `0.1.0` 已明确接受未签名安装包以及 Windows“未知发布者”/SmartScreen 提示，不再把 Authenticode 视为 P0。最终 RC 仍需针对其确切安装包、FFmpeg、未签名状态和哈希保留一次可追溯的干净 Windows 复验。
+当前已经成立的边界：安装器已通过全新安装、升级、运行中保护、固定 runtime、AUMID 快捷方式、卸载和用户数据保留验收；已安装应用完成过受管 Whisper 真实媒体任务、结果审看和重新导出；公开 CPU runtime 下载与 `small + CPU` 真实任务已多次完成；Windows 通知已正常归属并显示。FFmpeg license-complete r2 binary/source 已发布为固定 GitHub prerelease，成为标准 runtime、portable 和 installer 的 active pin，对应源码和技术许可审查已经闭环。以上证据不替代针对最终安装包确切哈希的 P0 验收。
+
+## P1：发布工程化
+
+| 事项 | 状态 | 完成边界 | 关联文档 |
+| --- | --- | --- | --- |
+| 完整发布物的可复现 CI 构建 | 待实现 | 当前 CI 已运行 Python / Flutter 质量检查，并可在 tag 或手动触发时编译 Flutter Windows Release；后续让干净构建执行器继续生成固定 Python / FFmpeg runtime、安装包、manifest 和验收报告。`0.1.0` 可使用已审查的本地发布脚本生成最终候选，本项不阻断首版 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
 ## P1：桌面生命周期与数据安全
 
@@ -54,6 +69,7 @@
 | --- | --- | --- | --- |
 | 全应用视觉动效与 CG 场景深化 | 探索中 | 以展示性和品牌记忆点为明确目标，探索启动、导入、运行阶段、完成、失败恢复、窗口切换和退出的全窗口 Shader、粒子、角色、音效与 2D / 2.5D CG 演出；真实业务状态、可读结果、减少动态效果版本和 Windows Release 性能验收仍为底线 | [`FRONTEND_VISUAL_INTERACTION_SPEC.md`](FRONTEND/current/FRONTEND_VISUAL_INTERACTION_SPEC.md) |
 | 结果工作区字幕轴易用性 | 待决策 | 先明确首版字幕轴需要承担的定位、选择、浏览和校时范围，再用真实长字幕编辑任务验收；不以专业 NLE 的极致能力作为首阶段目标 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
+| 英文用户文档 | 待实现 | 在中文用户文档和产品术语稳定后，为 README 与核心用户指南提供同步英文版本；在具备可持续维护方式前不复制全部内部设计文档 | [`../README.md`](../README.md)、[`USER_GUIDE.md`](USER_GUIDE.md) |
 
 ## P2：低优先级验证
 
