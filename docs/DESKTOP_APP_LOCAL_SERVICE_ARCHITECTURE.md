@@ -139,11 +139,8 @@ tools/ffmpeg/ffmpeg_runtime.json
 
 NSIS 安装器已经自动验证全新安装、升级、运行中保护、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留。
 
-`0.1.0` 唯一 P0 是一次完整的最终候选发布验收：
+`0.1.0` 的最终候选发布验收已于 2026-08-06 完成。冻结安装包来自 commit `aace461e86f789492f7aa46709971b5e104f3cae`，正式文件名为 `TransVortex-0.1.0-windows-x64-setup.exe`，SHA-256 为 `5f2d0f77cbbefb68ff1866d2362dc571745c50908de8e4fb3f93388cc307dcc8`；未签名状态、FFmpeg 对应源码和用户数据边界均已写入 Release Notes。发布负责人已确认该确切候选在干净 Windows 用户环境完成首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出，并轻量回归通知点击聚焦。
 
-- 从拟发布 commit 生成并冻结最终安装包，记录版本、commit、安装包 SHA-256、明确未签名状态和 FFmpeg 对应源码地址。
-- 在干净 Windows 用户环境完成首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出，并轻量回归通知点击聚焦；通过后归档证据并显式确认发布状态。
-
-已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。首版 `0.1.0` 明确允许未签名发布，Windows“未知发布者”/SmartScreen 提示属于已接受限制，不再作为发布阻塞项。当前 CI 已覆盖 Python / Flutter 质量检查和 Flutter Windows Release 编译；固定 Python / FFmpeg runtime、安装包、manifest 与验收报告的完整 CI 打包属于后续发布工程化，不阻断首版。
+已安装路径真实任务、公开 CPU ASR 下载和 Windows 通知显示均已完成现场使用；FFmpeg r2 binary/source 托管和技术许可审查也已闭环。首版 `0.1.0` 明确允许未签名发布，Windows“未知发布者”/SmartScreen 提示属于已接受限制，不再作为发布阻塞项。当前 CI 已覆盖 Python / Flutter 质量检查和 Flutter Windows Release 编译；固定 Python / FFmpeg runtime、安装包、manifest 与验收报告的完整 CI 打包属于发布后的工程化工作，不改变 `0.1.0` 的发布结论。
 
 这些事项的状态和优先级只在 [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md) 维护。

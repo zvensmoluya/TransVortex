@@ -73,7 +73,7 @@ pwsh -NoProfile -File scripts\build_ffmpeg_core_distribution.ps1 -Force -Json
 
 标准 runtime builder 同时识别历史 `transvortex-core-v1` 和许可材料完整的 `transvortex-core-v2`，验证归档内 manifest 和逐文件哈希，并保留构建、PE 导入、兼容性和许可证据。该 runtime 已通过 WAV、MP3、M4A、FLAC、AAC、Ogg/Vorbis、Opus、AC3、EAC3、H.264 MKV/MP4 和常见文本字幕的探测、提取、转换、重采样、切分、静音检测与字幕提取矩阵；portable RC 的包内 Local Service、可见窗口启动和 FFmpeg 校验已经通过，unsigned internal NSIS installer 也已生成并校验 payload。
 
-`requirements/ffmpeg-core-runtime.json` 保留 r1 历史快照，`requirements/ffmpeg-core-runtime-r2.json` 保留已完成技术许可审查的 r2 快照；两个版本的 binary/source 都已发布为独立 GitHub prerelease。`requirements/ffmpeg-runtime.json` 是当前 `status=active`、`adopted=true` 的 r2 默认 pin，普通 runtime、portable 和 installer 构建会直接下载并使用 core。当前 pin 的 `public_distribution_ready=false` 记录的是最终候选尚未完成干净 Windows 发布验收，不表示 FFmpeg 对应源码、外部库范围或技术许可审查仍有缺口；该状态应在最终候选证据归档后与应用发布状态一并显式确认。
+`requirements/ffmpeg-core-runtime.json` 保留 r1 历史快照，`requirements/ffmpeg-core-runtime-r2.json` 保留已完成技术许可审查的 r2 快照；两个版本的 binary/source 都已发布为独立 GitHub prerelease。`requirements/ffmpeg-runtime.json` 是当前 `status=active`、`adopted=true` 的 r2 默认 pin，普通 runtime、portable 和 installer 构建会直接下载并使用 core。当前 pin 保留的 `public_distribution_ready=false` 是 `0.1.0` 候选构建时的状态快照，不表示 FFmpeg 对应源码、外部库范围或技术许可审查仍有缺口，也不覆盖随后针对冻结安装包完成的发布验收。应用是否获准发布以确切安装包哈希、Release 记录和发布负责人确认共同为准；不得为了回写验收结果而重建或替换已经冻结的 `0.1.0` 安装包。
 
 以后新增 FFmpeg 内建格式或 codec 通常不需要改构建开关；只有确实需要 `libopenh264`、`libvpx` 等外部实现时，才应逐项加入 allowlist，并同时固定源码、许可证、通知和回归样本。
 
@@ -124,7 +124,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
 
 `-AllowUnsigned` 显式确认本次构建允许没有 Authenticode；不带 `-ReleaseCandidate` 时仍生成 `internal` 验收件，二者同时使用才生成未签名 `candidate`。首版 `0.1.0` 的签名策略是 `optional_for_initial_release`：未签名不再阻止公开候选和最终发布，但下载页必须明确说明 Windows 可能显示“未知发布者”或 SmartScreen 提示。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease。
 
-公开发布的剩余门槛是：从拟发布 commit 生成并冻结确切 RC，记录版本、commit、安装包 SHA-256、未签名状态和 FFmpeg 对应源码地址；随后在干净 Windows 用户环境完成首启和精简真实媒体任务，并归档结果。构建与常规安装器验收脚本会保守地保持 `public_release_ready=false`，避免一次开发机验收被自动解释为最终发布授权；通过最终候选验收后仍需显式确认发布状态。
+`0.1.0` 的最终发布闭环已于 2026-08-06 完成：安装包冻结自 commit `aace461e86f789492f7aa46709971b5e104f3cae`，正式文件名为 `TransVortex-0.1.0-windows-x64-setup.exe`，SHA-256 为 `5f2d0f77cbbefb68ff1866d2362dc571745c50908de8e4fb3f93388cc307dcc8`。发布负责人已确认完成该确切候选的干净 Windows 安装、首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出验收。构建与常规安装器验收脚本仍会保守地保持 `public_release_ready=false`，避免把一次开发机验收自动解释为发布授权；最终授权由冻结资产的验收记录和 GitHub Release 显式给出。
 
 全新安装把用户选择的位置整理为一个专用产品根，并建立 `App`、`Data`、`Resources` 三个相互隔离的子目录。默认布局是 `%LOCALAPPDATA%\Programs\TransVortex\App`、`Data` 和 `Resources`；选择其他磁盘时三者一起跟随到所选位置。升级的 staging、旧版本回滚和卸载程序删除边界都只落在 `App`，不会覆盖 `Data` 或 `Resources`。确认页面直接展示程序、工作数据和识别资源的最终路径，其中工作数据仍可单独更改；配置和凭据固定在 Windows 用户目录。
 
@@ -157,4 +157,4 @@ Agent / CLI 定位文件属于已安装程序入口，不属于用户设置；�
 
 同一隔离安装随后启动了可见 Flutter APP，并完成一条确实需要 ASR 的真实媒体任务。机器报告固定了 `DONE` 任务与 checkpoint、正常退出的 Python Worker、`managed + stdio_jsonl + cuda + int8_float16` 识别证据，以及非空 SRT / ASS；人工操作覆盖运行态、独立任务处理窗审看和重新导出。无活动 Worker 后静默卸载返回 0，程序目录删除，隔离任务与报告保留。因此已安装路径真实任务已经闭环。
 
-2026-07-30 又完成了公开 CPU runtime 下载和 `small + CPU` 可见 APP 真实任务；Windows 通知也已正常归属并显示。首版未签名策略已经明确，FFmpeg binary/source 托管与技术许可审查也已完成。上述阶段证据仍不能替代针对最终候选确切哈希的干净 Windows 验收；通知点击聚焦只在该验收中做轻量回归。安装路径证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。
+2026-07-30 又完成了公开 CPU runtime 下载和 `small + CPU` 可见 APP 真实任务；Windows 通知也已正常归属并显示。首版未签名策略已经明确，FFmpeg binary/source 托管与技术许可审查也已完成。2026-08-06，发布负责人进一步确认完成最终候选确切哈希的干净 Windows 验收和通知点击聚焦轻量回归，`0.1.0` 发布门槛由此闭环。安装路径证据见 [`archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md`](archive/e2e-reports/2026-07-18-managed-asr-installed-app-e2e.md)。

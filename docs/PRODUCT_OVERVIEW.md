@@ -80,7 +80,7 @@ CLI / Agent ─────┼─> Python core / task protocol
 | --- | --- |
 | 产品介绍、下载、当前能力、隐私摘要和已知限制 | [`../README.md`](../README.md) |
 | Windows 安装、桌面配置、任务操作、结果审看和故障恢复 | [`USER_GUIDE.md`](USER_GUIDE.md) |
-| 短期待办、发布口径和验收门槛 | [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md) |
+| 短期待办、已发布版本边界和后续优先级 | [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md) |
 | 普通用户界面公开哪些能力 | [`FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
 | Python core、CLI、协议和代码所有权 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | 桌面进程、Local Service、Worker 和生命周期 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |

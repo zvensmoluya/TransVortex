@@ -2,7 +2,7 @@
 
 ## 支持范围
 
-TransVortex 目前处于早期发布阶段。首个公开版本发布后，项目只为最新公开版本提供安全修复；开发分支、历史提交、已被新版本替代的候选安装包和第三方转存包不单独维护。可验证的公开版本与安装包以 [GitHub Releases](https://github.com/zvensmoluya/TransVortex/releases) 为准。
+TransVortex 目前处于早期发布阶段。项目只为最新公开版本提供安全修复；开发分支、历史提交、已被新版本替代的候选安装包和第三方转存包不单独维护。可验证的公开版本与安装包以 [GitHub Releases](https://github.com/zvensmoluya/TransVortex/releases) 为准。
 
 `0.1.0` 的 Windows 安装包没有 Authenticode 签名，因此 Windows 可能显示“未知发布者”或 SmartScreen 提示。这是已披露的发布限制，不应被视为安装包来源可信的依据。安装前仍需核对 Release 页面公布的文件名和 SHA-256。
 

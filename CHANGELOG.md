@@ -2,9 +2,9 @@
 
 本文件只记录公开版本中用户可见的重要变化和发布边界，不收录日常重构、测试扩展或一次性开发过程。安装包文件名、SHA-256、对应 commit 和下载地址以每个版本的 [GitHub Release](https://github.com/zvensmoluya/TransVortex/releases) 为准。
 
-## [0.1.0] - 待发布
+## [0.1.0] - 2026-08-06
 
-首个 Windows x64 公开版本候选。
+首个 Windows x64 公开版本。
 
 ### 新增
 
@@ -27,4 +27,4 @@
 - OpenRouter Grok STT 仍属实验能力，远端识别和翻译服务可能产生费用，AI 字幕需要人工审看。
 - 独立 App Host、应用崩溃恢复、完整进程树守护和已有 ASR 资源自动跨盘迁移尚未完成。
 
-发布前剩余门槛见 [`docs/CURRENT_BACKLOG.md`](docs/CURRENT_BACKLOG.md)。正式发布时应把本节的“待发布”替换为发布日期，并将候选事实与最终 Release 资产逐项核对。
+安装包文件名、SHA-256、对应 commit 和完整发布说明见 [`v0.1.0` GitHub Release](https://github.com/zvensmoluya/TransVortex/releases/tag/v0.1.0)。

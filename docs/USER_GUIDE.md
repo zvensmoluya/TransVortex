@@ -36,7 +36,7 @@
 Release 页面会公布安装包的 SHA-256。下载后可以在 PowerShell 中核对：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\TransVortex-0.1.0-windows-x64-setup-candidate.exe
+Get-FileHash -LiteralPath .\TransVortex-0.1.0-windows-x64-setup.exe -Algorithm SHA256
 ```
 
 文件名以实际下载版本为准。只有计算结果与 Release 页面完全一致时才继续安装。

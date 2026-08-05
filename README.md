@@ -88,7 +88,7 @@ TransVortex 的“本地优先”指任务状态、工件、审看与本机识�
 - OpenRouter Grok STT 仍是实验能力；长音频、多语言和切句质量仍需更多真实内容验证。
 - 远端 ASR 和翻译服务可能产生费用，AI 生成字幕仍需要人工审看。
 
-当前发布门槛和非阻塞待办统一维护在 [CURRENT_BACKLOG.md](docs/CURRENT_BACKLOG.md)。
+`0.1.0` 已完成发布验收。发布后的非阻塞待办和后续优先级统一维护在 [CURRENT_BACKLOG.md](docs/CURRENT_BACKLOG.md)。
 
 ## CLI 与 Agent
 
@@ -187,7 +187,7 @@ CI 当前固定 Flutter `3.44.4`。`flutter build windows --release` 只生成 F
 - [架构说明](docs/ARCHITECTURE.md)：Python core、CLI、协议与桌面接入的所有权边界。
 - [桌面运行架构](docs/DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md)：Local Service、Worker、托盘和发布基础。
 - [Flutter 产品入口](docs/FRONTEND/README.md)：当前产品表面、配置语义和设计规格。
-- [当前待办](docs/CURRENT_BACKLOG.md)：`0.1.0` 发布口径、剩余门槛和后续优先级。
+- [当前待办](docs/CURRENT_BACKLOG.md)：`0.1.0` 发布边界、发布后的非阻塞待办和后续优先级。
 - [变更记录](CHANGELOG.md)：公开版本中用户可见的重要变化与发布边界。
 - [安全策略](SECURITY.md)：支持范围以及普通问题与敏感漏洞的报告方式。
 
