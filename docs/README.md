@@ -14,11 +14,14 @@
 ## 当前工作入口
 
 1. [`CURRENT_BACKLOG.md`](CURRENT_BACKLOG.md)
-   - 当前统一待办、`0.1.0` 发布事实、优先级和状态。
+   - 当前统一待办、`0.1.0` 发布事实、`0.2.0` 主线、优先级和状态。
    - 只记录尚未闭环的事项，详细设计链接到对应专题文档。
-2. [`运行与测试指南.md`](运行与测试指南.md)
+2. [`WORKBENCH_0_2_PLAN.md`](WORKBENCH_0_2_PLAN.md)
+   - `0.2.0` 译制工作间的短期产品承诺、产品表面、架构治理边界、阶段顺序和旗舰验收场景。
+   - 规划内容不代表当前已经公开；实施完成后把稳定结论回写专题文档并归档本计划。
+3. [`运行与测试指南.md`](运行与测试指南.md)
    - 开发、构建、打包和验收命令。
-3. [`FRONTEND/README.md`](FRONTEND/README.md)
+4. [`FRONTEND/README.md`](FRONTEND/README.md)
    - Flutter 主体验前端的产品表面、配置语义、设计规格和历史归档入口。
 
 ## 发布与安全
@@ -31,6 +34,7 @@
 | 主题 | 文档 | 说明 |
 | --- | --- | --- |
 | 产品与系统总览 | [`PRODUCT_OVERVIEW.md`](PRODUCT_OVERVIEW.md) | 稳定产品模型、业务真实来源、核心流程与系统边界 |
+| `0.2.0` 译制工作间计划 | [`WORKBENCH_0_2_PLAN.md`](WORKBENCH_0_2_PLAN.md) | 下一阶段产品表面、简单架构治理、工作台闭环、视觉深化和 Android 伴侣端预研 |
 | 后端分层 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Python core、CLI、协议和桌面接入的所有权边界 |
 | 桌面运行架构 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) | Local Service、Worker、Supervisor、托盘和发布基础 |
 | 应用运行时与安装 | [`APP_RUNTIME.md`](APP_RUNTIME.md) | 固定 Python / FFmpeg runtime、NSIS 安装器和公开发布边界 |
