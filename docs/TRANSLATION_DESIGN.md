@@ -76,16 +76,18 @@ normalized source segments
 
 当前术语记忆由几种不同能力组成：
 
-- 预设术语表：用户选择的人工或项目术语。
-- 运行时术语库：当前任务自动生成的 `translation_memory.json`。
+- 持久术语库：独立于作品和任务的用户资产，可由用户或 Agent 完全维护；同一集合可供多个任务选择。
+- 任务集合快照：任务开始时冻结所选集合的 ID、revision、hash 和条目，保存在 `selected_collections.json`，保证恢复可复现。
+- 预设术语表：随配置 / 安装提供的兼容性只读词表，不替代用户术语库。
+- 运行时任务记忆：当前任务自动生成的 `translation_memory.json`，用于当次增强、恢复和审计。
 - bootstrap：翻译前从整片 source segments 初始化术语建议。
 - inject：按当前分片命中关系和强度把术语注入翻译。
 - patch：翻译过程中按窗口合并模型提出的术语更新。
 - 受保护条目：人工确认内容，自动 patch 不能覆盖。
 
-`memory.enabled` 是总开关；`bootstrap`、`inject` 和 `patch` 分别控制生成、使用和动态维护。主窗口的“自动生成术语建议”只控制生成相关行为，不代表关闭已有人工术语的使用。
+`memory.enabled` 是总开关；`collections` 选择持久集合，`bootstrap`、`inject` 和 `patch` 分别控制生成、使用和动态维护。主窗口把它们表达为“自动发现术语候选”和“使用哪些术语库”两个独立选择。
 
-完整术语审看、保护、合并和跨任务复用仍是产品待办。
+任务动态生成的内容不会隐式持久化。结果审看页只把用户勾选的候选提升到指定集合，先 dry-run 预览冲突，再用 expected revision 写入；未勾选内容继续只属于任务。集合支持创建、编辑、删除以及条目确认、锁定、拒绝、停用、别名、约束、优先级和备注维护，Agent 还可通过 JSON 契约操作完整结构。候选证据浏览、批量导入导出和复杂冲突合并仍是后续工作。
 
 ## 7. 主要工件
 
@@ -96,6 +98,7 @@ translate/segments.translated.jsonl
 translate/validation.jsonl
 translate/repairs.jsonl
 memory/translation_memory.json
+memory/selected_collections.json
 memory/memory_patches.jsonl
 quality/
 final/segments.final.json

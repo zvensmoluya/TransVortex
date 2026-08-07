@@ -191,6 +191,7 @@ class MainWindowViewModel {
     required this.bilingual,
     required this.formats,
     required this.termsEnabled,
+    this.memoryCollectionIds = const <String>[],
     required this.runningText,
     required this.progress,
     required this.canceling,
@@ -229,6 +230,7 @@ class MainWindowViewModel {
   final bool bilingual;
   final List<String> formats;
   final bool termsEnabled;
+  final List<String> memoryCollectionIds;
   final String? runningText;
   final double progress;
   final bool canceling;
@@ -270,6 +272,7 @@ class MainWindowController extends ChangeNotifier {
   bool _bilingual = true;
   List<String> _formats = const ['SRT', 'ASS'];
   bool _termsEnabled = true;
+  List<String> _memoryCollectionIds = const [];
   String? _outputDirectory;
   String? _taskId;
   bool _submitting = false;
@@ -429,6 +432,16 @@ class MainWindowController extends ChangeNotifier {
 
   void setTermsEnabled(bool value) {
     _termsEnabled = value;
+    _publish();
+  }
+
+  void setMemoryCollectionIds(Iterable<String> value) {
+    final seen = <String>{};
+    _memoryCollectionIds = List.unmodifiable(
+      value
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty && seen.add(item)),
+    );
     _publish();
   }
 
@@ -883,7 +896,13 @@ class MainWindowController extends ChangeNotifier {
   }
 
   Map<String, Object?> _memoryGenerationOverrides() => {
-    if (_termsEnabled) 'memory_enabled': true,
+    if (_termsEnabled || _memoryCollectionIds.isNotEmpty)
+      'memory_enabled': true,
+    if (_termsEnabled || _memoryCollectionIds.isNotEmpty)
+      'memory_inject_enabled': true,
+    'memory_collections': [
+      for (final id in _memoryCollectionIds) {'id': id},
+    ],
     'memory_bootstrap_enabled': _termsEnabled,
     'memory_patch_enabled': _termsEnabled,
     if (_termsEnabled) 'memory_patch_window_chunks': 3,
@@ -1025,6 +1044,7 @@ class MainWindowController extends ChangeNotifier {
       bilingual: _bilingual,
       formats: _formats,
       termsEnabled: _termsEnabled,
+      memoryCollectionIds: _memoryCollectionIds,
       runningText: _statusText,
       progress: _progress,
       canceling: _canceling,

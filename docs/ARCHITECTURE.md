@@ -36,7 +36,7 @@ transvortex/
   protocol/     agent protocol, structured errors, redaction, safe output contracts
   artifacts/    task store, checkpoints, events, result workspace
   core/         pipeline entry points, ASR planning/execution, stage controllers
-  memory/       project memory documents, bootstrap, selection, consistency
+  memory/       persistent collections, task snapshots, runtime memory, consistency
   prompts/      owned prompt assets and prompt assembly
   formats/      subtitle parsing, renderers, and delivery presentation
   providers/    model/provider protocol adapters and provider management
@@ -91,8 +91,11 @@ translation, or delivery helpers from their owning module. Thin private
 wrappers remain only where tests and experiments replace runtime operations;
 new modules must not depend back on the orchestrator facade.
 
-`memory/` owns memory documents, preset selection, bootstrap, effective-source
-planning, and consistency checks. `prompts/` owns prompt assets and assembly;
+`memory/` owns independent persistent collections, immutable task selection
+snapshots, runtime memory documents, preset compatibility, bootstrap,
+effective-source planning, and consistency checks. A persistent collection is
+not owned by a task or a work entity; tasks reference collections and freeze
+their revisions before translation. `prompts/` owns prompt assets and assembly;
 neither belongs to provider transport or Flutter state.
 
 `formats/` owns:

@@ -6,6 +6,7 @@ from typing import Any, Callable
 from .. import __version__
 from ..artifacts.result_workspace import (
     open_task_result,
+    promote_task_memory_entries,
     reexport_task,
     save_task_segments,
     update_task_memory_entry,
@@ -16,6 +17,13 @@ from ..artifacts.task_store import TaskStore
 from ..asr_domain import resolve_asr_policy
 from ..core.orchestrator import task_status_json
 from ..memory.exporter import MemoryPresetExportOptions, export_runtime_memory_to_preset
+from ..memory.collections import (
+    MemoryCollectionError,
+    build_selected_collections_snapshot,
+    collection_payload,
+    collection_store_for_config,
+    collection_summary,
+)
 from ..openrouter import fetch_openrouter_current_key_usage
 from ..openrouter_asr import (
     openrouter_asr_model_profile,
@@ -114,6 +122,7 @@ SERVICE_CAPABILITIES = [
     "agent_handoff",
     "media_inspection",
     "result_workspace",
+    "memory_library",
     "event_cursor",
 ]
 
@@ -209,12 +218,24 @@ class DesktopApi:
             "result.segments.save": self.result_segments_save,
             "result.reexport": self.result_reexport,
             "result.memoryEntry.update": self.result_memory_entry_update,
+            "memory.collections.list": self.memory_collections_list,
+            "memory.collection.get": self.memory_collection_get,
+            "memory.collection.create": self.memory_collection_create,
+            "memory.collection.update": self.memory_collection_update,
+            "memory.collection.delete": self.memory_collection_delete,
+            "memory.entry.upsert": self.memory_entry_upsert,
+            "memory.entry.delete": self.memory_entry_delete,
+            "memory.candidates.promote": self.memory_candidates_promote,
+            "memory.plan.resolve": self.memory_plan_resolve,
             "memory.exportPreset": self.memory_export_preset,
         }
         handler = handlers.get(method)
         if handler is None:
             raise DesktopApiError("method_not_found", f"Unknown desktop method: {method}", details={"method": method})
-        return handler(params)
+        try:
+            return handler(params)
+        except MemoryCollectionError as exc:
+            raise DesktopApiError(exc.code, str(exc), details=exc.details) from exc
 
     def service_info(self, _params: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -309,6 +330,11 @@ class DesktopApi:
             "config": config_view,
             "tasks": _catalog_task_payloads(artifacts_dir),
             "runtime": runtime.snapshot(),
+            "memory_collections": (
+                [collection_summary(item) for item in collection_store_for_config(root_dir=self.root_dir, config=config).list()]
+                if config is not None
+                else []
+            ),
             "environment": doctor_report(root_dir=self.root_dir, providers_file=self.providers_file),
             "config_error": config_error,
         }
@@ -851,6 +877,99 @@ class DesktopApi:
             status=_required_text(params, "status"),
         )
 
+    def memory_collections_list(self, _params: dict[str, Any]) -> dict[str, Any]:
+        store = self._memory_collection_store()
+        return {
+            "collections": [collection_summary(item) for item in store.list()],
+            "root": str(store.root),
+        }
+
+    def memory_collection_get(self, params: dict[str, Any]) -> dict[str, Any]:
+        collection = self._memory_collection_store().get(_required_text(params, "collection_id", "collectionId", "id"))
+        return {"collection": collection_payload(collection)}
+
+    def memory_collection_create(self, params: dict[str, Any]) -> dict[str, Any]:
+        collection = self._memory_collection_store().create(
+            name=_required_text(params, "name"),
+            collection_id=_optional_text(params, "collection_id", "collectionId", "id") or "",
+            description=str(params.get("description") or ""),
+            language_pairs=_text_list(params, "language_pairs", "languagePairs"),
+            tags=_text_list(params, "tags"),
+            actor=_optional_text(params, "actor") or "user",
+        )
+        return {"ok": True, "collection": collection_payload(collection)}
+
+    def memory_collection_update(self, params: dict[str, Any]) -> dict[str, Any]:
+        changes = params.get("changes", params.get("collection"))
+        if not isinstance(changes, dict):
+            raise DesktopApiError("invalid_request", "changes must be an object")
+        collection = self._memory_collection_store().update(
+            _required_text(params, "collection_id", "collectionId", "id"),
+            changes,
+            expected_revision=_required_revision(params),
+            actor=_optional_text(params, "actor") or "user",
+            dry_run=bool(params.get("dry_run", params.get("dryRun", False))),
+        )
+        return {"ok": True, "dry_run": bool(params.get("dry_run", params.get("dryRun", False))), "collection": collection_payload(collection)}
+
+    def memory_collection_delete(self, params: dict[str, Any]) -> dict[str, Any]:
+        collection_id = _required_text(params, "collection_id", "collectionId", "id")
+        self._memory_collection_store().delete(collection_id, expected_revision=_required_revision(params))
+        return {"ok": True, "collection_id": collection_id}
+
+    def memory_entry_upsert(self, params: dict[str, Any]) -> dict[str, Any]:
+        entry = params.get("entry")
+        if not isinstance(entry, dict):
+            raise DesktopApiError("invalid_request", "entry must be an object")
+        collection, saved_entry = self._memory_collection_store().upsert_entry(
+            _required_text(params, "collection_id", "collectionId"),
+            entry,
+            expected_revision=_required_revision(params),
+            actor=_optional_text(params, "actor") or "user",
+            dry_run=bool(params.get("dry_run", params.get("dryRun", False))),
+        )
+        return {
+            "ok": True,
+            "dry_run": bool(params.get("dry_run", params.get("dryRun", False))),
+            "collection": collection_payload(collection),
+            "entry": to_plain(saved_entry),
+        }
+
+    def memory_entry_delete(self, params: dict[str, Any]) -> dict[str, Any]:
+        collection = self._memory_collection_store().delete_entry(
+            _required_text(params, "collection_id", "collectionId"),
+            _required_text(params, "entry_id", "entryId"),
+            expected_revision=_required_revision(params),
+            actor=_optional_text(params, "actor") or "user",
+            dry_run=bool(params.get("dry_run", params.get("dryRun", False))),
+        )
+        return {
+            "ok": True,
+            "dry_run": bool(params.get("dry_run", params.get("dryRun", False))),
+            "collection": collection_payload(collection),
+        }
+
+    def memory_candidates_promote(self, params: dict[str, Any]) -> dict[str, Any]:
+        return promote_task_memory_entries(
+            root_dir=self.root_dir,
+            task_id=_required_text(params, "task_id", "taskId"),
+            collection_id=_required_text(params, "collection_id", "collectionId"),
+            entry_ids=_text_list(params, "entry_ids", "entryIds"),
+            status=_optional_text(params, "status") or "confirmed",
+            expected_revision=_required_revision(params),
+            conflict_policy=_optional_text(params, "conflict_policy", "conflictPolicy") or "skip",
+            actor=_optional_text(params, "actor") or "user",
+            dry_run=bool(params.get("dry_run", params.get("dryRun", False))),
+        )
+
+    def memory_plan_resolve(self, params: dict[str, Any]) -> dict[str, Any]:
+        return build_selected_collections_snapshot(
+            collection_ids=_text_list(params, "collection_ids", "collectionIds"),
+            store=self._memory_collection_store(),
+            source_lang=_required_text(params, "source_lang", "sourceLang", "src"),
+            target_lang=_required_text(params, "target_lang", "targetLang", "tgt"),
+        )
+
     def memory_export_preset(self, params: dict[str, Any]) -> dict[str, Any]:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return export_runtime_memory_to_preset(
@@ -870,6 +989,10 @@ class DesktopApi:
     def _runtime(self) -> TaskRuntime:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return TaskRuntime(config.pipeline.artifacts_dir)
+
+    def _memory_collection_store(self):
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        return collection_store_for_config(root_dir=self.root_dir, config=config)
 
     def _notify_task_ready(self, task_id: str) -> None:
         if self._task_ready_callback is None or not task_id:
@@ -1249,7 +1372,7 @@ def _unexpected_workspace_entries(workspace_root: Path) -> list[str]:
         return []
     if not workspace_root.is_dir():
         return [workspace_root.name]
-    allowed = {"tasks", "cache", ".transvortex-workspace.json"}
+    allowed = {"tasks", "cache", "memory", ".transvortex-workspace.json"}
     try:
         return sorted(child.name for child in workspace_root.iterdir() if child.name.casefold() not in allowed)
     except OSError as exc:
@@ -1277,6 +1400,31 @@ def _optional_text(params: dict[str, Any], *keys: str) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _text_list(params: dict[str, Any], *keys: str) -> list[str]:
+    for key in keys:
+        value = params.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            raise DesktopApiError("invalid_request", f"{key} must be a list")
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    return []
+
+
+def _required_revision(params: dict[str, Any]) -> int:
+    for key in ("expected_revision", "expectedRevision"):
+        if key not in params:
+            continue
+        try:
+            revision = int(params[key])
+        except (TypeError, ValueError):
+            raise DesktopApiError("invalid_request", f"{key} must be an integer") from None
+        if revision < 1:
+            raise DesktopApiError("invalid_request", f"{key} must be at least 1")
+        return revision
+    raise DesktopApiError("invalid_request", "expected_revision is required")
 
 
 def _optional_bool(params: dict[str, Any], *keys: str) -> bool | None:

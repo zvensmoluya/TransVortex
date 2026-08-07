@@ -29,6 +29,7 @@ import 'services/workspace_data_manager.dart';
 import 'theme/tokens.dart';
 import 'widgets/application_settings_panel.dart';
 import 'widgets/job_line.dart';
+import 'widgets/memory_library_dialog.dart';
 import 'widgets/primary_action.dart';
 import 'widgets/reasoning_effort_picker.dart';
 import 'widgets/designed_tooltip.dart';
@@ -573,6 +574,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             onPickBilingual: _pickBilingual,
             onPickFormats: _pickFormats,
             onToggleTerms: _toggleTerms,
+            onPickMemoryCollections: _pickMemoryCollections,
             onConfigureTranslation: () =>
                 _openToolWindow(AppWindowType.translationSettings),
             onConfigureAsr: () => _openToolWindow(AppWindowType.asrSettings),
@@ -1153,6 +1155,28 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   void _toggleTerms() {
     _controller.setTermsEnabled(!_controller.view.termsEnabled);
+  }
+
+  Future<void> _pickMemoryCollections() async {
+    await _service.start();
+    final client = _service.client;
+    if (client == null || !mounted) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地服务尚未连接，暂时无法读取术语库。')));
+      }
+      return;
+    }
+    final selected = await showDialog<List<String>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => MemoryLibraryDialog(
+        client: client,
+        selectedCollectionIds: _controller.view.memoryCollectionIds,
+      ),
+    );
+    if (selected != null) _controller.setMemoryCollectionIds(selected);
   }
 
   Future<TValue?> _showOptionMenu<TValue>({

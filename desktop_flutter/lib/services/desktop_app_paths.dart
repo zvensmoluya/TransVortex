@@ -21,6 +21,8 @@ class DesktopAppPaths {
   final Directory workspaceRoot;
   final Directory tasksRoot;
   final Directory cacheRoot;
+  Directory get memoryRoot =>
+      Directory(_joinPath(workspaceRoot.path, 'Memory'));
 
   factory DesktopAppPaths.system({
     Map<String, String>? environment,

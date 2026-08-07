@@ -12,6 +12,7 @@ from typing import Any
 
 from ..artifacts.result_workspace import (
     open_task_result,
+    promote_task_memory_entries,
     reexport_task,
     save_task_segments,
     update_task_memory_entry,
@@ -67,6 +68,12 @@ from ..memory.exporter import (
     MemoryPresetExportOptions,
     bootstrap_memory_preset,
     export_runtime_memory_to_preset,
+)
+from ..memory.collections import (
+    build_selected_collections_snapshot,
+    collection_payload,
+    collection_store_for_config,
+    collection_summary,
 )
 from ..providers.admin import (
     custom_adapter_template_payload,
@@ -144,6 +151,7 @@ def _common_overrides(args: argparse.Namespace) -> dict:
         "memory_patch_enabled": getattr(args, "memory_patch_enabled", None),
         "memory_intensity": getattr(args, "memory_intensity", None),
         "memory_patch_window_chunks": getattr(args, "memory_patch_window_chunks", None),
+        "memory_collections": _parse_memory_collection_arg(getattr(args, "memory_collection", None)),
         "memory_presets": _parse_memory_preset_arg(getattr(args, "memory_preset", None)),
     }
 
@@ -162,6 +170,16 @@ def _parse_memory_preset_arg(raw: str | None) -> list[dict[str, str]] | None:
         else:
             out.append({"id": token})
     return out
+
+
+def _parse_memory_collection_arg(raw: str | None) -> list[dict[str, str]] | None:
+    if raw is None:
+        return None
+    return [
+        {"id": token.strip()}
+        for token in str(raw).split(",")
+        if token.strip()
+    ]
 
 
 def _subtitle_ass_style_overrides(args: argparse.Namespace) -> dict[str, object] | None:
@@ -280,6 +298,11 @@ def _add_pipeline_override_args(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--memory-patch-enabled", choices=["true", "false"], default=None)
     subparser.add_argument("--memory-intensity", choices=["low", "auto", "high", "max"], default=None)
     subparser.add_argument("--memory-patch-window-chunks", type=int, default=None)
+    subparser.add_argument(
+        "--memory-collection",
+        default=None,
+        help="Comma-separated persistent memory collection ids to snapshot for this task",
+    )
     subparser.add_argument(
         "--memory-preset",
         default=None,
@@ -429,6 +452,7 @@ def _append_common_overrides_to_args(args: list[str], ns: argparse.Namespace) ->
         ("--memory-patch-enabled", getattr(ns, "memory_patch_enabled", None)),
         ("--memory-intensity", getattr(ns, "memory_intensity", None)),
         ("--memory-patch-window-chunks", getattr(ns, "memory_patch_window_chunks", None)),
+        ("--memory-collection", getattr(ns, "memory_collection", None)),
         ("--memory-preset", getattr(ns, "memory_preset", None)),
     ]
     for flag, value in mapping:
@@ -486,6 +510,7 @@ def _append_request_overrides_to_args(args: list[str], overrides: dict[str, Any]
         ("--memory-patch-enabled", bool_text(overrides.get("memory_patch_enabled"))),
         ("--memory-intensity", overrides.get("memory_intensity")),
         ("--memory-patch-window-chunks", overrides.get("memory_patch_window_chunks")),
+        ("--memory-collection", _memory_collections_arg(overrides.get("memory_collections"))),
         ("--memory-preset", _memory_presets_arg(overrides.get("memory_presets"))),
     ]
     for flag, value in mapping:
@@ -504,6 +529,17 @@ def _memory_presets_arg(value: Any) -> str | None:
             continue
         override = str(item.get("override_status") or "").strip()
         tokens.append(f"{preset_id}:{override}" if override else preset_id)
+    return ",".join(tokens) or None
+
+
+def _memory_collections_arg(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+    tokens = [
+        str(item.get("id") or "").strip()
+        for item in value
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
     return ",".join(tokens) or None
 
 
@@ -560,6 +596,7 @@ def _request_mode_business_flags(ns: argparse.Namespace, command: str) -> list[s
         "memory_patch_enabled": "--memory-patch-enabled",
         "memory_intensity": "--memory-intensity",
         "memory_patch_window_chunks": "--memory-patch-window-chunks",
+        "memory_collection": "--memory-collection",
         "memory_preset": "--memory-preset",
     }
     if command == "resume":
@@ -891,8 +928,58 @@ def _build_parser() -> argparse.ArgumentParser:
     result_memory_p.add_argument("--status", choices=["proposed", "confirmed", "locked"], required=True)
     result_memory_p.add_argument("--json", action="store_true")
 
-    memory_p = sub.add_parser("memory", help="Manage translation memory presets")
+    memory_p = sub.add_parser("memory", help="Manage persistent translation memory and legacy presets")
     memory_sub = memory_p.add_subparsers(dest="memory_command", required=True)
+    memory_list_p = memory_sub.add_parser("collections", help="List persistent memory collections")
+    memory_list_p.add_argument("--json", action="store_true")
+    memory_get_p = memory_sub.add_parser("collection-get", help="Read one persistent memory collection")
+    memory_get_p.add_argument("--collection-id", required=True)
+    memory_get_p.add_argument("--json", action="store_true")
+    memory_create_p = memory_sub.add_parser("collection-create", help="Create a persistent memory collection")
+    memory_create_p.add_argument("--collection-id", default="")
+    memory_create_p.add_argument("--name", required=True)
+    memory_create_p.add_argument("--description", default="")
+    memory_create_p.add_argument("--language-pair", action="append", default=[])
+    memory_create_p.add_argument("--tag", action="append", default=[])
+    memory_create_p.add_argument("--json", action="store_true")
+    memory_update_p = memory_sub.add_parser("collection-update", help="Update collection metadata with revision protection")
+    memory_update_p.add_argument("--collection-id", required=True)
+    memory_update_p.add_argument("--json-payload", required=True)
+    memory_update_p.add_argument("--expected-revision", type=int, required=True)
+    memory_update_p.add_argument("--dry-run", action="store_true")
+    memory_update_p.add_argument("--json", action="store_true")
+    memory_delete_p = memory_sub.add_parser("collection-delete", help="Delete a persistent memory collection")
+    memory_delete_p.add_argument("--collection-id", required=True)
+    memory_delete_p.add_argument("--expected-revision", type=int, required=True)
+    memory_delete_p.add_argument("--yes", action="store_true")
+    memory_delete_p.add_argument("--json", action="store_true")
+    memory_entry_upsert_p = memory_sub.add_parser("entry-upsert", help="Create or edit a collection entry")
+    memory_entry_upsert_p.add_argument("--collection-id", required=True)
+    memory_entry_upsert_p.add_argument("--json-payload", required=True)
+    memory_entry_upsert_p.add_argument("--expected-revision", type=int, required=True)
+    memory_entry_upsert_p.add_argument("--dry-run", action="store_true")
+    memory_entry_upsert_p.add_argument("--json", action="store_true")
+    memory_entry_delete_p = memory_sub.add_parser("entry-delete", help="Delete a collection entry")
+    memory_entry_delete_p.add_argument("--collection-id", required=True)
+    memory_entry_delete_p.add_argument("--entry-id", required=True)
+    memory_entry_delete_p.add_argument("--expected-revision", type=int, required=True)
+    memory_entry_delete_p.add_argument("--dry-run", action="store_true")
+    memory_entry_delete_p.add_argument("--yes", action="store_true")
+    memory_entry_delete_p.add_argument("--json", action="store_true")
+    memory_promote_p = memory_sub.add_parser("promote", help="Promote selected task candidates into a collection")
+    memory_promote_p.add_argument("--task-id", required=True)
+    memory_promote_p.add_argument("--collection-id", required=True)
+    memory_promote_p.add_argument("--entry-id", action="append", required=True)
+    memory_promote_p.add_argument("--status", choices=["proposed", "confirmed", "locked"], default="confirmed")
+    memory_promote_p.add_argument("--expected-revision", type=int, required=True)
+    memory_promote_p.add_argument("--conflict-policy", choices=["skip", "replace"], default="skip")
+    memory_promote_p.add_argument("--dry-run", action="store_true")
+    memory_promote_p.add_argument("--json", action="store_true")
+    memory_resolve_p = memory_sub.add_parser("resolve", help="Preview the exact collection snapshot for a task")
+    memory_resolve_p.add_argument("--collection-id", action="append", required=True)
+    memory_resolve_p.add_argument("--src", required=True)
+    memory_resolve_p.add_argument("--tgt", required=True)
+    memory_resolve_p.add_argument("--json", action="store_true")
     memory_bootstrap_p = memory_sub.add_parser("bootstrap", help="Generate a draft memory preset from segments or SRT")
     _add_providers_file_arg(memory_bootstrap_p)
     memory_bootstrap_p.add_argument("--segments", required=True)
@@ -1906,6 +1993,108 @@ def main() -> None:
                 task_id_hint=args.task_id,
             )
         )
+        return
+
+    if args.command == "memory" and args.memory_command in {
+        "collections",
+        "collection-get",
+        "collection-create",
+        "collection-update",
+        "collection-delete",
+        "entry-upsert",
+        "entry-delete",
+        "promote",
+        "resolve",
+    }:
+        config = load_app_config(root_dir=root, providers_file=providers_file)
+        collection_store = collection_store_for_config(root_dir=root, config=config)
+
+        def do_memory_command() -> dict[str, Any]:
+            if args.memory_command == "collections":
+                return {
+                    "collections": [collection_summary(item) for item in collection_store.list()],
+                    "root": str(collection_store.root),
+                }
+            if args.memory_command == "collection-get":
+                return {"collection": collection_payload(collection_store.get(args.collection_id))}
+            if args.memory_command == "collection-create":
+                collection = collection_store.create(
+                    name=args.name,
+                    collection_id=args.collection_id,
+                    description=args.description,
+                    language_pairs=args.language_pair,
+                    tags=args.tag,
+                    actor="agent",
+                )
+                return {"ok": True, "collection": collection_payload(collection)}
+            if args.memory_command == "collection-update":
+                collection = collection_store.update(
+                    args.collection_id,
+                    _read_json_arg(args.json_payload),
+                    expected_revision=args.expected_revision,
+                    actor="agent",
+                    dry_run=args.dry_run,
+                )
+                return {"ok": True, "dry_run": args.dry_run, "collection": collection_payload(collection)}
+            if args.memory_command == "collection-delete":
+                if not args.yes:
+                    raise ValueError("collection-delete requires --yes")
+                collection_store.delete(args.collection_id, expected_revision=args.expected_revision)
+                return {"ok": True, "collection_id": args.collection_id}
+            if args.memory_command == "entry-upsert":
+                collection, entry = collection_store.upsert_entry(
+                    args.collection_id,
+                    _read_json_arg(args.json_payload),
+                    expected_revision=args.expected_revision,
+                    actor="agent",
+                    dry_run=args.dry_run,
+                )
+                return {
+                    "ok": True,
+                    "dry_run": args.dry_run,
+                    "collection": collection_payload(collection),
+                    "entry": to_plain(entry),
+                }
+            if args.memory_command == "entry-delete":
+                if not args.dry_run and not args.yes:
+                    raise ValueError("entry-delete requires --yes unless --dry-run is used")
+                collection = collection_store.delete_entry(
+                    args.collection_id,
+                    args.entry_id,
+                    expected_revision=args.expected_revision,
+                    actor="agent",
+                    dry_run=args.dry_run,
+                )
+                return {"ok": True, "dry_run": args.dry_run, "collection": collection_payload(collection)}
+            if args.memory_command == "promote":
+                return promote_task_memory_entries(
+                    root_dir=root,
+                    task_id=args.task_id,
+                    collection_id=args.collection_id,
+                    entry_ids=args.entry_id,
+                    status=args.status,
+                    expected_revision=args.expected_revision,
+                    conflict_policy=args.conflict_policy,
+                    actor="agent",
+                    dry_run=args.dry_run,
+                )
+            return build_selected_collections_snapshot(
+                collection_ids=args.collection_id,
+                store=collection_store,
+                source_lang=args.src,
+                target_lang=args.tgt,
+            )
+
+        payload = _run_or_exit(do_memory_command, json_mode=args.json, stream_events=False)
+        if args.json:
+            _print_json(payload)
+        elif args.memory_command == "collections":
+            for row in payload["collections"]:
+                print(f"{row['id']}\t{row['revision']}\t{row['entries']}\t{row['name']}")
+        elif args.memory_command == "collection-delete":
+            print(payload["collection_id"])
+        else:
+            _print_json(payload)
         return
 
     if args.command == "memory" and args.memory_command == "export-preset":

@@ -26,14 +26,16 @@ class WorkspaceDataStatus {
     required this.tasksBytes,
     required this.cacheBytes,
     required this.taskCount,
+    this.memoryBytes = 0,
   });
 
   final String root;
   final int tasksBytes;
   final int cacheBytes;
+  final int memoryBytes;
   final int taskCount;
 
-  int get totalBytes => tasksBytes + cacheBytes;
+  int get totalBytes => tasksBytes + cacheBytes + memoryBytes;
 }
 
 class WorkspaceMigrationReceipt {
@@ -87,6 +89,7 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
       root: paths.workspaceRoot.path,
       tasksBytes: await _directoryBytes(paths.tasksRoot),
       cacheBytes: await _directoryBytes(paths.cacheRoot),
+      memoryBytes: await _directoryBytes(paths.memoryRoot),
       taskCount: await _taskDirectoryCount(paths.tasksRoot),
     );
   }
@@ -139,7 +142,11 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
     );
     try {
       await target.create(recursive: true);
-      final sources = [paths.tasksRoot.absolute, paths.cacheRoot.absolute];
+      final sources = [
+        paths.tasksRoot.absolute,
+        paths.cacheRoot.absolute,
+        paths.memoryRoot.absolute,
+      ];
       final totalBytes = await _directoriesBytes(sources);
       var copiedBytes = 0;
       onProgress?.call(0, totalBytes);
@@ -158,6 +165,7 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
       final copiedTotal = await _directoriesBytes([
         Directory(_join(target.path, 'Tasks')),
         Directory(_join(target.path, 'Cache')),
+        Directory(_join(target.path, 'Memory')),
       ]);
       if (copiedTotal != totalBytes) {
         throw WorkspaceDataException(
@@ -191,7 +199,7 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
   @override
   Future<void> discardCopiedTarget(WorkspaceMigrationReceipt receipt) async {
     final target = receipt.targetRoot.absolute;
-    for (final name in ['Tasks', 'Cache', workspaceMarkerName]) {
+    for (final name in ['Tasks', 'Cache', 'Memory', workspaceMarkerName]) {
       final entityPath = _join(target.path, name);
       final type = await FileSystemEntity.type(entityPath, followLinks: false);
       if (type == FileSystemEntityType.notFound) continue;
@@ -209,7 +217,7 @@ class WorkspaceDataManager implements WorkspaceDataOperations {
   @override
   Future<void> removeMigratedSource(WorkspaceMigrationReceipt receipt) async {
     final source = receipt.sourceRoot.absolute;
-    for (final name in ['Tasks', 'Cache', workspaceMarkerName]) {
+    for (final name in ['Tasks', 'Cache', 'Memory', workspaceMarkerName]) {
       final entityPath = _join(source.path, name);
       final type = await FileSystemEntity.type(entityPath, followLinks: false);
       if (type == FileSystemEntityType.notFound) continue;

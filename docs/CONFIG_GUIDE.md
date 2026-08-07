@@ -254,6 +254,7 @@ translation:
 ```yaml
 memory:
   enabled: true
+  collections: []
   presets: []
   bootstrap:
     enabled: true
@@ -274,12 +275,15 @@ memory:
 ```
 
 说明：
-- `memory.enabled: false` 是一键总禁用，会跳过预设术语表、bootstrap、注入、动态维护和一致性质检。
+- `memory.enabled: false` 是一键总禁用，会跳过持久集合、预设术语表、bootstrap、注入、动态维护和一致性质检。
+- `memory.collections` 是本任务选择的持久术语库 ID。集合是用户级工作数据，不绑定作品或任务；创建任务时会把所选 revision 与条目冻结到 `memory/selected_collections.json`，恢复任务继续读取该快照，而不是读取集合的最新版本。
 - `memory.presets` 有条目时会加载用户选择的预设术语表；空列表表示不加载预设。
-- `memory.bootstrap.enabled: true` 会在翻译前生成运行时术语库文件 `translation_memory.json`。
-- `memory.inject.enabled: true` 才会把预设术语表和运行时术语库注入翻译；`memory.inject.intensity` 只控制强度：`low`、`auto`、`high`、`max`。
+- `memory.bootstrap.enabled: true` 会在翻译前生成任务运行时术语文件 `translation_memory.json`。它是当次任务工件，可用于翻译增强、恢复和审计，但不会自动写回持久术语库。
+- `memory.inject.enabled: true` 才会把所选集合快照、预设术语表和运行时术语注入翻译；`memory.inject.intensity` 只控制强度：`low`、`auto`、`high`、`max`。
 - `memory.patch.enabled: true` 会开启翻译中的动态维护；当前只支持 `mode: serial`，即默认每 3 个 chunk 合并一次修改建议，再继续后续翻译。这样既能让新译名回流后续分片，也避免每片单独请求造成调用放大。开启 patch 要求 `memory.inject.enabled: true`。
 - 只生成术语表草稿不属于主翻译 pipeline 的 memory 模式，请使用 `transvortex memory bootstrap` 独立命令。
+
+正式桌面端把持久术语库放在工作数据根的 `Memory/*.json`，并随 `Tasks`、`Cache` 一起迁移；仓库 CLI 使用 `<root>/memory/collections/*.json`。集合写入使用 revision 乐观并发保护。可通过 `transvortex memory collections --json` 查看，再用 `collection-get/create/update/delete`、`entry-upsert/delete`、`promote` 和 `resolve` 操作；破坏性命令要求 `--yes`，写操作支持或要求 `--expected-revision`，适用的命令提供 `--dry-run`。
 
 ## 5. ASR 与视频字幕来源
 

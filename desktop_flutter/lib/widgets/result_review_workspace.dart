@@ -7,6 +7,7 @@ import '../model/task_labels.dart';
 import '../services/app_service_client.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
+import 'memory_library_dialog.dart';
 
 part 'result_review_workspace/result_review_actions.dart';
 part 'result_review_workspace/result_review_draft_controller.dart';
@@ -212,6 +213,7 @@ class _ResultReviewWorkspaceState extends State<ResultReviewWorkspace> {
       onNormalizeTiming: _normalizeTiming,
       onPreviousIssue: () => _navigateIssue(-1),
       onNextIssue: () => _navigateIssue(1),
+      onPromoteMemory: () => unawaited(_promoteMemoryCandidates()),
       onReexport: () => unawaited(_reexport()),
     );
   }

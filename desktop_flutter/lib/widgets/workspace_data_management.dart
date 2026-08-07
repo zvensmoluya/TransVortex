@@ -140,7 +140,7 @@ class _WorkspaceDataManagementState extends State<WorkspaceDataManagement> {
       builder: (context) => AlertDialog(
         title: const Text('迁移工作数据？'),
         content: Text(
-          '应用会先确认没有正在处理的任务，将任务和缓存复制到新位置，'
+          '应用会先确认没有正在处理的任务，将任务、术语库和缓存复制到新位置，'
           '校验后切换配置并重启本地服务，再清理旧位置。\n\n'
           '当前位置：$sourceRoot\n新位置：${selected.trim()}',
         ),
@@ -295,7 +295,8 @@ class _WorkspaceDataManagementState extends State<WorkspaceDataManagement> {
     final status = _status;
     final totalLabel = status == null
         ? '正在计算占用空间'
-        : '${status.taskCount} 个任务 · 任务 ${_formatBytes(status.tasksBytes)} · 缓存 ${_formatBytes(status.cacheBytes)}';
+        : '${status.taskCount} 个任务 · 任务 ${_formatBytes(status.tasksBytes)} · '
+              '术语库 ${_formatBytes(status.memoryBytes)} · 缓存 ${_formatBytes(status.cacheBytes)}';
     final progress = _busy && _totalBytes > 0
         ? (_copiedBytes / _totalBytes).clamp(0.0, 1.0)
         : null;

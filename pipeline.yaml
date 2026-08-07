@@ -99,6 +99,8 @@ translation:
     max_attempts: 2
 memory:
   enabled: true
+  collections: []
+  presets: []
   bootstrap:
     enabled: true
     mode: whole_document

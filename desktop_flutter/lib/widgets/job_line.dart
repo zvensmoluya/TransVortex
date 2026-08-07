@@ -20,6 +20,7 @@ class JobLine extends StatelessWidget {
     required this.onPickBilingual,
     required this.onPickFormats,
     required this.onToggleTerms,
+    required this.onPickMemoryCollections,
     required this.onConfigureTranslation,
     required this.onConfigureAsr,
   });
@@ -33,6 +34,7 @@ class JobLine extends StatelessWidget {
   final VoidCallback onPickBilingual;
   final VoidCallback onPickFormats;
   final VoidCallback onToggleTerms;
+  final VoidCallback onPickMemoryCollections;
   final VoidCallback onConfigureTranslation;
   final VoidCallback onConfigureAsr;
 
@@ -46,7 +48,11 @@ class JobLine extends StatelessWidget {
     final translationLabel = view.translationConfigured
         ? _compactEngineLabel(view.translationLabel)
         : '先配置翻译';
-    final memoryLabel = view.termsEnabled ? '自动生成术语建议' : '不生成术语建议';
+    final memoryLabel = view.termsEnabled ? '自动发现术语候选' : '不自动发现候选';
+    final collectionCount = view.memoryCollectionIds.length;
+    final collectionLabel = collectionCount == 0
+        ? '不使用术语库'
+        : '使用 $collectionCount 个术语库';
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -142,9 +148,18 @@ class JobLine extends StatelessWidget {
             _Word(
               label: memoryLabel,
               tooltip: view.termsEnabled
-                  ? '本次制作允许系统生成术语建议。不会改动或关闭已有人工术语。'
-                  : '本次不生成新的术语建议。已有人工术语是否使用不受这个开关影响。',
+                  ? '本次允许系统动态发现候选，用于增强当次翻译；不会自动写入持久术语库。'
+                  : '本次不动态发现新候选；是否使用持久术语库由旁边的选择单独决定。',
               onPick: onToggleTerms,
+            ),
+            const Text('，并', style: T.tBody),
+            _Word(
+              key: const ValueKey('job-memory-collections'),
+              label: collectionLabel,
+              tooltip: collectionCount == 0
+                  ? '选择本任务要使用的持久术语库。任务开始后会冻结快照，不会被后续修改影响。'
+                  : '本任务将使用所选术语库的快照；点击可选择或维护术语库。',
+              onPick: onPickMemoryCollections,
             ),
           ],
         ),

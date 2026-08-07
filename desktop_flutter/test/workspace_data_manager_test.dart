@@ -40,6 +40,10 @@ void main() {
     await File(
       '${paths.cacheRoot.path}${Platform.pathSeparator}audio.tmp',
     ).writeAsBytes([1, 2, 3, 4]);
+    await paths.memoryRoot.create(recursive: true);
+    await File(
+      '${paths.memoryRoot.path}${Platform.pathSeparator}shared.json',
+    ).writeAsString('{"id":"shared"}');
     await paths.configRoot.create(recursive: true);
     await File(
       '${paths.configRoot.path}${Platform.pathSeparator}$workspaceStorageConfigName',
@@ -57,7 +61,8 @@ void main() {
     expect(status.taskCount, 1);
     expect(status.tasksBytes, greaterThan(0));
     expect(status.cacheBytes, 4);
-    expect(status.totalBytes, status.tasksBytes + 4);
+    expect(status.memoryBytes, greaterThan(0));
+    expect(status.totalBytes, status.tasksBytes + status.memoryBytes + 4);
   });
 
   test('copies, verifies, restores config, and removes old data', () async {
@@ -83,6 +88,12 @@ void main() {
       ).readAsBytesSync(),
       [1, 2, 3, 4],
     );
+    expect(
+      File(
+        '${target.path}${Platform.pathSeparator}Memory${Platform.pathSeparator}shared.json',
+      ).readAsStringSync(),
+      '{"id":"shared"}',
+    );
     expect(progress.last, greaterThan(0));
 
     await receipt.configFile.writeAsString('new-config');
@@ -92,6 +103,7 @@ void main() {
     await manager.removeMigratedSource(receipt);
     expect(await paths.tasksRoot.exists(), isFalse);
     expect(await paths.cacheRoot.exists(), isFalse);
+    expect(await paths.memoryRoot.exists(), isFalse);
   });
 
   test('cache cleanup preserves task records', () async {

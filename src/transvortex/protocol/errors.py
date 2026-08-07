@@ -49,6 +49,22 @@ def _transport_error_details(exc: Exception) -> dict[str, Any]:
 def classify_exception(exc: Exception, *, stage: str | None = None) -> dict[str, Any]:
     message = str(exc)
     lowered = message.lower()
+    custom_code = str(getattr(exc, "code", "") or "").strip()
+    custom_details = getattr(exc, "details", None)
+    if custom_code:
+        return error_info(
+            code=custom_code,
+            error_type="conflict_error" if custom_code.endswith("revision_conflict") else "input_error",
+            stage=stage,
+            message=message,
+            hint_zh=(
+                "术语集合已被其他操作修改，请重新读取最新 revision 后再提交。"
+                if custom_code.endswith("revision_conflict")
+                else "术语记忆请求不符合接口约束，请检查集合、条目和参数。"
+            ),
+            retryable=custom_code.endswith("revision_conflict"),
+            details=dict(custom_details) if isinstance(custom_details, dict) else {},
+        )
     transport_error_type = str(getattr(exc, "error_type", "") or "").strip().lower()
     transport_details = _transport_error_details(exc)
     if exc.__class__.__name__ == "RequestValidationError":

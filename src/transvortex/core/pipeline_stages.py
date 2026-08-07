@@ -16,11 +16,13 @@ from ..formats.exporter import (
 from ..formats.srt import parse_srt_file
 from ..memory.bootstrapper import bootstrap_memory
 from ..memory.checker import check_consistency, write_consistency_issues
+from ..memory.collections import build_selected_collections_snapshot, collection_store_for_config
 from ..memory.plan import (
     effective_memory_sources,
     memory_enabled,
     runs_bootstrap,
     translates_with_memory,
+    uses_collections,
     uses_presets,
 )
 from ..memory.presets import build_selected_presets_snapshot
@@ -593,6 +595,28 @@ def run_memory_stage(context: PipelineExecutionContext, dependencies: PipelineSt
         dependencies.emit_stage(store, task_id, "MEMORY", "Preparing translation memory")
         memory_store = MemoryStore(paths["memory"])
         memory_store.ensure_runtime_document()
+        if uses_collections(config.pipeline.memory) and not memory_store.selected_collections_file.exists():
+            snapshot = build_selected_collections_snapshot(
+                collection_ids=[item.id for item in config.pipeline.memory.collections],
+                store=collection_store_for_config(root_dir=root_dir, config=config),
+                source_lang=task.source_lang,
+                target_lang=task.target_lang,
+            )
+            memory_store.save_selected_collections(snapshot)
+            report = dict(snapshot.get("report") or {})
+            store.append_event(
+                task_id,
+                "artifact",
+                stage="MEMORY",
+                message="Memory collections snapshot ready",
+                details={
+                    "path": str(memory_store.selected_collections_file),
+                    "applied": report.get("applied") or [],
+                    "skipped": report.get("skipped") or [],
+                    "conflicts": report.get("conflicts") or [],
+                    "entries": int(report.get("entries") or 0),
+                },
+            )
         if uses_presets(config.pipeline.memory) and not memory_store.selected_presets_file.exists():
             snapshot = build_selected_presets_snapshot(
                 presets=config.pipeline.memory.presets,

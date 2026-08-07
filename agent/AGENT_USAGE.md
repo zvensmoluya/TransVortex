@@ -179,6 +179,48 @@ segments JSONL file or SRT and emits translated/final artifacts. `export` writes
 SRT/ASS/VTT from final segments and reports delivery checks in JSON output or
 `quality/subtitle_delivery.json` when run through a task.
 
+## Persistent Memory Collections
+
+Persistent collections are user-owned assets independent of works and tasks.
+Task-generated runtime memory is not persistent by default. A task may select
+one or more collections; TransVortex freezes their revisions into
+`memory/selected_collections.json`, so later collection edits do not alter a
+resume or an old result.
+
+Read before writing:
+
+```powershell
+transvortex memory collections --json
+transvortex memory collection-get --collection-id <collection-id> --json
+transvortex memory resolve --collection-id <collection-id> --src ja --tgt zh-CN --json
+```
+
+Create or customize collections and entries:
+
+```powershell
+transvortex memory collection-create --name <name> --collection-id <id> --language-pair 'ja->zh-CN' --json
+transvortex memory collection-update --collection-id <id> --expected-revision <revision> --json-payload '<changes-json>' --dry-run --json
+transvortex memory entry-upsert --collection-id <id> --expected-revision <revision> --json-payload '<entry-json>' --dry-run --json
+```
+
+After inspecting the dry-run result, repeat without `--dry-run` using the same
+expected revision. If the revision changed, read the collection again and
+reconcile instead of overwriting it. Deletion additionally requires `--yes`.
+
+Select collections for a new task with `--memory-collection <id[,id...]>`.
+Promote only explicitly selected runtime candidates:
+
+```powershell
+transvortex result open --task-id <task-id> --json
+transvortex memory promote --task-id <task-id> --collection-id <id> --entry-id <entry-id> --expected-revision <revision> --dry-run --json
+```
+
+Repeat `--entry-id` for multiple candidates. Inspect `applied`, `skipped`, and
+`conflicts`, then repeat without `--dry-run` if authorized. Never infer that all
+runtime candidates should be persisted. The `skip` conflict policy is the safe
+default; use `replace` only when the user has authorized replacing an existing
+target.
+
 ## Events
 
 Events are JSONL objects. Stable fields:

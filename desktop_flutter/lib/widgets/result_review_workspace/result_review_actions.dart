@@ -1,6 +1,35 @@
 part of '../result_review_workspace.dart';
 
 extension _ResultReviewActions on _ResultReviewWorkspaceState {
+  Future<void> _promoteMemoryCandidates() async {
+    final result = _result;
+    if (result == null || _saving || _reexporting) return;
+    final rawCandidates = result.memory['entry_items'];
+    final candidates =
+        (rawCandidates is List ? rawCandidates : const <Object?>[])
+            .map(MemoryEntryItem.fromJson)
+            .where((entry) => entry.id.isNotEmpty)
+            .toList();
+    if (candidates.isEmpty) return;
+    final promoted = await showDialog<MemoryPromotionResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => MemoryPromotionDialog(
+        client: _client,
+        taskId: _taskId,
+        candidates: candidates,
+      ),
+    );
+    if (promoted == null || !mounted) return;
+    _setReviewState(() {
+      _notice = promoted.applied > 0
+          ? '已将 ${promoted.applied} 条术语保存到术语库${promoted.conflicts > 0 ? '，其中 ${promoted.conflicts} 条发生冲突' : ''}'
+          : '没有新增持久术语';
+      _actionError = null;
+      _failedAction = null;
+    });
+  }
+
   Future<void> _loadResult() async {
     final taskId = _taskId;
     if (taskId.isEmpty) {

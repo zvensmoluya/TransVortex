@@ -685,6 +685,7 @@ void main() {
     expect(overrides['memory_bootstrap_enabled'], isTrue);
     expect(overrides['memory_patch_enabled'], isTrue);
     expect(overrides['memory_patch_window_chunks'], 3);
+    expect(overrides['memory_collections'], isEmpty);
     expect(overrides['asr_provider'], 'local');
     expect(overrides['asr_model'], 'large-v3');
   });
@@ -860,7 +861,36 @@ void main() {
     expect(overrides['memory_bootstrap_enabled'], isFalse);
     expect(overrides['memory_patch_enabled'], isFalse);
     expect(overrides.containsKey('memory_patch_window_chunks'), isFalse);
+    expect(overrides['memory_collections'], isEmpty);
   });
+
+  test(
+    'controller uses selected memory collections without dynamic generation',
+    () async {
+      final controller = MainWindowController(service: _readyController());
+      await controller.startService();
+      controller.pickSource(r'D:\movie.mp4');
+      controller.setTermsEnabled(false);
+      controller.setMemoryCollectionIds(const [
+        'characters',
+        'shared',
+        'characters',
+      ]);
+
+      final payload = controller.buildRunRequest();
+      final overrides = payload['overrides'] as Map<String, Object?>;
+
+      expect(controller.view.memoryCollectionIds, ['characters', 'shared']);
+      expect(overrides['memory_enabled'], isTrue);
+      expect(overrides['memory_inject_enabled'], isTrue);
+      expect(overrides['memory_bootstrap_enabled'], isFalse);
+      expect(overrides['memory_patch_enabled'], isFalse);
+      expect(overrides['memory_collections'], [
+        {'id': 'characters'},
+        {'id': 'shared'},
+      ]);
+    },
+  );
 
   test(
     'controller lets recovery override output directory for the next run',

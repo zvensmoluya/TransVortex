@@ -431,6 +431,118 @@ class AppServiceClient {
     );
   }
 
+  Future<List<MemoryCollectionSummary>> memoryCollections() async {
+    final payload = _stringMap(await call('memory.collections.list'));
+    return _objectList(payload['collections'])
+        .map(MemoryCollectionSummary.fromJson)
+        .where((collection) => collection.id.isNotEmpty)
+        .toList();
+  }
+
+  Future<MemoryCollectionDetail> memoryCollection(String collectionId) async {
+    return MemoryCollectionDetail.fromJson(
+      await call('memory.collection.get', {'collection_id': collectionId}),
+    );
+  }
+
+  Future<MemoryCollectionDetail> createMemoryCollection({
+    required String name,
+    String collectionId = '',
+    String description = '',
+    List<String> languagePairs = const [],
+    List<String> tags = const [],
+  }) async {
+    return MemoryCollectionDetail.fromJson(
+      await call('memory.collection.create', {
+        'name': name,
+        'collection_id': collectionId,
+        'description': description,
+        'language_pairs': languagePairs,
+        'tags': tags,
+      }),
+    );
+  }
+
+  Future<MemoryCollectionDetail> updateMemoryCollection(
+    String collectionId, {
+    required int expectedRevision,
+    required Map<String, Object?> changes,
+    bool dryRun = false,
+  }) async {
+    return MemoryCollectionDetail.fromJson(
+      await call('memory.collection.update', {
+        'collection_id': collectionId,
+        'expected_revision': expectedRevision,
+        'changes': changes,
+        'dry_run': dryRun,
+      }),
+    );
+  }
+
+  Future<void> deleteMemoryCollection(
+    String collectionId, {
+    required int expectedRevision,
+  }) async {
+    await call('memory.collection.delete', {
+      'collection_id': collectionId,
+      'expected_revision': expectedRevision,
+    });
+  }
+
+  Future<MemoryCollectionDetail> upsertMemoryEntry(
+    String collectionId, {
+    required int expectedRevision,
+    required Map<String, Object?> entry,
+    bool dryRun = false,
+  }) async {
+    return MemoryCollectionDetail.fromJson(
+      await call('memory.entry.upsert', {
+        'collection_id': collectionId,
+        'expected_revision': expectedRevision,
+        'entry': entry,
+        'dry_run': dryRun,
+      }),
+    );
+  }
+
+  Future<MemoryCollectionDetail> deleteMemoryEntry(
+    String collectionId,
+    String entryId, {
+    required int expectedRevision,
+    bool dryRun = false,
+  }) async {
+    return MemoryCollectionDetail.fromJson(
+      await call('memory.entry.delete', {
+        'collection_id': collectionId,
+        'entry_id': entryId,
+        'expected_revision': expectedRevision,
+        'dry_run': dryRun,
+      }),
+    );
+  }
+
+  Future<Map<String, Object?>> promoteMemoryCandidates({
+    required String taskId,
+    required String collectionId,
+    required List<String> entryIds,
+    required int expectedRevision,
+    String status = 'confirmed',
+    String conflictPolicy = 'skip',
+    bool dryRun = false,
+  }) async {
+    return _stringMap(
+      await call('memory.candidates.promote', {
+        'task_id': taskId,
+        'collection_id': collectionId,
+        'entry_ids': entryIds,
+        'expected_revision': expectedRevision,
+        'status': status,
+        'conflict_policy': conflictPolicy,
+        'dry_run': dryRun,
+      }),
+    );
+  }
+
   Future<Map<String, Object?>> resultReexport(
     String taskId, {
     String outputFormat = 'both',

@@ -25,6 +25,7 @@ from .models import (
     MemoryConfig,
     MemoryConsistencyCheckConfig,
     MemoryChunkingConfig,
+    MemoryCollectionRef,
     MemoryInjectConfig,
     MemoryMergeConfig,
     MemoryPatchConfig,
@@ -218,6 +219,25 @@ def _parse_memory_presets(raw: Any) -> list[MemoryPresetRef]:
             continue
         seen.add(ref_id)
         out.append(MemoryPresetRef(id=ref_id, override_status=override))
+    return out
+
+
+def _parse_memory_collections(raw: Any) -> list[MemoryCollectionRef]:
+    if not isinstance(raw, list):
+        return []
+    out: list[MemoryCollectionRef] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, str):
+            ref_id = item.strip()
+        elif isinstance(item, dict):
+            ref_id = str(item.get("id") or "").strip()
+        else:
+            continue
+        if not ref_id or ref_id in seen:
+            continue
+        seen.add(ref_id)
+        out.append(MemoryCollectionRef(id=ref_id))
     return out
 
 
@@ -867,6 +887,7 @@ def load_app_config(
     memory_patch_raw = memory_raw.get("patch") or {}
     memory_merge_raw = memory_raw.get("merge") or {}
     memory_check_raw = memory_raw.get("consistency_check") or {}
+    memory_collections = _parse_memory_collections(memory_raw.get("collections"))
     memory_presets = _parse_memory_presets(memory_raw.get("presets"))
     _reject_legacy_memory_fields(memory_raw, memory_patch_raw)
     memory_inject_format = _to_str(memory_inject_raw.get("format"), "v2").strip().lower()
@@ -884,6 +905,7 @@ def load_app_config(
         raise ValueError(f"Unsupported memory.patch.mode: {memory_patch_mode}; expected one of: {', '.join(sorted(MEMORY_PATCH_MODES))}")
     memory = MemoryConfig(
         enabled=_to_bool(memory_raw.get("enabled"), True),
+        collections=memory_collections,
         presets=memory_presets,
         bootstrap=MemoryBootstrapConfig(
             enabled=_to_bool(memory_bootstrap_raw.get("enabled"), True),
@@ -1014,6 +1036,7 @@ def load_app_config(
         "memory_patch_enabled",
         "memory_intensity",
         "memory_patch_window_chunks",
+        "memory_collections",
         "memory_presets",
     }
     memory_overrides: dict[str, Any] = {}
@@ -1178,6 +1201,8 @@ def load_app_config(
             memory_overrides["memory_patch_window_chunks"],
             pipeline.memory.patch.window_chunks,
         )
+    if "memory_collections" in memory_overrides:
+        pipeline.memory.collections = _parse_memory_collections(memory_overrides["memory_collections"])
     if "memory_presets" in memory_overrides:
         pipeline.memory.presets = _parse_memory_presets(memory_overrides["memory_presets"])
     providers: dict[str, ProviderConfig] = {}

@@ -8,6 +8,7 @@ from ..app.models import MemoryConfig
 @dataclass(frozen=True)
 class MemoryPlan:
     enabled: bool
+    uses_collections: bool
     uses_presets: bool
     runs_bootstrap: bool
     translates_with_memory: bool
@@ -17,15 +18,19 @@ class MemoryPlan:
 
 def resolve_memory_plan(memory: MemoryConfig) -> MemoryPlan:
     enabled = bool(memory.enabled)
+    uses_collections = enabled and bool(memory.collections)
     uses_presets = enabled and bool(memory.presets)
     translates = enabled and bool(memory.inject.enabled)
     sources: list[str] = []
+    if translates and uses_collections:
+        sources.append("collections")
     if translates and uses_presets:
         sources.append("presets")
     if translates:
         sources.append("runtime")
     return MemoryPlan(
         enabled=enabled,
+        uses_collections=uses_collections,
         uses_presets=uses_presets,
         runs_bootstrap=enabled and bool(memory.bootstrap.enabled),
         translates_with_memory=translates,
@@ -40,6 +45,10 @@ def memory_enabled(memory: MemoryConfig) -> bool:
 
 def uses_presets(memory: MemoryConfig) -> bool:
     return resolve_memory_plan(memory).uses_presets
+
+
+def uses_collections(memory: MemoryConfig) -> bool:
+    return resolve_memory_plan(memory).uses_collections
 
 
 def runs_bootstrap(memory: MemoryConfig) -> bool:

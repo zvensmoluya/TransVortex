@@ -5,6 +5,7 @@ part 'models/config_models.dart';
 part 'models/asr_models.dart';
 part 'models/task_models.dart';
 part 'models/result_models.dart';
+part 'models/memory_models.dart';
 
 Map<String, Object?> _stringMap(Object? value) {
   if (value is Map) {

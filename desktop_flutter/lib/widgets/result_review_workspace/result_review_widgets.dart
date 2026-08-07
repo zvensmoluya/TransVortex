@@ -38,6 +38,7 @@ class _ResultReviewBody extends StatelessWidget {
     required this.onNormalizeTiming,
     required this.onPreviousIssue,
     required this.onNextIssue,
+    required this.onPromoteMemory,
     required this.onReexport,
   });
 
@@ -83,6 +84,7 @@ class _ResultReviewBody extends StatelessWidget {
   onNormalizeTiming;
   final VoidCallback onPreviousIssue;
   final VoidCallback onNextIssue;
+  final VoidCallback onPromoteMemory;
   final VoidCallback onReexport;
 
   @override
@@ -133,6 +135,7 @@ class _ResultReviewBody extends StatelessWidget {
           onDiscardEdits: onDiscardEdits,
           onPreviousIssue: onPreviousIssue,
           onNextIssue: onNextIssue,
+          onPromoteMemory: onPromoteMemory,
           onReexport: onReexport,
         ),
         const SizedBox(height: T.s16),
@@ -210,6 +213,7 @@ class _ResultHeader extends StatelessWidget {
     required this.onDiscardEdits,
     required this.onPreviousIssue,
     required this.onNextIssue,
+    required this.onPromoteMemory,
     required this.onReexport,
   });
 
@@ -240,6 +244,7 @@ class _ResultHeader extends StatelessWidget {
   final VoidCallback onDiscardEdits;
   final VoidCallback onPreviousIssue;
   final VoidCallback onNextIssue;
+  final VoidCallback onPromoteMemory;
   final VoidCallback onReexport;
 
   @override
@@ -306,6 +311,14 @@ class _ResultHeader extends StatelessWidget {
                   onTap: onDiscardEdits,
                   enabled: dirty && !saving && !reexporting,
                 ),
+                if (_resultInt(result.memory['runtime_entries']) > 0)
+                  _ReviewButton(
+                    label:
+                        '术语候选 ${_resultInt(result.memory['runtime_entries'])}',
+                    icon: Icons.library_add_outlined,
+                    onTap: onPromoteMemory,
+                    enabled: !saving && !reexporting,
+                  ),
                 _ReviewButton(
                   label: reexporting ? '导出中' : '重新导出',
                   icon: Icons.ios_share,
@@ -366,6 +379,12 @@ class _ResultHeader extends StatelessWidget {
       ],
     );
   }
+}
+
+int _resultInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('$value') ?? 0;
 }
 
 class _ReviewStatusStrip extends StatelessWidget {

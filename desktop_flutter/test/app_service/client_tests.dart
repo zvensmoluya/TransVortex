@@ -470,4 +470,56 @@ void main() {
     expect(transport.calls.single.method, 'asr.model.discover');
     expect(transport.calls.single.params, {'search_root': r'D:\Models'});
   });
+
+  test(
+    'AppServiceClient manages memory collections with revision guards',
+    () async {
+      final collection = {
+        'id': 'characters',
+        'name': '人物名',
+        'revision': 3,
+        'entries': [
+          {'id': 'subaru', 'source': 'スバル', 'target': '昴', 'status': 'locked'},
+        ],
+      };
+      final transport = RecordingRpcTransport({
+        'memory.collections.list': {
+          'collections': [
+            {...collection, 'entries': 1},
+          ],
+        },
+        'memory.collection.get': {'collection': collection},
+        'memory.entry.upsert': {'collection': collection},
+        'memory.candidates.promote': {
+          'applied': [
+            {'entry_id': 'candidate-1'},
+          ],
+          'conflicts': [],
+        },
+      });
+      final client = AppServiceClient(transport);
+
+      final listed = await client.memoryCollections();
+      final loaded = await client.memoryCollection('characters');
+      await client.upsertMemoryEntry(
+        'characters',
+        expectedRevision: 3,
+        entry: const {'source': 'エミリア', 'target': '爱蜜莉雅'},
+      );
+      final promoted = await client.promoteMemoryCandidates(
+        taskId: 'task-1',
+        collectionId: 'characters',
+        entryIds: const ['candidate-1'],
+        expectedRevision: 3,
+        dryRun: true,
+      );
+
+      expect(listed.single.entryCount, 1);
+      expect(loaded.entries.single.source, 'スバル');
+      expect(promoted['applied'], hasLength(1));
+      expect(transport.calls[2].params['expected_revision'], 3);
+      expect(transport.calls[3].params, containsPair('dry_run', true));
+      expect(transport.calls[3].params['entry_ids'], ['candidate-1']);
+    },
+  );
 }

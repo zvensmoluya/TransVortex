@@ -623,8 +623,14 @@ class MemoryPresetRef:
 
 
 @dataclass
+class MemoryCollectionRef:
+    id: str
+
+
+@dataclass
 class MemoryConfig:
     enabled: bool = True
+    collections: list[MemoryCollectionRef] = field(default_factory=list)
     presets: list[MemoryPresetRef] = field(default_factory=list)
     bootstrap: MemoryBootstrapConfig = field(default_factory=MemoryBootstrapConfig)
     chunking: MemoryChunkingConfig = field(default_factory=MemoryChunkingConfig)

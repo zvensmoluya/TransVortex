@@ -7,6 +7,7 @@ from ..app.config import load_app_config
 from ..app.models import Segment
 from ..core.subtitle_optimizer import evaluate_subtitle_quality
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
+from ..memory.collections import MemoryCollectionError, collection_store_for_config
 from ..memory.schema import entry_from_dict, normalize_status
 from ..memory.store import MemoryStore
 from ..utils import read_json, read_jsonl, to_plain, write_json
@@ -154,9 +155,13 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     delivery_summary = _delivery_summary(paths)
     memory_file = paths["memory"] / "translation_memory.json"
     selected_presets_file = paths["memory"] / "selected_presets.json"
+    selected_collections_file = paths["memory"] / "selected_collections.json"
     memory_issues_file = paths["memory"] / "consistency_issues.jsonl"
     memory_entries = []
     preset_entries = []
+    collection_entries = []
+    selected_collections = []
+    collection_report: dict[str, Any] = {}
     memory_issues = []
     if memory_file.exists():
         memory_payload = read_json(memory_file)
@@ -164,6 +169,11 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
     if selected_presets_file.exists():
         preset_payload = read_json(selected_presets_file)
         preset_entries = list(preset_payload.get("entries") or [])
+    if selected_collections_file.exists():
+        collection_payload = read_json(selected_collections_file)
+        collection_entries = list(collection_payload.get("entries") or [])
+        selected_collections = list(collection_payload.get("collection_ids") or [])
+        collection_report = dict(collection_payload.get("report") or {})
     if memory_issues_file.exists():
         memory_issues = read_jsonl(memory_issues_file)
     issues_by_id = _issues_for_segments(segments, config.pipeline.subtitle.quality.hard_max_cps)
@@ -194,15 +204,20 @@ def open_task_result(*, root_dir: Path, task_id: str) -> dict[str, Any]:
             "bootstrap_enabled": bool((memory_settings.get("bootstrap") or {}).get("enabled", False)) if isinstance(memory_settings.get("bootstrap"), dict) else False,
             "inject_enabled": bool((memory_settings.get("inject") or {}).get("enabled", False)) if isinstance(memory_settings.get("inject"), dict) else False,
             "patch_enabled": bool((memory_settings.get("patch") or {}).get("enabled", False)) if isinstance(memory_settings.get("patch"), dict) else False,
-            "entries": len(memory_entries) + len(preset_entries),
+            "entries": len(memory_entries) + len(preset_entries) + len(collection_entries),
             "entry_items": memory_entries,
+            "collection_items": collection_entries,
             "preset_items": preset_entries,
             "issue_items": memory_issues,
             "runtime_entries": len(memory_entries),
+            "collection_entries": len(collection_entries),
+            "selected_collections": selected_collections,
+            "collection_report": collection_report,
             "preset_entries": len(preset_entries),
             "issues": len(memory_issues),
             "paths": {
                 "translation_memory": str(memory_file) if memory_file.exists() else "",
+                "selected_collections": str(selected_collections_file) if selected_collections_file.exists() else "",
                 "selected_presets": str(selected_presets_file) if selected_presets_file.exists() else "",
                 "consistency_issues": str(memory_issues_file) if memory_issues_file.exists() else "",
             },
@@ -299,6 +314,66 @@ def update_task_memory_entry(
         details={"entry_id": entry_id, "status": normalized_status},
     )
     return open_task_result(root_dir=root_dir, task_id=task_id)
+
+
+def promote_task_memory_entries(
+    *,
+    root_dir: Path,
+    task_id: str,
+    collection_id: str,
+    entry_ids: list[str],
+    status: str = "confirmed",
+    expected_revision: int | None = None,
+    conflict_policy: str = "skip",
+    actor: str = "user",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    config = load_app_config(root_dir=root_dir)
+    task_store = TaskStore(config.pipeline.artifacts_dir)
+    task_store.load_task(task_id)
+    memory_store = MemoryStore(task_store.task_dir(task_id) / "memory")
+    runtime_entries = memory_store.load_runtime().entries
+    requested = []
+    seen: set[str] = set()
+    for raw_id in entry_ids:
+        entry_id = str(raw_id or "").strip()
+        if entry_id and entry_id not in seen:
+            requested.append(entry_id)
+            seen.add(entry_id)
+    if not requested:
+        raise MemoryCollectionError("memory_entry_selection_required", "select at least one task memory entry")
+    by_id = {entry.id: entry for entry in runtime_entries}
+    missing = [entry_id for entry_id in requested if entry_id not in by_id]
+    if missing:
+        raise MemoryCollectionError(
+            "memory_entry_not_found",
+            "one or more task memory entries were not found",
+            details={"entry_ids": missing},
+        )
+    result = collection_store_for_config(root_dir=root_dir, config=config).promote_entries(
+        collection_id,
+        [by_id[entry_id] for entry_id in requested],
+        task_id=task_id,
+        status=status,
+        expected_revision=expected_revision,
+        conflict_policy=conflict_policy,
+        actor=actor,
+        dry_run=dry_run,
+    )
+    if result.get("applied") and not dry_run:
+        task_store.append_event(
+            task_id,
+            "memory_promoted",
+            stage="EDIT",
+            message="Task memory entries promoted to a persistent collection",
+            details={
+                "collection_id": collection_id,
+                "entry_ids": requested,
+                "applied": result.get("applied") or [],
+                "conflicts": result.get("conflicts") or [],
+            },
+        )
+    return result
 
 
 def _optional_bool(value: bool | str | None, default: bool) -> bool:

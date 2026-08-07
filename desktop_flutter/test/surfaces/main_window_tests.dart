@@ -41,7 +41,8 @@ void main() {
     expect(find.text('把音频、视频或字幕放进来吧'), findsOneWidget);
     expect(find.text('选择片源'), findsOneWidget);
     expect(find.text('新任务会按'), findsOneWidget);
-    expect(find.text('自动生成术语建议'), findsOneWidget);
+    expect(find.text('自动发现术语候选'), findsOneWidget);
+    expect(find.text('不使用术语库'), findsOneWidget);
     expect(find.text('字幕，并'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('main-empty-pick-target')),
@@ -284,25 +285,25 @@ void main() {
 
     expect(find.text('picked-video.mp4'), findsOneWidget);
     expect(find.text('字幕，并'), findsOneWidget);
-    final termsToggle = find.text('自动生成术语建议');
+    final termsToggle = find.text('自动发现术语候选');
     expect(termsToggle, findsOneWidget);
     final enabledTooltips = tester
         .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(enabledTooltips, contains('本次制作允许系统生成术语建议。不会改动或关闭已有人工术语。'));
+    expect(enabledTooltips, contains('本次允许系统动态发现候选，用于增强当次翻译；不会自动写入持久术语库。'));
 
     await tester.tap(termsToggle);
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('不生成术语建议'), findsOneWidget);
+    expect(find.text('不自动发现候选'), findsOneWidget);
     final disabledTooltips = tester
         .widgetList<DesignedTooltip>(find.byType(DesignedTooltip))
         .map((tooltip) => tooltip.message)
         .whereType<String>()
         .toList();
-    expect(disabledTooltips, contains('本次不生成新的术语建议。已有人工术语是否使用不受这个开关影响。'));
+    expect(disabledTooltips, contains('本次不动态发现新候选；是否使用持久术语库由旁边的选择单独决定。'));
     expect(find.text('开始译制'), findsOneWidget);
     expectNoFlutterException();
   });
@@ -743,7 +744,7 @@ void main() {
     expect(find.text('按分片翻译对白'), findsOneWidget);
     expect(find.textContaining('ridiculously-long-tail'), findsOneWidget);
     expect(find.text('取消任务'), findsOneWidget);
-    expect(find.text('自动生成术语建议'), findsNothing);
+    expect(find.text('自动发现术语候选'), findsNothing);
     expect(find.textContaining('Task created'), findsNothing);
     expectNoFlutterException();
   });
@@ -883,7 +884,7 @@ void main() {
 
     expect(find.text('审看结果'), findsOneWidget);
     expect(find.text('制作新片源'), findsOneWidget);
-    expect(find.text('自动生成术语建议'), findsNothing);
+    expect(find.text('自动发现术语候选'), findsNothing);
     expect(notifications.completed, ['movie.mp4']);
     expect(notifications.failed, isEmpty);
     expectNoFlutterException();

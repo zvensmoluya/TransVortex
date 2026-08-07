@@ -20,6 +20,10 @@ class MemoryStore:
         return self.memory_dir / "selected_presets.json"
 
     @property
+    def selected_collections_file(self) -> Path:
+        return self.memory_dir / "selected_collections.json"
+
+    @property
     def patches_file(self) -> Path:
         return self.memory_dir / "memory_patches.jsonl"
 
@@ -71,6 +75,23 @@ class MemoryStore:
     def save_selected_presets(self, snapshot: dict[str, Any]) -> None:
         write_json(self.selected_presets_file, snapshot)
 
+    def save_selected_collections(self, snapshot: dict[str, Any]) -> None:
+        write_json(self.selected_collections_file, snapshot)
+
+    def load_selected_collections(self) -> dict[str, Any]:
+        self.ensure()
+        if not self.selected_collections_file.exists():
+            return {
+                "schema_version": 1,
+                "source_lang": "",
+                "target_lang": "",
+                "collection_ids": [],
+                "report": {"applied": [], "skipped": [], "conflicts": [], "entries": 0},
+                "entries": [],
+            }
+        data = read_json(self.selected_collections_file)
+        return data if isinstance(data, dict) else {}
+
     def load_selected_presets(self) -> dict[str, Any]:
         self.ensure()
         if not self.selected_presets_file.exists():
@@ -92,13 +113,22 @@ class MemoryStore:
             if isinstance(row, dict)
         ]
 
+    def load_selected_collection_entries(self) -> list[MemoryEntry]:
+        snapshot = self.load_selected_collections()
+        return [
+            entry_from_dict(row)
+            for row in snapshot.get("entries", []) or []
+            if isinstance(row, dict)
+        ]
+
     def load_effective(self, sources: tuple[str, ...] = ()) -> MemoryDocument:
         source_set = set(sources)
         runtime = self.load_runtime() if "runtime" in source_set else MemoryDocument()
+        collection_entries = self.load_selected_collection_entries() if "collections" in source_set else []
         preset_entries = self.load_selected_entries() if "presets" in source_set else []
         entries: list[MemoryEntry] = []
         seen: set[str] = set()
-        for entry in [*preset_entries, *runtime.entries]:
+        for entry in [*collection_entries, *preset_entries, *runtime.entries]:
             key = normalize_source_key(entry.source)
             if not key or key in seen:
                 continue

@@ -27,6 +27,10 @@ void main() {
       paths.cacheRoot.path,
       endsWith('Workspace${Platform.pathSeparator}Cache'),
     );
+    expect(
+      paths.memoryRoot.path,
+      endsWith('Workspace${Platform.pathSeparator}Memory'),
+    );
   });
 
   test('TRANSVORTEX_HOME overrides all desktop paths for development', () {
@@ -43,6 +47,7 @@ void main() {
     expect(paths.workspaceRoot.path, r'D:\tvx-home\Workspace');
     expect(paths.tasksRoot.path, r'D:\tvx-home\Workspace\Tasks');
     expect(paths.cacheRoot.path, r'D:\tvx-home\Workspace\Cache');
+    expect(paths.memoryRoot.path, r'D:\tvx-home\Workspace\Memory');
   });
 
   test('workspace config keeps task data outside the user profile', () {
@@ -72,6 +77,7 @@ void main() {
     expect(paths.workspaceRoot.path, r'D:\TransVortexData');
     expect(paths.tasksRoot.path, r'D:\TransVortexData\Tasks');
     expect(paths.cacheRoot.path, r'D:\TransVortexData\Cache');
+    expect(paths.memoryRoot.path, r'D:\TransVortexData\Memory');
   });
 
   test('invalid workspace config falls back to app data', () {

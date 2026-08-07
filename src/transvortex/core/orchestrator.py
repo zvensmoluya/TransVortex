@@ -40,6 +40,7 @@ from .openrouter_asr_usage import (
 )
 from ..memory.checker import check_consistency, write_consistency_issues
 from ..memory.bootstrapper import bootstrap_memory
+from ..memory.collections import build_selected_collections_snapshot, collection_store_for_config
 from ..memory.presets import build_selected_presets_snapshot
 from ..memory.store import MemoryStore
 from ..memory.plan import (
@@ -47,9 +48,10 @@ from ..memory.plan import (
     memory_enabled,
     runs_bootstrap,
     translates_with_memory,
+    uses_collections,
     uses_presets,
 )
-from ..app.models import AppConfig, Segment, TaskRecord
+from ..app.models import AppConfig, MemoryCollectionRef, MemoryPresetRef, Segment, TaskRecord
 from ..asr_domain import (
     ASR_PLAN_SCHEMA_VERSION,
     ASR_RETRY_SCHEMA_VERSION,
@@ -752,6 +754,14 @@ def create_pipeline_task(
     config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=routing)
     normalized_input_type = input_type if input_type in {"video_asr_translate", "srt_translate", "segments_translate", "video_asr"} else "video_asr_translate"
     store = TaskStore(config.pipeline.artifacts_dir, event_sink=event_sink)
+    collection_snapshot = None
+    if uses_collections(config.pipeline.memory):
+        collection_snapshot = build_selected_collections_snapshot(
+            collection_ids=[item.id for item in config.pipeline.memory.collections],
+            store=collection_store_for_config(root_dir=root_dir, config=config),
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
     task = _create_task(
         store,
         input_file=input_file,
@@ -760,10 +770,27 @@ def create_pipeline_task(
         bilingual=bilingual,
         settings=_task_settings(config, input_type=normalized_input_type, root_dir=root_dir),
     )
+    if collection_snapshot is not None:
+        MemoryStore(store.task_dir(task.task_id) / "memory").save_selected_collections(collection_snapshot)
     if status != "INIT":
         store.update_task_status(task.task_id, status)
     store.clear_cancel(task.task_id)
     store.append_event(task.task_id, "task_created", stage=status, message="Task created", progress=_stage_progress(status))
+    if collection_snapshot is not None:
+        report = dict(collection_snapshot.get("report") or {})
+        store.append_event(
+            task.task_id,
+            "artifact",
+            stage="MEMORY",
+            message="Memory collections snapshot frozen",
+            details={
+                "path": str(store.task_dir(task.task_id) / "memory" / "selected_collections.json"),
+                "applied": report.get("applied") or [],
+                "skipped": report.get("skipped") or [],
+                "conflicts": report.get("conflicts") or [],
+                "entries": int(report.get("entries") or 0),
+            },
+        )
     return task.task_id, config.pipeline.artifacts_dir
 
 
@@ -814,6 +841,29 @@ def _apply_saved_pipeline_settings(config: AppConfig, settings: dict[str, Any]) 
             setattr(target, name, value)
 
     apply_dataclass(config.pipeline, settings)
+    memory_settings = settings.get("memory")
+    if isinstance(memory_settings, dict):
+        raw_collections = memory_settings.get("collections")
+        if isinstance(raw_collections, list):
+            config.pipeline.memory.collections = [
+                MemoryCollectionRef(id=str(item.get("id") or "").strip())
+                for item in raw_collections
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            ]
+        else:
+            # Tasks created before collection support must resume without
+            # inheriting a newly configured global collection.
+            config.pipeline.memory.collections = []
+        raw_presets = memory_settings.get("presets")
+        if isinstance(raw_presets, list):
+            config.pipeline.memory.presets = [
+                MemoryPresetRef(
+                    id=str(item.get("id") or "").strip(),
+                    override_status=str(item.get("override_status") or "").strip(),
+                )
+                for item in raw_presets
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            ]
 
 
 def _task_routing_override(
@@ -1027,6 +1077,8 @@ def queue_resume_task(
         model=model,
     )
     config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
+    _apply_saved_pipeline_settings(config, task.settings)
+    _apply_saved_asr_settings(config, task.settings, root_dir=root_dir)
     _save_task_routing_settings(store, task, config)
     store.clear_cancel(task_id)
     store.update_task_status(task_id, "QUEUED", clear_error=True)
@@ -1056,6 +1108,8 @@ def execute_pipeline_task(
         model=model,
     )
     config = apply_route_overrides(config, provider_name=provider_name, model=model, routing=effective_routing)
+    _apply_saved_pipeline_settings(config, task.settings)
+    _apply_saved_asr_settings(config, task.settings, root_dir=root_dir)
     _save_task_routing_settings(store, task, config)
     _execute_task(
         config,
