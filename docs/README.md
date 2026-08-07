@@ -50,6 +50,7 @@
 以下目录保留历史上下文，不再表示当前实现或优先级：
 
 - [`archive/README.md`](archive/README.md)：开发与设计快照、研究材料、单次执行记录和 E2E 报告。
+- [`archive/2026-08-07-architecture-governance-m0.md`](archive/2026-08-07-architecture-governance-m0.md)：首版发布后 M0 架构治理的范围、批次与验证记录。
 - [`FRONTEND/README.md`](FRONTEND/README.md)：前端当前入口及其方向、失败实验和技术路线归档说明。
 
 ## 文档优先级

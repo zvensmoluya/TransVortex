@@ -151,6 +151,14 @@ Base URL 表示模型 API 或中转网关地址，不表示本机网络代理。
 
 ## 5. 实施规则
 
+以下是当前代码所有权，不新增用户可见产品概念：
+
+- 主窗口 shell 负责启动和窗口 routing；桌面生命周期、release smoke 与私有展示组件各自独立，`MainWindowController` 继续负责本次任务草稿和主流程编排。
+- 翻译设置继续由 `TranslationSettingsController` 与专用 view 持有；ASR resource operation 的轮询 / 终态由 `AsrOperationController` 持有；ASR 设置表面、内部诊断表面与窗口 shell 分开。代码中的 operation、snapshot 或 draft 不是新的菜单或用户术语。
+- 任务处理窗的数据加载 / event cursor、结果编辑器关闭保护、任务动作、smoke 和展示分别落位。该窗口当前没有周期性 task list 轮询。
+- 结果审看把 result 加载 / segments 保存 / re-export、片段导航 / 时间码交互、草稿 controller 和展示分开。草稿只在保存前有效；Python result 工件仍是权威状态，保存 segments 与重新导出仍是两个动作。
+- 紧耦合的窗口私有组件使用 Dart `part` 共享同一 library；它只是内部 composition 边界，不是跨窗口 API，也不允许 controller / service 反向依赖具体 Widget。
+
 - 新增用户入口前，先在本文档中确认归属和公开状态。
 - “后端已支持”不能作为新增菜单、按钮或页面的充分理由。
 - 文案描述用户意图，不描述内部子系统开关。

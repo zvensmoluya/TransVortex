@@ -20,6 +20,8 @@ Flutter App
 
 当前由主 Flutter engine 启动和监督一个 Local Service。子窗口通过窗口 bridge 使用同一服务抽象；bridge 不可用时仍存在过渡性自行启动路径，需要在 Supervisor 阶段收口。
 
+Flutter 的稳定导入面仍是 `services/app_service_client.dart`，但该文件只负责导出。实现已经按职责分为：newline JSON-RPC transport / pending request、Local Service process Supervisor / session、typed RPC client，以及 service、config、ASR、task、result 五组 DTO。transport 不解析业务 DTO，typed client 不拥有进程生命周期，Supervisor 不承载 RPC 领域映射。
+
 Local Service 的 pump 驱动单活动 Worker 队列。当前任务串行执行，多 Worker 并发不是近期目标。
 
 ## 2. 职责
@@ -30,6 +32,8 @@ Local Service 的 pump 驱动单活动 Worker 队列。当前任务串行执行�
 - 通过 typed client 调用 Local Service。
 - 展示 snapshot、任务事件和结果，不持有业务权威状态。
 - 不直接启动 Worker，不拼接 pipeline 脚本。
+
+主窗口内部把托盘 / 多工具窗 / 退出保护、release smoke 和纯展示组件分开；正常任务草稿与提交仍由 `MainWindowController` 持有。设置窗口中的 ASR resource operation 由无 Widget / window plugin 依赖的 `AsrOperationController` 轮询，窗口关闭不取消 Local Service 中的权威 operation，重开后从 snapshot 接回。任务处理和结果审看分别隔离数据 / 动作 / 关闭保护与展示；segment 草稿 controller 只持有保存前的窗口内编辑状态，不替代磁盘结果工件。
 
 ### Local Service
 
@@ -70,6 +74,8 @@ Local Service 的 pump 驱动单活动 Worker 队列。当前任务串行执行�
 Local Service 可以持有连接、pump、请求表和进程句柄等易失运行态，但正确性不能依赖进程一直存活。Flutter state 只是展示缓存，窗口重建后必须能从 Local Service 恢复。
 
 `desktop.snapshot` 用于启动和重连；运行中优先使用 `runtime.snapshot` 和带 cursor 的 `tasks.events`，避免反复读取全量状态。
+
+当前任务处理窗口由显式刷新和动作完成后的重载驱动，没有周期性 task list 轮询；`tasks.events` 的 cursor 只用于按需读取更多事件。不要把这项实现细节描述成持续实时订阅。
 
 ## 5. 用户目录
 

@@ -32,17 +32,16 @@ Provider、ASR、网络、Agent 和资源管理仍是支持这些目标的设置
 
 ## 阶段顺序
 
-### M0：产品表面定稿与简单架构治理
+### M0：产品表面定稿与简单架构治理（已完成）
 
-M0 是限时内部阶段，不单独发布，目标是为下一轮快速开发建立明确落点，而不是全仓重写。
+M0 已于 2026-08-07 完成。稳定所有权已经回写当前架构与前端专题文档；具体行为护栏、热点基线、执行批次和验证记录见 [`archive/2026-08-07-architecture-governance-m0.md`](archive/2026-08-07-architecture-governance-m0.md)。
 
-- 先确认作品、术语、编辑和交付之间的入口、状态与所有权。
-- 拆分 Flutter 设置窗、主窗口、App Service client、任务处理与超大测试文件中的高频职责。
-- 保留 Python orchestrator 的公开入口，逐步提取 ASR 执行、checkpoint、翻译和交付阶段。
-- 保持 Flutter / Python 职责、RPC、任务工件、配置和凭据语义不变。
-- 相关 Python 与 Flutter 测试在纯结构调整期间保持通过。
+- 冻结了作品、术语、编辑和交付之间的入口、状态与所有权，没有把规划中的产品概念伪装成当前能力。
+- 拆分了 Flutter 主窗口、设置窗、App Service client、任务处理、结果审看和高频测试职责。
+- 保留 Python orchestrator 的稳定 pipeline 入口，提取 ASR planning / execution、阶段 controller 及 source / translation / delivery helper。
+- Flutter / Python 职责、RPC、任务工件、配置和凭据语义保持不变；定向回归与静态检查通过。
 
-M0 不以统一行数或一次性拆完所有大文件为目标。低频且领域隔离的大模块只有在阻塞主线时才治理。
+M0 没有追求统一行数、消除全部既有依赖环或拆完所有大文件。后续只在具体 M1 改动触及边界时继续治理。
 
 ### M1：`0.2.0` 工作台闭环
 

@@ -4,6 +4,11 @@
 
 当前文档入口见 [`../README.md`](../README.md)，当前统一待办见 [`../CURRENT_BACKLOG.md`](../CURRENT_BACKLOG.md)。前端设计路线的独立历史归档由 [`../FRONTEND/README.md`](../FRONTEND/README.md) 统一说明。
 
+## 执行记录
+
+- [`2026-08-07-architecture-governance-m0.md`](2026-08-07-architecture-governance-m0.md)
+  - 首版发布后 M0 架构治理的产品边界、结构拆分、定向验证和剩余风险记录。
+
 ## 开发快照
 
 - [`development-snapshots/2026-02-13-provider-probe-execution-log.md`](development-snapshots/2026-02-13-provider-probe-execution-log.md)

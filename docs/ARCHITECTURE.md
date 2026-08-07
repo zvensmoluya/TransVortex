@@ -32,13 +32,16 @@ service integration milestone.
 
 ```text
 transvortex/
-  app/          config, shared domain models, environment diagnostics
+  app/          config, shared domain models, Local Service, runtime administration
   protocol/     agent protocol, structured errors, redaction, safe output contracts
   artifacts/    task store, checkpoints, events, result workspace
-  core/         pipeline orchestration and pipeline stages
+  core/         pipeline entry points, ASR planning/execution, stage controllers
+  memory/       project memory documents, bootstrap, selection, consistency
+  prompts/      owned prompt assets and prompt assembly
   formats/      subtitle parsing, renderers, and delivery presentation
   providers/    model/provider protocol adapters and provider management
   cli/          parser, commands, detach/output helpers
+  experiments/  explicit development experiments; never a product runtime dependency
 ```
 
 ## Current Ownership
@@ -62,16 +65,35 @@ transvortex/
 
 `core/` owns:
 
-- `orchestrator.py`
-- `asr.py`
-- `media.py`
-- `chunking.py`
-- `translate.py`
-- `aligner.py`
-- `subtitle_quality.py`
-- `subtitle_optimizer.py`
-- `subtitle_compression.py`
-- `translation_validation.py`
+- `orchestrator.py`: stable task/run/resume entry points, stage order, unified
+  cancellation/failure handling, and successful-task cache cleanup.
+- `pipeline_stages.py`: PRECHECK, INGEST/ASR, MEMORY, SEGMENT/TRANSLATE,
+  ALIGN/QUALITY, and EXPORT controllers. It receives runtime-replaceable
+  operations explicitly and does not import `orchestrator.py`.
+- `pipeline_runtime.py`: cancellation and shared artifact-validity helpers.
+- `asr_planning.py`: resolved plan identity, portable manifests, persisted
+  plan validation, capability limits, and artifact references.
+- `asr_execution.py`: ASR preprocessing, usage accounting, retry plans,
+  serial/concurrent execution, adaptive concurrency, and split retry.
+- `source_pipeline.py`: authoritative source-segment artifacts, cleanup, and
+  ASR boundary-quality annotations.
+- `translation_pipeline.py`: chunk sizing, validation ledger/backfill,
+  progress accounting, and translation experiment artifacts.
+- `delivery_planning.py`: output-format normalization and task output paths.
+- `asr.py`, `media.py`, `chunking.py`, `translate.py`, `aligner.py`,
+  `subtitle_quality.py`, `subtitle_optimizer.py`, `subtitle_compression.py`,
+  `subtitle_reflow.py`, and `translation_validation.py`: focused domain
+  implementations called by the stage controllers.
+
+`orchestrator.py` remains the supported import surface for pipeline lifecycle
+entry points. Internal code should import planning, execution, source,
+translation, or delivery helpers from their owning module. Thin private
+wrappers remain only where tests and experiments replace runtime operations;
+new modules must not depend back on the orchestrator facade.
+
+`memory/` owns memory documents, preset selection, bootstrap, effective-source
+planning, and consistency checks. `prompts/` owns prompt assets and assembly;
+neither belongs to provider transport or Flutter state.
 
 `formats/` owns:
 
@@ -132,7 +154,9 @@ Recommended next refactors, each as a separate change:
 
 - Split `cli/entry.py` into parser, command handlers, detach, and output
   helpers.
-- Split `core/orchestrator.py` into smaller pipeline stage controllers.
+- Continue reducing cross-package dependency cycles when a concrete M1 change
+  touches them; do not duplicate config, credential, DTO, or error logic to
+  make the graph look cleaner.
 - Introduce explicit protocol DTOs when JSON/JSONL schemas grow beyond the
   current helper functions.
 - Add richer subtitle preview/burn-in helpers under `formats/` without
