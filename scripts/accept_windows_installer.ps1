@@ -708,15 +708,27 @@ try {
         throw "Running-process uninstall protection failed. Exit=$blockedUninstallExit"
     }
 
-    if (-not $installedApp.CloseMainWindow()) {
-        $installedApp.Kill()
+    $runningUpgradeMarker = Join-Path $installFullPath "obsolete-running-upgrade-marker.txt"
+    Set-Content -LiteralPath $runningUpgradeMarker -Value "must be removed" -Encoding utf8
+    $confirmedCloseUpgradeExit = Invoke-WaitingProcess -FilePath $resolvedInstaller -ArgumentList @(
+        "/S",
+        "/CLOSEAPP",
+        "/D=$installerRequestedPath"
+    )
+    if ($confirmedCloseUpgradeExit -ne 0) {
+        throw "Confirmed close-and-upgrade failed with exit code $confirmedCloseUpgradeExit"
     }
-    if (-not $installedApp.WaitForExit(10000)) {
-        $installedApp.Kill()
-        $installedApp.WaitForExit()
+    if (-not $installedApp.WaitForExit(15000)) {
+        throw "Confirmed close-and-upgrade did not stop the running app."
+    }
+    if (Test-Path -LiteralPath $runningUpgradeMarker) {
+        throw "Confirmed close-and-upgrade did not replace the previous install."
     }
     $installedApp = $null
+    Assert-InstalledLayout -Root $installFullPath
+    $agentEntryReport = Assert-AgentEntry -Root $installFullPath -ConfigRoot $configRoot -EntryRoot $agentEntryRoot
 
+    $uninstallerPath = Join-Path $installFullPath "Uninstall.exe"
     $uninstallExit = Invoke-WaitingProcess -FilePath $uninstallerPath -ArgumentList @("/S")
     if ($uninstallExit -ne 0) {
         throw "Silent uninstall failed with exit code $uninstallExit"
@@ -788,6 +800,9 @@ try {
         app_mutex_opened = $true
         running_install_block_exit_code = $blockedUpgradeExit
         running_uninstall_block_exit_code = $blockedUninstallExit
+        confirmed_close_upgrade_exit_code = $confirmedCloseUpgradeExit
+        confirmed_close_upgrade_stopped_app = $true
+        confirmed_close_upgrade_replaced_install = $true
         uninstall_exit_code = $uninstallExit
         uninstall_removed_install_root = $true
         uninstall_removed_program_registry = $true

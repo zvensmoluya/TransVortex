@@ -359,6 +359,10 @@ $report = [ordered]@{
     external_models_removed_by_uninstaller = $false
     agent_entry_removed_by_uninstaller = $true
     running_process_mutex = "Local\\TransVortex.Desktop.89E122A8-7AB7-4D0F-9661-0EC5A881F65B"
+    interactive_running_app_prompt = $true
+    confirmed_running_app_shutdown = "exact_process_tree"
+    silent_running_app_default = "fail_exit_10"
+    silent_close_app_switch = "/CLOSEAPP"
     signed = $signed
     signing_policy = "optional_for_initial_release"
     signing_required_for_public_release = $false
@@ -382,7 +386,7 @@ $report = [ordered]@{
         "installed-path change rejection",
         "fresh silent install and installed Local Service RPC",
         "upgrade replacement and obsolete-file removal",
-        "running-process install and uninstall protection",
+        "running-process install block, confirmed close-and-upgrade, and uninstall protection",
         "Start menu shortcut AppUserModelID",
         "silent uninstall default preservation and explicit managed-data cleanup"
     )

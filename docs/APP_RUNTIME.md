@@ -122,11 +122,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\accept_windows_insta
   -InstallerPath .\dist\installer\windows\TransVortex-0.1.0-windows-x64-setup-candidate.exe
 ```
 
-`-AllowUnsigned` 显式确认本次构建允许没有 Authenticode；不带 `-ReleaseCandidate` 时仍生成 `internal` 验收件，二者同时使用才生成未签名 `candidate`。首版 `0.1.0` 的签名策略是 `optional_for_initial_release`：未签名不再阻止公开候选和最终发布，但下载页必须明确说明 Windows 可能显示“未知发布者”或 SmartScreen 提示。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中拒绝安装和卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease。
+`-AllowUnsigned` 显式确认本次构建允许没有 Authenticode；不带 `-ReleaseCandidate` 时仍生成 `internal` 验收件，二者同时使用才生成未签名 `candidate`。首版 `0.1.0` 的签名策略是 `optional_for_initial_release`：未签名不再阻止公开候选和最终发布，但下载页必须明确说明 Windows 可能显示“未知发布者”或 SmartScreen 提示。当前自动验收已覆盖全新安装、固定 Local Service、清空媒体 `PATH` 后运行 bundled FFmpeg / FFprobe、升级清旧文件、运行中默认拒绝静默安装、显式确认后关闭运行中应用并完成升级、运行中拒绝卸载、AUMID 快捷方式、卸载注册、静默卸载默认保留数据，以及安装包内 runtime 的分项清理能力。终端用户运行安装器和已安装应用均不依赖 PowerShell。FFmpeg binary、完整对应源码、LGPLv3/GPLv3 文本和技术审查记录已托管在同一个固定 prerelease。
 
 `0.1.0` 的最终发布闭环已于 2026-08-06 完成：安装包冻结自 commit `aace461e86f789492f7aa46709971b5e104f3cae`，正式文件名为 `TransVortex-0.1.0-windows-x64-setup.exe`，SHA-256 为 `5f2d0f77cbbefb68ff1866d2362dc571745c50908de8e4fb3f93388cc307dcc8`。发布负责人已确认完成该确切候选的干净 Windows 安装、首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出验收。构建与常规安装器验收脚本仍会保守地保持 `public_release_ready=false`，避免把一次开发机验收自动解释为发布授权；最终授权由冻结资产的验收记录和 GitHub Release 显式给出。
 
 全新安装把用户选择的位置整理为一个专用产品根，并建立 `App`、`Data`、`Resources` 三个相互隔离的子目录。默认布局是 `%LOCALAPPDATA%\Programs\TransVortex\App`、`Data` 和 `Resources`；选择其他磁盘时三者一起跟随到所选位置。升级的 staging、旧版本回滚和卸载程序删除边界都只落在 `App`，不会覆盖 `Data` 或 `Resources`。确认页面直接展示程序、工作数据和识别资源的最终路径，其中工作数据仍可单独更改；配置和凭据固定在 Windows 用户目录。
+
+交互升级检测到运行中的桌面端时，会提示任务中断和未保存编辑风险。用户确认后，安装器只按主窗口取得的精确 PID 结束该 TransVortex 进程树，再继续替换程序；不会按进程名关闭其他程序。静默安装默认仍以退出码 `10` 拒绝运行中升级；只有显式传入 `/CLOSEAPP` 才允许同样的关闭流程，避免后台脚本擅自中断任务。
 
 版本化 Agent 资料位于 `<InstallRoot>\agent`。正式 NSIS 安装在程序替换、配置和快捷方式全部成功后，原子写入 `%LOCALAPPDATA%\TransVortex\Agent\README.md` 与 `current.json`；后者只包含当前安装根、配置根、文档路径和可直接执行的 CLI `argv` 数组，不含凭据。升级重写这两个定位文件，Local Service 启动时也会在有效安装标记存在时自修复。卸载只删除这两个自有文件并尝试移除空目录，不递归删除 Agent 目录中的其他内容。便携包不登记该用户级入口。
 

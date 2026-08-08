@@ -143,7 +143,7 @@ tools/ffmpeg/ffmpeg_runtime.json
 
 ## 9. 当前发布边界
 
-NSIS 安装器已经自动验证全新安装、升级、运行中保护、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留。
+NSIS 安装器已经自动验证全新安装、升级、运行中默认拦截、显式确认后关闭应用进程树并继续升级、固定 Python / FFmpeg、AUMID 快捷方式、卸载和用户数据保留。
 
 `0.1.0` 的最终候选发布验收已于 2026-08-06 完成。冻结安装包来自 commit `aace461e86f789492f7aa46709971b5e104f3cae`，正式文件名为 `TransVortex-0.1.0-windows-x64-setup.exe`，SHA-256 为 `5f2d0f77cbbefb68ff1866d2362dc571745c50908de8e4fb3f93388cc307dcc8`；未签名状态、FFmpeg 对应源码和用户数据边界均已写入 Release Notes。发布负责人已确认该确切候选在干净 Windows 用户环境完成首启、受管 CPU Whisper 精简真实媒体任务、结果审看与导出，并轻量回归通知点击聚焦。
 

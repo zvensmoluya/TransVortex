@@ -840,7 +840,7 @@ if (-not [bool]$ffmpegReport.corresponding_source_assets_published) {
 }
 $manualAcceptanceRequired = @(
     "real visible release window end-to-end run; record with scripts/accept_flutter_release_manual.ps1",
-    "native NSIS installer install, upgrade, running-process protection, and uninstall acceptance"
+    "native NSIS installer install, upgrade, confirmed running-app shutdown, and uninstall acceptance"
 )
 if (-not [string]::IsNullOrWhiteSpace($ffmpegPublicationRequirement)) {
     $manualAcceptanceRequired += $ffmpegPublicationRequirement

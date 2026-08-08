@@ -62,6 +62,30 @@ def test_installer_confirmation_recomputes_the_normalized_product_layout() -> No
     )
 
 
+def test_installer_can_close_a_confirmed_running_app_before_upgrade() -> None:
+    installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
+        encoding="utf-8"
+    )
+    acceptance = (
+        ROOT / "scripts" / "accept_windows_installer.ps1"
+    ).read_text(encoding="utf-8")
+
+    shutdown_start = installer.index("Function RequestRunningAppShutdown")
+    shutdown_end = installer.index("FunctionEnd", shutdown_start)
+    shutdown = installer[shutdown_start:shutdown_end]
+
+    assert 'FindWindow $0 "FLUTTER_RUNNER_WIN32_WINDOW" "${APP_NAME}"' in shutdown
+    assert "GetWindowThreadProcessId" in shutdown
+    assert '"$SYSDIR\\taskkill.exe" /PID $RunningAppPid /T /F' in installer
+    assert '是否关闭 TransVortex 并继续更新？' in installer
+    assert "正在处理的任务将被中断" in installer
+    assert '${GetOptions} "$1" "/CLOSEAPP" $2' in installer
+    assert 'silent_running_blocked:' in installer
+    assert 'SetErrorLevel 10' in installer
+    assert '"/CLOSEAPP"' in acceptance
+    assert 'confirmed_close_upgrade_exit_code' in acceptance
+
+
 def test_installer_directory_page_exposes_product_root_instead_of_app_root() -> None:
     installer = (ROOT / "installer" / "windows" / "TransVortex.nsi").read_text(
         encoding="utf-8"

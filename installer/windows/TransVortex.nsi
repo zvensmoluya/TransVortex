@@ -153,25 +153,115 @@ Var CleanupReport
 Var CleanupArgs
 Var CleanupMessage
 Var CleanupFailure
+Var RunningAppPid
+
+Function IsAppRunning
+  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_MUTEX}") p .r0'
+  IntPtrCmp $0 0 app_not_running
+  System::Call 'kernel32::CloseHandle(p r0)'
+  Push "1"
+  Return
+
+app_not_running:
+  Push "0"
+FunctionEnd
+
+Function WaitForAppExit
+  StrCpy $1 "0"
+
+wait_for_app_exit_check:
+  Call IsAppRunning
+  Pop $0
+  StrCmp $0 "0" wait_for_app_exit_done
+  Sleep 250
+  IntOp $1 $1 + 1
+  IntCmp $1 40 wait_for_app_exit_timeout wait_for_app_exit_check wait_for_app_exit_timeout
+
+wait_for_app_exit_done:
+  Push "closed"
+  Return
+
+wait_for_app_exit_timeout:
+  Push "running"
+FunctionEnd
+
+Function RequestRunningAppShutdown
+  Call IsAppRunning
+  Pop $0
+  StrCmp $0 "0" running_app_shutdown_done
+
+  StrCpy $2 "0"
+
+running_app_find_window:
+  FindWindow $0 "FLUTTER_RUNNER_WIN32_WINDOW" "${APP_NAME}"
+  StrCmp $0 0 0 running_app_window_found
+  Sleep 250
+  IntOp $2 $2 + 1
+  IntCmp $2 20 running_app_shutdown_failed running_app_find_window running_app_shutdown_failed
+
+running_app_window_found:
+  System::Call 'user32::GetWindowThreadProcessId(p r0, *i .r1) i .r2'
+  StrCpy $RunningAppPid "$1"
+  StrCmp $RunningAppPid "0" running_app_shutdown_failed
+
+  ; The user (or an explicit /CLOSEAPP caller) has approved stopping this exact
+  ; application process and its Local Service / worker child processes.
+  nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /PID $RunningAppPid /T /F'
+  Pop $2
+  Pop $3
+  Call WaitForAppExit
+  Pop $0
+  StrCmp $0 "closed" running_app_shutdown_done running_app_shutdown_failed
+
+running_app_shutdown_done:
+  Push "closed"
+  Return
+
+running_app_shutdown_failed:
+  Push "failed"
+FunctionEnd
 
 Function CheckAppNotRunning
 check_again:
-  System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_MUTEX}") p .r0'
-  IntPtrCmp $0 0 not_running
-  System::Call 'kernel32::CloseHandle(p r0)'
+  Call IsAppRunning
+  Pop $0
+  StrCmp $0 "0" not_running
   IfSilent silent_running interactive_running
 
 interactive_running:
-  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-    "TransVortex 正在运行。请先关闭应用，再点击“重试”。" \
-    IDRETRY check_again IDCANCEL cancel_install
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON1 \
+    "TransVortex 正在运行，更新前需要关闭。$\r$\n$\r$\n确认后，安装程序会结束 TransVortex 及其本地服务，再继续更新。正在处理的任务将被中断，已落盘进度可稍后继续；未保存的界面编辑可能丢失。$\r$\n$\r$\n是否关闭 TransVortex 并继续更新？" \
+    IDYES close_running_app IDNO cancel_install
 
 silent_running:
+  ${GetParameters} $1
+  ClearErrors
+  ${GetOptions} "$1" "/CLOSEAPP" $2
+  IfErrors silent_running_blocked close_running_app
+
+silent_running_blocked:
   SetErrorLevel 10
   Quit
 
+close_running_app:
+  SetDetailsPrint textonly
+  DetailPrint "正在关闭 TransVortex…"
+  SetDetailsPrint none
+  Call RequestRunningAppShutdown
+  Pop $0
+  StrCmp $0 "closed" check_again close_running_app_failed
+
+close_running_app_failed:
+  IfSilent silent_running_blocked interactive_close_failed
+
+interactive_close_failed:
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+    "安装程序未能关闭 TransVortex。请保存工作并从托盘菜单退出应用，然后点击“重试”；也可以取消本次更新。" \
+    IDRETRY check_again IDCANCEL cancel_install
+
 cancel_install:
-  Abort
+  SetErrorLevel 10
+  Quit
 
 not_running:
 FunctionEnd
