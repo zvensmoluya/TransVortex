@@ -347,6 +347,12 @@ $report = [ordered]@{
     atomic_directory_swap = $true
     branded_mui2_interface = $true
     internal_file_details_hidden = $true
+    start_menu_launch_shortcut = $true
+    desktop_shortcut_default = "create"
+    desktop_shortcut_opt_out_switch = "/NODESKTOPSHORTCUT"
+    desktop_shortcut_preference_preserved_on_upgrade = $true
+    start_menu_uninstall_shortcut = $true
+    product_root_uninstall_shortcut = $true
     interactive_uninstall_cleanup = $true
     interactive_asr_cleanup_default = "remove"
     silent_uninstall_user_data_default = "preserve"
@@ -387,7 +393,8 @@ $report = [ordered]@{
         "fresh silent install and installed Local Service RPC",
         "upgrade replacement and obsolete-file removal",
         "running-process install block, confirmed close-and-upgrade, and uninstall protection",
-        "Start menu shortcut AppUserModelID",
+        "Start menu and desktop shortcut AppUserModelID, upgrade preservation, and uninstall cleanup",
+        "Start menu and product-root uninstall entries",
         "silent uninstall default preservation and explicit managed-data cleanup"
     )
     generated_at = (Get-Date).ToUniversalTime().ToString("o")

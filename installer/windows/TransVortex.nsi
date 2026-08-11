@@ -107,8 +107,9 @@ Var ProductRoot
 !define MUI_PAGE_HEADER_SUBTEXT "程序、工作数据和识别资源使用相互隔离的子目录。"
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom WorkspacePageCreate WorkspacePageLeave
+Page custom ShortcutsPageCreate ShortcutsPageLeave
 !define MUI_PAGE_HEADER_TEXT "正在准备 TransVortex"
-!define MUI_PAGE_HEADER_SUBTEXT "安装固定运行环境、媒体工具，并准备工作数据位置。"
+!define MUI_PAGE_HEADER_SUBTEXT "安装固定运行环境、媒体工具，并创建应用入口。"
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TITLE "TransVortex 已准备好"
 !define MUI_FINISHPAGE_TEXT "安装已经完成。首次启动后可配置翻译服务，并按需准备本机语音识别资源。"
@@ -129,7 +130,13 @@ UninstPage custom un.CleanupPageCreate un.CleanupPageLeave
 Var StagingDir
 Var PreviousDir
 Var HadPreviousInstall
-Var ShortcutBackup
+Var StartMenuShortcutBackup
+Var StartMenuUninstallShortcutBackup
+Var DesktopShortcutBackup
+Var ProductUninstallShortcutBackup
+Var ShortcutsDialog
+Var DesktopShortcutCheckbox
+Var CreateDesktopShortcut
 Var WorkspaceDialog
 Var WorkspacePathInput
 Var WorkspaceBrowseButton
@@ -154,6 +161,26 @@ Var CleanupArgs
 Var CleanupMessage
 Var CleanupFailure
 Var RunningAppPid
+
+Function .onInit
+  SetShellVarContext current
+  StrCpy $CreateDesktopShortcut "1"
+
+  ClearErrors
+  ReadRegDWORD $0 HKCU "${APP_REGISTRY_KEY}" "DesktopShortcut"
+  IfErrors desktop_shortcut_option_parameters
+  StrCmp $0 "0" 0 desktop_shortcut_option_parameters
+  StrCpy $CreateDesktopShortcut "0"
+
+desktop_shortcut_option_parameters:
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} "$0" "/NODESKTOPSHORTCUT" $1
+  IfErrors desktop_shortcut_option_done
+  StrCpy $CreateDesktopShortcut "0"
+
+desktop_shortcut_option_done:
+FunctionEnd
 
 Function IsAppRunning
   System::Call 'kernel32::OpenMutexW(i 0x00100000, i 0, w "${APP_MUTEX}") p .r0'
@@ -574,6 +601,42 @@ workspace_page_validate:
   Call ValidateWorkspaceRoot
 FunctionEnd
 
+Function ShortcutsPageCreate
+  !insertmacro MUI_HEADER_TEXT "选择应用入口" "安装后可以从开始菜单或桌面打开 TransVortex。"
+  nsDialogs::Create 1018
+  Pop $ShortcutsDialog
+  ${If} $ShortcutsDialog == error
+    Abort
+  ${EndIf}
+  SetCtlColors $ShortcutsDialog "" "FAF8FC"
+
+  ${NSD_CreateLabel} 0 0 100% 34u "安装器会始终创建开始菜单中的启动和卸载入口，并在产品根目录放置一个清晰的卸载入口。"
+  Pop $0
+  SetCtlColors $0 "2E2A33" "FAF8FC"
+
+  ${NSD_CreateCheckbox} 0 42u 100% 14u "创建桌面快捷方式"
+  Pop $DesktopShortcutCheckbox
+  StrCmp $CreateDesktopShortcut "1" 0 desktop_shortcut_checkbox_ready
+  ${NSD_SetState} $DesktopShortcutCheckbox ${BST_CHECKED}
+
+desktop_shortcut_checkbox_ready:
+  ${NSD_CreateLabel} 0 68u 100% 38u "升级会沿用这次选择；取消勾选会移除由 TransVortex 安装器创建的现有桌面快捷方式。"
+  Pop $0
+  SetCtlColors $0 "5F5965" "FAF8FC"
+
+  nsDialogs::Show
+FunctionEnd
+
+Function ShortcutsPageLeave
+  ${NSD_GetState} $DesktopShortcutCheckbox $0
+  StrCmp $0 ${BST_CHECKED} desktop_shortcut_selected
+  StrCpy $CreateDesktopShortcut "0"
+  Return
+
+desktop_shortcut_selected:
+  StrCpy $CreateDesktopShortcut "1"
+FunctionEnd
+
 Function WriteWorkspaceConfig
   CreateDirectory "$WorkspaceRoot"
   IfErrors workspace_config_failed
@@ -696,15 +759,33 @@ FunctionEnd
 
 Function RollBackPayload
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\卸载 ${APP_NAME}.lnk"
+  Delete "$DESKTOP\${APP_NAME}.lnk"
+  StrCmp $ModernInstallLayout "1" 0 rollback_product_uninstall_shortcut_done
+    Delete "$ProductRoot\卸载 ${APP_NAME}.lnk"
+rollback_product_uninstall_shortcut_done:
   RMDir /r "$INSTDIR"
   StrCmp $HadPreviousInstall "1" 0 rollback_done
   ClearErrors
   Rename "$PreviousDir" "$INSTDIR"
 rollback_done:
-  IfFileExists "$ShortcutBackup" 0 rollback_shortcut_done
-    CopyFiles /SILENT "$ShortcutBackup" "$SMPROGRAMS\${APP_NAME}.lnk"
-rollback_shortcut_done:
-  Delete "$ShortcutBackup"
+  IfFileExists "$StartMenuShortcutBackup" 0 rollback_start_menu_shortcut_done
+    CopyFiles /SILENT "$StartMenuShortcutBackup" "$SMPROGRAMS\${APP_NAME}.lnk"
+rollback_start_menu_shortcut_done:
+  IfFileExists "$StartMenuUninstallShortcutBackup" 0 rollback_start_menu_uninstall_shortcut_done
+    CopyFiles /SILENT "$StartMenuUninstallShortcutBackup" "$SMPROGRAMS\卸载 ${APP_NAME}.lnk"
+rollback_start_menu_uninstall_shortcut_done:
+  IfFileExists "$DesktopShortcutBackup" 0 rollback_desktop_shortcut_done
+    CopyFiles /SILENT "$DesktopShortcutBackup" "$DESKTOP\${APP_NAME}.lnk"
+rollback_desktop_shortcut_done:
+  StrCmp $ModernInstallLayout "1" 0 rollback_product_uninstall_shortcut_restore_done
+  IfFileExists "$ProductUninstallShortcutBackup" 0 rollback_product_uninstall_shortcut_restore_done
+    CopyFiles /SILENT "$ProductUninstallShortcutBackup" "$ProductRoot\卸载 ${APP_NAME}.lnk"
+rollback_product_uninstall_shortcut_restore_done:
+  Delete "$StartMenuShortcutBackup"
+  Delete "$StartMenuUninstallShortcutBackup"
+  Delete "$DesktopShortcutBackup"
+  Delete "$ProductUninstallShortcutBackup"
 FunctionEnd
 
 Section "${APP_NAME}" SecMain
@@ -715,17 +796,37 @@ Section "${APP_NAME}" SecMain
   SetDetailsPrint none
   Call NormalizeInstallDirectory
   Call CheckInstallDirectorySafety
+  Call ResolveInstallLayout
   Call ResolveWorkspaceRoot
   Call ValidateWorkspaceRoot
   StrCpy $StagingDir "$INSTDIR.__staging"
   StrCpy $PreviousDir "$INSTDIR.__previous"
   StrCpy $HadPreviousInstall "0"
-  StrCpy $ShortcutBackup "$TEMP\TransVortex-installer-shortcut-backup.lnk"
-  Delete "$ShortcutBackup"
+  StrCpy $StartMenuShortcutBackup "$TEMP\TransVortex-installer-start-menu-shortcut-backup.lnk"
+  StrCpy $StartMenuUninstallShortcutBackup "$TEMP\TransVortex-installer-start-menu-uninstall-shortcut-backup.lnk"
+  StrCpy $DesktopShortcutBackup "$TEMP\TransVortex-installer-desktop-shortcut-backup.lnk"
+  StrCpy $ProductUninstallShortcutBackup "$TEMP\TransVortex-installer-product-uninstall-shortcut-backup.lnk"
+  Delete "$StartMenuShortcutBackup"
+  Delete "$StartMenuUninstallShortcutBackup"
+  Delete "$DesktopShortcutBackup"
+  Delete "$ProductUninstallShortcutBackup"
   IfFileExists "$SMPROGRAMS\${APP_NAME}.lnk" 0 shortcut_backup_done
-    CopyFiles /SILENT "$SMPROGRAMS\${APP_NAME}.lnk" "$ShortcutBackup"
+    CopyFiles /SILENT "$SMPROGRAMS\${APP_NAME}.lnk" "$StartMenuShortcutBackup"
 
 shortcut_backup_done:
+  IfFileExists "$SMPROGRAMS\卸载 ${APP_NAME}.lnk" 0 start_menu_uninstall_shortcut_backup_done
+    CopyFiles /SILENT "$SMPROGRAMS\卸载 ${APP_NAME}.lnk" "$StartMenuUninstallShortcutBackup"
+
+start_menu_uninstall_shortcut_backup_done:
+  IfFileExists "$DESKTOP\${APP_NAME}.lnk" 0 desktop_shortcut_backup_done
+    CopyFiles /SILENT "$DESKTOP\${APP_NAME}.lnk" "$DesktopShortcutBackup"
+
+desktop_shortcut_backup_done:
+  StrCmp $ModernInstallLayout "1" 0 product_uninstall_shortcut_backup_done
+  IfFileExists "$ProductRoot\卸载 ${APP_NAME}.lnk" 0 product_uninstall_shortcut_backup_done
+    CopyFiles /SILENT "$ProductRoot\卸载 ${APP_NAME}.lnk" "$ProductUninstallShortcutBackup"
+
+product_uninstall_shortcut_backup_done:
 
   IfFileExists "$INSTDIR\*.*" current_ready
   IfFileExists "$PreviousDir\*.*" 0 current_ready
@@ -742,6 +843,7 @@ current_ready:
   File /r "${APP_SOURCE}\*.*"
   WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "AppId" "${APP_ID}"
   WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "Version" "${APP_VERSION}"
+  WriteINIStr "$StagingDir\.transvortex-install.ini" "Install" "ProductRoot" "$ProductRoot"
   WriteUninstaller "$StagingDir\Uninstall.exe"
   SetDetailsPrint textonly
   DetailPrint "正在校验安装内容…"
@@ -782,16 +884,43 @@ workspace_config_ready_after_swap:
 asr_storage_config_ready_after_swap:
 
   SetDetailsPrint textonly
-  DetailPrint "正在创建开始菜单入口…"
+  DetailPrint "正在创建应用与卸载入口…"
   SetDetailsPrint none
   SetOutPath "$INSTDIR"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}.lnk" "$INSTDIR\TransVortex.exe" \
     "" "$INSTDIR\TransVortex.exe" 0 SW_SHOWNORMAL "" "${APP_NAME}"
-  IfErrors post_swap_failed
+  IfErrors post_shortcut_failed
   ExecWait '"$INSTDIR\TransVortex.exe" --set-shortcut-app-user-model-id "$SMPROGRAMS\${APP_NAME}.lnk"' $0
   ${If} $0 != 0
-    Goto post_swap_failed
+    Goto post_shortcut_failed
   ${EndIf}
+
+  CreateShortCut "$SMPROGRAMS\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe" \
+    "" "$INSTDIR\Uninstall.exe" 0 SW_SHOWNORMAL "" "卸载 ${APP_NAME}"
+  IfErrors post_shortcut_failed
+
+  StrCmp $ModernInstallLayout "1" 0 product_uninstall_shortcut_ready
+  CreateShortCut "$ProductRoot\卸载 ${APP_NAME}.lnk" "$INSTDIR\Uninstall.exe" \
+    "" "$INSTDIR\Uninstall.exe" 0 SW_SHOWNORMAL "" "卸载 ${APP_NAME}"
+  IfErrors post_shortcut_failed
+
+product_uninstall_shortcut_ready:
+  StrCmp $CreateDesktopShortcut "1" create_desktop_shortcut remove_desktop_shortcut
+
+create_desktop_shortcut:
+  CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\TransVortex.exe" \
+    "" "$INSTDIR\TransVortex.exe" 0 SW_SHOWNORMAL "" "${APP_NAME}"
+  IfErrors post_shortcut_failed
+  ExecWait '"$INSTDIR\TransVortex.exe" --set-shortcut-app-user-model-id "$DESKTOP\${APP_NAME}.lnk"' $0
+  ${If} $0 != 0
+    Goto post_shortcut_failed
+  ${EndIf}
+  Goto desktop_shortcut_ready
+
+remove_desktop_shortcut:
+  Delete "$DESKTOP\${APP_NAME}.lnk"
+
+desktop_shortcut_ready:
 
   SetDetailsPrint textonly
   DetailPrint "正在登记 Agent / CLI 入口…"
@@ -814,9 +943,20 @@ asr_storage_config_ready_after_swap:
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "EstimatedSize" ${ESTIMATED_SIZE_KB}
+  StrCmp $CreateDesktopShortcut "1" 0 write_desktop_shortcut_disabled
+  WriteRegDWORD HKCU "${APP_REGISTRY_KEY}" "DesktopShortcut" 1
+  Goto desktop_shortcut_state_written
+
+write_desktop_shortcut_disabled:
+  WriteRegDWORD HKCU "${APP_REGISTRY_KEY}" "DesktopShortcut" 0
+
+desktop_shortcut_state_written:
 
   RMDir /r "$PreviousDir"
-  Delete "$ShortcutBackup"
+  Delete "$StartMenuShortcutBackup"
+  Delete "$StartMenuUninstallShortcutBackup"
+  Delete "$DesktopShortcutBackup"
+  Delete "$ProductUninstallShortcutBackup"
   SetDetailsPrint textonly
   DetailPrint "TransVortex 已准备好。"
   Goto install_complete
@@ -829,9 +969,9 @@ post_asr_storage_config_failed:
   Call RollBackPayload
   Abort "无法准备识别资源位置。请确认安装磁盘已连接且目录可写。已恢复此前安装。"
 
-post_swap_failed:
+post_shortcut_failed:
   Call RollBackPayload
-  Abort "无法创建带正确 Windows 应用身份的开始菜单快捷方式。已恢复此前安装。"
+  Abort "无法创建应用或卸载快捷方式。已恢复此前安装。"
 
 post_agent_entry_failed:
   StrCmp $HadPreviousInstall "1" agent_entry_failure_rollback
@@ -849,7 +989,10 @@ restore_after_swap_failure:
 
 swap_failed:
   RMDir /r "$StagingDir"
-  Delete "$ShortcutBackup"
+  Delete "$StartMenuShortcutBackup"
+  Delete "$StartMenuUninstallShortcutBackup"
+  Delete "$DesktopShortcutBackup"
+  Delete "$ProductUninstallShortcutBackup"
   Abort "无法替换安装目录。请确认目录没有被其他程序占用。"
 
 install_complete:
@@ -1129,8 +1272,21 @@ Section "Uninstall"
   DetailPrint "正在移除 TransVortex 程序…"
   SetDetailsPrint none
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\卸载 ${APP_NAME}.lnk"
+  Delete "$DESKTOP\${APP_NAME}.lnk"
+  ReadINIStr $ProductRoot "$INSTDIR\.transvortex-install.ini" "Install" "ProductRoot"
+  StrCmp $ProductRoot "" uninstall_product_shortcut_done
+  ${GetParent} "$INSTDIR" $0
+  System::Call 'kernel32::lstrcmpiW(w "$ProductRoot", w "$0") i .r1'
+  IntCmp $1 0 uninstall_product_shortcut_safe uninstall_product_shortcut_done uninstall_product_shortcut_done
+
+uninstall_product_shortcut_safe:
+  Delete "$ProductRoot\卸载 ${APP_NAME}.lnk"
+
+uninstall_product_shortcut_done:
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
   DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "InstallLocation"
+  DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "DesktopShortcut"
   StrCmp $CleanupRemoveTasks "1" 0 preserve_workspace_location
   DeleteRegValue HKCU "${APP_REGISTRY_KEY}" "WorkspaceLocation"
 preserve_workspace_location:

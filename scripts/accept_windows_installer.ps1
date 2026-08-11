@@ -110,6 +110,32 @@ function Invoke-WaitingProcess {
     return $process.ExitCode
 }
 
+function Assert-ShortcutTarget {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ShortcutPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedTarget
+    )
+
+    if (-not (Test-Path -LiteralPath $ShortcutPath)) {
+        throw "Shortcut was not created: $ShortcutPath"
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $actualTarget = Get-FullPath -Path $shortcut.TargetPath
+    } finally {
+        if ($null -ne $shortcut) {
+            [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
+        }
+        [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+    }
+    if (-not [string]::Equals($actualTarget, (Get-FullPath -Path $ExpectedTarget), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Shortcut target mismatch. Shortcut=$ShortcutPath Actual=$actualTarget Expected=$ExpectedTarget"
+    }
+}
+
 function Assert-InstalledLayout {
     param(
         [Parameter(Mandatory = $true)]
@@ -574,9 +600,29 @@ if ((Test-Path -LiteralPath $agentEntryDocument) -or (Test-Path -LiteralPath $ag
     throw "Refusing automated acceptance while a TransVortex Agent locator already exists."
 }
 
-$shortcutPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)) "TransVortex.lnk"
-$shortcutBackup = Join-Path $acceptanceRoot "previous-shortcut.lnk"
-$hadShortcut = Test-Path -LiteralPath $shortcutPath
+$programsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+$desktopRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+$shortcutPath = Join-Path $programsRoot "TransVortex.lnk"
+$startMenuUninstallShortcutPath = Join-Path $programsRoot "卸载 TransVortex.lnk"
+$desktopShortcutPath = Join-Path $desktopRoot "TransVortex.lnk"
+$productUninstallShortcutPath = Join-Path $productRoot "卸载 TransVortex.lnk"
+$shortcutSnapshots = @(
+    [pscustomobject]@{
+        Path = $shortcutPath
+        Backup = (Join-Path $acceptanceRoot "previous-start-menu-shortcut.lnk")
+        Existed = (Test-Path -LiteralPath $shortcutPath)
+    },
+    [pscustomobject]@{
+        Path = $startMenuUninstallShortcutPath
+        Backup = (Join-Path $acceptanceRoot "previous-start-menu-uninstall-shortcut.lnk")
+        Existed = (Test-Path -LiteralPath $startMenuUninstallShortcutPath)
+    },
+    [pscustomobject]@{
+        Path = $desktopShortcutPath
+        Backup = (Join-Path $acceptanceRoot "previous-desktop-shortcut.lnk")
+        Existed = (Test-Path -LiteralPath $desktopShortcutPath)
+    }
+)
 $userDataSentinelRoot = Join-Path $env:LOCALAPPDATA "TransVortex\InstallerAcceptance\$acceptanceId"
 $userDataSentinel = Join-Path $userDataSentinelRoot "preserve.txt"
 $serviceRoot = Join-Path $acceptanceRoot "service"
@@ -604,8 +650,10 @@ $acceptanceSucceeded = $false
 $installed = $false
 $agentEntryReport = $null
 New-Item -ItemType Directory -Force -Path $acceptanceRoot | Out-Null
-if ($hadShortcut) {
-    Copy-Item -LiteralPath $shortcutPath -Destination $shortcutBackup -Force
+foreach ($snapshot in $shortcutSnapshots) {
+    if ([bool]$snapshot.Existed) {
+        Copy-Item -LiteralPath $snapshot.Path -Destination $snapshot.Backup -Force
+    }
 }
 New-Item -ItemType Directory -Force -Path $userDataSentinelRoot | Out-Null
 Set-Content -LiteralPath $userDataSentinel -Value $acceptanceId -Encoding utf8
@@ -670,6 +718,19 @@ try {
         throw "Start menu shortcut identity verification failed."
     }
     $shortcutReport = (($shortcutJson | Out-String).Trim() | ConvertFrom-Json)
+    if (-not (Test-Path -LiteralPath $desktopShortcutPath)) {
+        throw "Default desktop shortcut was not created."
+    }
+    $desktopShortcutJson = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "install_flutter_desktop_shortcut.ps1") -ExePath (Join-Path $installFullPath "TransVortex.exe") -ShortcutPath $desktopShortcutPath -VerifyOnly -Json
+    if ($LASTEXITCODE -ne 0) {
+        throw "Desktop shortcut identity verification failed."
+    }
+    $desktopShortcutReport = (($desktopShortcutJson | Out-String).Trim() | ConvertFrom-Json)
+    Assert-ShortcutTarget -ShortcutPath $startMenuUninstallShortcutPath -ExpectedTarget (Join-Path $installFullPath "Uninstall.exe")
+    Assert-ShortcutTarget -ShortcutPath $productUninstallShortcutPath -ExpectedTarget (Join-Path $installFullPath "Uninstall.exe")
+    if ([int]$appRegistry.DesktopShortcut -ne 1) {
+        throw "Desktop shortcut preference was not registered as enabled."
+    }
     $serviceReport = Invoke-InstalledServiceCheck -Root $installFullPath -ServiceRoot $serviceRoot -IsolatedProfile $isolatedProfile -TimeoutSeconds $ServiceTimeoutSeconds
     $uninstallCleanupReport = Invoke-InstalledUninstallCleanupCheck -Root $installFullPath -AcceptanceRoot $acceptanceRoot
 
@@ -689,6 +750,11 @@ try {
     }
     Assert-InstalledLayout -Root $installFullPath
     $agentEntryReport = Assert-AgentEntry -Root $installFullPath -ConfigRoot $configRoot -EntryRoot $agentEntryRoot
+    foreach ($requiredShortcut in @($shortcutPath, $startMenuUninstallShortcutPath, $desktopShortcutPath, $productUninstallShortcutPath)) {
+        if (-not (Test-Path -LiteralPath $requiredShortcut)) {
+            throw "Upgrade did not preserve an application entry: $requiredShortcut"
+        }
+    }
 
     $installedApp = Start-IsolatedInstalledApp -Root $installFullPath -IsolatedLocalAppData $isolatedLocalAppData -IsolatedProfile $isolatedProfile
     Start-Sleep -Seconds $LaunchWaitSeconds
@@ -750,6 +816,15 @@ try {
     if (Test-Path -LiteralPath $shortcutPath) {
         throw "Start menu shortcut remains after uninstall."
     }
+    if (Test-Path -LiteralPath $startMenuUninstallShortcutPath) {
+        throw "Start menu uninstall shortcut remains after uninstall."
+    }
+    if (Test-Path -LiteralPath $desktopShortcutPath) {
+        throw "Desktop shortcut remains after uninstall."
+    }
+    if (Test-Path -LiteralPath $productUninstallShortcutPath) {
+        throw "Product-root uninstall shortcut remains after uninstall."
+    }
     if ((Test-Path -LiteralPath $agentEntryDocument) -or (Test-Path -LiteralPath $agentEntryState)) {
         throw "TransVortex-owned Agent locator files remain after uninstall."
     }
@@ -794,6 +869,11 @@ try {
         local_service = $serviceReport
         uninstall_cleanup_helper = $uninstallCleanupReport
         shortcut_app_user_model_id_ok = [bool]$shortcutReport.shortcut_app_user_model_id_ok
+        desktop_shortcut_default_created = $true
+        desktop_shortcut_app_user_model_id_ok = [bool]$desktopShortcutReport.shortcut_app_user_model_id_ok
+        upgrade_preserved_shortcuts = $true
+        start_menu_uninstall_entry_ok = $true
+        product_root_uninstall_entry_ok = $true
         upgrade_exit_code = $upgradeExit
         upgrade_removed_obsolete_file = $true
         visible_launch_ok = $true
@@ -808,6 +888,7 @@ try {
         uninstall_removed_program_registry = $true
         uninstall_preserved_workspace_registry = $true
         uninstall_removed_shortcut = $true
+        uninstall_removed_shortcuts = $true
         uninstall_preserved_user_data = $true
         preexisting_config_restored = $true
         silent_uninstall_cleanup_default = "preserve"
@@ -841,10 +922,12 @@ try {
             -ConfigRoot $configRoot `
             -ConfigRootExisted $configRootExisted
     }
-    if ($hadShortcut -and (Test-Path -LiteralPath $shortcutBackup)) {
-        Copy-Item -LiteralPath $shortcutBackup -Destination $shortcutPath -Force
-    } elseif (-not $hadShortcut -and (Test-Path -LiteralPath $shortcutPath)) {
-        Remove-Item -LiteralPath $shortcutPath -Force
+    foreach ($snapshot in $shortcutSnapshots) {
+        if ([bool]$snapshot.Existed -and (Test-Path -LiteralPath $snapshot.Backup)) {
+            Copy-Item -LiteralPath $snapshot.Backup -Destination $snapshot.Path -Force
+        } elseif (-not [bool]$snapshot.Existed -and (Test-Path -LiteralPath $snapshot.Path)) {
+            Remove-Item -LiteralPath $snapshot.Path -Force
+        }
     }
     if (Test-Path -LiteralPath $userDataSentinelRoot) {
         Assert-PathInsideDirectory -Path $userDataSentinelRoot -Directory (Join-Path $env:LOCALAPPDATA "TransVortex\InstallerAcceptance")
