@@ -2,8 +2,95 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../model/task_labels.dart';
 import '../services/app_service_client.dart';
 import '../theme/tokens.dart';
+import 'language_picker.dart';
+
+enum _CollectionScopeMode { all, specific }
+
+final _collectionSourceLanguages = sourceLanguageOptions
+    .where((value) => value != 'auto')
+    .toList(growable: false);
+final _collectionTargetLanguages = targetLanguageOptions.toList(
+  growable: false,
+);
+
+const _entryCategoryValues = [
+  'term',
+  'name',
+  'place',
+  'organization',
+  'expression',
+  'asr_correction',
+  'other',
+];
+
+String _entryCategoryLabel(String value) {
+  return switch (value) {
+    'term' => '普通术语',
+    'name' => '人物 / 专名',
+    'place' => '地点',
+    'organization' => '组织',
+    'expression' => '固定表达',
+    'asr_correction' => '识别纠错',
+    'other' => '其他',
+    _ => value.isEmpty ? '普通术语' : value,
+  };
+}
+
+String _entryConstraintLabel(String value) {
+  return switch (value) {
+    '' => '自动',
+    'must_use' => '必须使用',
+    'preferred' => '优先使用',
+    'hint' => '仅提示',
+    _ => value,
+  };
+}
+
+bool _isUniversalLanguagePair(String value) {
+  final normalized = value.trim().toLowerCase().replaceAll(' ', '');
+  return normalized == '*' || normalized == '*->*';
+}
+
+List<String> _specificLanguagePairs(Iterable<String> values) => values
+    .map((value) => value.trim())
+    .where((value) => value.isNotEmpty && !_isUniversalLanguagePair(value))
+    .toSet()
+    .toList();
+
+String _languagePairLabel(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty || _isUniversalLanguagePair(trimmed)) return '不限语言';
+  final separator = trimmed.indexOf('->');
+  if (separator <= 0 || separator >= trimmed.length - 2) return trimmed;
+  final source = trimmed.substring(0, separator);
+  final target = trimmed.substring(separator + 2);
+  return '${languageLabel(source)} → ${languageLabel(target)}';
+}
+
+String _collectionScopeLabel(Iterable<String> values) {
+  if (values.any(_isUniversalLanguagePair)) return '不限语言';
+  final pairs = _specificLanguagePairs(values);
+  return pairs.isEmpty ? '不限语言' : pairs.map(_languagePairLabel).join('、');
+}
+
+String _languagePairComponent(String value, {required bool source}) {
+  final separator = value.indexOf('->');
+  if (separator <= 0 || separator >= value.length - 2) return '';
+  return source
+      ? value.substring(0, separator)
+      : value.substring(separator + 2);
+}
+
+String _languageOptionOrFallback(Iterable<String> options, String candidate) {
+  final normalized = candidate.trim().toLowerCase().replaceAll('_', '-');
+  return options.firstWhere(
+    (option) => option.toLowerCase().replaceAll('_', '-') == normalized,
+    orElse: () => options.first,
+  );
+}
 
 class MemoryLibraryDialog extends StatefulWidget {
   const MemoryLibraryDialog({
@@ -252,8 +339,8 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
       children: [
         Text(
           widget.embedded
-              ? '集中维护跨任务复用的术语资产；任务使用的是开始制作时冻结的版本快照。'
-              : '术语库独立于作品和任务。勾选的是本任务要使用的库；任务开始时会冻结版本快照。',
+              ? '术语库是一组可跨任务复用的术语；任务使用的是开始制作时冻结的版本快照。'
+              : '术语库独立于作品和任务。勾选本任务要使用的库，开始制作时会冻结版本快照。',
           style: T.tCaption,
         ),
         const SizedBox(height: T.s12),
@@ -319,7 +406,9 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
                                 }),
                           title: Text(item.name),
                           subtitle: Text(
-                            '${item.entryCount} 条 · r${item.revision}',
+                            '${item.entryCount} 条术语 · ${_collectionScopeLabel(item.languagePairs)}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           controlAffinity: ListTileControlAffinity.leading,
                           contentPadding: EdgeInsets.zero,
@@ -364,7 +453,7 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
       children: [
         Row(
           children: [
-            const Expanded(child: Text('持久术语库', style: T.tSection)),
+            const Expanded(child: Text('术语库', style: T.tSection)),
             IconButton(
               tooltip: '新建术语库',
               onPressed: _busy ? null : _createCollection,
@@ -374,13 +463,7 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
         ),
         Expanded(
           child: _collections.isEmpty
-              ? Center(
-                  child: Text(
-                    '还没有术语库\n点击 + 新建',
-                    textAlign: TextAlign.center,
-                    style: T.tCaption,
-                  ),
-                )
+              ? _emptyCollectionList()
               : ListView.builder(
                   itemCount: _collections.length,
                   itemBuilder: (context, index) {
@@ -407,13 +490,43 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: Text(
-                        '${item.entryCount} 条 · r${item.revision}',
+                        '${item.entryCount} 条术语 · ${_collectionScopeLabel(item.languagePairs)}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     );
                   },
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _emptyCollectionList() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: T.s8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.menu_book_outlined, size: 28, color: T.muted),
+            const SizedBox(height: T.s8),
+            const Text('还没有术语库', style: T.tBody),
+            const SizedBox(height: T.s4),
+            const Text(
+              '创建后可以添加多条术语，跨任务复用。',
+              textAlign: TextAlign.center,
+              style: T.tCaption,
+            ),
+            const SizedBox(height: T.s12),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _createCollection,
+              icon: const Icon(Icons.add, size: 17),
+              label: const Text('新建术语库'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -464,15 +577,23 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
             detail.summary.tags.isNotEmpty)
           Text(
             [
-              ...detail.summary.languagePairs,
+              if (detail.summary.languagePairs.isNotEmpty)
+                _collectionScopeLabel(detail.summary.languagePairs),
               ...detail.summary.tags.map((tag) => '#$tag'),
             ].join(' · '),
             style: T.tCaption,
           ),
         const Divider(height: T.s24),
+        Row(
+          children: [
+            const Expanded(child: Text('术语', style: T.tSection)),
+            Text('${detail.entries.length} 条', style: T.tCaption),
+          ],
+        ),
+        const SizedBox(height: T.s8),
         Expanded(
           child: detail.entries.isEmpty
-              ? const Center(child: Text('这个术语库还是空的', style: T.tCaption))
+              ? _emptyEntryList()
               : ListView.separated(
                   itemCount: detail.entries.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
@@ -484,7 +605,7 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
                         '${entry.source}  →  ${entry.target.isEmpty ? '（仅提示）' : entry.target}',
                       ),
                       subtitle: Text(
-                        '${_statusLabel(entry.status)} · ${entry.category}${entry.notes.isEmpty ? '' : ' · ${entry.notes}'}',
+                        '${_statusLabel(entry.status)} · ${_entryCategoryLabel(entry.category)}${entry.notes.isEmpty ? '' : ' · ${entry.notes}'}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -502,252 +623,503 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
     );
   }
 
+  Widget _emptyEntryList() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.translate_outlined, size: 32, color: T.muted),
+          const SizedBox(height: T.s8),
+          const Text('这个术语库还没有术语', style: T.tBody),
+          const SizedBox(height: T.s4),
+          const Text(
+            '添加一条原文和译文，之后就能在多个任务中复用。',
+            style: T.tCaption,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: T.s12),
+          FilledButton.icon(
+            onPressed: _busy ? null : () => _editEntry(),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('添加第一条术语'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<_CollectionDraft?> _showCollectionEditor({
     MemoryCollectionSummary? existing,
   }) async {
-    final id = TextEditingController(text: existing?.id ?? '');
-    final name = TextEditingController(text: existing?.name ?? '');
-    final description = TextEditingController(
-      text: existing?.description ?? '',
+    var nameValue = existing?.name ?? '';
+    var descriptionValue = existing?.description ?? '';
+    var tagsValue = existing?.tags.join(', ') ?? '';
+    final formKey = GlobalKey<FormState>();
+    var selectedPairs = _specificLanguagePairs(
+      existing?.languagePairs ?? const [],
     );
-    final pairs = TextEditingController(
-      text: existing?.languagePairs.join(', ') ?? '',
-    );
-    final tags = TextEditingController(text: existing?.tags.join(', ') ?? '');
-    try {
-      return await showDialog<_CollectionDraft>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(existing == null ? '新建术语库' : '编辑术语库'),
-          content: SizedBox(
-            width: 440,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  autofocus: true,
-                  decoration: const InputDecoration(labelText: '名称 *'),
-                ),
-                if (existing == null)
-                  TextField(
-                    controller: id,
-                    decoration: const InputDecoration(labelText: 'ID（可留空自动生成）'),
-                  ),
-                TextField(
-                  controller: description,
-                  decoration: const InputDecoration(labelText: '说明'),
-                ),
-                TextField(
-                  controller: pairs,
-                  decoration: const InputDecoration(
-                    labelText: '语言对（逗号分隔，如 ja->zh-CN）',
-                  ),
-                ),
-                TextField(
-                  controller: tags,
-                  decoration: const InputDecoration(labelText: '标签（逗号分隔）'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (name.text.trim().isEmpty) return;
-                Navigator.pop(
-                  context,
-                  _CollectionDraft(
-                    id: id.text.trim(),
-                    name: name.text.trim(),
-                    description: description.text.trim(),
-                    languagePairs: _splitValues(pairs.text),
-                    tags: _splitValues(tags.text),
-                  ),
-                );
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        ),
+    var scopeMode = selectedPairs.isEmpty
+        ? _CollectionScopeMode.all
+        : _CollectionScopeMode.specific;
+    var sourceLanguage = _collectionSourceLanguages.first;
+    var targetLanguage = _collectionTargetLanguages.first;
+    if (selectedPairs.isNotEmpty) {
+      sourceLanguage = _languageOptionOrFallback(
+        _collectionSourceLanguages,
+        _languagePairComponent(selectedPairs.first, source: true),
       );
-    } finally {
-      id.dispose();
-      name.dispose();
-      description.dispose();
-      pairs.dispose();
-      tags.dispose();
+      targetLanguage = _languageOptionOrFallback(
+        _collectionTargetLanguages,
+        _languagePairComponent(selectedPairs.first, source: false),
+      );
     }
-  }
+    var showAdvanced =
+        existing != null &&
+        (descriptionValue.trim().isNotEmpty || tagsValue.trim().isNotEmpty);
+    String? scopeError;
+    return showDialog<_CollectionDraft>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          void addPair() {
+            final pair = '$sourceLanguage->$targetLanguage';
+            if (!selectedPairs.any(
+              (value) => value.toLowerCase() == pair.toLowerCase(),
+            )) {
+              setDialogState(() {
+                selectedPairs = [...selectedPairs, pair];
+                scopeError = null;
+              });
+            }
+          }
 
-  Future<Map<String, Object?>?> _showEntryEditor(
-    MemoryEntryItem? existing,
-  ) async {
-    final source = TextEditingController(text: existing?.source ?? '');
-    final target = TextEditingController(text: existing?.target ?? '');
-    final aliases = TextEditingController(
-      text: existing?.aliases.join(', ') ?? '',
-    );
-    final category = TextEditingController(text: existing?.category ?? 'term');
-    final notes = TextEditingController(text: existing?.notes ?? '');
-    final priority = TextEditingController(text: '${existing?.priority ?? 50}');
-    var status = existing?.status ?? 'confirmed';
-    var constraint = existing?.constraint ?? '';
-    try {
-      return await showDialog<Map<String, Object?>>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(existing == null ? '添加术语' : '编辑术语'),
+          return AlertDialog(
+            title: Text(existing == null ? '新建术语库' : '编辑术语库'),
             content: SizedBox(
               width: 500,
               child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: source,
-                      autofocus: true,
-                      decoration: const InputDecoration(labelText: '原文 *'),
-                    ),
-                    TextField(
-                      controller: target,
-                      decoration: const InputDecoration(
-                        labelText: '译文（可留空作为提示）',
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        existing == null
+                            ? '一个术语库可以包含多条跨任务复用的术语。创建后会进入术语列表。'
+                            : '这里只修改术语库属性；已有任务仍使用创建时冻结的版本。',
+                        style: T.tCaption,
                       ),
-                    ),
-                    TextField(
-                      controller: aliases,
-                      decoration: const InputDecoration(labelText: '别名（逗号分隔）'),
-                    ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: category,
-                            decoration: const InputDecoration(labelText: '分类'),
+                      const SizedBox(height: T.s12),
+                      TextFormField(
+                        initialValue: nameValue,
+                        autofocus: existing == null,
+                        onChanged: (value) => nameValue = value,
+                        decoration: const InputDecoration(
+                          labelText: '术语库名称',
+                          hintText: '例如：日语角色名库',
+                        ),
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                            ? '请填写术语库名称'
+                            : null,
+                      ),
+                      const SizedBox(height: T.s12),
+                      Text('适用范围', style: T.tSection),
+                      const SizedBox(height: T.s4),
+                      Text('不限语言时，这个术语库可以用于所有任务。', style: T.tCaption),
+                      const SizedBox(height: T.s8),
+                      DropdownButtonFormField<_CollectionScopeMode>(
+                        initialValue: scopeMode,
+                        decoration: const InputDecoration(labelText: '术语适用于'),
+                        items: const [
+                          DropdownMenuItem(
+                            value: _CollectionScopeMode.all,
+                            child: Text('不限语言'),
+                          ),
+                          DropdownMenuItem(
+                            value: _CollectionScopeMode.specific,
+                            child: Text('指定语言对'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() {
+                            scopeMode = value;
+                            scopeError = null;
+                          });
+                        },
+                      ),
+                      if (scopeMode == _CollectionScopeMode.specific) ...[
+                        const SizedBox(height: T.s8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: sourceLanguage,
+                                decoration: const InputDecoration(
+                                  labelText: '原语言',
+                                ),
+                                items: [
+                                  for (final option
+                                      in _collectionSourceLanguages)
+                                    DropdownMenuItem(
+                                      value: option,
+                                      child: Text(languageLabel(option)),
+                                    ),
+                                ],
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setDialogState(
+                                      () => sourceLanguage = value,
+                                    );
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: T.s8),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: targetLanguage,
+                                decoration: const InputDecoration(
+                                  labelText: '目标语言',
+                                ),
+                                items: [
+                                  for (final option
+                                      in _collectionTargetLanguages)
+                                    DropdownMenuItem(
+                                      value: option,
+                                      child: Text(languageLabel(option)),
+                                    ),
+                                ],
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setDialogState(
+                                      () => targetLanguage = value,
+                                    );
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: addPair,
+                            icon: const Icon(Icons.add, size: 17),
+                            label: const Text('添加语言对'),
                           ),
                         ),
-                        const SizedBox(width: T.s12),
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: status,
-                            decoration: const InputDecoration(labelText: '状态'),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'proposed',
-                                child: Text('候选'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'confirmed',
-                                child: Text('已确认'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'locked',
-                                child: Text('锁定'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'rejected',
-                                child: Text('拒绝'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'deprecated',
-                                child: Text('停用'),
-                              ),
+                        if (selectedPairs.isNotEmpty)
+                          Wrap(
+                            spacing: T.s8,
+                            runSpacing: T.s4,
+                            children: [
+                              for (final pair in selectedPairs)
+                                InputChip(
+                                  label: Text(_languagePairLabel(pair)),
+                                  onDeleted: () => setDialogState(
+                                    () => selectedPairs = selectedPairs
+                                        .where((value) => value != pair)
+                                        .toList(),
+                                  ),
+                                ),
                             ],
-                            onChanged: (value) =>
-                                setDialogState(() => status = value ?? status),
+                          ),
+                        if (scopeError != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: T.s4),
+                            child: Text(
+                              scopeError!,
+                              style: T.tCaption.copyWith(color: T.danger),
+                            ),
+                          ),
+                      ],
+                      const SizedBox(height: T.s4),
+                      TextButton.icon(
+                        onPressed: () =>
+                            setDialogState(() => showAdvanced = !showAdvanced),
+                        icon: Icon(
+                          showAdvanced
+                              ? Icons.expand_less
+                              : Icons.tune_outlined,
+                          size: 17,
+                        ),
+                        label: Text(showAdvanced ? '收起更多属性' : '更多属性（可选）'),
+                      ),
+                      if (showAdvanced) ...[
+                        TextFormField(
+                          initialValue: descriptionValue,
+                          onChanged: (value) => descriptionValue = value,
+                          decoration: const InputDecoration(
+                            labelText: '说明',
+                            hintText: '例如：人物、地名和组织名的固定译法',
+                          ),
+                        ),
+                        const SizedBox(height: T.s8),
+                        TextFormField(
+                          initialValue: tagsValue,
+                          onChanged: (value) => tagsValue = value,
+                          decoration: const InputDecoration(
+                            labelText: '标签',
+                            hintText: '多个标签用逗号分隔',
                           ),
                         ),
                       ],
-                    ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: constraint,
-                            decoration: const InputDecoration(labelText: '约束'),
-                            items: const [
-                              DropdownMenuItem(value: '', child: Text('自动')),
-                              DropdownMenuItem(
-                                value: 'must_use',
-                                child: Text('必须使用'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'preferred',
-                                child: Text('优先使用'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'hint',
-                                child: Text('仅提示'),
-                              ),
-                            ],
-                            onChanged: (value) =>
-                                setDialogState(() => constraint = value ?? ''),
-                          ),
-                        ),
-                        const SizedBox(width: T.s12),
-                        Expanded(
-                          child: TextField(
-                            controller: priority,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(labelText: '优先级'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    TextField(
-                      controller: notes,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: const InputDecoration(labelText: '说明 / 上下文'),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dialogContext),
                 child: const Text('取消'),
               ),
               FilledButton(
                 onPressed: () {
-                  if (source.text.trim().isEmpty) return;
-                  Navigator.pop(context, <String, Object?>{
-                    if (existing != null) 'id': existing.id,
-                    'source': source.text.trim(),
-                    'target': target.text.trim(),
-                    'aliases': _splitValues(aliases.text),
-                    'category': category.text.trim().isEmpty
-                        ? 'term'
-                        : category.text.trim(),
-                    'status': status,
-                    'constraint': constraint,
-                    'priority': int.tryParse(priority.text.trim()) ?? 50,
-                    'notes': notes.text.trim(),
-                    if (existing != null && existing.memoryType.isNotEmpty)
-                      'memory_type': existing.memoryType,
-                  });
+                  if (!formKey.currentState!.validate()) return;
+                  if (scopeMode == _CollectionScopeMode.specific &&
+                      selectedPairs.isEmpty) {
+                    setDialogState(() => scopeError = '请先添加一个语言对，或选择“不限语言”');
+                    return;
+                  }
+                  Navigator.pop(
+                    dialogContext,
+                    _CollectionDraft(
+                      id: existing?.id ?? '',
+                      name: nameValue.trim(),
+                      description: descriptionValue.trim(),
+                      languagePairs: scopeMode == _CollectionScopeMode.all
+                          ? const []
+                          : selectedPairs,
+                      tags: _splitValues(tagsValue),
+                    ),
+                  );
                 },
-                child: const Text('保存'),
+                child: Text(existing == null ? '创建并进入术语库' : '保存更改'),
               ),
             ],
-          ),
-        ),
-      );
-    } finally {
-      source.dispose();
-      target.dispose();
-      aliases.dispose();
-      category.dispose();
-      notes.dispose();
-      priority.dispose();
+          );
+        },
+      ),
+    );
+  }
+
+  Future<Map<String, Object?>?> _showEntryEditor(
+    MemoryEntryItem? existing,
+  ) async {
+    var sourceValue = existing?.source ?? '';
+    var targetValue = existing?.target ?? '';
+    var aliasesValue = existing?.aliases.join(', ') ?? '';
+    var notesValue = existing?.notes ?? '';
+    var priorityValue = '${existing?.priority ?? 50}';
+    final formKey = GlobalKey<FormState>();
+    var category = existing?.category.trim().isNotEmpty == true
+        ? existing!.category
+        : 'term';
+    var status = existing?.status ?? 'confirmed';
+    var constraint = existing?.constraint ?? '';
+    var showAdvanced =
+        existing != null &&
+        (aliasesValue.trim().isNotEmpty ||
+            notesValue.trim().isNotEmpty ||
+            priorityValue.trim() != '50' ||
+            constraint.trim().isNotEmpty);
+    final categoryValues = <String>[..._entryCategoryValues];
+    if (!categoryValues.contains(category)) categoryValues.add(category);
+    final statusValues = <String>[
+      'proposed',
+      'confirmed',
+      'locked',
+      'rejected',
+      'deprecated',
+    ];
+    if (!statusValues.contains(status)) statusValues.add(status);
+    final constraintValues = <String>['', 'must_use', 'preferred', 'hint'];
+    if (constraint.isNotEmpty && !constraintValues.contains(constraint)) {
+      constraintValues.add(constraint);
     }
+    return showDialog<Map<String, Object?>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text(existing == null ? '添加术语' : '编辑术语'),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('只填写术语本身；别名、约束和备注可以稍后补充。', style: T.tCaption),
+                    const SizedBox(height: T.s12),
+                    TextFormField(
+                      initialValue: sourceValue,
+                      autofocus: true,
+                      onChanged: (value) => sourceValue = value,
+                      decoration: const InputDecoration(
+                        labelText: '原文',
+                        hintText: '例如：スバル',
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? '请填写原文'
+                          : null,
+                    ),
+                    const SizedBox(height: T.s8),
+                    TextFormField(
+                      initialValue: targetValue,
+                      onChanged: (value) => targetValue = value,
+                      decoration: const InputDecoration(
+                        labelText: '译文（可选）',
+                        hintText: '留空表示仅作为提示',
+                      ),
+                      validator: (value) {
+                        if (value?.trim().isNotEmpty == true ||
+                            aliasesValue.trim().isNotEmpty ||
+                            notesValue.trim().isNotEmpty) {
+                          return null;
+                        }
+                        return '请填写译文；如仅作提示，请在“更多属性”中填写别名或备注';
+                      },
+                    ),
+                    const SizedBox(height: T.s8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: category,
+                            decoration: const InputDecoration(labelText: '类型'),
+                            items: [
+                              for (final value in categoryValues)
+                                DropdownMenuItem(
+                                  value: value,
+                                  child: Text(_entryCategoryLabel(value)),
+                                ),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) {
+                                setDialogState(() => category = value);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: T.s8),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: status,
+                            decoration: const InputDecoration(labelText: '状态'),
+                            items: [
+                              for (final value in statusValues)
+                                DropdownMenuItem(
+                                  value: value,
+                                  child: Text(_statusLabel(value)),
+                                ),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) {
+                                setDialogState(() => status = value);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: T.s4),
+                    TextButton.icon(
+                      onPressed: () =>
+                          setDialogState(() => showAdvanced = !showAdvanced),
+                      icon: Icon(
+                        showAdvanced ? Icons.expand_less : Icons.tune_outlined,
+                        size: 17,
+                      ),
+                      label: Text(showAdvanced ? '收起更多属性' : '更多属性（可选）'),
+                    ),
+                    if (showAdvanced) ...[
+                      TextFormField(
+                        initialValue: aliasesValue,
+                        onChanged: (value) => aliasesValue = value,
+                        decoration: const InputDecoration(
+                          labelText: '别名',
+                          hintText: '多个别名用逗号分隔',
+                        ),
+                      ),
+                      const SizedBox(height: T.s8),
+                      DropdownButtonFormField<String>(
+                        initialValue: constraint,
+                        decoration: const InputDecoration(labelText: '使用方式'),
+                        items: [
+                          for (final value in constraintValues)
+                            DropdownMenuItem(
+                              value: value,
+                              child: Text(_entryConstraintLabel(value)),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setDialogState(() => constraint = value);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: T.s8),
+                      TextFormField(
+                        initialValue: priorityValue,
+                        onChanged: (value) => priorityValue = value,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '优先级',
+                          helperText: '通常保持默认即可',
+                        ),
+                      ),
+                      const SizedBox(height: T.s8),
+                      TextFormField(
+                        initialValue: notesValue,
+                        onChanged: (value) => notesValue = value,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          labelText: '备注 / 上下文',
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!formKey.currentState!.validate()) return;
+                Navigator.pop(dialogContext, <String, Object?>{
+                  if (existing != null) 'id': existing.id,
+                  'source': sourceValue.trim(),
+                  'target': targetValue.trim(),
+                  'aliases': _splitValues(aliasesValue),
+                  'category': category,
+                  'status': status,
+                  'constraint': constraint,
+                  'priority': int.tryParse(priorityValue.trim()) ?? 50,
+                  'notes': notesValue.trim(),
+                  if (existing != null && existing.memoryType.isNotEmpty)
+                    'memory_type': existing.memoryType,
+                });
+              },
+              child: Text(existing == null ? '添加术语' : '保存更改'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
