@@ -54,7 +54,7 @@
 | 启动与崩溃日志 | 待实现 | Local Service 启动前错误和应用崩溃可被持久记录并用于恢复提示 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 | 凭据长期安全边界 | 待决策 | 明确 `auth.json` 的 Windows ACL 加固或 Credential Manager 演进策略 | [`DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md`](DESKTOP_APP_LOCAL_SERVICE_ARCHITECTURE.md) |
 
-当前已经成立的边界：正常关闭主窗口会收起产品窗口并驻留托盘，Local Service 与当前任务继续运行；托盘可恢复窗口，明确退出会在活动任务存在时先要求确认；任务处理窗有未保存字幕时会阻止主窗口收起或应用退出，并前置编辑窗口等待用户决定。该能力不覆盖应用自身崩溃后的恢复。
+当前已经成立的边界：正常关闭主窗口会收起产品窗口并驻留托盘，Local Service 与当前任务继续运行；托盘可恢复窗口，明确退出会在活动任务存在时先要求确认；工作台有未保存字幕时会阻止主窗口收起或应用退出，并前置编辑窗口等待用户决定。该能力不覆盖应用自身崩溃后的恢复。
 
 ## P1：产品与界面闭环
 
@@ -63,7 +63,7 @@
 | 失败恢复矩阵 | 待验收 | 配置、凭据、识别、目录和任务失败都有真实可执行的恢复动作 | [`FRONTEND_PRODUCT_SURFACES.md`](FRONTEND/current/FRONTEND_PRODUCT_SURFACES.md) |
 | 已有 ASR 资源跨盘迁移 | 待实现 | 在不重新下载的前提下复制运行组件、模型和安全断点，提供真实进度、逐文件校验、取消、原位置保留与失败回滚；完成前只允许首次下载前选择资源位置 | [`LOCAL_ASR_COMPONENTS.md`](LOCAL_ASR_COMPONENTS.md) |
 | Agent 准备环境与资源接入契约 | 待验收 | v2 已拆分 provider mode 与 runtime / 模型 / GPU 加速来源，scope 已进入机器契约并分别报告范围完成与完整 ASR 就绪；当前配置只作为侦查基线，模型、CPU/CUDA 与 managed/external 路径由 Agent 结合主机选择；磁盘容量跟随实际 ASR `storage_root`。契约提供托管 apply、外部资源 probe/register、activate 和 full strict verify，Flutter 已可按五种范围直接交接给用户环境中的 Codex CLI。剩余工作是随公开组件发布完成真实下载、NVIDIA 环境准备与干净机器验收 | [`../agent/README.md`](../agent/README.md)、[`../agent/workflows/ASR_ENVIRONMENT_SETUP.md`](../agent/workflows/ASR_ENVIRONMENT_SETUP.md) |
-| 术语库与任务记忆工作台 | 进行中 | 已区分任务临时候选、独立持久术语库和任务冻结快照；Flutter 可按任务选择 / 维护集合并选择性提升结果候选，CLI / Agent 具备 revision、dry-run 和显式删除保护。后续补候选证据、批量合并 / 导入导出、冲突审看和字幕人工修改提议；作品实体不是前置条件 | [`WORKBENCH_0_2_PLAN.md`](WORKBENCH_0_2_PLAN.md)、[`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
+| 术语库与任务记忆工作台 | 进行中 | 已区分任务临时候选、独立持久术语库和任务冻结快照；Flutter 主窗口只选择本任务使用的集合，完整维护位于单例工作台的“术语库”区域，结果候选可选择性提升，CLI / Agent 具备 revision、dry-run 和显式删除保护。后续补候选证据、批量合并 / 导入导出、冲突审看和字幕人工修改提议；作品实体不是前置条件 | [`WORKBENCH_0_2_PLAN.md`](WORKBENCH_0_2_PLAN.md)、[`FRONTEND_TASK_CONFIGURATION_SEMANTICS.md`](FRONTEND/current/FRONTEND_TASK_CONFIGURATION_SEMANTICS.md) |
 | 字幕成品样式系统 | 待实现 | 区分字幕内容布局与 ASS 等格式承载的视觉样式，提供预设、预览、任务快照和重新导出 | [`WORKBENCH_0_2_PLAN.md`](WORKBENCH_0_2_PLAN.md) |
 | 高级翻译与识别设置 | 进行中 | ASR 已完成 Engine + Capabilities + Policy + ResolvedPlan 的 schema v2 收口：配置拒绝未知/旧字段，凭据按 Endpoint binding 隔离，任务冻结并校验实际分窗与持久化细分重试；旧 `AsrProviderConfig` 只保留为执行链单向投影。剩余工作是逐步删除该适配层、翻译 fallback/mapping 和更多诊断修复联动 | [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)、[`FRONTEND_DESIGN_SPEC.md`](FRONTEND/current/FRONTEND_DESIGN_SPEC.md) |
 | OpenRouter 云 ASR 真实服务验收 | 待验收 | 2026-07-28 已确认 Whisper segment 与 Grok `verbose_json + word` 时间戳链路；两个 profile 现均使用 300 秒窗口和 3 秒 overlap，Whisper 复用 segment 去重，Grok 先合并词时间轴再生成字幕段，正常窗口与细分重试均有诊断。平台错误/重试、中断不丢失的任务级 usage 汇总、普通 key 用量/限额查询和 Flutter 完整/部分用量区分已具备，剩余真实长音频、多语言、切句质量与窗口阈值人工验收 | [`KNOWN_ISSUES_AND_VALIDATION.md`](KNOWN_ISSUES_AND_VALIDATION.md) |

@@ -1,5 +1,39 @@
 part of '../task_processing_window.dart';
 
+class _WorkbenchSectionNav extends StatelessWidget {
+  const _WorkbenchSectionNav({required this.selected, required this.onChanged});
+
+  final _WorkbenchSection selected;
+  final ValueChanged<_WorkbenchSection> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SegmentedButton<_WorkbenchSection>(
+        key: const ValueKey('workbench-section-nav'),
+        segments: const [
+          ButtonSegment(
+            value: _WorkbenchSection.tasks,
+            icon: Icon(Icons.subtitles_outlined, size: 18),
+            label: Text('任务与字幕'),
+          ),
+          ButtonSegment(
+            value: _WorkbenchSection.terminology,
+            icon: Icon(Icons.menu_book_outlined, size: 18),
+            label: Text('术语库'),
+          ),
+        ],
+        selected: {selected},
+        showSelectedIcon: false,
+        onSelectionChanged: (values) {
+          if (values.isNotEmpty) onChanged(values.first);
+        },
+      ),
+    );
+  }
+}
+
 class _TaskProcessingBody extends StatelessWidget {
   const _TaskProcessingBody({
     required this.tasks,

@@ -136,7 +136,11 @@ AppWindowArgs _windowWithOverrides(
   final type =
       AppWindowTypeLabel.maybeFromId(explicitWindowType?.trim()) ?? parsed.type;
   final taskId = _optionalString(explicitTaskId) ?? parsed.taskId;
-  return AppWindowArgs(type: type, taskId: taskId);
+  return AppWindowArgs(
+    type: type,
+    taskId: taskId,
+    workspaceSection: parsed.workspaceSection,
+  );
 }
 
 String? _optionalString(Object? value) {

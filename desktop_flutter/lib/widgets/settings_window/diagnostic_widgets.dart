@@ -563,7 +563,7 @@ class _DiagnosticTaskRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: T.s8),
-          _MiniTextButton(label: '任务处理', onTap: onOpenTask),
+          _MiniTextButton(label: '工作台', onTap: onOpenTask),
           const SizedBox(width: T.s8),
           _MiniTextButton(label: canOpen ? '结果摘要' : '未完成', onTap: onOpenResult),
           const SizedBox(width: T.s8),

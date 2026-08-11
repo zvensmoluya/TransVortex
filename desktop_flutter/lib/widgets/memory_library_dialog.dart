@@ -10,10 +10,16 @@ class MemoryLibraryDialog extends StatefulWidget {
     super.key,
     required this.client,
     this.selectedCollectionIds = const [],
+    this.selectionOnly = false,
+    this.embedded = false,
+    this.onManageLibrary,
   });
 
   final AppServiceClient client;
   final List<String> selectedCollectionIds;
+  final bool selectionOnly;
+  final bool embedded;
+  final Future<void> Function()? onManageLibrary;
 
   @override
   State<MemoryLibraryDialog> createState() => _MemoryLibraryDialogState();
@@ -41,14 +47,14 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
       if (!mounted) return;
       final availableIds = collections.map((item) => item.id).toSet();
       _selected.removeWhere((id) => !availableIds.contains(id));
-      final requested = preferredId ?? _activeId;
+      final requested = widget.selectionOnly ? null : preferredId ?? _activeId;
       final active = availableIds.contains(requested)
           ? requested
           : collections.isEmpty
           ? null
           : collections.first.id;
       MemoryCollectionDetail? detail;
-      if (active != null) {
+      if (active != null && !widget.selectionOnly) {
         detail = await widget.client.memoryCollection(active);
       }
       if (!mounted) return;
@@ -218,35 +224,12 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.selectionOnly) return _selectionDialog();
+    final content = _managementContent();
+    if (widget.embedded) return content;
     return AlertDialog(
       title: const Text('术语库'),
-      content: SizedBox(
-        width: 780,
-        height: 520,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('术语库独立于作品和任务。勾选的是本任务要使用的库；任务开始时会冻结版本快照。', style: T.tCaption),
-            const SizedBox(height: T.s12),
-            if (_error != null) ...[
-              Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
-              const SizedBox(height: T.s8),
-            ],
-            Expanded(
-              child: _loading && _collections.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(width: 260, child: _collectionList()),
-                        const VerticalDivider(width: T.s24),
-                        Expanded(child: _collectionDetail()),
-                      ],
-                    ),
-            ),
-          ],
-        ),
-      ),
+      content: SizedBox(width: 780, height: 520, child: content),
       actions: [
         TextButton(
           onPressed: _busy ? null : () => Navigator.pop(context),
@@ -261,6 +244,118 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
         ),
       ],
     );
+  }
+
+  Widget _managementContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.embedded
+              ? '集中维护跨任务复用的术语资产；任务使用的是开始制作时冻结的版本快照。'
+              : '术语库独立于作品和任务。勾选的是本任务要使用的库；任务开始时会冻结版本快照。',
+          style: T.tCaption,
+        ),
+        const SizedBox(height: T.s12),
+        if (_error != null) ...[
+          Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
+          const SizedBox(height: T.s8),
+        ],
+        Expanded(
+          child: _loading && _collections.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(width: 260, child: _collectionList()),
+                    const VerticalDivider(width: T.s24),
+                    Expanded(child: _collectionDetail()),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _selectionDialog() {
+    return AlertDialog(
+      title: const Text('本任务使用的术语库'),
+      content: SizedBox(
+        width: 480,
+        height: 360,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('只选择本次任务要使用的术语库；开始制作时会冻结版本快照。', style: T.tCaption),
+            const SizedBox(height: T.s12),
+            if (_error != null) ...[
+              Text(_error!, style: T.tCaption.copyWith(color: T.danger)),
+              const SizedBox(height: T.s8),
+            ],
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _collections.isEmpty
+                  ? Center(
+                      child: Text(
+                        '还没有术语库。\n可以前往工作台创建和维护。',
+                        textAlign: TextAlign.center,
+                        style: T.tCaption,
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: _collections.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = _collections[index];
+                        return CheckboxListTile(
+                          value: _selected.contains(item.id),
+                          onChanged: _busy
+                              ? null
+                              : (checked) => setState(() {
+                                  checked == true
+                                      ? _selected.add(item.id)
+                                      : _selected.remove(item.id);
+                                }),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.entryCount} 条 · r${item.revision}',
+                          ),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: EdgeInsets.zero,
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (widget.onManageLibrary != null)
+          TextButton.icon(
+            onPressed: _busy ? null : _openManager,
+            icon: const Icon(Icons.open_in_new, size: 17),
+            label: const Text('管理术语库'),
+          ),
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _busy
+              ? null
+              : () => Navigator.pop(context, _selected.toList()),
+          icon: const Icon(Icons.check, size: 18),
+          label: Text('用于本任务（${_selected.length}）'),
+        ),
+      ],
+    );
+  }
+
+  void _openManager() {
+    final callback = widget.onManageLibrary;
+    Navigator.pop(context);
+    if (callback != null) unawaited(callback());
   }
 
   Widget _collectionList() {
@@ -294,16 +389,18 @@ class _MemoryLibraryDialogState extends State<MemoryLibraryDialog> {
                       dense: true,
                       selected: item.id == _activeId,
                       onTap: () => _activate(item.id),
-                      leading: Checkbox(
-                        value: _selected.contains(item.id),
-                        onChanged: _busy
-                            ? null
-                            : (checked) => setState(() {
-                                checked == true
-                                    ? _selected.add(item.id)
-                                    : _selected.remove(item.id);
-                              }),
-                      ),
+                      leading: widget.embedded
+                          ? null
+                          : Checkbox(
+                              value: _selected.contains(item.id),
+                              onChanged: _busy
+                                  ? null
+                                  : (checked) => setState(() {
+                                      checked == true
+                                          ? _selected.add(item.id)
+                                          : _selected.remove(item.id);
+                                    }),
+                            ),
                       title: Text(
                         item.name,
                         maxLines: 1,

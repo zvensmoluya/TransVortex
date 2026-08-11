@@ -87,7 +87,7 @@ python .\scripts\accept_managed_asr_staging.py `
 
 成功报告必须同时记录 `readiness.state=ready`、`runtime_source=managed`、`transport=stdio_jsonl`、设备和 compute type，并重新计算安装后模型文件哈希。该机器验收会真实加载模型并转录探测音频，但不代替可见 APP 的完整媒体任务、结果审看或公开下载验收。
 
-从隔离安装目录启动可见 APP、完成确实需要 ASR 的任务并在任务处理窗审看和重新导出后，在卸载前固定安装物、任务、Worker、识别行和输出证据：
+从隔离安装目录启动可见 APP、完成确实需要 ASR 的任务并在工作台审看和重新导出后，在卸载前固定安装物、任务、Worker、识别行和输出证据：
 
 ```powershell
 & "$installRoot\runtime\python\python.exe" .\scripts\verify_managed_asr_app_e2e.py `

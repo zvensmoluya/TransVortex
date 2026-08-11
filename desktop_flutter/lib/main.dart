@@ -81,6 +81,7 @@ Future<void> main(List<String> args) async {
     TransVortexApp(
       windowType: parsedArgs.type,
       taskId: parsedArgs.taskId,
+      workspaceSection: parsedArgs.workspaceSection,
       store: store,
       bridge: bridge,
       smoke: startupArgs.smoke,
@@ -121,6 +122,7 @@ class TransVortexApp extends StatelessWidget {
     super.key,
     this.windowType = AppWindowType.main,
     this.taskId,
+    this.workspaceSection,
     this.store,
     this.bridge,
     this.localServiceController,
@@ -136,6 +138,7 @@ class TransVortexApp extends StatelessWidget {
 
   final AppWindowType windowType;
   final String? taskId;
+  final String? workspaceSection;
   final WindowStateStore? store;
   final WindowStateBridge? bridge;
   final LocalServiceController? localServiceController;
@@ -220,6 +223,7 @@ class TransVortexApp extends StatelessWidget {
         ),
         AppWindowType.taskProcessing => TaskProcessingWindow(
           taskId: taskId,
+          initialSection: workspaceSection,
           bridge: appBridge,
           pathOpener: pathOpener,
           directoryProbe: directoryProbe,
@@ -900,7 +904,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       items: [
         _menuItem('translation', '翻译模型设置'),
         _menuItem('asr', '语音识别设置'),
-        _menuItem('history', '任务处理'),
+        _menuItem('history', '工作台'),
         const PopupMenuDivider(),
         _menuItem('application_settings', '应用设置'),
       ],
@@ -1174,6 +1178,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       builder: (context) => MemoryLibraryDialog(
         client: client,
         selectedCollectionIds: _controller.view.memoryCollectionIds,
+        selectionOnly: true,
+        onManageLibrary: () => _openToolWindow(
+          AppWindowType.taskProcessing,
+          workspaceSection: 'terminology',
+        ),
       ),
     );
     if (selected != null) _controller.setMemoryCollectionIds(selected);
@@ -1397,7 +1406,11 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _openToolWindowFromArgs(AppWindowArgs args) {
-    return _openToolWindow(args.type, taskId: args.taskId);
+    return _openToolWindow(
+      args.type,
+      taskId: args.taskId,
+      workspaceSection: args.workspaceSection,
+    );
   }
 
   Future<void> _openApplicationSettings() async {
@@ -1546,11 +1559,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
         (a.height - b.height).abs() <= tolerance;
   }
 
-  Future<void> _openToolWindow(AppWindowType type, {String? taskId}) async {
+  Future<void> _openToolWindow(
+    AppWindowType type, {
+    String? taskId,
+    String? workspaceSection,
+  }) async {
     final parentBounds = await _currentWindowBounds();
     final args = AppWindowArgs(
       type: type,
       taskId: taskId,
+      workspaceSection: workspaceSection,
       parentBounds: parentBounds,
       visibleBounds: await currentDisplayVisibleBoundsFor(parentBounds),
     );

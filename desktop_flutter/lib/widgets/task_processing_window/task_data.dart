@@ -88,6 +88,7 @@ extension _TaskProcessingData on _TaskProcessingWindowState {
 
   Future<void> _retarget(AppWindowArgs args) async {
     if (args.type != AppWindowType.taskProcessing) return;
+    final section = _workbenchSectionFromId(args.workspaceSection);
     final taskId = args.taskId?.trim();
     if (taskId != null && taskId.isNotEmpty) {
       if (taskId != _editingTaskId && !await _leaveResultEditor()) return;
@@ -97,6 +98,18 @@ extension _TaskProcessingData on _TaskProcessingWindowState {
       _editingTaskId = taskId;
       _resultEditorDirty = false;
       _taskFilter = _TaskFilter.all;
+    }
+    if (mounted) {
+      _setTaskProcessingState(() {
+        _workbenchSection = section;
+        if (section == _WorkbenchSection.terminology) {
+          _terminologyVisited = true;
+        }
+      });
+    }
+    if (section == _WorkbenchSection.terminology &&
+        (taskId == null || taskId.isEmpty)) {
+      return;
     }
     await _loadTasks();
   }

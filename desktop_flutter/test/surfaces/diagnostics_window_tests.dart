@@ -219,13 +219,13 @@ void main() {
     expect(openedTools.single.type, AppWindowType.taskProcessing);
     expect(openedTools.single.taskId, 'tvx_waiting_1');
 
-    expect(find.text('查看任务处理'), findsOneWidget);
-    await tester.tap(find.text('查看任务处理'));
+    expect(find.text('打开工作台'), findsOneWidget);
+    await tester.tap(find.text('打开工作台'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(openedTools.length, 2);
     expect(openedTools.last.type, AppWindowType.taskProcessing);
     expect(openedTools.last.taskId, 'tvx_diag_context_active_123456');
-    expect(find.textContaining('已打开任务处理'), findsOneWidget);
+    expect(find.textContaining('已打开工作台'), findsOneWidget);
     expectNoFlutterException();
   });
 
@@ -335,11 +335,11 @@ void main() {
     expect(directoryProbe.checkedPaths, [r'D:\media']);
     expect(find.text('结果目录：目录不可写：denied'), findsOneWidget);
     expect(find.textContaining('结果目录不可写'), findsOneWidget);
-    await tester.tap(find.text('任务处理').first);
+    await tester.tap(find.text('工作台').first);
     await tester.pump(const Duration(milliseconds: 100));
     expect(openedTools.single.type, AppWindowType.taskProcessing);
     expect(openedTools.single.taskId, 'tvx_recent_done_abcdef');
-    expect(find.textContaining('已打开任务处理'), findsOneWidget);
+    expect(find.textContaining('已打开工作台'), findsOneWidget);
     await tester.tap(find.text('结果摘要').first);
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pumpAndSettle();

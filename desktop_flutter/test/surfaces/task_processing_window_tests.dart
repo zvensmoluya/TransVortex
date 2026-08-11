@@ -184,6 +184,30 @@ void main() {
           'output_paths': {'srt': r'D:\media\processing-done.zh-CN.srt'},
         };
       }
+      if (method == 'memory.collections.list') {
+        return {
+          'collections': [
+            {'id': 'characters', 'name': '人物名', 'revision': 2, 'entries': 1},
+          ],
+        };
+      }
+      if (method == 'memory.collection.get') {
+        return {
+          'collection': {
+            'id': 'characters',
+            'name': '人物名',
+            'revision': 2,
+            'entries': [
+              {
+                'id': 'subaru',
+                'source': 'スバル',
+                'target': '昴',
+                'status': 'locked',
+              },
+            ],
+          },
+        };
+      }
       throw RpcRemoteException('method_not_found', method);
     });
     bridge.attachToolWindowOpener((args) async {
@@ -205,7 +229,9 @@ void main() {
 
     expect(calls, contains('tasks.list'));
     expect(calls, contains('tasks.events'));
-    expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('工作台'), findsOneWidget);
+    expect(find.text('任务与字幕'), findsOneWidget);
+    expect(find.text('术语库'), findsOneWidget);
     expect(find.text('任务片列'), findsOneWidget);
     expect(find.text('processing-done.mp4'), findsWidgets);
     expect(find.text('processing-failed.mp4'), findsOneWidget);
@@ -224,10 +250,18 @@ void main() {
     final lockedTaskSearch = find.widgetWithText(TextField, '搜索任务');
     expect(tester.widget<TextField>(lockedTaskSearch).enabled, isFalse);
 
+    await tester.tap(find.text('术语库'));
+    await tester.pumpAndSettle();
+    expect(find.text('集中维护跨任务复用的术语资产；任务使用的是开始制作时冻结的版本快照。'), findsOneWidget);
+    expect(find.text('スバル  →  昴'), findsOneWidget);
+    await tester.tap(find.text('任务与字幕'));
+    await tester.pump();
+    expect(find.text('这是未保存修改。'), findsOneWidget);
+
     final closeRequest = requestCurrentWindowCloseForTesting();
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('放弃未保存修改？'), findsOneWidget);
-    expect(find.textContaining('关闭任务处理后'), findsOneWidget);
+    expect(find.textContaining('关闭工作台后'), findsOneWidget);
     expect(
       find.descendant(
         of: find.byType(AlertDialog),

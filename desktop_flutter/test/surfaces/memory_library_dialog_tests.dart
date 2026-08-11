@@ -7,7 +7,7 @@ import '../app_service/app_service_test_support.dart';
 
 void main() {
   testWidgets(
-    'memory library separates task selection from collection editing',
+    'workbench memory library maintains collections without task selection',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(720, 520));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -45,29 +45,68 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: MemoryLibraryDialog(client: AppServiceClient(transport)),
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: MemoryLibraryDialog(
+                client: AppServiceClient(transport),
+                embedded: true,
+              ),
+            ),
           ),
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('术语库独立于作品和任务。勾选的是本任务要使用的库；任务开始时会冻结版本快照。'),
-        findsOneWidget,
-      );
+      expect(find.text('集中维护跨任务复用的术语资产；任务使用的是开始制作时冻结的版本快照。'), findsOneWidget);
       expect(find.text('人物名'), findsWidgets);
       expect(find.text('スバル  →  昴'), findsOneWidget);
-      expect(find.text('用于本任务（0）'), findsOneWidget);
-
-      await tester.tap(find.byType(Checkbox).first);
-      await tester.pump();
-      expect(find.text('用于本任务（1）'), findsOneWidget);
+      expect(find.byType(Checkbox), findsNothing);
       expect(transport.calls.map((call) => call.method), [
         'memory.collections.list',
         'memory.collection.get',
       ]);
     },
   );
+
+  testWidgets('main task picker only selects reusable memory collections', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(720, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final transport = RecordingRpcTransport({
+      'memory.collections.list': {
+        'collections': [
+          {'id': 'characters', 'name': '人物名', 'revision': 2, 'entries': 1},
+        ],
+      },
+    });
+    var openedManager = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MemoryLibraryDialog(
+            client: AppServiceClient(transport),
+            selectedCollectionIds: const ['characters'],
+            selectionOnly: true,
+            onManageLibrary: () async => openedManager = true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('本任务使用的术语库'), findsOneWidget);
+    expect(find.text('管理术语库'), findsOneWidget);
+    expect(find.text('用于本任务（1）'), findsOneWidget);
+    expect(find.text('スバル  →  昴'), findsNothing);
+    expect(transport.calls.map((call) => call.method), [
+      'memory.collections.list',
+    ]);
+    await tester.tap(find.text('管理术语库'));
+    await tester.pump();
+    expect(openedManager, isTrue);
+  });
 
   testWidgets('candidate promotion previews before the persistent write', (
     tester,

@@ -25,7 +25,7 @@ extension AppWindowTypeLabel on AppWindowType {
     AppWindowType.translationSettings => '翻译模型设置',
     AppWindowType.asrSettings => '语音识别设置',
     AppWindowType.diagnostics => '诊断',
-    AppWindowType.taskProcessing => '任务处理',
+    AppWindowType.taskProcessing => '工作台',
   };
 
   static AppWindowType fromId(String? id) => switch (id) {
@@ -57,12 +57,14 @@ class AppWindowArgs {
   const AppWindowArgs({
     required this.type,
     this.taskId,
+    this.workspaceSection,
     this.parentBounds,
     this.visibleBounds,
   });
 
   final AppWindowType type;
   final String? taskId;
+  final String? workspaceSection;
   final Rect? parentBounds;
   final Rect? visibleBounds;
 
@@ -72,6 +74,7 @@ class AppWindowArgs {
       'type': type.id,
       if (normalizedTaskId != null && normalizedTaskId.isNotEmpty)
         'task_id': normalizedTaskId,
+      'workspace_section': ?_optionalString(workspaceSection),
       if (parentBounds != null) 'parent_bounds': _rectToJson(parentBounds!),
       if (visibleBounds != null) 'visible_bounds': _rectToJson(visibleBounds!),
     });
@@ -97,6 +100,9 @@ class AppWindowArgs {
         return AppWindowArgs(
           type: AppWindowTypeLabel.fromId(decoded['type'] as String?),
           taskId: _optionalString(decoded['task_id'] ?? decoded['taskId']),
+          workspaceSection: _optionalString(
+            decoded['workspace_section'] ?? decoded['workspaceSection'],
+          ),
           parentBounds: _rectFromJson(
             decoded['parent_bounds'] ?? decoded['parentBounds'],
           ),

@@ -87,7 +87,7 @@ class SystemDesktopTrayService
       tray.Menu(
         items: [
           tray.MenuItem(key: _showMainKey, label: '打开 TransVortex'),
-          tray.MenuItem(key: _openTasksKey, label: '任务处理'),
+          tray.MenuItem(key: _openTasksKey, label: '工作台'),
           tray.MenuItem.separator(),
           tray.MenuItem(label: presentation.statusLabel, disabled: true),
           tray.MenuItem.separator(),

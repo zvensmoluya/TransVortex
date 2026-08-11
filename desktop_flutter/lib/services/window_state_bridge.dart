@@ -95,6 +95,9 @@ class WindowStateBridge {
         final args = _asMap(call.arguments);
         final type = AppWindowTypeLabel.maybeFromId(args['type'] as String?);
         final taskId = _optionalString(args['task_id'] ?? args['taskId']);
+        final workspaceSection = _optionalString(
+          args['workspace_section'] ?? args['workspaceSection'],
+        );
         final opener = _toolWindowOpener;
         if (type == null || opener == null) {
           throw PlatformException(
@@ -102,8 +105,19 @@ class WindowStateBridge {
             message: 'Tool window opener is not attached',
           );
         }
-        await opener(AppWindowArgs(type: type, taskId: taskId));
-        return {'ok': true, 'type': type.id, 'task_id': ?taskId};
+        await opener(
+          AppWindowArgs(
+            type: type,
+            taskId: taskId,
+            workspaceSection: workspaceSection,
+          ),
+        );
+        return {
+          'ok': true,
+          'type': type.id,
+          'task_id': ?taskId,
+          'workspace_section': ?workspaceSection,
+        };
       default:
         throw PlatformException(
           code: 'unknown_method',
@@ -204,8 +218,16 @@ class WindowStateBridge {
     }
   }
 
-  Future<void> openToolWindow(AppWindowType type, {String? taskId}) async {
-    final args = AppWindowArgs(type: type, taskId: taskId);
+  Future<void> openToolWindow(
+    AppWindowType type, {
+    String? taskId,
+    String? workspaceSection,
+  }) async {
+    final args = AppWindowArgs(
+      type: type,
+      taskId: taskId,
+      workspaceSection: workspaceSection,
+    );
     final opener = _toolWindowOpener;
     if (opener != null) {
       await opener(args);
@@ -222,6 +244,8 @@ class WindowStateBridge {
       await channel.invokeMethod<Object?>('tool.open', {
         'type': args.type.id,
         if (args.taskId != null) 'task_id': args.taskId,
+        if (args.workspaceSection != null)
+          'workspace_section': args.workspaceSection,
       });
     } on WindowChannelException catch (error) {
       throw PlatformException(

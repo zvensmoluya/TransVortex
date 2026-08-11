@@ -19,6 +19,7 @@ import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
+import 'memory_library_dialog.dart';
 import 'result_review_workspace.dart';
 import 'title_bar.dart';
 
@@ -71,10 +72,13 @@ class _TaskProcessingClientTransport implements AppServiceTransport {
 
 enum _TaskFilter { all, active, needsAction, review, done, cancelled }
 
+enum _WorkbenchSection { tasks, terminology }
+
 class TaskProcessingWindow extends StatefulWidget {
   const TaskProcessingWindow({
     super.key,
     required this.taskId,
+    this.initialSection,
     required this.bridge,
     this.pathOpener,
     this.directoryProbe,
@@ -82,6 +86,7 @@ class TaskProcessingWindow extends StatefulWidget {
   });
 
   final String? taskId;
+  final String? initialSection;
   final WindowStateBridge bridge;
   final PathOpener? pathOpener;
   final DirectoryWriteProbe? directoryProbe;
@@ -114,6 +119,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   String? _reexportingTaskId;
   String? _cancellingTaskId;
   bool _checkingOutputDirectory = false;
+  late _WorkbenchSection _workbenchSection;
+  bool _terminologyVisited = false;
   String? _editingTaskId;
   bool _resultEditorDirty = false;
   bool _windowCloseAllowed = false;
@@ -157,6 +164,8 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
     _directoryProbe = widget.directoryProbe ?? SystemDirectoryWriteProbe();
     _selectedTaskId = widget.taskId?.trim();
     _editingTaskId = widget.taskId?.trim();
+    _workbenchSection = _workbenchSectionFromId(widget.initialSection);
+    _terminologyVisited = _workbenchSection == _WorkbenchSection.terminology;
     _taskSearchController.addListener(_handleTaskSearchChanged);
     _eventSearchController.addListener(_handleEventSearchChanged);
     if (widget.smoke == null) {
@@ -220,7 +229,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
         body: Column(
           children: [
             TitleBar(
-              title: '任务处理',
+              title: '工作台',
               status: _statusText(selected),
               canMaximize: true,
               onClose: () => unawaited(_requestWindowClose()),
@@ -228,62 +237,93 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(T.s24, T.s16, T.s24, T.s24),
-                child: _TaskProcessingBody(
-                  tasks: visibleTasks,
-                  totalTaskCount: listTasks.length,
-                  filter: _taskFilter,
-                  filterCounts: _taskFilterCounts(listTasks, searchQuery),
-                  searchController: _taskSearchController,
-                  selected: selected,
-                  events: events,
-                  eventSearchController: _eventSearchController,
-                  editingTaskId: editingTaskId == selected?.taskId
-                      ? editingTaskId
-                      : null,
-                  resultEditorDirty: _resultEditorDirty,
-                  bridge: widget.bridge,
-                  resultTransportOverride: _embeddedResultTransport,
-                  message: _message,
-                  error: _error,
-                  loadingTasks: _loadingTasks,
-                  loadingEvents: _loadingEvents,
-                  loadingMoreEvents: _loadingMoreEvents,
-                  eventsHasMore: selectedEventsPage?.hasMore == true,
-                  resuming: _resuming,
-                  retranslatingTaskId: _retranslatingTaskId,
-                  reexportingTaskId: _reexportingTaskId,
-                  cancellingTaskId: _cancellingTaskId,
-                  checkingOutputDirectory: _checkingOutputDirectory,
-                  onRefresh: _loadTasks,
-                  onFilterChanged: (filter) =>
-                      unawaited(_setTaskFilter(filter)),
-                  onClearSearch: _taskSearchController.clear,
-                  onSelectTask: (task) => unawaited(_selectTask(task)),
-                  onLoadMoreEvents: selected == null
-                      ? null
-                      : () => unawaited(_loadMoreEvents(selected.taskId)),
-                  onClearEventSearch: _eventSearchController.clear,
-                  onOpenResult: (task) => unawaited(_openResult(task)),
-                  onCloseEditor: () => unawaited(_leaveResultEditor()),
-                  onResultDirtyChanged: _handleResultDirtyChanged,
-                  onResultChanged: () => unawaited(_loadTasks()),
-                  onResume: (task) => unawaited(_resumeTask(task)),
-                  onRetranslate: (task) => unawaited(_retranslateTask(task)),
-                  onCancel: (task) => unawaited(_cancelTask(task)),
-                  onOpenFailureRecovery: (task) =>
-                      unawaited(_openFailureRecoverySettings(task)),
-                  onReexport: (task) => unawaited(
-                    _recoverTaskOutput(task, chooseDirectory: false),
-                  ),
-                  onChooseOutputDirectory: (task) => unawaited(
-                    _recoverTaskOutput(task, chooseDirectory: true),
-                  ),
-                  onOpenTaskDirectory: (task) =>
-                      unawaited(_openTaskDirectory(task)),
-                  onOpenOutputDirectory: (task) =>
-                      unawaited(_openOutputDirectory(task)),
-                  onCheckOutputDirectory: (task) =>
-                      unawaited(_checkOutputDirectory(task)),
+                child: Column(
+                  children: [
+                    _WorkbenchSectionNav(
+                      selected: _workbenchSection,
+                      onChanged: _selectWorkbenchSection,
+                    ),
+                    const SizedBox(height: T.s16),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _workbenchSection.index,
+                        children: [
+                          _TaskProcessingBody(
+                            tasks: visibleTasks,
+                            totalTaskCount: listTasks.length,
+                            filter: _taskFilter,
+                            filterCounts: _taskFilterCounts(
+                              listTasks,
+                              searchQuery,
+                            ),
+                            searchController: _taskSearchController,
+                            selected: selected,
+                            events: events,
+                            eventSearchController: _eventSearchController,
+                            editingTaskId: editingTaskId == selected?.taskId
+                                ? editingTaskId
+                                : null,
+                            resultEditorDirty: _resultEditorDirty,
+                            bridge: widget.bridge,
+                            resultTransportOverride: _embeddedResultTransport,
+                            message: _message,
+                            error: _error,
+                            loadingTasks: _loadingTasks,
+                            loadingEvents: _loadingEvents,
+                            loadingMoreEvents: _loadingMoreEvents,
+                            eventsHasMore: selectedEventsPage?.hasMore == true,
+                            resuming: _resuming,
+                            retranslatingTaskId: _retranslatingTaskId,
+                            reexportingTaskId: _reexportingTaskId,
+                            cancellingTaskId: _cancellingTaskId,
+                            checkingOutputDirectory: _checkingOutputDirectory,
+                            onRefresh: _loadTasks,
+                            onFilterChanged: (filter) =>
+                                unawaited(_setTaskFilter(filter)),
+                            onClearSearch: _taskSearchController.clear,
+                            onSelectTask: (task) =>
+                                unawaited(_selectTask(task)),
+                            onLoadMoreEvents: selected == null
+                                ? null
+                                : () => unawaited(
+                                    _loadMoreEvents(selected.taskId),
+                                  ),
+                            onClearEventSearch: _eventSearchController.clear,
+                            onOpenResult: (task) =>
+                                unawaited(_openResult(task)),
+                            onCloseEditor: () =>
+                                unawaited(_leaveResultEditor()),
+                            onResultDirtyChanged: _handleResultDirtyChanged,
+                            onResultChanged: () => unawaited(_loadTasks()),
+                            onResume: (task) => unawaited(_resumeTask(task)),
+                            onRetranslate: (task) =>
+                                unawaited(_retranslateTask(task)),
+                            onCancel: (task) => unawaited(_cancelTask(task)),
+                            onOpenFailureRecovery: (task) =>
+                                unawaited(_openFailureRecoverySettings(task)),
+                            onReexport: (task) => unawaited(
+                              _recoverTaskOutput(task, chooseDirectory: false),
+                            ),
+                            onChooseOutputDirectory: (task) => unawaited(
+                              _recoverTaskOutput(task, chooseDirectory: true),
+                            ),
+                            onOpenTaskDirectory: (task) =>
+                                unawaited(_openTaskDirectory(task)),
+                            onOpenOutputDirectory: (task) =>
+                                unawaited(_openOutputDirectory(task)),
+                            onCheckOutputDirectory: (task) =>
+                                unawaited(_checkOutputDirectory(task)),
+                          ),
+                          _terminologyVisited
+                              ? MemoryLibraryDialog(
+                                  client: _client,
+                                  embedded: true,
+                                )
+                              : const SizedBox.shrink(),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -294,12 +334,31 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
   }
 
   String _statusText(TaskSummary? selected) {
+    if (_workbenchSection == _WorkbenchSection.terminology) {
+      return '维护跨任务复用的术语资产';
+    }
     if (_loadingTasks) return '读取任务中';
     if (_resuming) return '继续任务中';
     if (_reexportingTaskId != null) return '重新导出中';
     if (_checkingOutputDirectory) return '检查结果目录中';
-    if (_error != null) return '任务处理暂不可用';
+    if (_error != null) return '工作台暂不可用';
     if (selected == null) return '任务片列';
     return '${taskStatusLabel(selected.status)} · 任务片列';
   }
+
+  void _selectWorkbenchSection(_WorkbenchSection section) {
+    if (_workbenchSection == section) return;
+    setState(() {
+      _workbenchSection = section;
+      if (section == _WorkbenchSection.terminology) {
+        _terminologyVisited = true;
+      }
+    });
+  }
 }
+
+_WorkbenchSection _workbenchSectionFromId(String? value) =>
+    switch (value?.trim().toLowerCase()) {
+      'terminology' || 'memory' => _WorkbenchSection.terminology,
+      _ => _WorkbenchSection.tasks,
+    };

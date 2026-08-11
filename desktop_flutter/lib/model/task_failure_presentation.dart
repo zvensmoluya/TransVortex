@@ -208,7 +208,7 @@ String _failureReason({
     case 'artifact_missing':
       return '任务中间文件不完整，可以从已有检查点继续重建。';
     case 'runtime_error':
-      return '任务运行失败，可以先重试；如果仍失败，请在任务处理中查看失败线索。';
+      return '任务运行失败，可以先重试；如果仍失败，请在工作台中查看失败线索。';
   }
 
   final candidate = hint.trim().isNotEmpty ? hint.trim() : error.trim();

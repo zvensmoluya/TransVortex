@@ -134,7 +134,7 @@ extension _MainScreenLifecycle on _MainScreenState {
       _trayHideAttempted = true;
       _trayHideError = '';
       if (!await _closeToolWindows()) {
-        _trayHideError = '任务处理或工具窗口尚未安全关闭';
+        _trayHideError = '工作台或工具窗口尚未安全关闭';
         return;
       }
       try {

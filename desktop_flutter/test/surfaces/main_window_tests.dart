@@ -68,7 +68,7 @@ void main() {
 
     expect(find.text('翻译模型设置'), findsOneWidget);
     expect(find.text('语音识别设置'), findsOneWidget);
-    expect(find.text('任务处理'), findsOneWidget);
+    expect(find.text('工作台'), findsOneWidget);
     expect(find.text('应用设置'), findsOneWidget);
     expect(find.text('全部设置'), findsNothing);
     expect(find.text('任务资料库位置'), findsNothing);

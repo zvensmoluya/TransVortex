@@ -1185,7 +1185,7 @@ void main() {
 
       expect(
         controller.view.failure?.reason,
-        '任务运行失败，可以先重试；如果仍失败，请在任务处理中查看失败线索。',
+        '任务运行失败，可以先重试；如果仍失败，请在工作台中查看失败线索。',
       );
       expect(controller.view.failure?.reason, isNot(contains('events.json')));
       expect(controller.view.failure?.reason, isNot(contains('stderr')));

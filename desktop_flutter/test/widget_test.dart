@@ -168,6 +168,15 @@ void main() {
     );
     expect(reviewArgs.type, AppWindowType.taskProcessing);
     expect(reviewArgs.taskId, 'tvx_review_123');
+    final terminologyArgs = AppWindowArgs.parse(
+      '{"type":"taskProcessing","workspace_section":"terminology"}',
+    );
+    expect(terminologyArgs.type, AppWindowType.taskProcessing);
+    expect(terminologyArgs.workspaceSection, 'terminology');
+    expect(
+      AppWindowArgs.parse(terminologyArgs.encode()).workspaceSection,
+      'terminology',
+    );
     final positionedArgs = AppWindowArgs.parse(
       '{"type":"translationSettings","parent_bounds":{"x":40,"y":60,"width":720,"height":520},"visible_bounds":{"x":0,"y":0,"width":1920,"height":1080}}',
     );

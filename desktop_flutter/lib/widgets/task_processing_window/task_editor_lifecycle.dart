@@ -43,7 +43,7 @@ extension _TaskProcessingEditorLifecycle on _TaskProcessingWindowState {
           ],
         ),
         content: Text(
-          closingWindow ? '字幕修改尚未保存，关闭任务处理后这些修改会丢失。' : '字幕修改尚未保存，离开后这些修改会丢失。',
+          closingWindow ? '字幕修改尚未保存，关闭工作台后这些修改会丢失。' : '字幕修改尚未保存，离开后这些修改会丢失。',
           style: T.tBody,
         ),
         actions: [
@@ -126,7 +126,7 @@ extension _TaskProcessingEditorLifecycle on _TaskProcessingWindowState {
     } on Object catch (error) {
       _windowCloseAllowed = false;
       if (mounted) {
-        _setTaskProcessingState(() => _error = '关闭任务处理失败：$error');
+        _setTaskProcessingState(() => _error = '关闭工作台失败：$error');
       }
     } finally {
       _windowCloseRequestInProgress = false;

@@ -484,7 +484,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
       AppWindowType.translationSettings => '翻译模型设置',
       AppWindowType.asrSettings => '语音识别设置',
       AppWindowType.diagnostics => '诊断',
-      AppWindowType.taskProcessing => '任务处理',
+      AppWindowType.taskProcessing => '工作台',
       AppWindowType.main => 'TransVortex',
     };
     final status = switch (widget.type) {
@@ -780,7 +780,7 @@ String _diagnosticRepairLabel(AppWindowType type) {
     AppWindowType.translationSettings => '去翻译模型设置',
     AppWindowType.asrSettings => '去语音识别设置',
     AppWindowType.diagnostics => '刷新诊断',
-    AppWindowType.taskProcessing => '查看任务处理',
+    AppWindowType.taskProcessing => '打开工作台',
     AppWindowType.main => '回到主窗口',
   };
 }
