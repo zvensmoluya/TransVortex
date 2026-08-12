@@ -1172,13 +1172,16 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
       }
       return;
     }
+    final view = _controller.view;
     final selected = await showDialog<List<String>>(
       context: context,
       barrierDismissible: false,
       builder: (context) => MemoryLibraryDialog(
         client: client,
-        selectedCollectionIds: _controller.view.memoryCollectionIds,
+        selectedCollectionIds: view.memoryCollectionIds,
         selectionOnly: true,
+        suggestedSourceLanguage: view.sourceLang,
+        suggestedTargetLanguage: view.targetLang,
         onManageLibrary: () => _openToolWindow(
           AppWindowType.taskProcessing,
           workspaceSection: 'terminology',

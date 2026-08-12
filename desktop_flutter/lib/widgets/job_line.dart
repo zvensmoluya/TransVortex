@@ -157,8 +157,8 @@ class JobLine extends StatelessWidget {
               key: const ValueKey('job-memory-collections'),
               label: collectionLabel,
               tooltip: collectionCount == 0
-                  ? '选择本任务要使用的持久术语库。任务开始后会冻结快照，不会被后续修改影响。'
-                  : '本任务将使用所选术语库的快照；点击可选择或维护术语库。',
+                  ? '选择本任务要使用的术语库。任务开始后会固定当前版本，之后的修改只影响新任务。'
+                  : '本任务会使用所选术语库的当前版本；点击可选择或维护术语库。',
               onPick: onPickMemoryCollections,
             ),
           ],

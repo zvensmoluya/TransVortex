@@ -252,7 +252,10 @@ void main() {
 
     await tester.tap(find.text('术语库'));
     await tester.pumpAndSettle();
-    expect(find.text('术语库是一组可跨任务复用的术语；任务使用的是开始制作时冻结的版本快照。'), findsOneWidget);
+    expect(
+      find.text('术语库是一组可跨任务复用的术语；任务开始后会固定当前版本，之后的修改只影响新任务。'),
+      findsOneWidget,
+    );
     expect(find.text('スバル  →  昴'), findsOneWidget);
     await tester.tap(find.text('任务与字幕'));
     await tester.pump();

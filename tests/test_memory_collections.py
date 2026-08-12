@@ -74,6 +74,36 @@ def test_collection_crud_preserves_entry_timestamp_and_revision(tmp_path: Path) 
     assert caught.value.code == "memory_collection_revision_conflict"
 
 
+def test_source_only_hint_entry_is_explicitly_allowed(tmp_path: Path) -> None:
+    store = MemoryCollectionStore(tmp_path / "collections")
+    collection = store.create(name="识别提示", collection_id="hints")
+
+    updated, entry = store.upsert_entry(
+        collection.id,
+        {
+            "source": "スバル",
+            "status": "proposed",
+            "constraint": "hint",
+            "memory_type": "concept_hint",
+        },
+        expected_revision=collection.revision,
+    )
+
+    assert updated.revision == 2
+    assert entry.source == "スバル"
+    assert entry.target == ""
+    assert entry.constraint == "hint"
+    assert entry.memory_type == "concept_hint"
+
+    with pytest.raises(MemoryCollectionError) as caught:
+        store.upsert_entry(
+            collection.id,
+            {"source": "没有内容"},
+            expected_revision=updated.revision,
+        )
+    assert caught.value.code == "memory_entry_invalid"
+
+
 def test_selected_collection_snapshot_is_ordered_and_frozen(tmp_path: Path) -> None:
     collection_store = MemoryCollectionStore(tmp_path / "collections")
     first = collection_store.create(name="优先", collection_id="first")

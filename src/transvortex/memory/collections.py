@@ -96,16 +96,20 @@ def _entry_id(value: str = "") -> str:
 
 
 def _entry_has_value(entry: MemoryEntry) -> bool:
-    return bool(
-        entry.source.strip()
-        and (
-            entry.target.strip()
-            or entry.notes.strip()
-            or entry.aliases
-            or entry.alias_details
-            or entry.target_variants
-        )
-    )
+    if not entry.source.strip():
+        return False
+    if (
+        entry.target.strip()
+        or entry.notes.strip()
+        or entry.aliases
+        or entry.alias_details
+        or entry.target_variants
+    ):
+        return True
+    # A source-only entry is useful when the user explicitly marks it as a
+    # recognition/context hint.  Keep ordinary empty rows rejected so an
+    # accidental blank translation cannot become a persistent term.
+    return entry.constraint == "hint" or entry.memory_type == "concept_hint"
 
 
 def _entry_from_payload(
@@ -135,7 +139,8 @@ def _entry_from_payload(
     if not _entry_has_value(entry):
         raise MemoryCollectionError(
             "memory_entry_invalid",
-            "memory entry requires source and a target, note, alias, or target variant",
+            "memory entry requires source and a target, note, alias, or target variant; "
+            "'hint' entries may use source only",
         )
     return entry
 
@@ -166,7 +171,8 @@ def collection_from_payload(payload: dict[str, Any]) -> MemoryCollection:
         if not entry.id or not _entry_has_value(entry):
             raise MemoryCollectionError(
                 "memory_entry_invalid",
-                "stored memory entry requires an id, source, and a target, note, alias, or target variant",
+                "stored memory entry requires an id, source, and a target, note, alias, or target variant; "
+                "'hint' entries may use source only",
             )
         if entry.id in seen_ids:
             raise MemoryCollectionError(
