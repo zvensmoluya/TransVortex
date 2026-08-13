@@ -91,6 +91,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   final _endpoint = TextEditingController();
   final _device = TextEditingController(text: 'auto');
   final _externalModelPath = TextEditingController();
+  final _funasrExecutable = TextEditingController();
+  final _funasrArguments = TextEditingController();
+  final _funasrWorkingDirectory = TextEditingController();
+  final _funasrHealthUrl = TextEditingController();
   final GlobalKey _renderKey = GlobalKey(debugLabel: 'settings-smoke-render');
   LocalServiceController? _smokeService;
   LocalServiceController? _ownedFallbackService;
@@ -121,6 +125,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _loading = false;
   bool _savingAsr = false;
   bool _testingAsr = false;
+  bool _managingFunasr = false;
   bool _checkingOpenRouterUsage = false;
   bool _copyingAgentHandoff = false;
   bool _discoveringAsrModels = false;
@@ -198,6 +203,10 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     _endpoint.dispose();
     _device.dispose();
     _externalModelPath.dispose();
+    _funasrExecutable.dispose();
+    _funasrArguments.dispose();
+    _funasrWorkingDirectory.dispose();
+    _funasrHealthUrl.dispose();
     _asrOperationController
       ..removeListener(_onAsrOperationChanged)
       ..dispose();

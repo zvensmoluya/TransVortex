@@ -171,6 +171,10 @@ extension _AsrSettingsSurface on _SettingsWindowState {
           readiness: provider?.readiness,
           draftDirty: _asrDraftDirty,
         ),
+        if (kind == 'local_server' && protocol == 'funasr_openai') ...[
+          const SizedBox(height: T.s8),
+          _funasrLauncherPanel(),
+        ],
         if (!_asrDraftDirty &&
             provider?.policyResolution.isNotEmpty == true) ...[
           const SizedBox(height: T.s8),
@@ -424,6 +428,227 @@ extension _AsrSettingsSurface on _SettingsWindowState {
         ],
       ],
     );
+  }
+
+  Widget _funasrLauncherPanel() {
+    final status = _snapshot?.funasrLauncher ?? const <String, Object?>{};
+    final configured = status['configured'] == true;
+    final running = '${status['state'] ?? ''}' == 'running';
+    final stdoutLog = '${status['stdout_log'] ?? ''}'.trim();
+    final stderrLog = '${status['stderr_log'] ?? ''}'.trim();
+    final lastError = '${status['last_error'] ?? ''}'.trim();
+    return Container(
+      padding: const EdgeInsets.all(T.s12),
+      decoration: BoxDecoration(
+        color: T.surface,
+        border: Border.all(color: T.line),
+        borderRadius: BorderRadius.circular(T.rMd),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('已部署服务点火器', style: T.tSection),
+          const SizedBox(height: T.s4),
+          Text(
+            '只启动已由你或 Agent 验证的环境；不会下载、安装、升级或诊断 FunASR。每行一个参数，按原顺序传入，不执行命令字符串。',
+            style: T.tCaption.copyWith(color: T.muted),
+          ),
+          const SizedBox(height: T.s12),
+          Input(
+            label: '可执行文件（绝对路径）',
+            controller: _funasrExecutable,
+            hintText: r'C:\\path\\to\\python.exe 或 funasr-server.exe',
+          ),
+          const SizedBox(height: T.s8),
+          Text('启动参数（每行一个）', style: T.tCaption),
+          const SizedBox(height: T.s4),
+          TextField(
+            controller: _funasrArguments,
+            minLines: 2,
+            maxLines: 5,
+            style: T.tBody,
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: T.surface,
+              hintText: '--model\nsensevoice\n--device\ncpu',
+              hintStyle: T.tCaption,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(T.rMd),
+                borderSide: const BorderSide(color: T.line),
+              ),
+            ),
+          ),
+          const SizedBox(height: T.s8),
+          Row(
+            children: [
+              Expanded(
+                child: Input(
+                  label: '工作目录（可留空）',
+                  controller: _funasrWorkingDirectory,
+                ),
+              ),
+              const SizedBox(width: T.s12),
+              Expanded(
+                child: Input(
+                  label: '健康检查地址',
+                  controller: _funasrHealthUrl,
+                  hintText: 'http://127.0.0.1:8899/health',
+                ),
+              ),
+            ],
+          ),
+          if (lastError.isNotEmpty) ...[
+            const SizedBox(height: T.s8),
+            Text(lastError, style: T.tCaption.copyWith(color: T.danger)),
+          ],
+          const SizedBox(height: T.s12),
+          Wrap(
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              ActionButton(
+                label: _managingFunasr
+                    ? '正在等待就绪'
+                    : running
+                    ? '正在运行'
+                    : configured
+                    ? '启动并等待就绪'
+                    : '保存启动项',
+                strong: true,
+                onTap: _managingFunasr
+                    ? null
+                    : running
+                    ? null
+                    : _saveOrStartFunasrLauncher,
+              ),
+              if (configured && !running)
+                ActionButton(
+                  label: '保存并启动',
+                  onTap: _managingFunasr ? null : _saveAndStartFunasrLauncher,
+                ),
+              if (running)
+                ActionButton(
+                  label: '停止服务',
+                  onTap: _managingFunasr ? null : _stopFunasrLauncher,
+                ),
+              if (stdoutLog.isNotEmpty || stderrLog.isNotEmpty)
+                ActionButton(
+                  label: '打开日志',
+                  onTap: () => _openFunasrLog(
+                    stderrLog.isNotEmpty ? stderrLog : stdoutLog,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, Object?> _funasrLauncherDraft() => {
+    'executable': _funasrExecutable.text.trim(),
+    'arguments': _funasrArguments.text
+        .split(RegExp(r'\r?\n'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false),
+    'working_directory': _funasrWorkingDirectory.text.trim(),
+    'health_url': _funasrHealthUrl.text.trim(),
+    'stop_on_service_exit': true,
+  };
+
+  Future<void> _saveOrStartFunasrLauncher() async {
+    final configured = (_snapshot?.funasrLauncher['configured'] == true);
+    if (configured) {
+      await _startFunasrLauncher();
+      return;
+    }
+    await _saveFunasrLauncher(start: false);
+  }
+
+  Future<void> _saveAndStartFunasrLauncher() =>
+      _saveFunasrLauncher(start: true);
+
+  Future<void> _saveFunasrLauncher({required bool start}) async {
+    _setSettingsState(() {
+      _managingFunasr = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.saveFunasrLauncher(_funasrLauncherDraft());
+      if (start) {
+        await _client.startFunasrLauncher();
+      }
+      if (!mounted) {
+        return;
+      }
+      _setSettingsState(
+        () => _message = start ? 'FunASR 已启动并通过健康检查。' : '启动项已保存。',
+      );
+      await _loadConfig(preserveAsrDraft: true, silent: true);
+    } on Object catch (error) {
+      if (mounted) {
+        _setSettingsState(() => _error = _friendlySettingsError(error));
+      }
+    } finally {
+      if (mounted) {
+        _setSettingsState(() => _managingFunasr = false);
+      }
+    }
+  }
+
+  Future<void> _startFunasrLauncher() async {
+    _setSettingsState(() {
+      _managingFunasr = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await _client.startFunasrLauncher();
+      if (mounted) {
+        _setSettingsState(() => _message = 'FunASR 已启动并通过健康检查。');
+      }
+      await _loadConfig(preserveAsrDraft: true, silent: true);
+    } on Object catch (error) {
+      if (mounted) {
+        _setSettingsState(() => _error = _friendlySettingsError(error));
+      }
+    } finally {
+      if (mounted) {
+        _setSettingsState(() => _managingFunasr = false);
+      }
+    }
+  }
+
+  Future<void> _stopFunasrLauncher() async {
+    _setSettingsState(() => _managingFunasr = true);
+    try {
+      await _client.stopFunasrLauncher();
+      if (mounted) {
+        _setSettingsState(() => _message = 'FunASR 服务已停止。');
+      }
+      await _loadConfig(preserveAsrDraft: true, silent: true);
+    } on Object catch (error) {
+      if (mounted) {
+        _setSettingsState(() => _error = _friendlySettingsError(error));
+      }
+    } finally {
+      if (mounted) {
+        _setSettingsState(() => _managingFunasr = false);
+      }
+    }
+  }
+
+  Future<void> _openFunasrLog(String path) async {
+    try {
+      await _pathOpener.revealFile(path);
+    } on Object catch (error) {
+      if (mounted) {
+        _setSettingsState(() => _error = _friendlySettingsError(error));
+      }
+    }
   }
 
   Widget _localWhisperSettings(
@@ -1148,6 +1373,21 @@ extension _AsrSettingsSurface on _SettingsWindowState {
         : 'auto';
     _localComputeType = '${local['compute_type'] ?? 'auto'}'.trim();
     if (_localComputeType.isEmpty) _localComputeType = 'auto';
+    final launcher = _snapshot?.funasrLauncher ?? const <String, Object?>{};
+    final launcherConfig = _stringMap(launcher['config']);
+    _funasrExecutable.text = '${launcherConfig['executable'] ?? ''}';
+    final launcherArgs = _objectList(
+      launcherConfig['arguments'],
+    ).map((item) => '$item').join('\n');
+    _funasrArguments.text = launcherArgs;
+    _funasrWorkingDirectory.text =
+        '${launcherConfig['working_directory'] ?? ''}';
+    final savedHealthUrl = '${launcherConfig['health_url'] ?? ''}'.trim();
+    _funasrHealthUrl.text = savedHealthUrl.isNotEmpty
+        ? savedHealthUrl
+        : _baseUrl.text.isEmpty
+        ? ''
+        : '${_baseUrl.text}/health';
     if (_externalModelPath.text.isEmpty && runtimeSource == 'external') {
       final environmentId = '${runtime['id'] ?? ''}';
       final savedEnvironment = _snapshot?.asrEnvironments.firstWhere(

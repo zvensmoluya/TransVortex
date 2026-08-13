@@ -249,6 +249,26 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> funasrLauncherStatus() {
+    return call('funasr.launcher.status').then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> saveFunasrLauncher(
+    Map<String, Object?> launcher,
+  ) {
+    return call('funasr.launcher.save', {
+      'launcher': launcher,
+    }).then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> startFunasrLauncher() {
+    return call('funasr.launcher.start').then(_stringMap);
+  }
+
+  Future<Map<String, Object?>> stopFunasrLauncher() {
+    return call('funasr.launcher.stop').then(_stringMap);
+  }
+
   Future<AsrOperationStatus> asrSetupStart(
     String modelId, {
     bool activateOnComplete = false,

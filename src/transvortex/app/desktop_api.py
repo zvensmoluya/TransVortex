@@ -78,6 +78,7 @@ from .asr_runtime import (
     set_registered_model_label,
 )
 from .asr_testing import run_asr_connection_test
+from .funasr_launcher import FunAsrLauncher, FunAsrLauncherError
 from .config import _read_yaml, load_app_config, resolve_providers_file
 from .credentials import (
     auth_file_path,
@@ -117,6 +118,7 @@ SERVICE_CAPABILITIES = [
     "asr_accelerator_probe",
     "asr_resource_activation",
     "asr_environment_probe",
+    "funasr_launcher",
     "agent_entry",
     "agent_client",
     "agent_handoff",
@@ -156,6 +158,7 @@ class DesktopApi:
             root_dir=root_dir,
             persist_install_locations=persist_install_locations,
         )
+        self._funasr_launcher = FunAsrLauncher(root_dir=root_dir)
         self.shutdown_requested = False
 
     def dispatch(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -197,6 +200,10 @@ class DesktopApi:
             "asr.status": self.asr_status,
             "asr.provider.test": self.asr_provider_test,
             "asr.provider.usage": self.asr_provider_usage,
+            "funasr.launcher.status": self.funasr_launcher_status,
+            "funasr.launcher.save": self.funasr_launcher_save,
+            "funasr.launcher.start": self.funasr_launcher_start,
+            "funasr.launcher.stop": self.funasr_launcher_stop,
             "asr.setup.start": self.asr_setup_start,
             "asr.storage.set": self.asr_storage_set,
             "asr.component.install": self.asr_component_install,
@@ -269,9 +276,14 @@ class DesktopApi:
     def service_shutdown(self, _params: dict[str, Any]) -> dict[str, Any]:
         self.shutdown_requested = True
         self._asr_operation_manager.cancel_all(wait_seconds=5.0)
+        self._funasr_launcher.close()
         if self._shutdown_callback is not None:
             self._shutdown_callback()
         return {"ok": True, "shutdown": "requested"}
+
+    def close(self) -> None:
+        self._asr_operation_manager.cancel_all(wait_seconds=5.0)
+        self._funasr_launcher.close()
 
     def agent_entry_get(self, _params: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -336,6 +348,7 @@ class DesktopApi:
                 else []
             ),
             "environment": doctor_report(root_dir=self.root_dir, providers_file=self.providers_file),
+            "funasr_launcher": self._funasr_launcher.status(),
             "config_error": config_error,
         }
 
@@ -565,6 +578,27 @@ class DesktopApi:
             root_dir=self.root_dir,
             source_lang=_optional_text(params, "source_lang", "sourceLang") or "en",
         )
+
+    def funasr_launcher_status(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return self._funasr_launcher.status()
+
+    def funasr_launcher_save(self, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._funasr_launcher.save_config(_dict_param(params, "launcher", "config"))
+        except FunAsrLauncherError as exc:
+            raise DesktopApiError("funasr_launcher_invalid", str(exc)) from exc
+
+    def funasr_launcher_start(self, params: dict[str, Any]) -> dict[str, Any]:
+        timeout = _optional_int(params, "timeout_seconds", "timeoutSeconds", default=90)
+        if timeout < 1 or timeout > 300:
+            raise DesktopApiError("funasr_launcher_invalid", "FunASR start timeout must be between 1 and 300 seconds")
+        try:
+            return self._funasr_launcher.start(timeout_seconds=float(timeout))
+        except FunAsrLauncherError as exc:
+            raise DesktopApiError("funasr_launcher_start_failed", str(exc)) from exc
+
+    def funasr_launcher_stop(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return self._funasr_launcher.stop()
 
     def asr_provider_usage(self, params: dict[str, Any]) -> dict[str, Any]:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)

@@ -165,7 +165,7 @@ API key 保存在当前用户的凭据文件中，Provider 配置只保存凭据
 | 方式 | 音频去向 | 开始前需要 |
 | --- | --- | --- |
 | 本机 Whisper | 留在本机 | 下载运行组件和模型，或验证已有兼容模型 |
-| FunASR | 发送到用户自行运行的本机服务 | 本机已有兼容的 OpenAI-style FunASR 服务 |
+| FunASR | 发送到用户自行运行，或由点火器启动的本机服务 | 本机已有兼容的 OpenAI-style FunASR 服务 |
 | OpenAI Whisper | 上传到 OpenAI Transcriptions | OpenAI API key 和可用账户 |
 | OpenRouter | 上传到 OpenRouter | OpenRouter API key、受支持模型和可用额度 |
 
@@ -187,14 +187,25 @@ API key 保存在当前用户的凭据文件中，Provider 配置只保存凭据
 
 ### 6.2 FunASR
 
-TransVortex 只连接 FunASR 服务，不负责安装模型、创建 Python 环境或启动服务。
+TransVortex 不负责安装 FunASR、创建 Python 环境、下载模型、处理 CUDA 兼容问题或提供 FunASR 技术支持。默认方式仍是连接用户自行运行的本机服务。
 
-1. 先在本机自行启动兼容的 FunASR OpenAI-style transcription 服务。
+1. 先在本机自行启动兼容的 FunASR OpenAI-style transcription 服务；若已经保存经验证的启动项，也可以使用下方点火器启动。
 2. 在“语音识别设置”选择“FunASR”。
 3. 填写本地服务地址和服务实际使用的模型 ID。
 4. 保存并设为默认，然后执行“测试连接”。
 
 当前产品要求使用本机回环地址。服务自己的模型、CUDA、进程生命周期、VAD 和时间戳行为由服务维护。连接测试会上传一段最小音频到该本机服务。
+
+#### 已部署服务的一键点火
+
+如果这台电脑的 FunASR 已经由你或 Agent 部署并验证可用，可以在 FunASR 设置页使用“已部署服务点火器”。这不是安装器：它只保存并执行一条已验证的启动配方，然后等待本机健康检查成功。
+
+1. 填写实际的可执行文件绝对路径，例如该环境中的 Python 或已安装的 `funasr-server` 可执行文件。
+2. 将启动参数逐行填写；每一行都是一个独立参数，应用不会解析或执行 PowerShell / CMD 命令字符串。
+3. 填写可选工作目录，以及该服务实际支持的本机健康检查地址（通常为 `http://127.0.0.1:8899/health`）。
+4. 先选择“保存启动项”，随后使用“启动并等待就绪”；成功后再进行“测试连接”。
+
+点火器只接受 `localhost`、`127.0.0.1` 或 `::1` 的 HTTP 健康检查地址。启动后的标准输出和错误输出写入 TransVortex 配置目录下的 `Logs/FunASR`，可从界面直接打开。停止服务会结束该点火器启动的进程树；默认在 TransVortex Local Service 退出时也会停止该服务。
 
 ### 6.3 OpenAI Whisper
 
@@ -384,7 +395,7 @@ ASS、VTT 和 LRC 当前是输出格式，不是可用字幕输入。文件选�
 
 ### FunASR 无法连接
 
-确认 FunASR 服务已经由用户在本机启动，地址使用回环主机和正确端口，模型 ID 与服务一致，并且 `/v1/audio/transcriptions` 兼容接口可用。TransVortex 不会替用户启动或重启 FunASR。
+确认 FunASR 服务已经在本机运行，地址使用回环主机和正确端口，模型 ID 与服务一致，并且 `/v1/audio/transcriptions` 兼容接口可用。若保存过点火器启动项，可使用“启动并等待就绪”或查看其错误日志；否则需由用户或 Agent 启动和修复该服务。
 
 ### OpenAI 或 OpenRouter 识别不能设为默认
 

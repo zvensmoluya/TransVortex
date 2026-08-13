@@ -79,6 +79,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         serve(service, root_dir=root)
     finally:
+        service.close()
         pump.stop()
         pump.join(timeout=3.0)
 

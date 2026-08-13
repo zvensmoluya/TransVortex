@@ -113,6 +113,8 @@ class DesktopSnapshot {
 
   Map<String, Object?> get asrLocal => _stringMap(config['asr_local']);
 
+  Map<String, Object?> get funasrLauncher => _stringMap(raw['funasr_launcher']);
+
   AsrStorageOption get asrStorage =>
       AsrStorageOption.fromJson(asrLocal['storage']);
 
