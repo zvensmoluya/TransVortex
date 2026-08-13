@@ -261,6 +261,10 @@ class AppServiceClient {
     }).then(_stringMap);
   }
 
+  Future<Map<String, Object?>> deleteFunasrLauncher() {
+    return call('funasr.launcher.delete').then(_stringMap);
+  }
+
   Future<Map<String, Object?>> startFunasrLauncher() {
     return call('funasr.launcher.start').then(_stringMap);
   }

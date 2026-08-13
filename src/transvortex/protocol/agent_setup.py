@@ -36,14 +36,14 @@ from ..app.asr_runtime import (
 )
 from ..app.config import load_app_config, resolve_providers_file
 from ..app.credentials import resolve_provider_credential
-from ..app.agent_entry import ASR_ENVIRONMENT_SCOPES, cli_argv_prefix
+from ..app.agent_entry import ASR_SETUP_SCOPES, cli_argv_prefix
 from ..utils import read_json
 from ..utils import utc_now_iso
 
 
 AGENT_SETUP_SCHEMA_VERSION = 2
 AGENT_SETUP_CONTRACT = "transvortex.agent_setup"
-SETUP_SCOPES = ASR_ENVIRONMENT_SCOPES
+SETUP_SCOPES = ASR_SETUP_SCOPES
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _PROVIDER_TEST_MAX_AGE_SECONDS = 24 * 60 * 60
 

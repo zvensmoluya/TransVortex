@@ -35,6 +35,8 @@ TransVortex 管理自己下载的资源。外部资源只保存路径、指纹�
 
 `local_service` 用于 loopback 地址上的 FunASR 或兼容服务。模型、Python、CUDA 和服务生命周期都属于该服务，不混入 TransVortex local worker 的资源契约。使用服务自己的协议和模型标识，并用广告的 ASR `engine-test` 验证。
 
+如果 FunASR 已经由用户部署并验证可启动，Agent 可以使用能力契约广告的 `funasr-launcher-save` 保存外部启动配方。该配方只让桌面 Local Service 代为启动、等待健康、记录日志和停止进程，不改变模型、Python、CUDA 和技术支持的外部所有权。
+
 ## Remote Provider
 
 `remote_provider` 用于用户选择的托管转录端点。Engine YAML 只保存 endpoint、model、`binding_id` 和 `secret_ref` 等非敏感配置，凭据由统一 resolver 取得；`env_fallback` 只允许 canonical 官方 Endpoint 显式声明。当前 Engine probe 会发送生成的短音频，并可能产生服务费用。

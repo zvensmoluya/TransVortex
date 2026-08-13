@@ -4,6 +4,8 @@
 
 ## 1. 读取当前契约
 
+若桌面交接范围是 `funasr_launcher`，先读取入口和 `agent-info`，然后直接按第 4 节的 FunASR 点火器边界执行；该范围不属于 Whisper 资源 `setup-plan` / `setup-verify` 的 scope，不要把它替换成 `full`。
+
 从稳定入口读取 `current.json`，执行其中的 `capabilities_argv`，再执行能力响应广告的 `asr setup-plan --scope <scope> --json`。`scope` 必须使用本次桌面交接的值。命令使用返回的 `argv` 数组，不依赖 `PATH`。
 
 `setup-plan` 本身只读取状态。重点字段是：
@@ -27,6 +29,7 @@
 - `prepare_model`：准备模型并接入；
 - `prepare_accelerator`：准备 NVIDIA GPU 加速并接入；
 - `register`：接入用户已经准备好的资源，不重新下载；
+- `funasr_launcher`：只为已经部署并能正常启动的 FunASR 保存经验证的点火配方；
 - `full`：把本地 ASR 准备到严格验证通过。
 
 Agent 可以使用自己的本机工具、下载能力和环境知识完成范围内的工作。`setup-plan` 提供 TransVortex 的事实、兼容目标和产品操作，不提供固定的硬件推荐表，也不限制 Agent 如何取得外部模型或 NVIDIA 用户态资源。当前配置中的模型或 CPU/GPU 偏好不能被当作任务目标；Agent 应结合主机与用户任务自行推荐并选择。
@@ -62,6 +65,8 @@ GPU 加速也有两种独立来源：
 ## 4. 其他执行模式
 
 `local_service` 和 `remote_provider` 不需要本地 runtime、模型或 CUDA 资源。按能力响应运行对应的 `engine-test`，不要把翻译服务的 `probe-provider` 当成 ASR Engine 验证。具体边界见 [`../references/provider-modes.md`](../references/provider-modes.md)。
+
+对于 `funasr_launcher`，只处理已经由用户部署并能正常启动的 FunASR。验证实际可执行文件、参数数组、工作目录、loopback 服务地址与健康地址，然后使用能力响应广告的 `asr funasr-launcher-save` 保存配方，并用 `asr funasr-launcher-status --json` 复核。不要执行 Whisper 资源准备，也不要在没有单独用户授权时安装、修复或升级 FunASR 环境。点火器的进程生命周期由桌面端 Local Service 管理。
 
 ## 5. 由 TransVortex 收口验证
 

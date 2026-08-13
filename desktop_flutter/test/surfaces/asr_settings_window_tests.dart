@@ -13,6 +13,44 @@ import 'package:transvortex_desktop_flutter/widgets/settings_window.dart';
 import '../support/widget_test_support.dart';
 
 void main() {
+  Map<String, Object?> funasrProvider() => {
+    'name': 'FunASR',
+    'kind': 'local_server',
+    'protocol': 'funasr_openai',
+    'model': 'sensevoice',
+    'base_url': 'http://127.0.0.1:8899',
+    'endpoint': '/v1/audio/transcriptions',
+    'readiness': {
+      'state': 'checking',
+      'code': 'local_service_unchecked',
+      'can_run': false,
+    },
+  };
+
+  Map<String, Object?> funasrLauncher({
+    String state = 'stopped',
+    bool owned = false,
+    bool healthy = false,
+  }) => {
+    'configured': true,
+    'config': {
+      'executable': r'C:\FunASR\python.exe',
+      'arguments': ['-m', 'funasr_server', '--port', '8899'],
+      'working_directory': r'C:\FunASR',
+      'health_url': 'http://127.0.0.1:8899/health',
+      'stop_on_service_exit': true,
+    },
+    'state': state,
+    'healthy': healthy,
+    'owned': owned,
+    'can_start': state == 'stopped' || state == 'failed',
+    'can_stop': owned,
+    if (owned) 'pid': 4321,
+    'stdout_log': r'C:\TransVortex\Logs\FunASR\stdout.log',
+    'stderr_log': r'C:\TransVortex\Logs\FunASR\stderr.log',
+    'last_error': '',
+  };
+
   testWidgets('ASR settings window saves default provider through bridge', (
     tester,
   ) async {
@@ -201,6 +239,96 @@ void main() {
     expect(clipboardText, 'inspect this machine');
     expectNoFlutterException();
   });
+
+  testWidgets('FunASR launcher starts asynchronously and reaches ready state', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = WindowStateStore();
+    final bridge = WindowStateBridge.main(store);
+    var statusCalls = 0;
+    bridge.attachServiceCaller((method, params) async {
+      if (method == 'desktop.snapshot') {
+        return desktopSnapshotFixture(
+          activeAsrProvider: 'funasr',
+          additionalAsrProviders: {'funasr': funasrProvider()},
+          funasrLauncher: funasrLauncher(),
+        ).raw;
+      }
+      if (method == 'funasr.launcher.start') {
+        return funasrLauncher(state: 'starting', owned: true);
+      }
+      if (method == 'funasr.launcher.status') {
+        statusCalls += 1;
+        return funasrLauncher(state: 'ready', owned: true, healthy: true);
+      }
+      throw RpcRemoteException('method_not_found', method);
+    });
+
+    await tester.pumpWidget(
+      TransVortexApp(
+        windowType: AppWindowType.asrSettings,
+        store: store,
+        bridge: bridge,
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const ValueKey('funasr-launcher-panel')), findsOneWidget);
+    expect(find.text('状态：已停止'), findsOneWidget);
+
+    await tester.tap(find.text('启动并等待就绪'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('正在启动'), findsWidgets);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(statusCalls, greaterThanOrEqualTo(1));
+    expect(find.textContaining('已就绪（由 TransVortex 启动）'), findsOneWidget);
+    expect(find.text('停止服务'), findsOneWidget);
+    expectNoFlutterException();
+  });
+
+  testWidgets(
+    'FunASR launcher does not take ownership of an external service',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final store = WindowStateStore();
+      final bridge = WindowStateBridge.main(store);
+      bridge.attachServiceCaller((method, params) async {
+        if (method == 'desktop.snapshot') {
+          return desktopSnapshotFixture(
+            activeAsrProvider: 'funasr',
+            additionalAsrProviders: {'funasr': funasrProvider()},
+            funasrLauncher: funasrLauncher(state: 'external', healthy: true),
+          ).raw;
+        }
+        if (method == 'funasr.launcher.status') {
+          return funasrLauncher(state: 'external', healthy: true);
+        }
+        throw RpcRemoteException('method_not_found', method);
+      });
+
+      await tester.pumpWidget(
+        TransVortexApp(
+          windowType: AppWindowType.asrSettings,
+          store: store,
+          bridge: bridge,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(find.text('状态：外部服务已就绪'), findsOneWidget);
+      expect(find.textContaining('不会接管或停止它'), findsOneWidget);
+      expect(find.text('停止服务'), findsNothing);
+      expect(find.text('外部服务已就绪'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('asr-agent-handoff')));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('配置已部署 FunASR 点火器'), findsOneWidget);
+      expectNoFlutterException();
+    },
+  );
 
   testWidgets(
     'ASR settings leaves installed resource cleanup to app settings',

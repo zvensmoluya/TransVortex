@@ -84,6 +84,9 @@ def test_agent_info_advertises_read_only_setup_contract(tmp_path: Path) -> None:
 
     assert payload["setup_contract"]["contract"] == "transvortex.agent_setup"
     assert payload["setup_contract"]["schema_version"] == 2
+    assert payload["commands"]["asr funasr-launcher-status"]["read_only"] is True
+    assert payload["commands"]["asr funasr-launcher-save"]["ownership"] == "external"
+    assert payload["commands"]["asr funasr-launcher-remove"]["requires_confirmation_flag"] == "--yes"
     assert payload["setup_contract"]["supported_scopes"] == [
         "inspect",
         "prepare_model",

@@ -137,6 +137,14 @@ may contact a local or remote ASR endpoint and writes only a non-secret probe
 status record; it is separate from the offline setup-plan and setup-verify
 commands.
 
+For an already deployed FunASR service, `agent-info` advertises
+`asr funasr-launcher-status`, `asr funasr-launcher-save`, and the confirmed
+`asr funasr-launcher-remove`. Save a recipe only after verifying the exact
+executable, argv array, working directory, and loopback health URL. This does
+not authorize downloading, installing, upgrading, repairing, or replacing
+FunASR, its models, Python, CUDA, or drivers. The desktop Local Service owns
+starting and stopping a saved recipe.
+
 ## Recommended Full Pipeline
 
 For long tasks, prefer detached execution:

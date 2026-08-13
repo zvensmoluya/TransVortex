@@ -20,7 +20,14 @@ INSTALL_MARKER_NAME = ".transvortex-install.ini"
 AGENT_ENTRY_DIRECTORY_NAME = "Agent"
 AGENT_ENTRY_DOCUMENT_NAME = "README.md"
 AGENT_ENTRY_STATE_NAME = "current.json"
-ASR_ENVIRONMENT_SCOPES = ("inspect", "prepare_model", "prepare_accelerator", "register", "full")
+ASR_SETUP_SCOPES = (
+    "inspect",
+    "prepare_model",
+    "prepare_accelerator",
+    "register",
+    "full",
+)
+ASR_ENVIRONMENT_SCOPES = (*ASR_SETUP_SCOPES[:-1], "funasr_launcher", "full")
 
 
 class AgentEntryError(RuntimeError):
@@ -258,6 +265,20 @@ def _handoff_text(entry_document: str, *, workflow: str | None = None) -> str:
 
 
 def _asr_handoff_text(entry_document: str, *, workflow: str, scope: str) -> str:
+    if scope == "funasr_launcher":
+        return (
+            "请使用本机安装的 TransVortex。"
+            f"稳定入口：`{entry_document}`；参考工作流：`{workflow}`。"
+            "先读取入口、current.json 和 capabilities_argv 返回的当前契约。"
+            "本次只为这台电脑上已经部署且可由用户正常启动的 FunASR 服务配置点火器："
+            "先侦查并实际验证可执行文件、参数数组、工作目录、loopback 服务地址和健康检查地址；"
+            "不要把整条 PowerShell/CMD 命令保存为字符串，不要读取或写入凭据。"
+            "除非用户在当前对话中另外明确授权，否则不要下载、安装、升级、修复或替换 FunASR、模型、Python、CUDA 和驱动。"
+            "验证启动配方后，使用 agent-info 广告的 `asr funasr-launcher-save` 命令保存；"
+            "再用 `asr funasr-launcher-status --json` 确认配置可读。"
+            "点火器的启动、停止和健康等待由 TransVortex 桌面端 Local Service 持有；"
+            "结果直接在当前 Agent 对话中说明，不写入其他产品配置。"
+        )
     goals = {
         "inspect": "侦查这台电脑当前的 ASR、GPU、驱动、磁盘和可复用资源，只给出结论与可执行方案，暂不准备或接入资源",
         "prepare_model": "侦查本机后选择并准备一个适合本机与用户任务的 Whisper 模型；可调用 TransVortex 托管下载，也可用你自己的工具准备外部模型，并在完成后注册、激活和验证",

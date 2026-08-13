@@ -593,6 +593,7 @@ class Input extends StatelessWidget {
     this.onChanged,
     this.hintText,
     this.keyboardType,
+    this.enabled = true,
   });
   final String label;
   final TextEditingController controller;
@@ -600,6 +601,7 @@ class Input extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final String? hintText;
   final TextInputType? keyboardType;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -610,6 +612,7 @@ class Input extends StatelessWidget {
         const SizedBox(height: T.s4),
         TextField(
           controller: controller,
+          enabled: enabled,
           obscureText: obscure,
           keyboardType: keyboardType,
           onChanged: onChanged,

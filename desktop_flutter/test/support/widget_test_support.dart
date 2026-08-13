@@ -164,6 +164,7 @@ DesktopSnapshot desktopSnapshotFixture({
   Map<String, Object?> runtime = const {},
   Map<String, Object?>? environment,
   Map<String, Object?> asrLocal = const {},
+  Map<String, Object?> funasrLauncher = const {},
 }) {
   final models = longModels
       ? [
@@ -476,6 +477,7 @@ DesktopSnapshot desktopSnapshotFixture({
     'tasks': tasks,
     'runtime': runtime,
     'environment': environment ?? doctorEnvironmentFixture(status: 'PASS'),
+    if (funasrLauncher.isNotEmpty) 'funasr_launcher': funasrLauncher,
   });
 }
 

@@ -51,6 +51,7 @@ from ..app.asr_runtime import (
     probe_external_model,
 )
 from ..app.asr_testing import run_asr_connection_test
+from ..app.funasr_launcher import FunAsrLauncher
 from ..formats.exporter import export_ass, export_lrc, export_srt, export_vtt, subtitle_delivery_report
 from ..formats.srt import parse_srt_file
 from ..app.models import Segment
@@ -1057,6 +1058,23 @@ def _build_parser() -> argparse.ArgumentParser:
     asr_setup_verify_p.add_argument("--scope", dest="setup_scope", choices=SETUP_SCOPES, default="full")
     asr_setup_verify_p.add_argument("--json", action="store_true", help="Print machine-readable verification result")
     asr_setup_verify_p.add_argument("--strict", action="store_true", help="Exit with code 1 when the requested scope is incomplete")
+    asr_funasr_launcher_status_p = asr_sub.add_parser(
+        "funasr-launcher-status",
+        help="Inspect the saved external FunASR launch recipe and loopback health",
+    )
+    asr_funasr_launcher_status_p.add_argument("--json", action="store_true")
+    asr_funasr_launcher_save_p = asr_sub.add_parser(
+        "funasr-launcher-save",
+        help="Save an Agent- or user-verified external FunASR launch recipe",
+    )
+    asr_funasr_launcher_save_p.add_argument("--json-payload", required=True)
+    asr_funasr_launcher_save_p.add_argument("--json", action="store_true")
+    asr_funasr_launcher_remove_p = asr_sub.add_parser(
+        "funasr-launcher-remove",
+        help="Remove the saved external FunASR launch recipe without touching its environment",
+    )
+    asr_funasr_launcher_remove_p.add_argument("--yes", action="store_true")
+    asr_funasr_launcher_remove_p.add_argument("--json", action="store_true")
     asr_setup_apply_p = asr_sub.add_parser(
         "setup-apply",
         help="Apply a TransVortex-managed ASR resource action and wait for completion",
@@ -1193,6 +1211,31 @@ def main() -> None:
         return
 
     asr_command = getattr(args, "asr_command", None) if args.command == "asr" else None
+    if asr_command == "funasr-launcher-status":
+        payload = FunAsrLauncher(root_dir=root).status()
+        _print_json(payload)
+        return
+
+    if asr_command == "funasr-launcher-save":
+        payload = _run_or_exit(
+            lambda: FunAsrLauncher(root_dir=root).save_config(_read_json_arg(args.json_payload)),
+            json_mode=True,
+            stream_events=False,
+        )
+        _print_json(payload)
+        return
+
+    if asr_command == "funasr-launcher-remove":
+        if not args.yes:
+            parser.error("asr funasr-launcher-remove requires --yes")
+        payload = _run_or_exit(
+            lambda: FunAsrLauncher(root_dir=root).delete_config(),
+            json_mode=True,
+            stream_events=False,
+        )
+        _print_json(payload)
+        return
+
     if asr_command == "setup-apply":
         operation_id = ""
         try:

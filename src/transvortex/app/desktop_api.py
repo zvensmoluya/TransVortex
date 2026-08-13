@@ -202,6 +202,7 @@ class DesktopApi:
             "asr.provider.usage": self.asr_provider_usage,
             "funasr.launcher.status": self.funasr_launcher_status,
             "funasr.launcher.save": self.funasr_launcher_save,
+            "funasr.launcher.delete": self.funasr_launcher_delete,
             "funasr.launcher.start": self.funasr_launcher_start,
             "funasr.launcher.stop": self.funasr_launcher_stop,
             "asr.setup.start": self.asr_setup_start,
@@ -587,6 +588,12 @@ class DesktopApi:
             return self._funasr_launcher.save_config(_dict_param(params, "launcher", "config"))
         except FunAsrLauncherError as exc:
             raise DesktopApiError("funasr_launcher_invalid", str(exc)) from exc
+
+    def funasr_launcher_delete(self, _params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._funasr_launcher.delete_config()
+        except FunAsrLauncherError as exc:
+            raise DesktopApiError("funasr_launcher_delete_failed", str(exc)) from exc
 
     def funasr_launcher_start(self, params: dict[str, Any]) -> dict[str, Any]:
         timeout = _optional_int(params, "timeout_seconds", "timeoutSeconds", default=90)

@@ -109,6 +109,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   TranslationSettingsController? _translationController;
 
   DesktopSnapshot? _snapshot;
+  Map<String, Object?> _funasrLauncherStatus = const {};
   List<TaskSummary>? _diagnosticTasks;
   TaskResultWorkspace? _diagnosticResult;
   final Map<String, DirectoryProbeResult> _diagnosticOutputDirectoryResults =
@@ -126,6 +127,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   bool _savingAsr = false;
   bool _testingAsr = false;
   bool _managingFunasr = false;
+  bool _refreshingFunasrStatus = false;
   bool _checkingOpenRouterUsage = false;
   bool _copyingAgentHandoff = false;
   bool _discoveringAsrModels = false;
@@ -151,6 +153,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
   int _configLoadRevision = 0;
   int _visibleConfigLoads = 0;
   int _openRouterUsageRequestRevision = 0;
+  Timer? _funasrStatusTimer;
 
   bool get _isTranslation => widget.type == AppWindowType.translationSettings;
   bool get _isAsr => widget.type == AppWindowType.asrSettings;
@@ -207,6 +210,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
     _funasrArguments.dispose();
     _funasrWorkingDirectory.dispose();
     _funasrHealthUrl.dispose();
+    _funasrStatusTimer?.cancel();
     _asrOperationController
       ..removeListener(_onAsrOperationChanged)
       ..dispose();
@@ -341,6 +345,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
           );
       setState(() {
         _snapshot = snapshot;
+        _funasrLauncherStatus = snapshot.funasrLauncher;
         if (widget.type == AppWindowType.diagnostics) {
           _diagnosticTasks = null;
           _diagnosticResult = null;
@@ -366,6 +371,7 @@ class _SettingsWindowState extends State<SettingsWindow> with WindowListener {
         }
       });
       if (_isAsr) {
+        _syncFunasrStatusPolling();
         _asrOperationController.attach(
           activeAsrOperation,
           poll: activeAsrOperation?.active == true,
