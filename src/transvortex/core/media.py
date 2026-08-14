@@ -88,8 +88,7 @@ def _stream_disposition(stream: dict[str, Any]) -> dict[str, int]:
     return out
 
 
-def list_subtitle_streams(video_path: Path) -> list[dict]:
-    probe = probe_audio(video_path)
+def _subtitle_streams_from_probe(probe: dict[str, Any]) -> list[dict]:
     streams = []
     for stream in probe.get("streams", []):
         if stream.get("codec_type") != "subtitle":
@@ -109,6 +108,51 @@ def list_subtitle_streams(video_path: Path) -> list[dict]:
             }
         )
     return streams
+
+
+def _audio_streams_from_probe(probe: dict[str, Any]) -> list[dict]:
+    streams = []
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") != "audio":
+            continue
+        tags = _stream_tags(stream)
+        disposition = _stream_disposition(stream)
+        streams.append(
+            {
+                "index": int(stream.get("index", -1)),
+                "codec_name": str(stream.get("codec_name") or ""),
+                "language": tags.get("language", ""),
+                "title": tags.get("title", ""),
+                "default": bool(disposition.get("default", 0)),
+                "channels": _optional_exact_nonnegative_int(
+                    stream.get("channels")
+                ),
+                "channel_layout": str(stream.get("channel_layout") or ""),
+                "sample_rate_hz": _optional_exact_nonnegative_int(
+                    stream.get("sample_rate")
+                ),
+                "bitrate": _optional_exact_nonnegative_int(
+                    stream.get("bit_rate")
+                ),
+            }
+        )
+    return streams
+
+
+def list_media_streams(video_path: Path) -> dict[str, list[dict]]:
+    probe = probe_audio(video_path)
+    return {
+        "audio_streams": _audio_streams_from_probe(probe),
+        "subtitle_streams": _subtitle_streams_from_probe(probe),
+    }
+
+
+def list_subtitle_streams(video_path: Path) -> list[dict]:
+    return list_media_streams(video_path)["subtitle_streams"]
+
+
+def list_audio_streams(video_path: Path) -> list[dict]:
+    return list_media_streams(video_path)["audio_streams"]
 
 
 def _normalize_language(value: str | None) -> str:
@@ -159,6 +203,54 @@ def select_subtitle_stream(
     if not matched:
         return None
     return sorted(matched, key=lambda stream: (not stream.get("default"), stream.get("index", 9999)))[0]
+
+
+def select_audio_stream(
+    streams: list[dict],
+    *,
+    source_lang: str,
+    audio_track: str = "auto",
+) -> dict | None:
+    requested = str(audio_track or "auto").strip().lower()
+    if requested and requested != "auto":
+        try:
+            wanted = int(requested)
+        except ValueError:
+            return None
+        return next(
+            (
+                stream
+                for stream in streams
+                if int(stream.get("index", -1)) == wanted
+            ),
+            None,
+        )
+    wanted_lang = _normalize_language(source_lang)
+    if wanted_lang not in {"", "auto", "detect"}:
+        matched = [
+            stream
+            for stream in streams
+            if _normalize_language(str(stream.get("language", ""))) == wanted_lang
+        ]
+        if matched:
+            return sorted(
+                matched,
+                key=lambda stream: (
+                    not stream.get("default"),
+                    stream.get("index", 9999),
+                ),
+            )[0]
+    return (
+        sorted(
+            streams,
+            key=lambda stream: (
+                not stream.get("default"),
+                stream.get("index", 9999),
+            ),
+        )[0]
+        if streams
+        else None
+    )
 
 
 def extract_subtitle_stream(video_path: Path, output_srt: Path, *, stream_index: int) -> None:

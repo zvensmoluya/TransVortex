@@ -895,6 +895,7 @@ class DesktopApi:
             source_lang=_optional_text(params, "source_lang", "sourceLang") or "auto",
             source_mode=_optional_text(params, "source_mode", "sourceMode") or "auto",
             subtitle_track=_optional_text(params, "subtitle_track", "subtitleTrack") or "auto",
+            audio_track=_optional_text(params, "audio_track", "audioTrack") or "auto",
         )
 
     def prompt_asr_save(self, params: dict[str, Any]) -> dict[str, Any]:

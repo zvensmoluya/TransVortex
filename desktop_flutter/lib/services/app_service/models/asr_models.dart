@@ -656,6 +656,8 @@ class MediaInspection {
     required this.needsAsr,
     this.available = true,
     this.code = 'ready',
+    this.audioStreams = const <Object?>[],
+    this.selectedAudioStream = const <String, Object?>{},
     this.subtitleStreams = const <Object?>[],
     this.selectedSubtitleStream = const <String, Object?>{},
   });
@@ -665,6 +667,8 @@ class MediaInspection {
   final bool needsAsr;
   final bool available;
   final String code;
+  final List<Object?> audioStreams;
+  final Map<String, Object?> selectedAudioStream;
   final List<Object?> subtitleStreams;
   final Map<String, Object?> selectedSubtitleStream;
 
@@ -679,6 +683,8 @@ class MediaInspection {
       needsAsr: map['needs_asr'] == true || map['needsAsr'] == true,
       available: map['available'] != false,
       code: _stringValue(map['code']) ?? 'ready',
+      audioStreams: _objectList(map['audio_streams']),
+      selectedAudioStream: _stringMap(map['selected_audio_stream']),
       subtitleStreams: _objectList(map['subtitle_streams']),
       selectedSubtitleStream: _stringMap(map['selected_subtitle_stream']),
     );

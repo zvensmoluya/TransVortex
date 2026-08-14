@@ -15,6 +15,7 @@ class JobLine extends StatelessWidget {
     required this.onPickTranslation,
     required this.onPickAsr,
     required this.onPickSourceInput,
+    required this.onPickAudioTrack,
     required this.onPickReasoning,
     required this.onSelectSourceLanguage,
     required this.onSelectTargetLanguage,
@@ -31,6 +32,7 @@ class JobLine extends StatelessWidget {
   final VoidCallback onPickTranslation;
   final VoidCallback onPickAsr;
   final VoidCallback onPickSourceInput;
+  final VoidCallback onPickAudioTrack;
   final VoidCallback onPickReasoning;
   final ValueChanged<String> onSelectSourceLanguage;
   final ValueChanged<String> onSelectTargetLanguage;
@@ -91,6 +93,15 @@ class JobLine extends StatelessWidget {
                 onPick: onPickSourceInput,
               ),
               if (view.requiresAsr) ...[
+                if (view.audioTrackConfigurable) ...[
+                  const Text('，音轨', style: T.tBody),
+                  _Word(
+                    key: const ValueKey('job-audio-track'),
+                    label: view.audioTrackLabel,
+                    tooltip: view.audioTrackDetail,
+                    onPick: onPickAudioTrack,
+                  ),
+                ],
                 const Text('，识别用', style: T.tBody),
                 _Word(
                   label: asrLabel,

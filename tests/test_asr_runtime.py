@@ -1155,28 +1155,53 @@ def test_media_inspection_only_requires_asr_when_video_has_no_selected_subtitle(
 ) -> None:
     video = tmp_path / "demo.mkv"
     video.write_bytes(b"media")
-    streams = [
-        {
-            "index": 2,
-            "codec_name": "subrip",
-            "language": "ja",
-            "title": "Japanese",
-            "default": True,
-            "forced": False,
-            "supported": True,
-        }
-    ]
-    monkeypatch.setattr("transvortex.app.media_inspect.list_subtitle_streams", lambda _path: streams)
+    streams = {
+        "audio_streams": [
+            {
+                "index": 1,
+                "codec_name": "aac",
+                "language": "eng",
+                "title": "English",
+                "default": True,
+            },
+            {
+                "index": 3,
+                "codec_name": "aac",
+                "language": "jpn",
+                "title": "Japanese",
+                "default": False,
+            },
+        ],
+        "subtitle_streams": [
+            {
+                "index": 2,
+                "codec_name": "subrip",
+                "language": "ja",
+                "title": "Japanese",
+                "default": True,
+                "forced": False,
+                "supported": True,
+            }
+        ],
+    }
+    monkeypatch.setattr("transvortex.app.media_inspect.list_media_streams", lambda _path: streams)
 
     embedded = inspect_media_source(video, source_lang="ja")
     no_match = inspect_media_source(video, source_lang="en")
     forced_asr = inspect_media_source(video, source_lang="ja", source_mode="asr")
+    forced_track = inspect_media_source(video, source_lang="ja", source_mode="asr", audio_track="1")
+    missing_track = inspect_media_source(video, source_lang="ja", source_mode="asr", audio_track="8")
     subtitle = inspect_media_source(tmp_path / "input.srt")
     audio = inspect_media_source(tmp_path / "input.wav")
 
     assert embedded["needs_asr"] is False
     assert embedded["selected_subtitle_stream"]["index"] == 2
     assert no_match["needs_asr"] is True
+    assert no_match["selected_audio_stream"]["index"] == 1
     assert forced_asr["needs_asr"] is True
+    assert forced_asr["selected_audio_stream"]["index"] == 3
+    assert forced_track["selected_audio_stream"]["index"] == 1
+    assert missing_track["available"] is False
+    assert missing_track["code"] == "audio_track_unavailable"
     assert subtitle["needs_asr"] is False
     assert audio["needs_asr"] is True

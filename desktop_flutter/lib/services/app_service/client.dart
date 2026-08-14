@@ -422,6 +422,7 @@ class AppServiceClient {
     String sourceLang = 'auto',
     String sourceMode = 'auto',
     String subtitleTrack = 'auto',
+    String audioTrack = 'auto',
   }) async {
     return MediaInspection.fromJson(
       await call('media.inspect', {
@@ -429,6 +430,7 @@ class AppServiceClient {
         'source_lang': sourceLang,
         'source_mode': sourceMode,
         'subtitle_track': subtitleTrack,
+        'audio_track': audioTrack,
       }, const Duration(seconds: 30)),
     );
   }

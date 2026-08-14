@@ -341,6 +341,7 @@ asr_engines:
 - 创建任务时会把 Engine、运行时 Capabilities 和有效 Policy 冻结到 `settings.asr_intent`。媒体探测后，稳定 segment id/index、任务目录内规范化相对路径、分片内容哈希、source/trusted 时间范围、cut reason、媒体信息、并发、请求期限和时间轴策略版本写入任务目录 `asr/asr_plan.json`；恢复任务逐项校验并使用该快照，不依赖机器绝对路径，也不受后来主页配置或默认值变化影响。
 - 细分重试会先持久化失败窗口的 retry decision 和替代子窗口，再执行子窗口；崩溃恢复后读取该决定，不会重新提交原失败窗口。当前 intent schema 为 `2`、plan schema 为 `4`、retry schema 为 `2`、时间轴 strategy version 为 `1`。版本或执行语义不兼容时明确拒绝恢复并要求新建任务，不长期分发旧算法实现。
 - 本地 ASR 会把任务的 `source_lang` 传给 faster-whisper，例如 `--src ja` 会使用 `language: ja`，避免让模型重新猜语言。
+- 视频走 ASR 时，`audio_track: auto` 会优先匹配 `source_lang`，再按容器默认轨和 stream index 选择；桌面端媒体检查会列出多条音轨，并把自动解析或用户指定的实际 stream index 冻结到任务覆盖中。
 - 本地 Whisper 的有效解码 Policy 默认使用 `beam_size: 5`、`temperature: 0` 并关闭 `condition_on_previous_text`；`vad_filter` 固定为 `false`，避免 worker 内部再次丢弃无人声区间。设备与 compute type 由 Engine 偏好和运行时探测共同解析。
 - ASR Engine 不复用翻译 routing。共享部分只限凭据解析和 HTTP 传输等薄基础设施；OpenAI transcription、OpenRouter STT、FunASR 与本地 worker 保留各自的请求和时间轴适配。
 - `openrouter_stt` 使用 OpenRouter 的 `/api/v1/audio/transcriptions` JSON 接口，音频会编码为 base64 放入 `input_audio` 上传。OpenRouter 也支持 OpenAI-compatible 的 `multipart/form-data`：它把模型、语言等参数作为普通表单字段，把音频作为二进制 `file` 字段上传，不是流式识别，官方当前说明该路径上限为 25 MB。multipart 只改变传输编码，不能据此推导模型可处理的音频时长；当前 TransVortex 仍使用已经实测通过的 JSON base64，不会在两种传输间自动切换。桌面端从用户级凭据中的 `openrouter_asr` 读取密钥，并以 `OPENROUTER_API_KEY` 作为开发兼容兜底；Provider YAML 不保存密钥。

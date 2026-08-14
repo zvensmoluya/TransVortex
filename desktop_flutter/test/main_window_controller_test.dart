@@ -343,6 +343,7 @@ void main() {
         'source_lang': 'auto',
         'source_mode': 'asr',
         'subtitle_track': 'auto',
+        'audio_track': 'auto',
       });
       var overrides =
           controller.buildRunRequest()['overrides'] as Map<String, Object?>;
@@ -361,11 +362,90 @@ void main() {
         'source_lang': 'auto',
         'source_mode': 'embedded_subtitle',
         'subtitle_track': '2',
+        'audio_track': 'auto',
       });
       overrides =
           controller.buildRunRequest()['overrides'] as Map<String, Object?>;
       expect(overrides['source_mode'], 'embedded_subtitle');
       expect(overrides['subtitle_track'], '2');
+    },
+  );
+
+  test(
+    'controller lets the user select and freeze a video ASR audio track',
+    () async {
+      const audioStreams = [
+        {
+          'index': 1,
+          'codec_name': 'aac',
+          'language': 'eng',
+          'title': 'English commentary',
+          'default': true,
+          'channels': 2,
+          'sample_rate_hz': 48000,
+        },
+        {
+          'index': 2,
+          'codec_name': 'aac',
+          'language': 'jpn',
+          'title': 'Japanese 5.1',
+          'default': false,
+          'channels': 6,
+          'sample_rate_hz': 48000,
+        },
+      ];
+      final firstInspection = {
+        'kind': 'video',
+        'source_mode': 'asr',
+        'needs_asr': true,
+        'available': true,
+        'code': 'ready',
+        'audio_streams': audioStreams,
+        'selected_audio_stream': audioStreams[0],
+        'subtitle_streams': const <Object?>[],
+        'selected_subtitle_stream': null,
+      };
+      final secondInspection = {
+        ...firstInspection,
+        'selected_audio_stream': audioStreams[1],
+      };
+      final handle = _FakeHandle(
+        _desktopSnapshot(asrHasKey: true),
+        mediaInspectionSequence: [firstInspection, secondInspection],
+      );
+      final controller = MainWindowController(
+        service: _readyController(handle: handle),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\multi-audio.mkv');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.view.audioTrackConfigurable, isTrue);
+      expect(controller.view.audioTrackLabel, '自动·音轨 #1 · 英语');
+      expect(
+        controller.view.audioTrackOptions
+            .singleWhere((option) => option.id == 'audio:2')
+            .detail,
+        'Japanese 5.1 · AAC · 6 声道 · 48 kHz',
+      );
+
+      final japanese = controller.view.audioTrackOptions.singleWhere(
+        (option) => option.id == 'audio:2',
+      );
+      await controller.selectAudioTrack(japanese);
+
+      expect(controller.view.audioTrackLabel, '音轨 #2 · 日语');
+      expect(handle.transport.lastParams['media.inspect'], {
+        'input': r'D:\multi-audio.mkv',
+        'source_lang': 'auto',
+        'source_mode': 'auto',
+        'subtitle_track': 'auto',
+        'audio_track': '2',
+      });
+      final overrides =
+          controller.buildRunRequest()['overrides'] as Map<String, Object?>;
+      expect(overrides['source_mode'], 'asr');
+      expect(overrides['asr_audio_track'], '2');
     },
   );
 

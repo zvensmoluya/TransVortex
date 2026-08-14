@@ -104,6 +104,21 @@ class SourceInputOption {
   final bool enabled;
 }
 
+@immutable
+class AudioTrackOption {
+  const AudioTrackOption({
+    required this.id,
+    required this.label,
+    required this.audioTrack,
+    this.detail = '',
+  });
+
+  final String id;
+  final String label;
+  final String detail;
+  final String audioTrack;
+}
+
 enum TranslationChoiceSource { profile, direct, task }
 
 @immutable
@@ -209,6 +224,10 @@ class MainWindowViewModel {
     this.sourceInputOptionId = 'auto',
     this.sourceInputLabel = '',
     this.sourceInputDetail = '',
+    this.audioTrackOptions = const <AudioTrackOption>[],
+    this.audioTrackOptionId = 'auto',
+    this.audioTrackLabel = '',
+    this.audioTrackDetail = '',
     required this.sourceLang,
     required this.targetLang,
     required this.bilingual,
@@ -254,6 +273,10 @@ class MainWindowViewModel {
   final String sourceInputOptionId;
   final String sourceInputLabel;
   final String sourceInputDetail;
+  final List<AudioTrackOption> audioTrackOptions;
+  final String audioTrackOptionId;
+  final String audioTrackLabel;
+  final String audioTrackDetail;
   final String sourceLang;
   final String targetLang;
   final bool bilingual;
@@ -283,6 +306,10 @@ class MainWindowViewModel {
   bool get hasSource => source != null;
   bool get requiresAsr => sourceNeedsAsr ?? source?.kind != SourceKind.subtitle;
   bool get sourceInputConfigurable => source?.kind == SourceKind.video;
+  bool get audioTrackConfigurable =>
+      source?.kind == SourceKind.video &&
+      requiresAsr &&
+      audioTrackOptions.length > 2;
 }
 
 class MainWindowController extends ChangeNotifier {
@@ -327,6 +354,8 @@ class MainWindowController extends ChangeNotifier {
   String _sourceInputOptionId = 'auto';
   String _sourceMode = 'auto';
   String _subtitleTrack = 'auto';
+  String _audioTrackOptionId = 'auto';
+  String _audioTrack = 'auto';
   MediaInspection? _sourceInspection;
   String? _sourceInspectionLanguage;
   int _sourceInspectionGeneration = 0;
@@ -371,6 +400,8 @@ class MainWindowController extends ChangeNotifier {
     _sourceInputOptionId = 'auto';
     _sourceMode = 'auto';
     _subtitleTrack = 'auto';
+    _audioTrackOptionId = 'auto';
+    _audioTrack = 'auto';
     _sourceInspection = switch (kind) {
       SourceKind.subtitle => const MediaInspection(
         kind: 'subtitle',
@@ -420,6 +451,8 @@ class MainWindowController extends ChangeNotifier {
     _sourceInputOptionId = 'auto';
     _sourceMode = 'auto';
     _subtitleTrack = 'auto';
+    _audioTrackOptionId = 'auto';
+    _audioTrack = 'auto';
     _sourceInspection = null;
     _sourceInspectionLanguage = null;
     _outputDirectory = null;
@@ -540,6 +573,22 @@ class MainWindowController extends ChangeNotifier {
     _sourceInputOptionId = option.id;
     _sourceMode = option.sourceMode;
     _subtitleTrack = option.subtitleTrack;
+    _sourceInspectionGeneration += 1;
+    _discardVideoInspectionFuture();
+    _sourceInspection = null;
+    _sourceInspectionLanguage = null;
+    if (_failure?.target == MainRecoveryTarget.pickSource) {
+      _failure = null;
+    }
+    _publish();
+    await _inspectCurrentVideo(showFailure: true);
+  }
+
+  Future<void> selectAudioTrack(AudioTrackOption option) async {
+    if (_source?.kind != SourceKind.video || !_requiresAsr) return;
+    if (_audioTrackOptionId == option.id && _sourceInspection != null) return;
+    _audioTrackOptionId = option.id;
+    _audioTrack = option.audioTrack;
     _sourceInspectionGeneration += 1;
     _discardVideoInspectionFuture();
     _sourceInspection = null;
@@ -928,6 +977,10 @@ class MainWindowController extends ChangeNotifier {
           _sourceInspection?.selectedSubtitleStream['index'] != null)
         'subtitle_track':
             '${_sourceInspection!.selectedSubtitleStream['index']}',
+      if (source.kind == SourceKind.video &&
+          requiresAsr &&
+          _sourceInspection?.selectedAudioStream['index'] != null)
+        'asr_audio_track': '${_sourceInspection!.selectedAudioStream['index']}',
       if (requiresAsr && asr.provider != null && asr.provider!.isNotEmpty)
         'asr_provider': asr.provider,
       if (requiresAsr && asr.model != null && asr.model!.isNotEmpty)
@@ -1094,6 +1147,7 @@ class MainWindowController extends ChangeNotifier {
     final asr = _effectiveAsrOption(snapshot);
     final state = _deriveState(readiness, translation, asr);
     final sourceInputOptions = _sourceInputOptions();
+    final audioTrackOptions = _audioTrackOptions();
     return MainWindowViewModel(
       state: state,
       statusLine: _statusLine(state),
@@ -1112,6 +1166,10 @@ class MainWindowController extends ChangeNotifier {
       sourceInputOptionId: _sourceInputOptionId,
       sourceInputLabel: _sourceInputLabel(sourceInputOptions),
       sourceInputDetail: _sourceInputDetail(sourceInputOptions),
+      audioTrackOptions: audioTrackOptions,
+      audioTrackOptionId: _audioTrackOptionId,
+      audioTrackLabel: _audioTrackLabel(audioTrackOptions),
+      audioTrackDetail: _audioTrackDetail(audioTrackOptions),
       sourceLang: _sourceLang,
       targetLang: _targetLang,
       bilingual: _bilingual,
@@ -1252,8 +1310,10 @@ class MainWindowController extends ChangeNotifier {
       _sourceInspection = inspection;
       _sourceInspectionLanguage = sourceLanguage;
       if (!inspection.available && showFailure) {
-        _failure = const MainFailureView(
-          reason: '没有找到可用的内嵌字幕轨，请改用语音识别或重新选择片源。',
+        _failure = MainFailureView(
+          reason: inspection.code == 'audio_track_unavailable'
+              ? '没有找到可用于语音识别的音轨，请指定内嵌字幕轨或重新选择片源。'
+              : '没有找到可用的内嵌字幕轨，请改用语音识别或重新选择片源。',
           actionLabel: '重新选择片源',
           target: MainRecoveryTarget.pickSource,
         );
@@ -1271,7 +1331,7 @@ class MainWindowController extends ChangeNotifier {
       }
       if (showFailure) {
         _failure = const MainFailureView(
-          reason: '无法检查视频字幕轨，请重试；如果仍失败，可以换一个文件。',
+          reason: '无法检查视频字幕或音轨，请重试；如果仍失败，可以换一个文件。',
           actionLabel: '重试',
           target: MainRecoveryTarget.retry,
         );
@@ -1319,6 +1379,7 @@ class MainWindowController extends ChangeNotifier {
       sourceLang: sourceLanguage,
       sourceMode: _sourceMode,
       subtitleTrack: _subtitleTrack,
+      audioTrack: _audioTrack,
     );
   }
 
@@ -1399,9 +1460,96 @@ class MainWindowController extends ChangeNotifier {
         : '当前使用 ${_subtitleStreamLabel(selected)}。';
   }
 
+  List<AudioTrackOption> _audioTrackOptions() {
+    if (_source?.kind != SourceKind.video || !_requiresAsr) return const [];
+    final streams = _sourceInspection?.audioStreams ?? const <Object?>[];
+    if (streams.isEmpty) return const [];
+    final options = <AudioTrackOption>[
+      AudioTrackOption(
+        id: 'auto',
+        label: '自动选择音轨',
+        detail: _automaticAudioTrackDetail(),
+        audioTrack: 'auto',
+      ),
+    ];
+    for (final raw in streams) {
+      final stream = _asStringMap(raw);
+      final index = stream['index'];
+      if (index == null) continue;
+      final track = '$index';
+      options.add(
+        AudioTrackOption(
+          id: 'audio:$track',
+          label: _audioStreamLabel(stream),
+          detail: _audioStreamDetail(stream),
+          audioTrack: track,
+        ),
+      );
+    }
+    return List.unmodifiable(options);
+  }
+
+  String _audioTrackLabel(List<AudioTrackOption> options) {
+    if (_source?.kind != SourceKind.video || !_requiresAsr) return '';
+    if (_audioTrackOptionId != 'auto') {
+      return _audioTrackOption(options, _audioTrackOptionId)?.label ?? '选择音轨';
+    }
+    final selected = _sourceInspection?.selectedAudioStream;
+    return selected == null || selected.isEmpty
+        ? '自动选择音轨'
+        : '自动·${_audioStreamLabel(selected)}';
+  }
+
+  String _audioTrackDetail(List<AudioTrackOption> options) {
+    if (_audioTrackOptionId == 'auto') return _automaticAudioTrackDetail();
+    return _audioTrackOption(options, _audioTrackOptionId)?.detail ?? '';
+  }
+
+  static AudioTrackOption? _audioTrackOption(
+    List<AudioTrackOption> options,
+    String id,
+  ) {
+    for (final option in options) {
+      if (option.id == id) return option;
+    }
+    return null;
+  }
+
+  String _automaticAudioTrackDetail() {
+    final selected = _sourceInspection?.selectedAudioStream;
+    return selected == null || selected.isEmpty
+        ? '根据源语言和默认音轨标记自动选择。'
+        : '根据源语言和默认标记选择；当前使用 ${_audioStreamLabel(selected)}。';
+  }
+
+  static String _audioStreamLabel(Map<String, Object?> stream) {
+    final index = '${stream['index'] ?? '?'}';
+    final language = _streamLanguageLabel('${stream['language'] ?? ''}');
+    return language.isEmpty ? '音轨 #$index' : '音轨 #$index · $language';
+  }
+
+  static String _audioStreamDetail(Map<String, Object?> stream) {
+    final parts = <String>[];
+    final title = '${stream['title'] ?? ''}'.trim();
+    final codec = '${stream['codec_name'] ?? ''}'.trim();
+    final channels = int.tryParse('${stream['channels'] ?? ''}');
+    final sampleRate = int.tryParse('${stream['sample_rate_hz'] ?? ''}');
+    if (title.isNotEmpty) parts.add(title);
+    if (codec.isNotEmpty) parts.add(codec.toUpperCase());
+    if (channels != null && channels > 0) parts.add('$channels 声道');
+    if (sampleRate != null && sampleRate > 0) {
+      final rate = sampleRate % 1000 == 0
+          ? '${sampleRate ~/ 1000} kHz'
+          : '$sampleRate Hz';
+      parts.add(rate);
+    }
+    if (stream['default'] == true) parts.add('默认轨');
+    return parts.join(' · ');
+  }
+
   static String _subtitleStreamLabel(Map<String, Object?> stream) {
     final index = '${stream['index'] ?? '?'}';
-    final language = _subtitleLanguageLabel('${stream['language'] ?? ''}');
+    final language = _streamLanguageLabel('${stream['language'] ?? ''}');
     return language.isEmpty ? '字幕轨 #$index' : '字幕轨 #$index · $language';
   }
 
@@ -1420,7 +1568,7 @@ class MainWindowController extends ChangeNotifier {
     return parts.join(' · ');
   }
 
-  static String _subtitleLanguageLabel(String value) {
+  static String _streamLanguageLabel(String value) {
     final normalized = switch (value.trim().toLowerCase()) {
       'jpn' || 'jp' || 'japanese' => 'ja',
       'eng' || 'english' => 'en',
@@ -1453,7 +1601,7 @@ class MainWindowController extends ChangeNotifier {
         !_running &&
         _failure == null;
     final base = inspectingVideo
-        ? '正在检查字幕轨'
+        ? '正在检查媒体轨道'
         : switch (state) {
             MainState.empty => '等待片源',
             MainState.ready => '就绪 · 可开始',

@@ -66,6 +66,72 @@ def test_subtitle_stream_selection_auto_prefers_default_supported(tmp_path: Path
     assert selected["index"] == 2
 
 
+def test_media_stream_listing_and_audio_selection_share_one_probe(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_probe(_path: Path) -> dict:
+        calls.append(_path)
+        return {
+            "streams": [
+                {
+                    "index": 1,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                    "bit_rate": "192000",
+                    "tags": {"language": "eng", "title": "English commentary"},
+                    "disposition": {"default": 0},
+                },
+                {
+                    "index": 2,
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 6,
+                    "tags": {"language": "jpn", "title": "Japanese 5.1"},
+                    "disposition": {"default": 1},
+                },
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "subrip",
+                    "tags": {"language": "eng"},
+                },
+            ]
+        }
+
+    monkeypatch.setattr(media, "probe_audio", fake_probe)
+
+    listed = media.list_media_streams(tmp_path / "demo.mkv")
+    selected = media.select_audio_stream(
+        listed["audio_streams"],
+        source_lang="ja",
+    )
+    explicit = media.select_audio_stream(
+        listed["audio_streams"],
+        source_lang="ja",
+        audio_track="1",
+    )
+
+    assert len(calls) == 1
+    assert listed["subtitle_streams"][0]["index"] == 3
+    assert listed["audio_streams"][0] == {
+        "index": 1,
+        "codec_name": "aac",
+        "language": "eng",
+        "title": "English commentary",
+        "default": False,
+        "channels": 2,
+        "channel_layout": "stereo",
+        "sample_rate_hz": 48000,
+        "bitrate": 192000,
+    }
+    assert selected is not None and selected["index"] == 2
+    assert explicit is not None and explicit["index"] == 1
+
+
 def test_extract_subtitle_stream_invokes_ffmpeg(monkeypatch, tmp_path: Path) -> None:
     calls = []
 

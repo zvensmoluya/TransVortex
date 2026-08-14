@@ -574,6 +574,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             onPickTranslation: _pickTranslation,
             onPickAsr: _pickAsr,
             onPickSourceInput: _pickSourceInput,
+            onPickAudioTrack: _pickAudioTrack,
             onPickReasoning: _pickReasoningEffort,
             onSelectSourceLanguage: _controller.setSourceLang,
             onSelectTargetLanguage: _controller.setTargetLang,
@@ -1081,6 +1082,22 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     );
     if (selected != null) {
       await _controller.selectSourceInput(selected);
+    }
+  }
+
+  Future<void> _pickAudioTrack() async {
+    final view = _controller.view;
+    if (!view.audioTrackConfigurable) return;
+    final selected = await _showOptionMenu<AudioTrackOption>(
+      title: '识别音轨',
+      options: view.audioTrackOptions,
+      emptyLabel: '没有可用的音轨',
+      labelOf: (option) => option.label,
+      detailOf: (option) => option.detail,
+      keyOf: (option) => ValueKey('audio-track-${option.id}'),
+    );
+    if (selected != null) {
+      await _controller.selectAudioTrack(selected);
     }
   }
 

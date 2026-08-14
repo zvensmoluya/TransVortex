@@ -429,6 +429,93 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main lets the user choose a video ASR audio track', (
+    tester,
+  ) async {
+    installFilePickerMock(
+      tester,
+      name: 'multi-audio.mkv',
+      path: r'D:\media\multi-audio.mkv',
+    );
+    const audioStreams = [
+      {
+        'index': 1,
+        'codec_name': 'aac',
+        'language': 'eng',
+        'title': 'English commentary',
+        'default': true,
+        'channels': 2,
+      },
+      {
+        'index': 2,
+        'codec_name': 'aac',
+        'language': 'jpn',
+        'title': 'Japanese 5.1',
+        'default': false,
+        'channels': 6,
+      },
+    ];
+    final firstInspection = {
+      'kind': 'video',
+      'source_mode': 'asr',
+      'needs_asr': true,
+      'available': true,
+      'code': 'ready',
+      'audio_streams': audioStreams,
+      'selected_audio_stream': audioStreams[0],
+      'subtitle_streams': const <Object?>[],
+      'selected_subtitle_stream': null,
+    };
+    final selectedInspection = {
+      ...firstInspection,
+      'selected_audio_stream': audioStreams[1],
+    };
+    final snapshot = desktopSnapshotFixture();
+    final transport = FakeAppServiceTransport(
+      {
+        'service.info': {
+          'service': 'transvortex.app_service',
+          'protocol_version': 1,
+          'app_version': 'test',
+          'capabilities': ['desktop_snapshot', 'runtime_pump'],
+        },
+        'service.health': {
+          'service': 'transvortex.app_service',
+          'status': 'healthy',
+          'runtime': {'active': null},
+          'pump': {'enabled': true},
+        },
+        'desktop.snapshot': snapshot.raw,
+        'media.inspect': selectedInspection,
+      },
+      sequences: {
+        'media.inspect': [firstInspection, selectedInspection],
+      },
+    );
+    await tester.pumpWidget(
+      TransVortexApp(localServiceController: controllerForTransport(transport)),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('选择片源'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('自动·音轨 #1 · 英语'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('job-audio-track')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('自动选择音轨'), findsOneWidget);
+    expect(find.text('音轨 #2 · 日语'), findsOneWidget);
+    activatePopupMenuItem(tester, const ValueKey('audio-track-audio:2'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('音轨 #2 · 日语'), findsOneWidget);
+    expect(transport.lastParams['media.inspect']?['audio_track'], '2');
+    expectNoFlutterException();
+  });
+
   testWidgets('main keeps an unavailable current ASR provider visible', (
     tester,
   ) async {
