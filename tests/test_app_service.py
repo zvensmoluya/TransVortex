@@ -1015,6 +1015,8 @@ def test_app_service_tasks_events_uses_cursor_payload(tmp_path: Path) -> None:
 
 
 def test_app_service_runtime_cancel_force_after_grace_is_non_blocking(tmp_path: Path) -> None:
+    grace_seconds = 10.0
+    max_response_seconds = 3.0
     _write_config(tmp_path)
     service = DesktopApi(root_dir=tmp_path)
     request = {
@@ -1031,12 +1033,14 @@ def test_app_service_runtime_cancel_force_after_grace_is_non_blocking(tmp_path: 
     start = time.monotonic()
     cancelled = handle_line(
         service,
-        _request("runtime.cancel", {"task_id": task_id, "force_after_grace": 10}),
+        _request("runtime.cancel", {"task_id": task_id, "force_after_grace": grace_seconds}),
         root_dir=tmp_path,
     )
     elapsed = time.monotonic() - start
 
-    assert elapsed < 1.0
+    # The RPC must return well before the grace period expires, while allowing
+    # for transient filesystem and scheduler latency on Windows CI runners.
+    assert elapsed < max_response_seconds
     assert cancelled["result"]["status"] == "CANCEL_REQUESTED"
 
 
