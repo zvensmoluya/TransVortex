@@ -182,6 +182,41 @@ void main() {
   });
 
   test(
+    'controller freezes the selected translation style in run overrides',
+    () async {
+      final handle = _FakeHandle(_desktopSnapshot());
+      final controller = MainWindowController(
+        service: _readyController(handle: handle),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\subtitle.srt');
+      controller.setTranslationStyle(
+        const TranslationStyleDetail(
+          summary: TranslationStyleSummary(
+            id: 'localized',
+            name: '本地化',
+            description: '自然处理文化表达',
+            revision: 3,
+            builtin: false,
+            updatedAt: '',
+          ),
+          prompt: 'Localize jokes naturally.',
+        ),
+      );
+
+      final payload = controller.buildRunRequest();
+      final overrides = payload['overrides'] as Map<String, Object?>;
+
+      expect(controller.view.translationStyleLabel, '本地化');
+      expect(overrides['translation_style_preset'], 'localized');
+      expect(
+        overrides['translation_style_prompt'],
+        'Localize jokes naturally.',
+      );
+    },
+  );
+
+  test(
     'controller inspects video and skips ASR when an embedded subtitle is selected',
     () async {
       final handle = _FakeHandle(

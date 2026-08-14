@@ -522,4 +522,37 @@ void main() {
       expect(transport.calls[3].params['entry_ids'], ['candidate-1']);
     },
   );
+
+  test('AppServiceClient exposes translation style contracts', () async {
+    const style = {
+      'id': 'localized',
+      'name': '本地化',
+      'description': '自然处理文化表达',
+      'prompt': 'Localize jokes naturally.',
+      'revision': 2,
+      'builtin': false,
+    };
+    final transport = RecordingRpcTransport({
+      'translation.styles.list': {
+        'styles': [style],
+      },
+      'translation.style.get': {'style': style},
+      'translation.style.update': {'style': style},
+    });
+    final client = AppServiceClient(transport);
+
+    final listed = await client.translationStyles();
+    final loaded = await client.translationStyle('localized');
+    await client.updateTranslationStyle(
+      'localized',
+      expectedRevision: 2,
+      name: '本地化',
+      description: '自然处理文化表达',
+      prompt: 'Localize jokes naturally.',
+    );
+
+    expect(listed.single.name, '本地化');
+    expect(loaded.prompt, 'Localize jokes naturally.');
+    expect(transport.calls.last.params['expected_revision'], 2);
+  });
 }

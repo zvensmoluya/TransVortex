@@ -43,7 +43,7 @@ void main() {
     expect(find.text('新任务会按'), findsOneWidget);
     expect(find.text('自动发现术语候选'), findsOneWidget);
     expect(find.text('不使用术语库'), findsOneWidget);
-    expect(find.text('字幕，并'), findsOneWidget);
+    expect(find.text('字幕，采用'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('main-empty-pick-target')),
       findsOneWidget,
@@ -284,7 +284,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('picked-video.mp4'), findsOneWidget);
-    expect(find.text('字幕，并'), findsOneWidget);
+    expect(find.text('字幕，采用'), findsOneWidget);
     final termsToggle = find.text('自动发现术语候选');
     expect(termsToggle, findsOneWidget);
     final enabledTooltips = tester

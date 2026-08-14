@@ -21,7 +21,7 @@ class _WorkbenchSectionNav extends StatelessWidget {
           ButtonSegment(
             value: _WorkbenchSection.terminology,
             icon: Icon(Icons.menu_book_outlined, size: 18),
-            label: Text('术语库'),
+            label: Text('翻译资产'),
           ),
         ],
         selected: {selected},

@@ -129,6 +129,31 @@ void main() {
           'message': '新的翻译任务已排队。',
         };
       }
+      if (method == 'translation.styles.list') {
+        return {
+          'styles': [
+            {
+              'id': 'subtitle_natural',
+              'name': '自然字幕',
+              'description': '自然、简洁',
+              'revision': 1,
+              'builtin': true,
+            },
+          ],
+        };
+      }
+      if (method == 'translation.style.get') {
+        return {
+          'style': {
+            'id': 'subtitle_natural',
+            'name': '自然字幕',
+            'description': '自然、简洁',
+            'prompt': 'Translate naturally.',
+            'revision': 1,
+            'builtin': true,
+          },
+        };
+      }
       if (method == 'runtime.cancel') {
         runningStatus = 'CANCEL_REQUESTED';
         return taskPayload(
@@ -231,7 +256,7 @@ void main() {
     expect(calls, contains('tasks.events'));
     expect(find.text('工作台'), findsOneWidget);
     expect(find.text('任务与字幕'), findsOneWidget);
-    expect(find.text('术语库'), findsOneWidget);
+    expect(find.text('翻译资产'), findsOneWidget);
     expect(find.text('任务片列'), findsOneWidget);
     expect(find.text('processing-done.mp4'), findsWidgets);
     expect(find.text('processing-failed.mp4'), findsOneWidget);
@@ -250,7 +275,7 @@ void main() {
     final lockedTaskSearch = find.widgetWithText(TextField, '搜索任务');
     expect(tester.widget<TextField>(lockedTaskSearch).enabled, isFalse);
 
-    await tester.tap(find.text('术语库'));
+    await tester.tap(find.text('翻译资产'));
     await tester.pumpAndSettle();
     expect(
       find.text('术语库是一组可跨任务复用的术语；任务开始后会固定当前版本，之后的修改只影响新任务。'),
@@ -297,7 +322,10 @@ void main() {
     expect(find.text('OpenRouter 用量 \$0.000182 · 6.90 秒'), findsOneWidget);
     expect(find.text('重新翻译'), findsOneWidget);
     await tester.tap(find.text('重新翻译'));
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle();
+    expect(find.text('选择翻译风格'), findsOneWidget);
+    await tester.tap(find.text('自然字幕'));
+    await tester.pumpAndSettle();
     expect(find.text('重新翻译当前识别稿'), findsOneWidget);
     expect(find.textContaining('不会重新运行语音识别'), findsOneWidget);
     await tester.tap(find.text('创建翻译任务'));
@@ -305,6 +333,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(paramsByMethod['runtime.retranslate'], {
       'task_id': 'tvx_processing_done_123456',
+      'overrides': {
+        'translation_style_preset': 'subtitle_natural',
+        'translation_style_prompt': 'Translate naturally.',
+      },
     });
     expect(find.text('阶段'), findsOneWidget);
     expect(find.text('加载更多事件'), findsOneWidget);

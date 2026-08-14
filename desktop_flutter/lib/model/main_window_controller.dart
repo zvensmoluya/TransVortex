@@ -192,6 +192,8 @@ class MainWindowViewModel {
     required this.formats,
     required this.termsEnabled,
     this.memoryCollectionIds = const <String>[],
+    this.translationStyleId = 'subtitle_natural',
+    this.translationStyleLabel = '自然字幕',
     required this.runningText,
     required this.progress,
     required this.canceling,
@@ -231,6 +233,8 @@ class MainWindowViewModel {
   final List<String> formats;
   final bool termsEnabled;
   final List<String> memoryCollectionIds;
+  final String translationStyleId;
+  final String translationStyleLabel;
   final String? runningText;
   final double progress;
   final bool canceling;
@@ -273,6 +277,7 @@ class MainWindowController extends ChangeNotifier {
   List<String> _formats = const ['SRT', 'ASS'];
   bool _termsEnabled = true;
   List<String> _memoryCollectionIds = const [];
+  TranslationStyleDetail? _selectedTranslationStyle;
   String? _outputDirectory;
   String? _taskId;
   bool _submitting = false;
@@ -442,6 +447,11 @@ class MainWindowController extends ChangeNotifier {
           .map((item) => item.trim())
           .where((item) => item.isNotEmpty && seen.add(item)),
     );
+    _publish();
+  }
+
+  void setTranslationStyle(TranslationStyleDetail style) {
+    _selectedTranslationStyle = style;
     _publish();
   }
 
@@ -853,6 +863,10 @@ class MainWindowController extends ChangeNotifier {
     final overrides = <String, Object?>{
       'output_format': outputFormatValue(_formats),
       'subtitle_quality_mode': 'balanced',
+      if (_selectedTranslationStyle != null)
+        'translation_style_preset': _selectedTranslationStyle!.summary.id,
+      if (_selectedTranslationStyle != null)
+        'translation_style_prompt': _selectedTranslationStyle!.prompt,
       ..._memoryGenerationOverrides(),
       if (source.kind == SourceKind.video && _sourceInspection != null)
         'source_mode': _sourceInspection!.sourceMode,
@@ -1045,6 +1059,9 @@ class MainWindowController extends ChangeNotifier {
       formats: _formats,
       termsEnabled: _termsEnabled,
       memoryCollectionIds: _memoryCollectionIds,
+      translationStyleId:
+          _selectedTranslationStyle?.summary.id ?? 'subtitle_natural',
+      translationStyleLabel: _selectedTranslationStyle?.summary.name ?? '自然字幕',
       runningText: _statusText,
       progress: _progress,
       canceling: _canceling,

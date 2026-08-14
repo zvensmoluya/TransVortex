@@ -30,6 +30,7 @@ import 'theme/tokens.dart';
 import 'widgets/application_settings_panel.dart';
 import 'widgets/job_line.dart';
 import 'widgets/memory_library_dialog.dart';
+import 'widgets/translation_style_library.dart';
 import 'widgets/primary_action.dart';
 import 'widgets/reasoning_effort_picker.dart';
 import 'widgets/designed_tooltip.dart';
@@ -577,6 +578,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             onSelectTargetLanguage: _controller.setTargetLang,
             onPickBilingual: _pickBilingual,
             onPickFormats: _pickFormats,
+            onPickTranslationStyle: _pickTranslationStyle,
             onToggleTerms: _toggleTerms,
             onPickMemoryCollections: _pickMemoryCollections,
             onConfigureTranslation: () =>
@@ -1159,6 +1161,33 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
 
   void _toggleTerms() {
     _controller.setTermsEnabled(!_controller.view.termsEnabled);
+  }
+
+  Future<void> _pickTranslationStyle() async {
+    await _service.start();
+    final client = _service.client;
+    if (client == null || !mounted) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地服务尚未连接，暂时无法读取风格库。')));
+      }
+      return;
+    }
+    final view = _controller.view;
+    final selected = await showDialog<TranslationStyleDetail>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => TranslationStylePickerDialog(
+        client: client,
+        selectedStyleId: view.translationStyleId,
+        onManageLibrary: () => _openToolWindow(
+          AppWindowType.taskProcessing,
+          workspaceSection: 'terminology',
+        ),
+      ),
+    );
+    if (selected != null) _controller.setTranslationStyle(selected);
   }
 
   Future<void> _pickMemoryCollections() async {

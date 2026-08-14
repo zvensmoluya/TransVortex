@@ -545,6 +545,60 @@ class AppServiceClient {
     );
   }
 
+  Future<List<TranslationStyleSummary>> translationStyles() async {
+    final payload = _stringMap(await call('translation.styles.list'));
+    return _objectList(payload['styles'])
+        .map(TranslationStyleSummary.fromJson)
+        .where((item) => item.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<TranslationStyleDetail> translationStyle(String styleId) async {
+    return TranslationStyleDetail.fromJson(
+      await call('translation.style.get', {'style_id': styleId}),
+    );
+  }
+
+  Future<TranslationStyleDetail> createTranslationStyle({
+    required String name,
+    required String prompt,
+    String description = '',
+  }) async {
+    return TranslationStyleDetail.fromJson(
+      await call('translation.style.create', {
+        'name': name,
+        'description': description,
+        'prompt': prompt,
+      }),
+    );
+  }
+
+  Future<TranslationStyleDetail> updateTranslationStyle(
+    String styleId, {
+    required int expectedRevision,
+    required String name,
+    required String description,
+    required String prompt,
+  }) async {
+    return TranslationStyleDetail.fromJson(
+      await call('translation.style.update', {
+        'style_id': styleId,
+        'expected_revision': expectedRevision,
+        'changes': {'name': name, 'description': description, 'prompt': prompt},
+      }),
+    );
+  }
+
+  Future<void> deleteTranslationStyle(
+    String styleId, {
+    required int expectedRevision,
+  }) async {
+    await call('translation.style.delete', {
+      'style_id': styleId,
+      'expected_revision': expectedRevision,
+    });
+  }
+
   Future<Map<String, Object?>> promoteMemoryCandidates({
     required String taskId,
     required String collectionId,

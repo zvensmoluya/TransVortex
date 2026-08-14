@@ -19,6 +19,7 @@ class JobLine extends StatelessWidget {
     required this.onSelectTargetLanguage,
     required this.onPickBilingual,
     required this.onPickFormats,
+    required this.onPickTranslationStyle,
     required this.onToggleTerms,
     required this.onPickMemoryCollections,
     required this.onConfigureTranslation,
@@ -33,6 +34,7 @@ class JobLine extends StatelessWidget {
   final ValueChanged<String> onSelectTargetLanguage;
   final VoidCallback onPickBilingual;
   final VoidCallback onPickFormats;
+  final VoidCallback onPickTranslationStyle;
   final VoidCallback onToggleTerms;
   final VoidCallback onPickMemoryCollections;
   final VoidCallback onConfigureTranslation;
@@ -144,7 +146,14 @@ class JobLine extends StatelessWidget {
             const Text('做成', style: T.tBody),
             _Word(label: view.bilingual ? '双语' : '单语', onPick: onPickBilingual),
             _Word(label: view.formats.join('·'), onPick: onPickFormats),
-            const Text('字幕，并', style: T.tBody),
+            const Text('字幕，采用', style: T.tBody),
+            _Word(
+              key: const ValueKey('job-translation-style'),
+              label: view.translationStyleLabel,
+              tooltip: '本任务使用的翻译风格；任务开始后会固定实际 Prompt。',
+              onPick: onPickTranslationStyle,
+            ),
+            const Text('，并', style: T.tBody),
             _Word(
               label: memoryLabel,
               tooltip: view.termsEnabled

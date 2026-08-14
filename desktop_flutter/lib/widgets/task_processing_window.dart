@@ -19,9 +19,10 @@ import '../services/path_opener.dart';
 import '../services/smoke_render_capture.dart';
 import '../services/window_state_bridge.dart';
 import '../theme/tokens.dart';
-import 'memory_library_dialog.dart';
 import 'result_review_workspace.dart';
 import 'title_bar.dart';
+import 'translation_assets_view.dart';
+import 'translation_style_library.dart';
 
 part 'task_processing_window/task_actions.dart';
 part 'task_processing_window/task_data.dart';
@@ -315,10 +316,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
                                 unawaited(_checkOutputDirectory(task)),
                           ),
                           _terminologyVisited
-                              ? MemoryLibraryDialog(
-                                  client: _client,
-                                  embedded: true,
-                                )
+                              ? TranslationAssetsView(client: _client)
                               : const SizedBox.shrink(),
                         ],
                       ),
@@ -335,7 +333,7 @@ class _TaskProcessingWindowState extends State<TaskProcessingWindow> {
 
   String _statusText(TaskSummary? selected) {
     if (_workbenchSection == _WorkbenchSection.terminology) {
-      return '维护跨任务复用的术语资产';
+      return '维护跨任务复用的术语与翻译风格';
     }
     if (_loadingTasks) return '读取任务中';
     if (_resuming) return '继续任务中';

@@ -44,6 +44,12 @@ from ..providers.admin import (
 from ..providers.model_catalog import model_catalog_payload
 from ..providers.probe import probe_provider
 from ..prompts.asr_admin import delete_asr_prompt_profile, save_asr_prompt_profile
+from ..prompts.styles import (
+    TranslationStyleError,
+    style_payload,
+    style_profile_store_for_config,
+    style_summary,
+)
 from ..utils import read_json, to_plain
 from .agent_client import (
     AgentClientError,
@@ -236,6 +242,11 @@ class DesktopApi:
             "memory.candidates.promote": self.memory_candidates_promote,
             "memory.plan.resolve": self.memory_plan_resolve,
             "memory.exportPreset": self.memory_export_preset,
+            "translation.styles.list": self.translation_styles_list,
+            "translation.style.get": self.translation_style_get,
+            "translation.style.create": self.translation_style_create,
+            "translation.style.update": self.translation_style_update,
+            "translation.style.delete": self.translation_style_delete,
         }
         handler = handlers.get(method)
         if handler is None:
@@ -243,6 +254,8 @@ class DesktopApi:
         try:
             return handler(params)
         except MemoryCollectionError as exc:
+            raise DesktopApiError(exc.code, str(exc), details=exc.details) from exc
+        except TranslationStyleError as exc:
             raise DesktopApiError(exc.code, str(exc), details=exc.details) from exc
 
     def service_info(self, _params: dict[str, Any]) -> dict[str, Any]:
@@ -1027,6 +1040,47 @@ class DesktopApi:
             ),
         )
 
+    def translation_styles_list(self, _params: dict[str, Any]) -> dict[str, Any]:
+        store = self._translation_style_store()
+        return {
+            "styles": [style_summary(item) for item in store.list()],
+            "root": str(store.root),
+        }
+
+    def translation_style_get(self, params: dict[str, Any]) -> dict[str, Any]:
+        profile = self._translation_style_store().get(
+            _required_text(params, "style_id", "styleId", "id")
+        )
+        return {"style": style_payload(profile)}
+
+    def translation_style_create(self, params: dict[str, Any]) -> dict[str, Any]:
+        profile = self._translation_style_store().create(
+            name=_required_text(params, "name"),
+            prompt=_required_text(params, "prompt"),
+            profile_id=_optional_text(params, "style_id", "styleId", "id") or "",
+            description=str(params.get("description") or ""),
+        )
+        return {"ok": True, "style": style_payload(profile)}
+
+    def translation_style_update(self, params: dict[str, Any]) -> dict[str, Any]:
+        changes = params.get("changes", params.get("style"))
+        if not isinstance(changes, dict):
+            raise DesktopApiError("invalid_request", "changes must be an object")
+        profile = self._translation_style_store().update(
+            _required_text(params, "style_id", "styleId", "id"),
+            changes,
+            expected_revision=_required_revision(params),
+        )
+        return {"ok": True, "style": style_payload(profile)}
+
+    def translation_style_delete(self, params: dict[str, Any]) -> dict[str, Any]:
+        style_id = _required_text(params, "style_id", "styleId", "id")
+        self._translation_style_store().delete(
+            style_id,
+            expected_revision=_required_revision(params),
+        )
+        return {"ok": True, "style_id": style_id}
+
     def _runtime(self) -> TaskRuntime:
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return TaskRuntime(config.pipeline.artifacts_dir)
@@ -1034,6 +1088,10 @@ class DesktopApi:
     def _memory_collection_store(self):
         config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
         return collection_store_for_config(root_dir=self.root_dir, config=config)
+
+    def _translation_style_store(self):
+        config = load_app_config(root_dir=self.root_dir, providers_file=self.providers_file)
+        return style_profile_store_for_config(root_dir=self.root_dir, config=config)
 
     def _notify_task_ready(self, task_id: str) -> None:
         if self._task_ready_callback is None or not task_id:

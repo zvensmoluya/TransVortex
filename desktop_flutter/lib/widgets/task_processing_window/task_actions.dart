@@ -30,11 +30,22 @@ extension _TaskProcessingActions on _TaskProcessingWindowState {
 
   Future<void> _retranslateTask(TaskSummary task) async {
     if (!task.isDone || _retranslatingTaskId != null) return;
+    final style = await showDialog<TranslationStyleDetail>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => TranslationStylePickerDialog(
+        client: _client,
+        selectedStyleId: 'subtitle_natural',
+      ),
+    );
+    if (style == null || !mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('重新翻译当前识别稿'),
-        content: const Text('将使用已保存的识别稿和当前翻译设置创建新任务，不会重新运行语音识别。该操作会调用翻译模型。'),
+        content: Text(
+          '将使用已保存的识别稿和“${style.summary.name}”风格创建新任务，不会重新运行语音识别。该操作会调用翻译模型。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -55,7 +66,13 @@ extension _TaskProcessingActions on _TaskProcessingWindowState {
       _error = null;
     });
     try {
-      final result = await _client.retranslate(task.taskId);
+      final result = await _client.retranslate(
+        task.taskId,
+        overrides: {
+          'translation_style_preset': style.summary.id,
+          'translation_style_prompt': style.prompt,
+        },
+      );
       if (!mounted) return;
       _selectedTaskId = result.taskId;
       await _loadTasks();
