@@ -573,6 +573,7 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
             view: view,
             onPickTranslation: _pickTranslation,
             onPickAsr: _pickAsr,
+            onPickSourceInput: _pickSourceInput,
             onPickReasoning: _pickReasoningEffort,
             onSelectSourceLanguage: _controller.setSourceLang,
             onSelectTargetLanguage: _controller.setTargetLang,
@@ -1063,6 +1064,23 @@ class _MainScreenState extends State<MainScreen> with TickerProviderStateMixin {
     }
     if (selected is TranslationRuntimeChoice) {
       _controller.selectTranslation(selected);
+    }
+  }
+
+  Future<void> _pickSourceInput() async {
+    final view = _controller.view;
+    if (!view.sourceInputConfigurable) return;
+    final selected = await _showOptionMenu<SourceInputOption>(
+      title: '字幕来源',
+      options: view.sourceInputOptions,
+      emptyLabel: '没有可用的字幕来源',
+      labelOf: (option) => option.label,
+      detailOf: (option) => option.detail,
+      enabledOf: (option) => option.enabled,
+      keyOf: (option) => ValueKey('source-input-${option.id}'),
+    );
+    if (selected != null) {
+      await _controller.selectSourceInput(selected);
     }
   }
 

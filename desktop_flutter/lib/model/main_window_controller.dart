@@ -85,6 +85,25 @@ class TaskOption {
   final String? model;
 }
 
+@immutable
+class SourceInputOption {
+  const SourceInputOption({
+    required this.id,
+    required this.label,
+    required this.sourceMode,
+    required this.subtitleTrack,
+    this.detail = '',
+    this.enabled = true,
+  });
+
+  final String id;
+  final String label;
+  final String detail;
+  final String sourceMode;
+  final String subtitleTrack;
+  final bool enabled;
+}
+
 enum TranslationChoiceSource { profile, direct, task }
 
 @immutable
@@ -186,6 +205,10 @@ class MainWindowViewModel {
     required this.translationOptions,
     required this.translationDirectOptions,
     required this.asrOptions,
+    this.sourceInputOptions = const <SourceInputOption>[],
+    this.sourceInputOptionId = 'auto',
+    this.sourceInputLabel = '',
+    this.sourceInputDetail = '',
     required this.sourceLang,
     required this.targetLang,
     required this.bilingual,
@@ -227,6 +250,10 @@ class MainWindowViewModel {
   final List<TranslationRuntimeChoice> translationOptions;
   final List<TranslationRuntimeChoice> translationDirectOptions;
   final List<TaskOption> asrOptions;
+  final List<SourceInputOption> sourceInputOptions;
+  final String sourceInputOptionId;
+  final String sourceInputLabel;
+  final String sourceInputDetail;
   final String sourceLang;
   final String targetLang;
   final bool bilingual;
@@ -255,6 +282,7 @@ class MainWindowViewModel {
 
   bool get hasSource => source != null;
   bool get requiresAsr => sourceNeedsAsr ?? source?.kind != SourceKind.subtitle;
+  bool get sourceInputConfigurable => source?.kind == SourceKind.video;
 }
 
 class MainWindowController extends ChangeNotifier {
@@ -296,6 +324,9 @@ class MainWindowController extends ChangeNotifier {
   TranslationRuntimeChoice? _selectedTranslation;
   String? _selectedReasoningEffort;
   TaskOption? _selectedAsr;
+  String _sourceInputOptionId = 'auto';
+  String _sourceMode = 'auto';
+  String _subtitleTrack = 'auto';
   MediaInspection? _sourceInspection;
   String? _sourceInspectionLanguage;
   int _sourceInspectionGeneration = 0;
@@ -337,6 +368,9 @@ class MainWindowController extends ChangeNotifier {
     );
     _sourceInspectionGeneration += 1;
     _discardVideoInspectionFuture();
+    _sourceInputOptionId = 'auto';
+    _sourceMode = 'auto';
+    _subtitleTrack = 'auto';
     _sourceInspection = switch (kind) {
       SourceKind.subtitle => const MediaInspection(
         kind: 'subtitle',
@@ -383,6 +417,9 @@ class MainWindowController extends ChangeNotifier {
     _source = null;
     _sourceInspectionGeneration += 1;
     _discardVideoInspectionFuture();
+    _sourceInputOptionId = 'auto';
+    _sourceMode = 'auto';
+    _subtitleTrack = 'auto';
     _sourceInspection = null;
     _sourceInspectionLanguage = null;
     _outputDirectory = null;
@@ -495,6 +532,23 @@ class MainWindowController extends ChangeNotifier {
   void selectAsr(TaskOption option) {
     _selectedAsr = option;
     _publish();
+  }
+
+  Future<void> selectSourceInput(SourceInputOption option) async {
+    if (_source?.kind != SourceKind.video || !option.enabled) return;
+    if (_sourceInputOptionId == option.id && _sourceInspection != null) return;
+    _sourceInputOptionId = option.id;
+    _sourceMode = option.sourceMode;
+    _subtitleTrack = option.subtitleTrack;
+    _sourceInspectionGeneration += 1;
+    _discardVideoInspectionFuture();
+    _sourceInspection = null;
+    _sourceInspectionLanguage = null;
+    if (_failure?.target == MainRecoveryTarget.pickSource) {
+      _failure = null;
+    }
+    _publish();
+    await _inspectCurrentVideo(showFailure: true);
   }
 
   @visibleForTesting
@@ -1039,6 +1093,7 @@ class MainWindowController extends ChangeNotifier {
     final reasoning = _reasoningSupport(snapshot, translation);
     final asr = _effectiveAsrOption(snapshot);
     final state = _deriveState(readiness, translation, asr);
+    final sourceInputOptions = _sourceInputOptions();
     return MainWindowViewModel(
       state: state,
       statusLine: _statusLine(state),
@@ -1053,6 +1108,10 @@ class MainWindowController extends ChangeNotifier {
       translationOptions: _translationOptions(snapshot),
       translationDirectOptions: _translationDirectOptions(snapshot),
       asrOptions: _asrOptions(snapshot),
+      sourceInputOptions: sourceInputOptions,
+      sourceInputOptionId: _sourceInputOptionId,
+      sourceInputLabel: _sourceInputLabel(sourceInputOptions),
+      sourceInputDetail: _sourceInputDetail(sourceInputOptions),
       sourceLang: _sourceLang,
       targetLang: _targetLang,
       bilingual: _bilingual,
@@ -1255,7 +1314,121 @@ class MainWindowController extends ChangeNotifier {
     await service.start();
     final client = service.client;
     if (client == null) throw StateError('本地服务未连接');
-    return client.inspectMedia(input: source.path, sourceLang: sourceLanguage);
+    return client.inspectMedia(
+      input: source.path,
+      sourceLang: sourceLanguage,
+      sourceMode: _sourceMode,
+      subtitleTrack: _subtitleTrack,
+    );
+  }
+
+  List<SourceInputOption> _sourceInputOptions() {
+    if (_source?.kind != SourceKind.video) return const [];
+    final options = <SourceInputOption>[
+      SourceInputOption(
+        id: 'auto',
+        label: '自动选择',
+        detail: _automaticSourceInputDetail(),
+        sourceMode: 'auto',
+        subtitleTrack: 'auto',
+      ),
+      const SourceInputOption(
+        id: 'asr',
+        label: '强制语音识别',
+        detail: '忽略视频中的内嵌字幕轨，始终从音频重新识别。',
+        sourceMode: 'asr',
+        subtitleTrack: 'auto',
+      ),
+    ];
+    for (final raw in _sourceInspection?.subtitleStreams ?? const <Object?>[]) {
+      final stream = _asStringMap(raw);
+      final index = stream['index'];
+      if (index == null) continue;
+      final track = '$index';
+      final supported = stream['supported'] == true;
+      final label = _subtitleStreamLabel(stream);
+      options.add(
+        SourceInputOption(
+          id: 'embedded:$track',
+          label: supported ? label : '$label（不支持）',
+          detail: _subtitleStreamDetail(stream, supported: supported),
+          sourceMode: 'embedded_subtitle',
+          subtitleTrack: track,
+          enabled: supported,
+        ),
+      );
+    }
+    return List.unmodifiable(options);
+  }
+
+  String _sourceInputLabel(List<SourceInputOption> options) {
+    if (_source?.kind != SourceKind.video) return '';
+    if (_sourceInputOptionId != 'auto') {
+      return _sourceInputOption(options, _sourceInputOptionId)?.label ??
+          '选择字幕来源';
+    }
+    final inspection = _sourceInspection;
+    if (inspection == null) return '自动选择';
+    if (inspection.needsAsr) return '自动·语音识别';
+    final selected = inspection.selectedSubtitleStream;
+    return selected.isEmpty ? '自动选择' : '自动·${_subtitleStreamLabel(selected)}';
+  }
+
+  String _sourceInputDetail(List<SourceInputOption> options) {
+    if (_sourceInputOptionId == 'auto') return _automaticSourceInputDetail();
+    return _sourceInputOption(options, _sourceInputOptionId)?.detail ?? '';
+  }
+
+  static SourceInputOption? _sourceInputOption(
+    List<SourceInputOption> options,
+    String id,
+  ) {
+    for (final option in options) {
+      if (option.id == id) return option;
+    }
+    return null;
+  }
+
+  String _automaticSourceInputDetail() {
+    final inspection = _sourceInspection;
+    if (inspection == null) return '根据源语言和字幕轨信息自动决定。';
+    if (inspection.needsAsr) return '没有匹配的可用文本字幕轨，当前将使用语音识别。';
+    final selected = inspection.selectedSubtitleStream;
+    return selected.isEmpty
+        ? '根据源语言和字幕轨信息自动决定。'
+        : '当前使用 ${_subtitleStreamLabel(selected)}。';
+  }
+
+  static String _subtitleStreamLabel(Map<String, Object?> stream) {
+    final index = '${stream['index'] ?? '?'}';
+    final language = _subtitleLanguageLabel('${stream['language'] ?? ''}');
+    return language.isEmpty ? '字幕轨 #$index' : '字幕轨 #$index · $language';
+  }
+
+  static String _subtitleStreamDetail(
+    Map<String, Object?> stream, {
+    required bool supported,
+  }) {
+    final parts = <String>[];
+    final title = '${stream['title'] ?? ''}'.trim();
+    final codec = '${stream['codec_name'] ?? ''}'.trim();
+    if (title.isNotEmpty) parts.add(title);
+    if (codec.isNotEmpty) parts.add(codec.toUpperCase());
+    if (stream['default'] == true) parts.add('默认轨');
+    if (stream['forced'] == true) parts.add('强制字幕');
+    if (!supported) parts.add('当前只能读取文本字幕轨');
+    return parts.join(' · ');
+  }
+
+  static String _subtitleLanguageLabel(String value) {
+    final normalized = switch (value.trim().toLowerCase()) {
+      'jpn' || 'jp' || 'japanese' => 'ja',
+      'eng' || 'english' => 'en',
+      'chi' || 'zho' || 'chs' || 'cht' => 'zh',
+      final value => value,
+    };
+    if (normalized.isEmpty || normalized == 'und') return '';
+    return languageLabel(normalized);
   }
 
   void _clearVideoInspectionFuture(Future<MediaInspection> expected) {

@@ -333,6 +333,102 @@ void main() {
     expectNoFlutterException();
   });
 
+  testWidgets('main lets the user choose an embedded subtitle track', (
+    tester,
+  ) async {
+    installFilePickerMock(
+      tester,
+      name: 'multi-track.mkv',
+      path: r'D:\media\multi-track.mkv',
+    );
+    const streams = [
+      {
+        'index': 2,
+        'codec_name': 'ass',
+        'supported': true,
+        'language': 'jpn',
+        'title': 'Japanese',
+        'default': true,
+      },
+      {
+        'index': 3,
+        'codec_name': 'hdmv_pgs_subtitle',
+        'supported': false,
+        'language': 'eng',
+        'title': 'English PGS',
+      },
+      {
+        'index': 4,
+        'codec_name': 'subrip',
+        'supported': true,
+        'language': 'eng',
+        'title': 'English Signs',
+      },
+    ];
+    final firstInspection = {
+      'kind': 'video',
+      'source_mode': 'embedded_subtitle',
+      'needs_asr': false,
+      'available': true,
+      'code': 'ready',
+      'subtitle_streams': streams,
+      'selected_subtitle_stream': streams[0],
+    };
+    final selectedInspection = {
+      ...firstInspection,
+      'selected_subtitle_stream': streams[2],
+    };
+    final snapshot = desktopSnapshotFixture();
+    final transport = FakeAppServiceTransport(
+      {
+        'service.info': {
+          'service': 'transvortex.app_service',
+          'protocol_version': 1,
+          'app_version': 'test',
+          'capabilities': ['desktop_snapshot', 'runtime_pump'],
+        },
+        'service.health': {
+          'service': 'transvortex.app_service',
+          'status': 'healthy',
+          'runtime': {'active': null},
+          'pump': {'enabled': true},
+        },
+        'desktop.snapshot': snapshot.raw,
+        'media.inspect': selectedInspection,
+      },
+      sequences: {
+        'media.inspect': [firstInspection, selectedInspection],
+      },
+    );
+    await tester.pumpWidget(
+      TransVortexApp(localServiceController: controllerForTransport(transport)),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('选择片源'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('自动·字幕轨 #2 · 日语'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('job-source-input')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('自动选择'), findsOneWidget);
+    expect(find.text('强制语音识别'), findsOneWidget);
+    expect(find.text('字幕轨 #3 · 英语（不支持）'), findsOneWidget);
+    activatePopupMenuItem(tester, const ValueKey('source-input-embedded:4'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('字幕轨 #4 · 英语'), findsOneWidget);
+    expect(
+      transport.lastParams['media.inspect']?['source_mode'],
+      'embedded_subtitle',
+    );
+    expect(transport.lastParams['media.inspect']?['subtitle_track'], '4');
+    expectNoFlutterException();
+  });
+
   testWidgets('main keeps an unavailable current ASR provider visible', (
     tester,
   ) async {

@@ -14,6 +14,7 @@ class JobLine extends StatelessWidget {
     required this.view,
     required this.onPickTranslation,
     required this.onPickAsr,
+    required this.onPickSourceInput,
     required this.onPickReasoning,
     required this.onSelectSourceLanguage,
     required this.onSelectTargetLanguage,
@@ -29,6 +30,7 @@ class JobLine extends StatelessWidget {
   final MainWindowViewModel view;
   final VoidCallback onPickTranslation;
   final VoidCallback onPickAsr;
+  final VoidCallback onPickSourceInput;
   final VoidCallback onPickReasoning;
   final ValueChanged<String> onSelectSourceLanguage;
   final ValueChanged<String> onSelectTargetLanguage;
@@ -80,7 +82,30 @@ class JobLine extends StatelessWidget {
                 onPick: openMenu,
               ),
             ),
-            if (view.requiresAsr) ...[
+            if (view.sourceInputConfigurable) ...[
+              const Text('源语，使用', style: T.tBody),
+              _Word(
+                key: const ValueKey('job-source-input'),
+                label: view.sourceInputLabel,
+                tooltip: view.sourceInputDetail,
+                onPick: onPickSourceInput,
+              ),
+              if (view.requiresAsr) ...[
+                const Text('，识别用', style: T.tBody),
+                _Word(
+                  label: asrLabel,
+                  fullLabel: view.asrConfigured
+                      ? view.asrLabel
+                      : view.asrDetail.isEmpty
+                      ? view.asrLabel
+                      : '${view.asrLabel} · ${view.asrDetail}',
+                  warn: !view.asrConfigured,
+                  onPick: view.asrOptions.isEmpty ? onConfigureAsr : onPickAsr,
+                ),
+                const Text('，交给', style: T.tBody),
+              ] else
+                const Text('，直接交给', style: T.tBody),
+            ] else if (view.requiresAsr) ...[
               const Text('源语，语音用', style: T.tBody),
               _Word(
                 label: asrLabel,

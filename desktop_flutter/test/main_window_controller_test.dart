@@ -264,6 +264,111 @@ void main() {
     },
   );
 
+  test(
+    'controller lets the user override automatic subtitle source selection',
+    () async {
+      const streams = [
+        {
+          'index': 2,
+          'codec_name': 'ass',
+          'supported': true,
+          'language': 'jpn',
+          'title': 'Japanese',
+          'default': true,
+        },
+        {
+          'index': 3,
+          'codec_name': 'hdmv_pgs_subtitle',
+          'supported': false,
+          'language': 'eng',
+          'title': 'English PGS',
+        },
+      ];
+      final handle = _FakeHandle(
+        _desktopSnapshot(asrHasKey: false),
+        mediaInspectionSequence: [
+          {
+            'kind': 'video',
+            'source_mode': 'embedded_subtitle',
+            'needs_asr': false,
+            'available': true,
+            'code': 'ready',
+            'subtitle_streams': streams,
+            'selected_subtitle_stream': streams[0],
+          },
+          {
+            'kind': 'video',
+            'source_mode': 'asr',
+            'needs_asr': true,
+            'available': true,
+            'code': 'ready',
+            'subtitle_streams': streams,
+            'selected_subtitle_stream': null,
+          },
+          {
+            'kind': 'video',
+            'source_mode': 'embedded_subtitle',
+            'needs_asr': false,
+            'available': true,
+            'code': 'ready',
+            'subtitle_streams': streams,
+            'selected_subtitle_stream': streams[0],
+          },
+        ],
+      );
+      final controller = MainWindowController(
+        service: _readyController(handle: handle),
+      );
+      await controller.startService();
+      controller.pickSource(r'D:\movie.mkv');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.view.sourceInputLabel, '自动·字幕轨 #2 · 日语');
+      expect(
+        controller.view.sourceInputOptions
+            .singleWhere((option) => option.id == 'embedded:3')
+            .enabled,
+        isFalse,
+      );
+
+      final asr = controller.view.sourceInputOptions.singleWhere(
+        (option) => option.id == 'asr',
+      );
+      await controller.selectSourceInput(asr);
+
+      expect(controller.view.requiresAsr, isTrue);
+      expect(controller.view.state, MainState.blocked);
+      expect(handle.transport.lastParams['media.inspect'], {
+        'input': r'D:\movie.mkv',
+        'source_lang': 'auto',
+        'source_mode': 'asr',
+        'subtitle_track': 'auto',
+      });
+      var overrides =
+          controller.buildRunRequest()['overrides'] as Map<String, Object?>;
+      expect(overrides['source_mode'], 'asr');
+      expect(overrides.containsKey('subtitle_track'), isFalse);
+
+      final embedded = controller.view.sourceInputOptions.singleWhere(
+        (option) => option.id == 'embedded:2',
+      );
+      await controller.selectSourceInput(embedded);
+
+      expect(controller.view.requiresAsr, isFalse);
+      expect(controller.view.state, MainState.ready);
+      expect(handle.transport.lastParams['media.inspect'], {
+        'input': r'D:\movie.mkv',
+        'source_lang': 'auto',
+        'source_mode': 'embedded_subtitle',
+        'subtitle_track': '2',
+      });
+      overrides =
+          controller.buildRunRequest()['overrides'] as Map<String, Object?>;
+      expect(overrides['source_mode'], 'embedded_subtitle');
+      expect(overrides['subtitle_track'], '2');
+    },
+  );
+
   test('controller always requires ASR for audio input', () async {
     final handle = _FakeHandle(_desktopSnapshot(asrHasKey: false));
     final controller = MainWindowController(
@@ -1665,6 +1770,7 @@ class _FakeHandle implements LocalServiceHandle {
     Map<String, Object?>? taskEvents,
     Map<String, Object?>? resultOpen,
     Map<String, Object?>? mediaInspection,
+    List<Map<String, Object?>>? mediaInspectionSequence,
     RpcRemoteException? resultReexportError,
     RpcRemoteException? runtimeCancelError,
     List<DesktopSnapshot>? snapshotSequence,
@@ -1739,6 +1845,7 @@ class _FakeHandle implements LocalServiceHandle {
                : snapshotAfterReexport == null
                ? null
                : [snapshot.raw, snapshotAfterReexport.raw],
+           'media.inspect': ?mediaInspectionSequence,
          },
        ) {
     client = AppServiceClient(transport);
